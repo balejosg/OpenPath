@@ -247,5 +247,20 @@ function Handle-Message {
             -ExtraFields $extraFields
     }
 
+    # Echo the optional correlation id from the request so the extension can
+    # relate responses per port/connection (persistent transport in Phase 2C).
+    if ($result -is [System.Collections.IDictionary]) {
+        $messageId = $null
+        if ($Message -is [System.Collections.IDictionary]) {
+            if ($Message.Contains('id')) { $messageId = $Message['id'] }
+        }
+        elseif ($Message.PSObject.Properties['id']) {
+            $messageId = $Message.id
+        }
+        if ($null -ne $messageId -and -not [string]::IsNullOrWhiteSpace([string]$messageId)) {
+            $result['id'] = $messageId
+        }
+    }
+
     return $result
 }

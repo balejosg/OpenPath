@@ -127,32 +127,58 @@ def format_utc_timestamp():
     )
 
 
-def write_runtime_dependency_request(entry):
+def validate_runtime_dependency_entry(entry):
+    """Validates and normalizes a runtime dependency payload.
+
+    Returns (error_response_or_None, anchor_host, dependency_host, request_type).
+    """
     if not isinstance(entry, dict):
-        return {
-            "success": False,
-            "action": "allow-local-runtime-dependency",
-            "error": "Invalid runtime dependency payload",
-        }
+        return (
+            {
+                "success": False,
+                "action": "allow-local-runtime-dependency",
+                "error": "Invalid runtime dependency payload",
+            },
+            "",
+            "",
+            "",
+        )
 
     anchor_host = normalize_runtime_dependency_host(entry.get("anchorHost"))
     dependency_host = normalize_runtime_dependency_host(entry.get("dependencyHost"))
     request_type = str(entry.get("requestType", "")).strip().lower()
     if not anchor_host or not dependency_host or not request_type:
-        return {
-            "success": False,
-            "action": "allow-local-runtime-dependency",
-            "error": "Invalid runtime dependency payload",
-        }
+        return (
+            {
+                "success": False,
+                "action": "allow-local-runtime-dependency",
+                "error": "Invalid runtime dependency payload",
+            },
+            "",
+            "",
+            "",
+        )
     if request_type == "main_frame":
-        return {
-            "success": False,
-            "action": "allow-local-runtime-dependency",
-            "anchorHost": anchor_host,
-            "dependencyHost": dependency_host,
-            "requestType": request_type,
-            "error": "main_frame dependencies are not supported",
-        }
+        return (
+            {
+                "success": False,
+                "action": "allow-local-runtime-dependency",
+                "anchorHost": anchor_host,
+                "dependencyHost": dependency_host,
+                "requestType": request_type,
+                "error": "main_frame dependencies are not supported",
+            },
+            anchor_host,
+            dependency_host,
+            request_type,
+        )
+    return (None, anchor_host, dependency_host, request_type)
+
+
+def write_runtime_dependency_request(entry):
+    error_response, anchor_host, dependency_host, request_type = validate_runtime_dependency_entry(entry)
+    if error_response is not None:
+        return error_response
 
     queue_dir = get_runtime_dependency_queue_dir()
     if not queue_dir.is_dir():
@@ -191,6 +217,129 @@ def write_runtime_dependency_request(entry):
         "requestType": request_type,
         "queued": True,
         "source": RUNTIME_DEPENDENCY_SOURCE,
+    }
+
+
+def enqueue_runtime_dependency_request(entry):
+    """Non-blocking allow: validate, queue, and answer with the per-entry state.
+
+    The systemd path unit (`openpath-runtime-dependency-apply.path`) observes the new
+    queue file and applies the batch; no explicit worker nudge is required here.
+    """
+    error_response, anchor_host, dependency_host, request_type = validate_runtime_dependency_entry(entry)
+    if error_response is not None:
+        return error_response
+
+    state = get_runtime_dependency_entry_states({(anchor_host, dependency_host)})[(anchor_host, dependency_host)]
+    if state["ready"]:
+        return {
+            "success": True,
+            "action": "allow-local-runtime-dependency",
+            "anchorHost": anchor_host,
+            "dependencyHost": dependency_host,
+            "requestType": request_type,
+            "queued": False,
+            "ready": True,
+            "runtimeDependencyState": "ready",
+            "mode": "enqueue",
+            "source": RUNTIME_DEPENDENCY_SOURCE,
+        }
+
+    response = write_runtime_dependency_request(entry)
+    if response.get("success") is not True:
+        return response
+
+    response = dict(response)
+    response.update(
+        {
+            "mode": "enqueue",
+            "queued": True,
+            "ready": False,
+            "runtimeDependencyState": "pending",
+        }
+    )
+    return response
+
+
+def enqueue_runtime_dependency_batch(entries):
+    """Non-blocking batch allow: validate and queue entries, answering per-entry states."""
+    if not isinstance(entries, list) or not entries:
+        return {
+            "success": False,
+            "action": "allow-local-runtime-dependency-batch",
+            "error": "Invalid runtime dependency batch payload",
+            "results": [],
+        }
+
+    validated = []
+    for entry in entries[:RUNTIME_DEPENDENCY_BATCH_LIMIT]:
+        error_response, anchor_host, dependency_host, request_type = validate_runtime_dependency_entry(entry)
+        validated.append((entry, error_response, anchor_host, dependency_host, request_type))
+
+    pairs = {
+        (anchor_host, dependency_host)
+        for (_, error_response, anchor_host, dependency_host, _) in validated
+        if error_response is None
+    }
+    states = get_runtime_dependency_entry_states(pairs) if pairs else {}
+
+    results = []
+    queued_count = 0
+    for entry, error_response, anchor_host, dependency_host, request_type in validated:
+        if error_response is not None:
+            results.append(error_response)
+            continue
+
+        if states[(anchor_host, dependency_host)]["ready"]:
+            results.append(
+                {
+                    "success": True,
+                    "action": "allow-local-runtime-dependency",
+                    "anchorHost": anchor_host,
+                    "dependencyHost": dependency_host,
+                    "requestType": request_type,
+                    "queued": False,
+                    "ready": True,
+                    "runtimeDependencyState": "ready",
+                    "mode": "enqueue",
+                    "source": RUNTIME_DEPENDENCY_SOURCE,
+                }
+            )
+            continue
+
+        response = write_runtime_dependency_request(entry)
+        if response.get("success") is not True:
+            results.append(response)
+            continue
+
+        result = dict(response)
+        result.update(
+            {
+                "mode": "enqueue",
+                "queued": True,
+                "ready": False,
+                "runtimeDependencyState": "pending",
+            }
+        )
+        results.append(result)
+        queued_count += 1
+
+    if len(entries) > RUNTIME_DEPENDENCY_BATCH_LIMIT:
+        results.append(
+            {
+                "success": False,
+                "action": "allow-local-runtime-dependency",
+                "error": "Runtime dependency batch limit exceeded",
+            }
+        )
+
+    return {
+        "success": all(result.get("success") is True for result in results),
+        "action": "allow-local-runtime-dependency-batch",
+        "mode": "enqueue",
+        "count": len(results),
+        "queuedCount": queued_count,
+        "results": results,
     }
 
 
@@ -234,11 +383,45 @@ def find_runtime_dependency_entry(anchor_host, dependency_host, entries):
     return None
 
 
-def is_runtime_dependency_ready(anchor_host, dependency_host):
-    generation, applied_generation, entries = read_runtime_dependency_overlay_state()
-    if generation <= 0 or applied_generation < generation:
+def entry_is_ready(entry, generation, applied_generation):
+    """Per-entry readiness rule: stamped entries gate on their own generation.
+
+    Legacy entries without a per-entry generation fall back to the document-level
+    rule (applied >= generation) so overlays written before this change keep the
+    historical behavior.
+    """
+    if not isinstance(entry, dict):
         return False
-    return find_runtime_dependency_entry(anchor_host, dependency_host, entries) is not None
+    entry_generation = entry.get("generation")
+    if isinstance(entry_generation, int) and not isinstance(entry_generation, bool) and entry_generation > 0:
+        return applied_generation >= entry_generation
+    return generation > 0 and applied_generation >= generation
+
+
+def get_runtime_dependency_entry_states(pairs):
+    """Reads the overlay once and returns per-pair readiness states.
+
+    `pairs` is an iterable of (anchor_host, dependency_host). The result maps each
+    pair to {"ready", "runtimeDependencyState", maybe "expiresAt"}.
+    """
+    generation, applied_generation, entries = read_runtime_dependency_overlay_state()
+    states = {}
+    for anchor_host, dependency_host in pairs:
+        entry = find_runtime_dependency_entry(anchor_host, dependency_host, entries)
+        ready = entry_is_ready(entry, generation, applied_generation)
+        state = {
+            "ready": bool(ready),
+            "runtimeDependencyState": "ready" if ready else "pending",
+        }
+        if isinstance(entry, dict) and isinstance(entry.get("expiresAt"), str):
+            state["expiresAt"] = entry["expiresAt"]
+        states[(anchor_host, dependency_host)] = state
+    return states
+
+
+def is_runtime_dependency_ready(anchor_host, dependency_host):
+    states = get_runtime_dependency_entry_states({(anchor_host, dependency_host)})
+    return bool(states[(anchor_host, dependency_host)]["ready"])
 
 
 def get_runtime_dependency_ready_timeout_ms():
@@ -1129,7 +1312,7 @@ def get_policy_version():
     return {"success": True, "action": "get-policy-version", "version": snapshot["version"]}
 
 
-def handle_message(message):
+def dispatch_message(message):
     """Procesa un mensaje y devuelve la respuesta"""
 
     if not isinstance(message, dict):
@@ -1184,6 +1367,16 @@ def handle_message(message):
         return get_policy_version()
 
     elif action == "allow-local-runtime-dependency":
+        mode = str(message.get("mode", "")).strip().lower()
+        if mode not in ("", "blocking", "enqueue"):
+            return {
+                "success": False,
+                "action": "allow-local-runtime-dependency",
+                "error": "Unsupported runtime dependency mode",
+            }
+        if mode == "enqueue":
+            return enqueue_runtime_dependency_request(message)
+
         response = write_runtime_dependency_request(message)
         anchor_host = response.get("anchorHost")
         dependency_host = response.get("dependencyHost")
@@ -1203,6 +1396,58 @@ def handle_message(message):
         return response
 
     elif action == "check-local-runtime-dependency":
+        entries = message.get("entries")
+        if isinstance(entries, list) and entries:
+            pairs = []
+            normalized_entries = []
+            results = []
+            for entry in entries[:RUNTIME_DEPENDENCY_BATCH_LIMIT]:
+                anchor_host = normalize_runtime_dependency_host(entry.get("anchorHost")) if isinstance(entry, dict) else ""
+                dependency_host = normalize_runtime_dependency_host(entry.get("dependencyHost")) if isinstance(entry, dict) else ""
+                if not anchor_host or not dependency_host:
+                    results.append(
+                        {
+                            "success": False,
+                            "action": "check-local-runtime-dependency",
+                            "error": "Invalid runtime dependency payload",
+                        }
+                    )
+                    continue
+                pairs.append((anchor_host, dependency_host))
+                normalized_entries.append((anchor_host, dependency_host))
+
+            # One overlay read for the whole batch.
+            states = get_runtime_dependency_entry_states(set(pairs)) if pairs else {}
+            for anchor_host, dependency_host in normalized_entries:
+                state = states[(anchor_host, dependency_host)]
+                result = {
+                    "success": True,
+                    "action": "check-local-runtime-dependency",
+                    "anchorHost": anchor_host,
+                    "dependencyHost": dependency_host,
+                    "ready": state["ready"],
+                    "runtimeDependencyState": state["runtimeDependencyState"],
+                }
+                if "expiresAt" in state:
+                    result["expiresAt"] = state["expiresAt"]
+                results.append(result)
+
+            if len(entries) > RUNTIME_DEPENDENCY_BATCH_LIMIT:
+                results.append(
+                    {
+                        "success": False,
+                        "action": "check-local-runtime-dependency",
+                        "error": "Runtime dependency batch limit exceeded",
+                    }
+                )
+
+            return {
+                "success": all(result.get("success") is True for result in results),
+                "action": "check-local-runtime-dependency",
+                "count": len(results),
+                "results": results,
+            }
+
         anchor_host = normalize_runtime_dependency_host(message.get("anchorHost"))
         dependency_host = normalize_runtime_dependency_host(message.get("dependencyHost"))
         if not anchor_host or not dependency_host:
@@ -1212,18 +1457,30 @@ def handle_message(message):
                 "error": "Invalid runtime dependency payload",
             }
 
-        ready = is_runtime_dependency_ready(anchor_host, dependency_host)
-        return {
+        state = get_runtime_dependency_entry_states({(anchor_host, dependency_host)})[(anchor_host, dependency_host)]
+        response = {
             "success": True,
             "action": "check-local-runtime-dependency",
             "anchorHost": anchor_host,
             "dependencyHost": dependency_host,
-            "ready": bool(ready),
-            "runtimeDependencyState": "ready" if ready else "pending",
+            "ready": state["ready"],
+            "runtimeDependencyState": state["runtimeDependencyState"],
         }
+        if "expiresAt" in state:
+            response["expiresAt"] = state["expiresAt"]
+        return response
 
     elif action == "allow-local-runtime-dependency-batch":
+        mode = str(message.get("mode", "")).strip().lower()
+        if mode not in ("", "blocking", "enqueue"):
+            return {
+                "success": False,
+                "action": "allow-local-runtime-dependency-batch",
+                "error": "Unsupported runtime dependency mode",
+            }
         entries = message.get("entries", [])
+        if mode == "enqueue":
+            return enqueue_runtime_dependency_batch(entries)
         if not isinstance(entries, list) or not entries:
             return {
                 "success": False,
@@ -1291,6 +1548,16 @@ def handle_message(message):
 
     else:
         return {"success": False, "error": f"Unknown action: {action}"}
+
+
+def handle_message(message):
+    """Dispatch a message and echo the optional correlation id back in the response."""
+    response = dispatch_message(message)
+    if isinstance(message, dict) and isinstance(response, dict):
+        message_id = message.get("id")
+        if message_id not in (None, ""):
+            response["id"] = message_id
+    return response
 
 
 def main():

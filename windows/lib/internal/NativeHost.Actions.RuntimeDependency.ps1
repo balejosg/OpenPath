@@ -82,9 +82,12 @@ function Test-NativeHostRuntimeDependencyOverlayApplied {
 function Test-NativeHostRuntimeDependencyWorkerFresh {
     <#
     .SYNOPSIS
-    Returns true when the resident runtime dependency worker heartbeat is recent enough to skip the scheduled-task fallback trigger.
+    Returns true when the resident runtime dependency worker heartbeat or a recent busy mark is recent enough to skip the scheduled-task fallback trigger.
     #>
-    param([int]$MaxAgeSeconds = 10)
+    param(
+        [int]$MaxAgeSeconds = 10,
+        [int]$BusyMaxAgeSeconds = 120
+    )
 
     $statePath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyWorkerState -OpenPathRoot $script:OpenPathRoot
     if (-not (Test-Path $statePath -ErrorAction SilentlyContinue)) {
@@ -95,6 +98,8 @@ function Test-NativeHostRuntimeDependencyWorkerFresh {
         $raw = Get-Content -Path $statePath -Raw -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
         $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+
+        $referenceMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
         $heartbeatMs = $null
         if ($parsed.PSObject.Properties['heartbeatEpochMs'] -and $parsed.heartbeatEpochMs) {
@@ -108,14 +113,163 @@ function Test-NativeHostRuntimeDependencyWorkerFresh {
                 [System.Globalization.DateTimeStyles]::RoundtripKind
             ).ToUnixTimeMilliseconds()
         }
-        if ($null -eq $heartbeatMs) { return $false }
+        if ($null -ne $heartbeatMs) {
+            $ageMs = $referenceMs - $heartbeatMs
+            if ($ageMs -ge -30000 -and $ageMs -le ([Math]::Max(1, $MaxAgeSeconds) * 1000)) {
+                return $true
+            }
+        }
 
-        $ageMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $heartbeatMs
-        return ($ageMs -ge -30000 -and $ageMs -le ([Math]::Max(1, $MaxAgeSeconds) * 1000))
+        # A worker applying a long batch refreshes its busy mark instead of the idle
+        # heartbeat; that still proves the worker is alive and applying.
+        $busySinceMs = $null
+        if ($parsed.PSObject.Properties['busySinceEpochMs'] -and $parsed.busySinceEpochMs) {
+            $busySinceMs = [long]$parsed.busySinceEpochMs
+        }
+        elseif ($parsed.PSObject.Properties['busySince'] -and $parsed.busySince) {
+            # ps-culture-allow: InvariantCulture and RoundtripKind are passed explicitly on the following lines.
+            $busySinceMs = [long][DateTimeOffset]::Parse(
+                [string]$parsed.busySince,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind
+            ).ToUnixTimeMilliseconds()
+        }
+        if ($null -ne $busySinceMs) {
+            $busyAgeMs = $referenceMs - $busySinceMs
+            return ($busyAgeMs -ge -30000 -and $busyAgeMs -le ([Math]::Max(1, $BusyMaxAgeSeconds) * 1000))
+        }
+
+        return $false
     }
     catch {
         return $false
     }
+}
+
+function Get-NativeHostRuntimeDependencySnapshot {
+    <#
+    .SYNOPSIS
+    Reads the runtime dependency overlay once and returns document/applied generations plus entries.
+    #>
+    param()
+
+    $snapshot = [PSCustomObject]@{
+        Generation = 0
+        AppliedGeneration = 0
+        Entries = @()
+    }
+
+    $path = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $script:OpenPathRoot
+    if (-not (Test-Path $path -ErrorAction SilentlyContinue)) {
+        return $snapshot
+    }
+
+    try {
+        $raw = Get-Content $path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $snapshot }
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        $generation = if ($parsed.PSObject.Properties['generation']) { [int]$parsed.generation } else { 0 }
+        $appliedGeneration = if ($parsed.PSObject.Properties['appliedGeneration']) { [int]$parsed.appliedGeneration } else { 0 }
+        $snapshot.Generation = $generation
+        $snapshot.AppliedGeneration = $appliedGeneration
+        $snapshot.Entries = @($parsed.entries)
+        return $snapshot
+    }
+    catch {
+        Write-NativeHostLog "Failed to inspect runtime dependency overlay: $_"
+        return $snapshot
+    }
+}
+
+function Test-NativeHostRuntimeDependencyEntryReady {
+    <#
+    .SYNOPSIS
+    Per-entry readiness: stamped entries gate on their own generation, legacy entries fall back to the document rule.
+    #>
+    param(
+        [AllowNull()][object]$Entry,
+        [int]$AppliedGeneration = 0,
+        [int]$DocumentGeneration = 0
+    )
+
+    if ($null -eq $Entry) { return $false }
+
+    $entryGeneration = 0
+    if ($Entry.PSObject.Properties['generation']) {
+        try { $entryGeneration = [int]$Entry.generation } catch { $entryGeneration = 0 }
+    }
+
+    if ($entryGeneration -gt 0) {
+        return ($AppliedGeneration -ge $entryGeneration)
+    }
+
+    return ($DocumentGeneration -gt 0 -and $AppliedGeneration -ge $DocumentGeneration)
+}
+
+function Get-NativeHostRuntimeDependencyEntryState {
+    <#
+    .SYNOPSIS
+    Returns the readiness state for one anchor/dependency pair from an already-read overlay snapshot.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Snapshot,
+        [Parameter(Mandatory = $true)][string]$AnchorHost,
+        [Parameter(Mandatory = $true)][string]$DependencyHost
+    )
+
+    $state = @{
+        ready = $false
+        runtimeDependencyState = 'pending'
+        expiresAt = ''
+    }
+
+    foreach ($entry in @($Snapshot.Entries)) {
+        $entryDependency = Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost
+        $entryAnchor = Normalize-OpenPathRuntimeDependencyHost -Value $entry.anchorHost
+        if ($entryDependency -ne $DependencyHost -or $entryAnchor -ne $AnchorHost) {
+            continue
+        }
+        $ready = [bool](Test-NativeHostRuntimeDependencyEntryReady -Entry $entry -AppliedGeneration ([int]$Snapshot.AppliedGeneration) -DocumentGeneration ([int]$Snapshot.Generation))
+        $state['ready'] = $ready
+        $state['runtimeDependencyState'] = if ($ready) { 'ready' } else { 'pending' }
+        if ($entry.PSObject.Properties['expiresAt']) { $state['expiresAt'] = [string]$entry.expiresAt }
+        return $state
+    }
+
+    return $state
+}
+
+function Test-NativeHostRuntimeDependencyDomainsReady {
+    <#
+    .SYNOPSIS
+    Returns true when every dependency host has an overlay entry that is ready under the per-entry rule.
+    #>
+    param(
+        [string[]]$Domains = @(),
+        [AllowNull()][object]$Snapshot = $null
+    )
+
+    if (@($Domains).Count -eq 0) { return $true }
+    if ($null -eq $Snapshot) {
+        $Snapshot = Get-NativeHostRuntimeDependencySnapshot
+    }
+
+    foreach ($domain in @($Domains)) {
+        $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $domain
+        if (-not $normalized) { return $false }
+        $matched = $false
+        foreach ($entry in @($Snapshot.Entries)) {
+            $entryDependency = Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost
+            if ($entryDependency -ne $normalized) { continue }
+            if (Test-NativeHostRuntimeDependencyEntryReady -Entry $entry -AppliedGeneration ([int]$Snapshot.AppliedGeneration) -DocumentGeneration ([int]$Snapshot.Generation)) {
+                $matched = $true
+                break
+            }
+        }
+        if (-not $matched) { return $false }
+    }
+
+    return $true
 }
 
 function Test-NativeHostRuntimeDependencyReady {
@@ -137,10 +291,11 @@ function Test-NativeHostRuntimeDependencyReady {
     if (@($Domains).Count -eq 0) {
         return $true
     }
-    if (-not (Test-NativeHostRuntimeDependencyOverlayContainsDomains -Domains $Domains)) {
-        return $false
-    }
-    return (Test-NativeHostRuntimeDependencyOverlayApplied)
+    # Per-entry readiness: reading the overlay once avoids the old global
+    # appliedGeneration gate, where an applied entry fell back to `pending`
+    # as soon as a later batch bumped the document generation.
+    $snapshot = Get-NativeHostRuntimeDependencySnapshot
+    return (Test-NativeHostRuntimeDependencyDomainsReady -Domains $Domains -Snapshot $snapshot)
 }
 
 function Add-NativeHostRuntimeDependencyReadinessToResult {
@@ -163,12 +318,59 @@ function Add-NativeHostRuntimeDependencyReadinessToResult {
             $Result['runtimeDependencyState'] = 'ready'
         }
         'runtime-dependency-overlay-present' {
-            $applied = [bool](Test-NativeHostRuntimeDependencyOverlayApplied)
-            $Result['ready'] = $applied
-            $Result['runtimeDependencyState'] = if ($applied) { 'ready' } else { 'pending' }
+            $anchorHost = if ($Result.Contains('anchorHost')) { Normalize-OpenPathRuntimeDependencyHost -Value $Result['anchorHost'] } else { '' }
+            $dependencyHost = if ($Result.Contains('dependencyHost')) { Normalize-OpenPathRuntimeDependencyHost -Value $Result['dependencyHost'] } else { '' }
+            $ready = $false
+            if ($anchorHost -and $dependencyHost) {
+                $snapshot = Get-NativeHostRuntimeDependencySnapshot
+                $entryState = Get-NativeHostRuntimeDependencyEntryState -Snapshot $snapshot -AnchorHost $anchorHost -DependencyHost $dependencyHost
+                $ready = [bool]$entryState.ready
+            }
+            $Result['ready'] = $ready
+            $Result['runtimeDependencyState'] = if ($ready) { 'ready' } else { 'pending' }
         }
     }
     return $Result
+}
+
+function Get-NativeHostRuntimeDependencyPolicyContext {
+    <#
+    .SYNOPSIS
+    Returns the process-cached runtime dependency validation sets for a message batch.
+    .DESCRIPTION
+    The protected-host catalog and whitelist set are expensive to rebuild per request. The
+    cache key is derived from the staged whitelist mirror and native state file metadata, so
+    a staged policy change invalidates it. This benefits the blocking per-message path today
+    and the persistent native host of Phase 2C.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][PSCustomObject]$Sections,
+        [AllowNull()][PSCustomObject]$State = $null
+    )
+
+    $fingerprintParts = @()
+    foreach ($pathVariable in @('WhitelistPath', 'StatePath')) {
+        $pathValue = ''
+        $variable = Get-Variable -Name $pathVariable -Scope Script -ErrorAction SilentlyContinue
+        if ($variable -and $variable.Value) { $pathValue = [string]$variable.Value }
+        if (-not $pathValue) { continue }
+
+        $item = Get-Item -LiteralPath $pathValue -ErrorAction SilentlyContinue
+        if ($item) {
+            $fingerprintParts += ('{0}|{1}|{2}' -f $pathValue, $item.LastWriteTimeUtc.Ticks, $item.Length)
+        }
+        else {
+            $fingerprintParts += "$pathValue|missing"
+        }
+    }
+    $cacheKey = ($fingerprintParts -join '#')
+    if (-not $cacheKey) { $cacheKey = 'runtime-dependency-policy-no-inputs' }
+
+    return (Get-OpenPathRuntimeDependencyPolicyContext `
+            -CacheKey $cacheKey `
+            -WhitelistedDomains @($Sections.Whitelist) `
+            -BlockedSubdomains @($Sections.BlockedSubdomains) `
+            -State $State)
 }
 
 function Resolve-NativeHostLocalRuntimeDependencyCandidate {
@@ -184,20 +386,84 @@ function Resolve-NativeHostLocalRuntimeDependencyCandidate {
         [PSCustomObject]$State,
 
         [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Sections
+        [PSCustomObject]$Sections,
+
+        [switch]$SkipOverlayCheck
     )
 
+    $context = Get-NativeHostRuntimeDependencyPolicyContext -Sections $Sections -State $State
     return (Test-OpenPathRuntimeDependencyCandidate `
             -Message $Message `
             -WhitelistedDomains @($Sections.Whitelist) `
             -BlockedSubdomains @($Sections.BlockedSubdomains) `
-            -State $State)
+            -State $State `
+            -SkipOverlayCheck:$SkipOverlayCheck `
+            -WhitelistSet $context.WhitelistSet `
+            -ProtectedHosts $context.ProtectedHosts `
+            -BlockedSubdomainSet $context.BlockedSubdomainSet)
+}
+
+function Get-NativeHostRuntimeDependencyMode {
+    <#
+    .SYNOPSIS
+    Returns 'blocking' (default, unchanged behavior), 'enqueue', or 'invalid' for an unsupported mode value.
+    #>
+    param([AllowNull()][object]$Message)
+
+    if ($null -eq $Message -or -not $Message.PSObject.Properties['mode'] -or -not $Message.mode) {
+        return 'blocking'
+    }
+
+    $mode = ([string]$Message.mode).Trim().ToLowerInvariant()
+    switch ($mode) {
+        '' { return 'blocking' }
+        'blocking' { return 'blocking' }
+        'enqueue' { return 'enqueue' }
+        default { return 'invalid' }
+    }
+}
+
+function Send-NativeHostRuntimeDependencyEnqueueTrigger {
+    <#
+    .SYNOPSIS
+    Fire-and-forget fallback trigger for enqueue-mode requests when the resident worker is not fresh.
+    .DESCRIPTION
+    The resident worker watches the queue and applies enqueue-mode batches without a
+    scheduled-task hop. When its heartbeat and busy mark are both stale, the scheduled
+    apply task is nudged so the batch is still applied without making the caller wait.
+    #>
+    param()
+
+    try {
+        if (Test-NativeHostRuntimeDependencyWorkerFresh -MaxAgeSeconds 10 -BusyMaxAgeSeconds 120) {
+            return $false
+        }
+        $taskName = if (
+            (Get-Variable -Name RuntimeDependencyTaskName -Scope Script -ErrorAction SilentlyContinue) -and
+            -not [string]::IsNullOrWhiteSpace($script:RuntimeDependencyTaskName)
+        ) {
+            [string]$script:RuntimeDependencyTaskName
+        }
+        else {
+            'OpenPath-RuntimeDependencyApply'
+        }
+        $runner = Get-NativeHostTaskRunner
+        $runResult = & $runner.RunTask $taskName
+        return ($runResult.success -eq $true)
+    }
+    catch {
+        Write-NativeHostStageLog -Stage 'enqueue-trigger-failed' -Fields @{ error = [string]$_ }
+        return $false
+    }
 }
 
 function Invoke-NativeHostLocalRuntimeDependencyAction {
     <#
     .SYNOPSIS
     Queues a single runtime dependency request and triggers the update task, waiting for the dependency to be applied.
+    .DESCRIPTION
+    Without a `mode` field the historical blocking behavior is unchanged. `mode: 'enqueue'`
+    validates and queues the request and answers immediately with the per-entry state.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -209,6 +475,14 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Sections
     )
+
+    $mode = Get-NativeHostRuntimeDependencyMode -Message $Message
+    if ($mode -eq 'invalid') {
+        return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; error = 'Unsupported runtime dependency mode' }
+    }
+    if ($mode -eq 'enqueue') {
+        return (Invoke-NativeHostLocalRuntimeDependencyEnqueueAction -Message $Message -State $State -Sections $Sections)
+    }
 
     $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $Message -State $State -Sections $Sections
     if ($candidate.Valid -ne $true) {
@@ -283,10 +557,15 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
     }
 }
 
-function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
+function Invoke-NativeHostLocalRuntimeDependencyEnqueueAction {
     <#
     .SYNOPSIS
-    Queues multiple runtime dependency requests from a batch message and triggers a single update task for all of them.
+    Non-blocking allow: validates and queues one dependency, answering immediately with its per-entry state.
+    .DESCRIPTION
+    `mode: 'enqueue'` returns as soon as the request is written (or immediately as `ready`
+    when the dependency is already applied) instead of waiting for the DNS reload. The
+    resident worker applies the queued batch; the scheduled apply task is nudged only when
+    the worker heartbeat and busy mark are both stale.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -299,7 +578,197 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
         [PSCustomObject]$Sections
     )
 
-    $entries = @($Message.entries)
+    $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $Message -State $State -Sections $Sections -SkipOverlayCheck
+    if ($candidate.Valid -ne $true) {
+        return (Add-NativeHostRuntimeDependencyReadinessToResult -Result $candidate.Result)
+    }
+
+    $snapshot = Get-NativeHostRuntimeDependencySnapshot
+    $entryState = Get-NativeHostRuntimeDependencyEntryState -Snapshot $snapshot -AnchorHost $candidate.AnchorHost -DependencyHost $candidate.DependencyHost
+    if ($entryState.ready) {
+        return @{
+            success = $true
+            action = $script:OpenPathRuntimeDependencyActionAllowLocal
+            anchorHost = $candidate.AnchorHost
+            dependencyHost = $candidate.DependencyHost
+            requestType = $candidate.RequestType
+            queued = $false
+            ready = $true
+            runtimeDependencyState = 'ready'
+            mode = 'enqueue'
+            source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
+        }
+    }
+
+    $queueWriteStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $requestPath = Write-OpenPathRuntimeDependencyQueueRequest `
+        -AnchorHost $candidate.AnchorHost `
+        -DependencyHost $candidate.DependencyHost `
+        -RequestType $candidate.RequestType
+    $queueWriteStopwatch.Stop()
+    $workerTriggered = Send-NativeHostRuntimeDependencyEnqueueTrigger
+    Write-NativeHostStageLog -Stage 'queue-written' `
+        -Domains @($candidate.DependencyHost) `
+        -ElapsedMs $queueWriteStopwatch.ElapsedMilliseconds `
+        -Fields @{ anchorHost = $candidate.AnchorHost; requestType = $candidate.RequestType; request = $requestPath; mode = 'enqueue'; workerTriggered = [bool]$workerTriggered }
+
+    return @{
+        success = $true
+        action = $script:OpenPathRuntimeDependencyActionAllowLocal
+        anchorHost = $candidate.AnchorHost
+        dependencyHost = $candidate.DependencyHost
+        requestType = $candidate.RequestType
+        queued = $true
+        ready = $false
+        runtimeDependencyState = 'pending'
+        mode = 'enqueue'
+        requestPath = $requestPath
+        queueWriteMs = [int]$queueWriteStopwatch.ElapsedMilliseconds
+        workerTriggered = [bool]$workerTriggered
+        source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
+    }
+}
+
+function Invoke-NativeHostLocalRuntimeDependencyBatchEnqueueAction {
+    <#
+    .SYNOPSIS
+    Non-blocking batch allow: validates and queues every entry, answering per-entry states immediately.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Message,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$State,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Sections
+    )
+
+    # `$Message.entries` on a single-pair message yields `$null`; `@($null)` is a
+    # one-element array and would wrongly route the message into the batch branch.
+    $entries = @($Message.entries | Where-Object { $null -ne $_ })
+    if ($entries.Count -eq 0) {
+        return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocalBatch; error = 'Invalid runtime dependency batch payload'; results = @() }
+    }
+
+    $results = @()
+    $queuedResults = @()
+    $snapshot = $null
+    $pairStateCache = @{}
+
+    foreach ($entry in @($entries | Select-Object -First $script:OpenPathRuntimeDependencyBatchMaxEntries)) {
+        $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $entry -State $State -Sections $Sections -SkipOverlayCheck
+        if ($candidate.Valid -ne $true) {
+            $results += (Add-NativeHostRuntimeDependencyReadinessToResult -Result $candidate.Result)
+            continue
+        }
+
+        if ($null -eq $snapshot) {
+            $snapshot = Get-NativeHostRuntimeDependencySnapshot
+        }
+        $pairKey = "$($candidate.AnchorHost)|$($candidate.DependencyHost)"
+        if (-not $pairStateCache.ContainsKey($pairKey)) {
+            $pairStateCache[$pairKey] = Get-NativeHostRuntimeDependencyEntryState -Snapshot $snapshot -AnchorHost $candidate.AnchorHost -DependencyHost $candidate.DependencyHost
+        }
+        $entryState = $pairStateCache[$pairKey]
+
+        if ($entryState.ready) {
+            $results += @{
+                success = $true
+                action = $script:OpenPathRuntimeDependencyActionAllowLocal
+                anchorHost = $candidate.AnchorHost
+                dependencyHost = $candidate.DependencyHost
+                requestType = $candidate.RequestType
+                queued = $false
+                ready = $true
+                runtimeDependencyState = 'ready'
+                source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
+            }
+            continue
+        }
+
+        $queueWriteStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $requestPath = Write-OpenPathRuntimeDependencyQueueRequest `
+            -AnchorHost $candidate.AnchorHost `
+            -DependencyHost $candidate.DependencyHost `
+            -RequestType $candidate.RequestType
+        $queueWriteStopwatch.Stop()
+        $result = @{
+            success = $true
+            action = $script:OpenPathRuntimeDependencyActionAllowLocal
+            anchorHost = $candidate.AnchorHost
+            dependencyHost = $candidate.DependencyHost
+            requestType = $candidate.RequestType
+            queued = $true
+            ready = $false
+            runtimeDependencyState = 'pending'
+            requestPath = $requestPath
+            queueWriteMs = [int]$queueWriteStopwatch.ElapsedMilliseconds
+            source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
+        }
+        $results += $result
+        $queuedResults += $result
+    }
+
+    if ($entries.Count -gt $script:OpenPathRuntimeDependencyBatchMaxEntries) {
+        $results += @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; error = 'Runtime dependency batch limit exceeded' }
+    }
+
+    $workerTriggered = $false
+    if ($queuedResults.Count -gt 0) {
+        $workerTriggered = Send-NativeHostRuntimeDependencyEnqueueTrigger
+        foreach ($result in $queuedResults) {
+            $result['workerTriggered'] = [bool]$workerTriggered
+        }
+        Write-NativeHostStageLog -Stage 'queue-written' `
+            -Domains @($queuedResults | ForEach-Object { $_.dependencyHost }) `
+            -ElapsedMs ([int](@($queuedResults | ForEach-Object { if ($_.ContainsKey('queueWriteMs')) { [int]$_.queueWriteMs } else { 0 } } | Measure-Object -Sum).Sum)) `
+            -Fields @{ count = $queuedResults.Count; mode = 'enqueue'; workerTriggered = [bool]$workerTriggered }
+    }
+
+    $failedResults = @($results | Where-Object { $_.success -ne $true })
+    return @{
+        success = ($failedResults.Count -eq 0)
+        action = $script:OpenPathRuntimeDependencyActionAllowLocalBatch
+        mode = 'enqueue'
+        count = $results.Count
+        queuedCount = $queuedResults.Count
+        workerTriggered = [bool]$workerTriggered
+        results = $results
+    }
+}
+
+function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
+    <#
+    .SYNOPSIS
+    Queues multiple runtime dependency requests from a batch message and triggers a single update task for all of them.
+    .DESCRIPTION
+    Without a `mode` field the historical blocking behavior is unchanged. `mode: 'enqueue'`
+    validates and queues every entry and answers per-entry states immediately.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Message,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$State,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Sections
+    )
+
+    $mode = Get-NativeHostRuntimeDependencyMode -Message $Message
+    if ($mode -eq 'invalid') {
+        return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocalBatch; error = 'Unsupported runtime dependency mode' }
+    }
+    if ($mode -eq 'enqueue') {
+        return (Invoke-NativeHostLocalRuntimeDependencyBatchEnqueueAction -Message $Message -State $State -Sections $Sections)
+    }
+
+    # `$Message.entries` on a single-pair message yields `$null`; `@($null)` is a
+    # one-element array and would wrongly route the message into the batch branch.
+    $entries = @($Message.entries | Where-Object { $null -ne $_ })
     if ($entries.Count -eq 0) {
         return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocalBatch; error = 'Invalid runtime dependency batch payload'; results = @() }
     }
@@ -404,7 +873,11 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
 function Invoke-NativeHostLocalRuntimeDependencyCheckAction {
     <#
     .SYNOPSIS
-    Reports whether a previously learned runtime dependency is currently operative in the local DNS path.
+    Reports whether previously learned runtime dependencies are currently operative in the local DNS path.
+    .DESCRIPTION
+    Accepts either the historical single pair (`anchorHost`/`dependencyHost`) or a batch
+    (`entries: [{anchorHost, dependencyHost}]`). The overlay is read once per message and
+    every answer uses the per-entry readiness rule.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -415,46 +888,62 @@ function Invoke-NativeHostLocalRuntimeDependencyCheckAction {
         return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionCheckLocal; error = 'Sensitive fields are not accepted' }
     }
 
+    # `$Message.entries` on a single-pair message yields `$null`; `@($null)` is a
+    # one-element array and would wrongly route the message into the batch branch.
+    $entries = @($Message.entries | Where-Object { $null -ne $_ })
+    if ($entries.Count -gt 0) {
+        $snapshot = Get-NativeHostRuntimeDependencySnapshot
+        $results = @()
+        foreach ($entry in @($entries | Select-Object -First $script:OpenPathRuntimeDependencyBatchMaxEntries)) {
+            $anchorHost = Normalize-OpenPathRuntimeDependencyHost -Value $entry.anchorHost
+            $dependencyHost = Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost
+            if (-not $anchorHost -or -not $dependencyHost) {
+                $results += @{ success = $false; action = $script:OpenPathRuntimeDependencyActionCheckLocal; error = 'Invalid runtime dependency payload' }
+                continue
+            }
+            $entryState = Get-NativeHostRuntimeDependencyEntryState -Snapshot $snapshot -AnchorHost $anchorHost -DependencyHost $dependencyHost
+            $result = @{
+                success = $true
+                action = $script:OpenPathRuntimeDependencyActionCheckLocal
+                anchorHost = $anchorHost
+                dependencyHost = $dependencyHost
+                ready = [bool]$entryState.ready
+                runtimeDependencyState = [string]$entryState.runtimeDependencyState
+            }
+            if ($entryState.expiresAt) { $result['expiresAt'] = [string]$entryState.expiresAt }
+            $results += $result
+        }
+        if ($entries.Count -gt $script:OpenPathRuntimeDependencyBatchMaxEntries) {
+            $results += @{ success = $false; action = $script:OpenPathRuntimeDependencyActionCheckLocal; error = 'Runtime dependency batch limit exceeded' }
+        }
+
+        $failedResults = @($results | Where-Object { $_.success -ne $true })
+        return @{
+            success = ($failedResults.Count -eq 0)
+            action = $script:OpenPathRuntimeDependencyActionCheckLocal
+            count = $results.Count
+            results = $results
+        }
+    }
+
     $anchorHost = Normalize-OpenPathRuntimeDependencyHost -Value $Message.anchorHost
     $dependencyHost = Normalize-OpenPathRuntimeDependencyHost -Value $Message.dependencyHost
     if (-not $anchorHost -or -not $dependencyHost) {
         return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionCheckLocal; error = 'Invalid runtime dependency payload' }
     }
 
-    $generation = 0
-    $appliedGeneration = 0
-    $entry = $null
-    $path = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $script:OpenPathRoot
-    if (Test-Path $path -ErrorAction SilentlyContinue) {
-        try {
-            $raw = Get-Content $path -Raw -ErrorAction Stop
-            if (-not [string]::IsNullOrWhiteSpace($raw)) {
-                $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
-                if ($parsed.PSObject.Properties['generation']) { $generation = [int]$parsed.generation }
-                if ($parsed.PSObject.Properties['appliedGeneration']) { $appliedGeneration = [int]$parsed.appliedGeneration }
-                $entry = @($parsed.entries | Where-Object {
-                        (Normalize-OpenPathRuntimeDependencyHost -Value $_.dependencyHost) -eq $dependencyHost -and
-                        (Normalize-OpenPathRuntimeDependencyHost -Value $_.anchorHost) -eq $anchorHost
-                    }) | Select-Object -First 1
-            }
-        }
-        catch {
-            Write-NativeHostLog "Failed to inspect runtime dependency overlay: $_"
-        }
-    }
-
-    $isReady = ($null -ne $entry) -and ($generation -gt 0) -and ($appliedGeneration -ge $generation)
-    $state = if ($isReady) { 'ready' } else { 'pending' }
+    $snapshot = Get-NativeHostRuntimeDependencySnapshot
+    $entryState = Get-NativeHostRuntimeDependencyEntryState -Snapshot $snapshot -AnchorHost $anchorHost -DependencyHost $dependencyHost
     $response = @{
         success = $true
         action = $script:OpenPathRuntimeDependencyActionCheckLocal
         anchorHost = $anchorHost
         dependencyHost = $dependencyHost
-        ready = [bool]$isReady
-        runtimeDependencyState = $state
+        ready = [bool]$entryState.ready
+        runtimeDependencyState = [string]$entryState.runtimeDependencyState
     }
-    if ($entry -and $entry.PSObject.Properties['expiresAt']) {
-        $response['expiresAt'] = [string]$entry.expiresAt
+    if ($entryState.expiresAt) {
+        $response['expiresAt'] = [string]$entryState.expiresAt
     }
     return $response
 }
@@ -661,13 +1150,9 @@ function Invoke-UpdateTask {
                     $waitRunner = Get-NativeHostTaskRunner
                     $waitResult = & $waitRunner.WaitFor $triggerState['TaskName'] {
                         $whitelistReady = Test-NativeWhitelistContainsDomains -Domains $Domains
-                        $runtimeDependencyReady = (
-                            (Test-NativeHostRuntimeDependencyQueueRequestProcessed -RequestPath $RuntimeDependencyRequestPath) -and
-                            (
-                                -not [string]::IsNullOrWhiteSpace($RuntimeDependencyRequestPath) -or
-                                (Test-NativeHostRuntimeDependencyOverlayContainsDomains -Domains $RuntimeDependencyDomains)
-                            )
-                        )
+                        $runtimeDependencyReady = Test-NativeHostRuntimeDependencyReady `
+                            -RequestPath $RuntimeDependencyRequestPath `
+                            -Domains $RuntimeDependencyDomains
                         return ($whitelistReady -and $runtimeDependencyReady)
                     } $TimeoutSeconds 100
 

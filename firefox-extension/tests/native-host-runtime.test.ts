@@ -748,3 +748,236 @@ void test('native host update-whitelist coalesces concurrent requests behind a s
     1
   );
 });
+
+void test('linux native host reports per-entry readiness while a later batch is pending', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-entry-ready-'));
+  const overlayPath = join(runtimeDir, 'runtime-dependency-overlay.json');
+  writeFileSync(
+    overlayPath,
+    JSON.stringify({
+      version: 1,
+      generation: 2,
+      appliedGeneration: 1,
+      entries: [
+        { anchorHost: 'allowed.example', dependencyHost: 'cdn.example', generation: 1 },
+        { anchorHost: 'allowed.example', dependencyHost: 'cdn2.example', generation: 2 },
+      ],
+    }),
+    'utf8'
+  );
+
+  const env = {
+    ...process.env,
+    XDG_DATA_HOME: runtimeDir,
+    OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE: overlayPath,
+  };
+
+  // The first entry was applied in generation 1; the document generation moved on
+  // because cdn2 was learned later. Per-entry readiness must keep cdn ready.
+  const applied = runNativeHostOnce(env, {
+    action: 'check-local-runtime-dependency',
+    anchorHost: 'allowed.example',
+    dependencyHost: 'cdn.example',
+  }) as { ready?: boolean; runtimeDependencyState?: string };
+  assert.equal(applied.ready, true, JSON.stringify(applied));
+  assert.equal(applied.runtimeDependencyState, 'ready');
+
+  const pending = runNativeHostOnce(env, {
+    action: 'check-local-runtime-dependency',
+    anchorHost: 'allowed.example',
+    dependencyHost: 'cdn2.example',
+  }) as { ready?: boolean; runtimeDependencyState?: string };
+  assert.equal(pending.ready, false);
+  assert.equal(pending.runtimeDependencyState, 'pending');
+});
+
+void test('linux native host answers check batches from one overlay read and echoes the id', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-check-batch-'));
+  const overlayPath = join(runtimeDir, 'runtime-dependency-overlay.json');
+  writeFileSync(
+    overlayPath,
+    JSON.stringify({
+      version: 1,
+      generation: 3,
+      appliedGeneration: 3,
+      entries: [{ anchorHost: 'allowed.example', dependencyHost: 'cdn.example', generation: 1 }],
+    }),
+    'utf8'
+  );
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+      OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE: overlayPath,
+    },
+    {
+      action: 'check-local-runtime-dependency',
+      id: 'port-7',
+      entries: [
+        { anchorHost: 'allowed.example', dependencyHost: 'cdn.example' },
+        { anchorHost: 'allowed.example', dependencyHost: 'cdn2.example' },
+      ],
+    }
+  ) as {
+    count?: number;
+    id?: string;
+    results?: { dependencyHost?: string; ready?: boolean; runtimeDependencyState?: string }[];
+    success?: boolean;
+  };
+
+  assert.equal(response.success, true);
+  assert.equal(response.id, 'port-7');
+  assert.equal(response.count, 2);
+  assert.deepStrictEqual(
+    (response.results ?? []).map((result) => [
+      result.dependencyHost,
+      result.ready,
+      result.runtimeDependencyState,
+    ]),
+    [
+      ['cdn.example', true, 'ready'],
+      ['cdn2.example', false, 'pending'],
+    ]
+  );
+});
+
+void test('linux native host enqueue mode answers immediately without waiting for the apply', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-enqueue-'));
+  const queueDir = join(runtimeDir, 'queue');
+  const overlayPath = join(runtimeDir, 'runtime-dependency-overlay.json');
+  mkdirSync(queueDir, { recursive: true });
+
+  const env = {
+    ...process.env,
+    XDG_DATA_HOME: runtimeDir,
+    OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
+    OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE: overlayPath,
+  };
+
+  const started = Date.now();
+  const pending = runNativeHostOnce(env, {
+    action: 'allow-local-runtime-dependency',
+    id: 'req-1',
+    mode: 'enqueue',
+    anchorHost: 'Allowed.Example.',
+    dependencyHost: 'CDN.Example',
+    requestType: 'FETCH',
+  }) as {
+    dependencyHost?: string;
+    id?: string;
+    mode?: string;
+    queued?: boolean;
+    ready?: boolean;
+    runtimeDependencyState?: string;
+    success?: boolean;
+  };
+  const elapsed = Date.now() - started;
+
+  assert.equal(pending.success, true);
+  assert.equal(pending.mode, 'enqueue');
+  assert.equal(pending.id, 'req-1');
+  assert.equal(pending.dependencyHost, 'cdn.example');
+  assert.equal(pending.queued, true);
+  assert.equal(pending.ready, false);
+  assert.equal(pending.runtimeDependencyState, 'pending');
+  // The historical blocking path waits up to the ready timeout (8s default).
+  assert.ok(elapsed < 5000, `enqueue answered too slowly: ${String(elapsed)}ms`);
+  assert.equal(readdirSync(queueDir).filter((entry) => entry.endsWith('.json')).length, 1);
+
+  // Same pair once applied: answered ready without queueing another request.
+  writeFileSync(
+    overlayPath,
+    JSON.stringify({
+      version: 1,
+      generation: 1,
+      appliedGeneration: 1,
+      entries: [{ anchorHost: 'allowed.example', dependencyHost: 'cdn.example', generation: 1 }],
+    }),
+    'utf8'
+  );
+  const ready = runNativeHostOnce(env, {
+    action: 'allow-local-runtime-dependency',
+    id: 2,
+    mode: 'enqueue',
+    anchorHost: 'allowed.example',
+    dependencyHost: 'cdn.example',
+    requestType: 'fetch',
+  }) as {
+    id?: number;
+    queued?: boolean;
+    ready?: boolean;
+    runtimeDependencyState?: string;
+  };
+
+  assert.equal(ready.ready, true);
+  assert.equal(ready.queued, false);
+  assert.equal(ready.runtimeDependencyState, 'ready');
+  assert.equal(ready.id, 2);
+  assert.equal(readdirSync(queueDir).filter((entry) => entry.endsWith('.json')).length, 1);
+});
+
+void test('linux native host enqueue mode answers per-entry states for a batch', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-enqueue-batch-'));
+  const queueDir = join(runtimeDir, 'queue');
+  const overlayPath = join(runtimeDir, 'runtime-dependency-overlay.json');
+  mkdirSync(queueDir, { recursive: true });
+  writeFileSync(
+    overlayPath,
+    JSON.stringify({
+      version: 1,
+      generation: 1,
+      appliedGeneration: 1,
+      entries: [
+        { anchorHost: 'allowed.example', dependencyHost: 'cdn-ready.example', generation: 1 },
+      ],
+    }),
+    'utf8'
+  );
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+      OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
+      OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE: overlayPath,
+    },
+    {
+      action: 'allow-local-runtime-dependency-batch',
+      mode: 'enqueue',
+      entries: [
+        {
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn-ready.example',
+          requestType: 'fetch',
+        },
+        { anchorHost: 'allowed.example', dependencyHost: 'cdn-new.example', requestType: 'script' },
+      ],
+    }
+  ) as {
+    queuedCount?: number;
+    results?: {
+      dependencyHost?: string;
+      queued?: boolean;
+      ready?: boolean;
+      runtimeDependencyState?: string;
+    }[];
+    success?: boolean;
+  };
+
+  assert.equal(response.success, true);
+  assert.equal(response.queuedCount, 1);
+  assert.deepStrictEqual(
+    (response.results ?? []).map((result) => [
+      result.dependencyHost,
+      result.queued,
+      result.ready,
+      result.runtimeDependencyState,
+    ]),
+    [
+      ['cdn-ready.example', false, true, 'ready'],
+      ['cdn-new.example', true, false, 'pending'],
+    ]
+  );
+  assert.equal(readdirSync(queueDir).filter((entry) => entry.endsWith('.json')).length, 1);
+});

@@ -649,9 +649,11 @@ Describe "Browser Module - Native Host" {
             Assert-ContentContainsAll -Content $runtimeDependencyOverlayContent -Needles @(
                 'RuntimeDependency.Protocol.ps1',
                 'version = $script:OpenPathRuntimeDependencyOverlayVersion',
-                'generation = $previousGeneration + 1',
+                '$nextGeneration = $previousGeneration + 1',
                 'appliedGeneration = $previousAppliedGeneration',
                 'function Set-OpenPathRuntimeDependencyOverlayApplied',
+                'function Test-OpenPathRuntimeDependencyEntryReady',
+                'function Get-OpenPathRuntimeDependencyPairKey',
                 'source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal'
             )
             Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
@@ -2065,6 +2067,161 @@ Describe "Browser Module - Native Host" {
                 $queuedRequestPath = Join-Path $tempRoot 'queued-request.json'
                 Set-Content -Path $queuedRequestPath -Value '{}'
                 (Test-NativeHostRuntimeDependencyReady -RequestPath $queuedRequestPath -Domains @('cdn-ready.example')) | Should -BeFalse
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Answers runtime dependency enqueue mode immediately with the per-entry state" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-enqueue-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                . $nativeHostActionsPath
+                $sections = [PSCustomObject]@{
+                    Whitelist = @('allowed.example')
+                    BlockedSubdomains = @()
+                    BlockedPaths = @()
+                    PolicyKnown = $true
+                    PolicyVersion = 'test'
+                }
+                $state = [PSCustomObject]@{}
+
+                $started = Get-Date
+                $response = Invoke-NativeHostLocalRuntimeDependencyAction -Message ([PSCustomObject]@{
+                        action = 'allow-local-runtime-dependency'
+                        mode = 'enqueue'
+                        anchorHost = 'allowed.example'
+                        dependencyHost = 'cdn.example'
+                        requestType = 'fetch'
+                    }) -State $state -Sections $sections
+                ((Get-Date) - $started).TotalSeconds | Should -BeLessThan 5
+
+                $response.success | Should -BeTrue
+                $response.mode | Should -Be 'enqueue'
+                $response.queued | Should -BeTrue
+                $response.ready | Should -BeFalse
+                $response.runtimeDependencyState | Should -Be 'pending'
+                $response.dependencyHost | Should -Be 'cdn.example'
+
+                $queuePath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue -OpenPathRoot $tempRoot
+                @(Get-ChildItem -Path $queuePath -Filter '*.json' -ErrorAction SilentlyContinue).Count | Should -Be 1
+
+                $unsupported = Invoke-NativeHostLocalRuntimeDependencyAction -Message ([PSCustomObject]@{
+                        action = 'allow-local-runtime-dependency'
+                        mode = 'teleport'
+                        anchorHost = 'allowed.example'
+                        dependencyHost = 'cdn.example'
+                        requestType = 'fetch'
+                    }) -State $state -Sections $sections
+                $unsupported.success | Should -BeFalse
+                $unsupported.error | Should -Be 'Unsupported runtime dependency mode'
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Answers runtime dependency check batches per entry and echoes the correlation id" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $previousStatePath = if (Get-Variable -Name StatePath -Scope Script -ErrorAction SilentlyContinue) { $script:StatePath } else { $null }
+            $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-check-batch-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                . $nativeHostActionsPath
+                $overlayPath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $tempRoot
+                New-Item -ItemType Directory -Path (Split-Path $overlayPath -Parent) -Force | Out-Null
+                @{
+                    version = 1
+                    generation = 2
+                    appliedGeneration = 1
+                    entries = @(
+                        @{ anchorHost = 'www.reddit.com'; dependencyHost = 'cdn-one.example'; generation = 1 },
+                        @{ anchorHost = 'www.reddit.com'; dependencyHost = 'cdn-two.example'; generation = 2 }
+                    )
+                } | ConvertTo-Json -Depth 6 | Set-Content -Path $overlayPath
+
+                $batch = Invoke-NativeHostLocalRuntimeDependencyCheckAction -Message ([PSCustomObject]@{
+                        action = 'check-local-runtime-dependency'
+                        entries = @(
+                            [PSCustomObject]@{ anchorHost = 'www.reddit.com'; dependencyHost = 'cdn-one.example' },
+                            [PSCustomObject]@{ anchorHost = 'www.reddit.com'; dependencyHost = 'cdn-two.example' }
+                        )
+                    })
+
+                $batch.success | Should -BeTrue
+                $batch.count | Should -Be 2
+                $batch.results[0].ready | Should -BeTrue
+                $batch.results[0].runtimeDependencyState | Should -Be 'ready'
+                $batch.results[1].ready | Should -BeFalse
+                $batch.results[1].runtimeDependencyState | Should -Be 'pending'
+
+                # The wait condition uses the same per-entry rule: the applied entry
+                # is ready while the newer batch is still pending.
+                (Test-NativeHostRuntimeDependencyReady -RequestPath '' -Domains @('cdn-one.example')) | Should -BeTrue
+                (Test-NativeHostRuntimeDependencyReady -RequestPath '' -Domains @('cdn-two.example')) | Should -BeFalse
+
+                # The correlation id is echoed by Handle-Message for every action.
+                $script:StatePath = Join-Path $tempRoot 'native-state.json'
+                $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
+                Set-Content -Path $script:WhitelistPath -Value '## WHITELIST'
+                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+                $ping = Handle-Message -Message ([PSCustomObject]@{ action = 'ping'; id = 'port-9' })
+                $ping.success | Should -BeTrue
+                $ping.id | Should -Be 'port-9'
+
+                $pingWithoutId = Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })
+                $pingWithoutId.ContainsKey('id') | Should -BeFalse
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                if ($null -ne $previousStatePath) { $script:StatePath = $previousStatePath } else { Remove-Variable -Name StatePath -Scope Script -ErrorAction SilentlyContinue }
+                if ($null -ne $previousWhitelistPath) { $script:WhitelistPath = $previousWhitelistPath } else { Remove-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Treats a recent worker busy mark as alive during long batches" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-busy-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                . $nativeHostActionsPath
+                $statePath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyWorkerState -OpenPathRoot $tempRoot
+                New-Item -ItemType Directory -Path (Split-Path $statePath -Parent) -Force | Out-Null
+
+                # Simulated 30 s batch: the idle heartbeat is 25 s old but the busy
+                # mark is fresh, so the native host must not fall back to schtasks.
+                @{
+                    pid = 55
+                    heartbeatEpochMs = [DateTimeOffset]::UtcNow.AddSeconds(-25).ToUnixTimeMilliseconds()
+                    busySince = [DateTimeOffset]::UtcNow.AddSeconds(-5).ToString('o')
+                    busySinceEpochMs = [DateTimeOffset]::UtcNow.AddSeconds(-5).ToUnixTimeMilliseconds()
+                    busyStage = 'acrylic-reload'
+                } | ConvertTo-Json -Depth 4 | Set-Content -Path $statePath
+
+                (Test-NativeHostRuntimeDependencyWorkerFresh -MaxAgeSeconds 10 -BusyMaxAgeSeconds 120) | Should -BeTrue
+
+                # Beyond the busy window the worker is not alive.
+                @{
+                    pid = 55
+                    heartbeatEpochMs = [DateTimeOffset]::UtcNow.AddSeconds(-25).ToUnixTimeMilliseconds()
+                    busySinceEpochMs = [DateTimeOffset]::UtcNow.AddSeconds(-300).ToUnixTimeMilliseconds()
+                } | ConvertTo-Json -Depth 4 | Set-Content -Path $statePath
+                (Test-NativeHostRuntimeDependencyWorkerFresh -MaxAgeSeconds 10 -BusyMaxAgeSeconds 120) | Should -BeFalse
             }
             finally {
                 if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
