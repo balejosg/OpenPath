@@ -25,6 +25,9 @@ lockPref("network.trr.uri", "");
 lockPref("network.dns.disablePrefetch", true);
 lockPref("network.dnsCacheExpiration", 0);
 lockPref("network.dnsCacheExpirationGracePeriod", 0);
+lockPref("network.dns.refresh_negative_addr_on_use", true);
+lockPref("network.dnsNegativeCacheExpiration", 0);
+lockPref("network.dnsNegativeCacheExpirationGracePeriod", 0);
 "@
     }
 }

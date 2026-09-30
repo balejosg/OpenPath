@@ -106,6 +106,9 @@ PYEOF
     grep -q 'lockPref("network.trr.uri", "")' "$TEST_TMP_DIR/usr/lib/firefox-esr/mozilla.cfg"
     grep -q 'lockPref("network.dnsCacheExpiration", 0)' "$TEST_TMP_DIR/usr/lib/firefox-esr/mozilla.cfg"
     grep -q 'lockPref("network.dnsCacheExpirationGracePeriod", 0)' "$TEST_TMP_DIR/usr/lib/firefox-esr/mozilla.cfg"
+    grep -q 'lockPref("network.dns.refresh_negative_addr_on_use", true)' "$TEST_TMP_DIR/usr/lib/firefox-esr/mozilla.cfg"
+    grep -q 'lockPref("network.dnsNegativeCacheExpiration", 0)' "$TEST_TMP_DIR/usr/lib/firefox-esr/mozilla.cfg"
+    grep -q 'lockPref("network.dnsNegativeCacheExpirationGracePeriod", 0)' "$TEST_TMP_DIR/usr/lib/firefox-esr/mozilla.cfg"
 }
 
 @test "generate_firefox_autoconfig handles absence of Firefox" {

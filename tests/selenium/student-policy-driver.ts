@@ -188,6 +188,9 @@ export class StudentPolicyDriver implements StudentPolicyDriverState {
     options.setPreference('network.trr.uri', '');
     options.setPreference('network.dnsCacheExpiration', 0);
     options.setPreference('network.dnsCacheExpirationGracePeriod', 0);
+    options.setPreference('network.dns.refresh_negative_addr_on_use', true);
+    options.setPreference('network.dnsNegativeCacheExpiration', 0);
+    options.setPreference('network.dnsNegativeCacheExpirationGracePeriod', 0);
     options.setPreference('dom.webnotifications.enabled', true);
     options.setPreference('xpinstall.signatures.required', false);
     options.setPreference('extensions.blocklist.enabled', false);

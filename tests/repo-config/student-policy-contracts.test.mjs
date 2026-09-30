@@ -507,6 +507,21 @@ describe('repository verification contract', () => {
     );
     assert.match(
       studentPolicyDriver,
+      /options\.setPreference\('network\.dns\.refresh_negative_addr_on_use', true\)/,
+      'student-policy-driver.ts should refresh Firefox negative DNS answers on use'
+    );
+    assert.match(
+      studentPolicyDriver,
+      /options\.setPreference\('network\.dnsNegativeCacheExpiration', 0\)/,
+      'student-policy-driver.ts should disable the Firefox negative DNS cache'
+    );
+    assert.match(
+      studentPolicyDriver,
+      /options\.setPreference\('network\.dnsNegativeCacheExpirationGracePeriod', 0\)/,
+      'student-policy-driver.ts should disable the Firefox negative DNS cache grace period'
+    );
+    assert.match(
+      studentPolicyDriver,
       /pageLoad: DEFAULT_BLOCKED_TIMEOUT_MS/,
       'student-policy-driver.ts should bound page-load waits for sinkhole-blocked navigations'
     );

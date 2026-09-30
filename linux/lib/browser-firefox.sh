@@ -216,6 +216,11 @@ lockPref("network.trr.uri", "");
 lockPref("network.dns.disablePrefetch", true);
 lockPref("network.dnsCacheExpiration", 0);
 lockPref("network.dnsCacheExpirationGracePeriod", 0);
+// Refresh cached negative answers on use and disable the Firefox negative DNS
+// cache so a dependency learned after a failed lookup resolves immediately.
+lockPref("network.dns.refresh_negative_addr_on_use", true);
+lockPref("network.dnsNegativeCacheExpiration", 0);
+lockPref("network.dnsNegativeCacheExpirationGracePeriod", 0);
 EOF
 
     log "✓ Firefox autoconfig generated"

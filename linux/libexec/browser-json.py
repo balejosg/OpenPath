@@ -241,6 +241,12 @@ def apply_firefox_hardening(policy_root: dict, ext_id: str) -> None:
             "network.proxy.type": 0,
             "network.proxy.no_proxies_on": "",
             "network.dns.disablePrefetch": True,
+            # Refresh cached negative answers on use and disable the Firefox
+            # negative DNS cache so a dependency learned after a failed lookup
+            # resolves immediately instead of within the 60 s negative TTL.
+            "network.dns.refresh_negative_addr_on_use": True,
+            "network.dnsNegativeCacheExpiration": 0,
+            "network.dnsNegativeCacheExpirationGracePeriod": 0,
         }
         for pref_name, pref_value in locked_prefs.items():
             preferences[pref_name] = {"Value": pref_value, "Status": "locked"}

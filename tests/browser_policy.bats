@@ -334,6 +334,9 @@ prefs = policies["policies"]["Preferences"]
 assert prefs["network.trr.mode"] == {"Value": 5, "Status": "locked"}, prefs.get("network.trr.mode")
 assert prefs["network.proxy.type"]["Status"] == "locked", prefs.get("network.proxy.type")
 assert prefs["network.dns.disablePrefetch"] == {"Value": True, "Status": "locked"}, prefs.get("network.dns.disablePrefetch")
+assert prefs["network.dns.refresh_negative_addr_on_use"] == {"Value": True, "Status": "locked"}, prefs.get("network.dns.refresh_negative_addr_on_use")
+assert prefs["network.dnsNegativeCacheExpiration"] == {"Value": 0, "Status": "locked"}, prefs.get("network.dnsNegativeCacheExpiration")
+assert prefs["network.dnsNegativeCacheExpirationGracePeriod"] == {"Value": 0, "Status": "locked"}, prefs.get("network.dnsNegativeCacheExpirationGracePeriod")
 PYEOF
 }
 

@@ -15,6 +15,10 @@ Describe "Firefox network autoconfig" {
             $content.MozillaCfg | Should -Match 'lockPref\("network\.trr\.uri", ""\)'
             $content.MozillaCfg | Should -Match 'lockPref\("network\.dns\.disablePrefetch", true\)'
             $content.MozillaCfg | Should -Match 'lockPref\("network\.dnsCacheExpiration", 0\)'
+            $content.MozillaCfg | Should -Match 'lockPref\("network\.dnsCacheExpirationGracePeriod", 0\)'
+            $content.MozillaCfg | Should -Match 'lockPref\("network\.dns\.refresh_negative_addr_on_use", true\)'
+            $content.MozillaCfg | Should -Match 'lockPref\("network\.dnsNegativeCacheExpiration", 0\)'
+            $content.MozillaCfg | Should -Match 'lockPref\("network\.dnsNegativeCacheExpirationGracePeriod", 0\)'
             $content.MozillaCfg | Should -Not -Match 'DNSOverHTTPS'
         }
     }
