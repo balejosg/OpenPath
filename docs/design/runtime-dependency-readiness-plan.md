@@ -321,20 +321,125 @@ generation.
   resources. Earlier iterations on the same VM measured 3-8.6 s applies and
   released first-visit requests, which motivated the new budgets, the
   redundant-reload skip, the queue triggers, the drain loop and the debounce.
-- Firefox host-permission gap (verified 2026-09-27, product follow-up): a
-  policy-managed MV3 extension is not guaranteed to receive its
-  `host_permissions` on install. Firefox 156 release installed the signed
-  extension with `userPermissions.origins = []`, so `webRequest` saw no page
-  traffic (no blocking, no dependency learning). Firefox ESR 140.16 granted
-  them on a first-start policy install in the acceptance smoke (dependency
-  batches and a full page render), but another policy install in the same
-  session ended with `origins = []`. Temporary installation of the signed XPI
-  always grants them, which is how the acceptance exercised the flow. The
-  product needs a deterministic grant path (for example a first-run
-  `permissions.request` flow) or an explicit supported-browser pin with
-  reviewer notes updated accordingly.
+- Firefox host-permission representation (corrected 2026-09-30): an earlier
+  note in this document described `userPermissions.origins = []` as a
+  "host-permission gap". That was a misreading of the MV3 representation. In
+  Firefox, optional host permissions are not materialized under
+  `userPermissions.origins` for policy-managed (force-installed) extensions;
+  the `<all_urls>` grant appears in
+  `profile/extensions.json` + `extension-preferences.json` as a granted
+  permission and `webRequest` sees page traffic. The Phase 1 lab
+  (`evidence/spa-runtime-deps-phase1-20260929-1929/`) confirmed with Firefox
+  156 release and the force-installed signed XPI that dependency learning and
+  blocking worked with `userPermissions.origins = []`, so no product change is
+  required for the permission path. See "Phase 2A" below for the actual
+  Windows-side blockers that were measured.
 - Physical acceptance (freshly installed student machine, Windows and Linux)
   remains pending.
+
+### Phase 2A: resident worker, OS-level readiness, and negative caching (2026-09-30)
+
+Phase 1 (lab, `evidence/spa-runtime-deps-phase1-20260929-1929/summary.md`, two
+R2 runs + R3 + R1 on Windows 11 25H2 / Firefox 156 / Reddit) measured the
+Windows path end to end and found four blockers beyond the protocol itself:
+
+1. **Per-message cold start dominated the first batch.** Every learned batch
+   paid a fresh `schtasks.exe /Run` + new PowerShell process + module import
+   before the fast apply started. From the first dependency request to the
+   start of the fast apply took ~10-12 s; the first batch was applied at
+   T0+15-18 s. The extension's held requests release at the 5 s/6 s soft
+   timeouts, so the requests that triggered the learning were released before
+   the overlay became operative (holds 5,013-6,039 ms; never released by
+   `ready`).
+2. **The readiness wait was too coarse.** The native host polled the queue and
+   overlay conditions at 1000 ms, adding up to a second of latency on top of
+   the apply.
+3. **Readiness was unreadable to the browser user.** The overlay lives under
+   the restricted `C:\OpenPath\data` root; the staged native directory ACL is
+   `BUILTIN\Users:(RX)` and neither the overlay nor the (previously)
+   native-directory log file was writable/readable in the Firefox user
+   context. `Write-NativeHostLog` failed silently and
+   `Test-NativeHostRuntimeDependencyReady` could never observe a fresh
+   generation, which is why the extension always fell back to the soft
+   timeout. Two fixes: the overlay and worker heartbeat now receive an
+   explicit `BUILTIN\Users` read ACE when written, and the native host log
+   moved to `%LOCALAPPDATA%\OpenPath\native-host.log` (per-user, size-capped
+   with one rotation).
+4. **Negative caching kept failed dependencies broken after a late apply.**
+   Firefox caches the NODATA answer for 60 s and `network.dnsCacheExpiration`
+   only governed positive answers; Windows also kept 9501 (NODATA) entries.
+   A successful Acrylic reload alone therefore did not make a _fresh_ OS
+   lookup succeed.
+
+Phase 2A changes:
+
+- **Resident worker** (`scripts\Start-RuntimeDependencyWorker.ps1`,
+  task `OpenPath-RuntimeDependencyWorker`): a single SYSTEM process started at
+  boot that imports the update runtime once, watches the queue with a
+  `FileSystemWatcher` plus a 2 s backup sweep and a 150 ms debounce, and
+  applies batches in-process through
+  `Invoke-OpenPathRuntimeDependencyFastApply`. If the global update mutex is
+  busy the worker waits and retries instead of dropping the batch. It writes a
+  heartbeat (`data\runtime-dependency-worker-state.json`, readable by the
+  browser user) that the native host consults; the watchdog restarts the task
+  if it is not running. `schtasks.exe` remains as the fallback trigger and
+  `Apply-RuntimeDependencyQueue.ps1` keeps working for older layouts.
+- **Ready implies an OS-level lookup.** After a successful Acrylic reload the
+  fast apply now runs `Clear-OpenPathDnsClientCache`
+  (`windows/lib/internal/DNS.Acrylic.Service.ps1`, with an
+  `ipconfig /flushdns` fallback) before stamping `appliedGeneration`, and the
+  metrics line records `dnsFlushMs`/`dnsFlushOk`.
+- **Native host readiness poll** dropped from 1000 ms to 100 ms, and the
+  per-message pipeline is instrumented in the per-user log: process start,
+  message received, queue written, worker-fresh/task trigger, readiness
+  observed, response sent (absolute timestamps plus script/process-relative
+  milliseconds).
+- **Firefox negative cache disabled through managed config**: the same three
+  locks ship on Windows (`mozilla.cfg`) and Linux (mozilla.cfg +
+  `policies.json` Preferences): `network.dns.refresh_negative_addr_on_use =
+true`, `network.dnsNegativeCacheExpiration = 0`,
+  `network.dnsNegativeCacheExpirationGracePeriod = 0`.
+
+Measured outcome (Windows desktop-survival lab VM, two acceptance
+executions `C1`/`D1` plus a pre-worker baseline `A1`; bundles with the
+`2ffa52a1` scripts plus this change; full data in
+`evidence/spa-runtime-deps-phase2a-20260930-0713/`):
+
+- A lab-only defect surfaced before the fix could be trusted: the
+  already-restricted `data\` root made the overlay unreadable to the
+  Firefox user, so the native host could never observe a fresh
+  `appliedGeneration` (this is why the extension always fell back to the
+  soft timeout, in Phase 1 too). The overlay and the worker heartbeat now
+  carry an explicit `BUILTIN\Users:(RX)` ACE, verified on the VM.
+- Pre-worker baseline (`A1`): first dependency queue file at `T0+~7 s`;
+  the schtasks-triggered fast apply only started `~8 s` after the queue
+  write and completed after 14 s waits. The extension never saw `ready`;
+  first-visit dependencies were released by the soft timeouts.
+- With the worker (`C1`/`D1`): the worker reacts to the first queue file in
+  `0.2-0.4 s` (FileSystemWatcher + 100 ms debounce, 1 s backup sweep) and
+  applies in-process. `stage=worker-fresh skippedTaskTrigger=true` proves
+  the native host no longer pays the schtasks hop. `ready`
+  (`appliedGeneration` stamped after the Acrylic reload + DNS client
+  flush) is observed by the extension for every batch; both runs show zero
+  dependency-host `NS_ERROR_UNKNOWN_HOST` answers after their ready and no
+  dependency-host 9501/9003 entries in the Windows cache after their
+  ready. The worker survives a VM reboot (startup trigger) and the
+  watchdog restarts it after a kill (verified).
+- Residual latency (explicit Phase 2B target): the first batch still takes
+  `~10-19 s` to `ready` in a cold profile because each extension message
+  spawns a new `powershell.exe` native host (`message sent -> queue
+written` alone is `~3.5-5 s` cold; the script init is ~1 s warm p95, and
+  PowerShell host startup dominates). Request -> fast-apply start was
+  `4.6 s` (`D1`) and `5.9 s` (`C1`); the apply itself starts as soon as
+  the queue file exists. A persistent native-messaging host (transport
+  change) removes this class of cold start; the extension-side decision to
+  keep holding and retry failed dependency requests after late readiness
+  is also Phase 2B.
+- R5 observation: the periodic full update cycles still restart Acrylic
+  twice per cycle in the lab (even when the local whitelist content is
+  unchanged), matching the Phase 1 observation; left unchanged because it
+  is not proven-trivial and the fast-apply path already skips redundant
+  reloads.
 
 ## Verification
 

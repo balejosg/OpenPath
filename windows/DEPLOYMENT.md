@@ -204,15 +204,16 @@ Acrylic DNS Proxy is installed to `C:\Program Files (x86)\Acrylic DNS Proxy\`. I
 
 The installer registers the following Task Scheduler tasks under the `OpenPath` prefix (verified from `windows/lib/internal/ScheduledTaskCatalog.ps1`):
 
-| Task name                         | Script                                     | Purpose                                       |
-| --------------------------------- | ------------------------------------------ | --------------------------------------------- |
-| `OpenPath-Update`                 | `scripts\Update-OpenPath.ps1`              | Periodic whitelist fetch and apply            |
-| `OpenPath-Watchdog`               | `scripts\Test-DNSHealth.ps1`               | DNS health check and auto-recovery            |
-| `OpenPath-Startup`                | `scripts\Update-OpenPath.ps1`              | Apply whitelist at machine startup            |
-| `OpenPath-SSE`                    | `scripts\Start-SSEListener.ps1`            | Push listener for instant rule changes        |
-| `OpenPath-AgentUpdate`            | `OpenPath.ps1 self-update --silent`        | Daily agent self-update (3 am +/- 45 min)     |
-| `OpenPath-RuntimeDependencyApply` | `scripts\Apply-RuntimeDependencyQueue.ps1` | Fast-apply browser-requested dependency hosts |
-| `OpenPath-CaptivePortalRecovery`  | `scripts\Recover-CaptivePortal.ps1`        | Captive portal detection and recovery         |
+| Task name                          | Script                                      | Purpose                                                                                                                                         |
+| ---------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OpenPath-Update`                  | `scripts\Update-OpenPath.ps1`               | Periodic whitelist fetch and apply                                                                                                              |
+| `OpenPath-Watchdog`                | `scripts\Test-DNSHealth.ps1`                | DNS health check and auto-recovery                                                                                                              |
+| `OpenPath-Startup`                 | `scripts\Update-OpenPath.ps1`               | Apply whitelist at machine startup                                                                                                              |
+| `OpenPath-SSE`                     | `scripts\Start-SSEListener.ps1`             | Push listener for instant rule changes                                                                                                          |
+| `OpenPath-AgentUpdate`             | `OpenPath.ps1 self-update --silent`         | Daily agent self-update (3 am +/- 45 min)                                                                                                       |
+| `OpenPath-RuntimeDependencyApply`  | `scripts\Apply-RuntimeDependencyQueue.ps1`  | Fast-apply browser-requested dependency hosts (fallback path)                                                                                   |
+| `OpenPath-RuntimeDependencyWorker` | `scripts\Start-RuntimeDependencyWorker.ps1` | Resident SYSTEM worker: watches the dependency queue and applies batches in-process (heartbeats to `data\runtime-dependency-worker-state.json`) |
+| `OpenPath-CaptivePortalRecovery`   | `scripts\Recover-CaptivePortal.ps1`         | Captive portal detection and recovery                                                                                                           |
 
 List tasks and their last-run status:
 

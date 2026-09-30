@@ -27,6 +27,7 @@ Get-ScheduledTaskInfo -TaskName "OpenPath-Watchdog"
 Get-ScheduledTaskInfo -TaskName "OpenPath-SSE"
 Get-ScheduledTaskInfo -TaskName "OpenPath-CaptivePortalRecovery"
 Get-ScheduledTaskInfo -TaskName "OpenPath-RuntimeDependencyApply"
+Get-ScheduledTaskInfo -TaskName "OpenPath-RuntimeDependencyWorker"
 Get-ScheduledTaskInfo -TaskName "OpenPath-AgentUpdate"
 Get-ScheduledTaskInfo -TaskName "OpenPath-Startup"
 ```
@@ -233,8 +234,16 @@ Common findings and their remediation:
 If the browser blocked-page UI cannot send a request, the machine may be missing the runtime dependency queue or native host connection.
 
 ```powershell
-# Check RuntimeDependencyApply task last run
+# Check the resident worker and its fallback task
+Get-ScheduledTask -TaskName "OpenPath-RuntimeDependencyWorker"
+Get-ScheduledTaskInfo -TaskName "OpenPath-RuntimeDependencyWorker"
 Get-ScheduledTaskInfo -TaskName "OpenPath-RuntimeDependencyApply"
+
+# Worker heartbeat (updated every few seconds while the worker runs)
+Get-Content "C:\OpenPath\data\runtime-dependency-worker-state.json" -ErrorAction SilentlyContinue
+
+# Per-user native host log: message timing, queue writes, readiness marks
+Get-Content "$env:LOCALAPPDATA\OpenPath\native-host.log" -Tail 60 -ErrorAction SilentlyContinue
 
 # Inspect the runtime dependency queue directory
 Get-ChildItem "C:\OpenPath\data\runtime-dependency-queue" -ErrorAction SilentlyContinue
@@ -242,6 +251,16 @@ Get-ChildItem "C:\OpenPath\data\runtime-dependency-queue" -ErrorAction SilentlyC
 # Check overall agent status including enrollment state
 .\OpenPath.ps1 status
 ```
+
+The `OpenPath-RuntimeDependencyWorker` task is the fast path: it applies learned
+dependencies in-process and heartbeats. If it is not `Running`, the native host
+falls back to triggering `OpenPath-RuntimeDependencyApply` through Task
+Scheduler (slower cold start) and the watchdog restarts the worker within a
+minute. When investigating first-visit failures, check the heartbeat freshness
+first, then the native host log stages (`stage=queue-written`,
+`stage=worker-fresh`, `stage=readiness-observed`) against the fast-apply
+metrics line in `C:\OpenPath\data\logs\openpath.log`
+(`detectedQueueFiles=`, `dnsFlushMs=`, `dnsFlushOk=`, `appliedGeneration=`).
 
 If the machine is not enrolled, re-enroll:
 
