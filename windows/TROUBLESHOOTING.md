@@ -260,7 +260,35 @@ minute. When investigating first-visit failures, check the heartbeat freshness
 first, then the native host log stages (`stage=queue-written`,
 `stage=worker-fresh`, `stage=readiness-observed`) against the fast-apply
 metrics line in `C:\OpenPath\data\logs\openpath.log`
-(`detectedQueueFiles=`, `dnsFlushMs=`, `dnsFlushOk=`, `appliedGeneration=`).
+(`detectedQueueFiles=`, `dnsFlushMs=`, `dnsFlushOk=`, `appliedGeneration=`,
+`mirrorSynced=`, `mirrorSyncMs=`).
+
+Worker states in `runtime-dependency-worker-state.json`:
+
+- `lastResult: "starting"` -- process up, no batch applied yet.
+- `lastResult: "applying"` with `busySince` / `busyStage: "queue" |
+"iteration-N" | "acrylic-reload" | "dns-flush" | "generation-stamp"` -- a
+  batch is in flight. The native host treats a busy mark younger than 120 s as
+  alive, so long batches do not trigger a duplicate schtasks apply.
+- `lastResult: "applied"` / `"apply-failed"` / `"error"` with `lastApplyMs` and
+  `lastError` -- outcome of the last batch.
+- `heartbeatAt` / `heartbeatEpochMs` -- idle heartbeat (every few seconds);
+  older than 10 s with no recent `busySince` is treated as a dead worker.
+
+Per-iteration readiness markers in `openpath.log`:
+
+- `Runtime dependency fast apply detected N queue file(s)` -- detection point.
+- `Runtime dependency fast apply iteration N staged ready in X ms` -- the
+  iteration's entries are ready at that moment (per-entry generations).
+- `overlay generation stamped: appliedGeneration=N` -- the reload + DNS flush
+  completed for that generation.
+- `Acrylic configuration unchanged; skipping rewrite` / `AcrylicHosts.txt
+unchanged; skipping rewrite` -- the hot path skipped redundant file writes.
+
+Non-blocking (`mode: "enqueue"`) requests answer immediately with the per-entry
+state; the per-user native host log records
+`stage=queue-written ... mode=enqueue workerTriggered=true|false` when the
+resident worker was not alive and the scheduled apply task had to be nudged.
 
 If the machine is not enrolled, re-enroll:
 

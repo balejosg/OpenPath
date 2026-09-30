@@ -280,12 +280,12 @@ behaviour). 3 and 4 are independent of each other. 5 lands last.
   to `native-host.log`; Windows already logs `queueWriteMs` / `updateWaitMs` /
   `acrylicReloadMs` plus `acrylicHostsChanged`.
 
-Known adjacent defect (not addressed here): on Linux, `command_update` in
-`runtime-dependency-overlay.py` mutates entry dicts in place before snapshotting
-the "before" state, so metadata-only refreshes (`lastSeen`, `expiresAt`,
-`requestTypes` on an existing pair) report `changed=false` and are not
-persisted. Readiness is unaffected because only net-new domains change the
-generation.
+Known adjacent defect (fixed in Phase 2B, 2026-09-30): on Linux,
+`command_update` in `runtime-dependency-overlay.py` mutated entry dicts in place
+before snapshotting the "before" state, so metadata-only refreshes (`lastSeen`,
+`expiresAt`, `requestTypes` on an existing pair) reported `changed=false` and
+were not persisted. The snapshot is now taken before the merge loop; see the
+Phase 2B notes below.
 
 ### Evidence (2026-09-27)
 
@@ -440,6 +440,94 @@ written` alone is `~3.5-5 s` cold; the script init is ~1 s warm p95, and
   unchanged), matching the Phase 1 observation; left unchanged because it
   is not proven-trivial and the fast-apply path already skips redundant
   reloads.
+
+### Phase 2B: per-entry readiness, worker hot path, and non-blocking protocol (2026-09-30)
+
+Phase 2B keeps the Phase 2A wire behavior by default and removes the remaining
+self-inflicted latency:
+
+**Per-entry readiness (Windows + Linux).** The overlay keeps a document
+`generation` and `appliedGeneration`, but every entry that is added now also
+carries its own `generation` (the document generation that made it newly
+resolvable). An entry is ready when `appliedGeneration >= entry.generation`;
+entries without a per-entry stamp (written by older agents) fall back to the
+document rule. Metadata-only refreshes (`lastSeen`, `expiresAt`,
+`requestTypes` of an existing pair) and prune rewrites no longer move the
+document generation. Before this change, writing generation `k+1` (any new
+dependency) made every already-applied entry answer `pending` until the next
+stamp -- the Phase 2A lab measured that window as up to ~24 s of a full batch
+drain (gen1 08:14:49 / gen2 08:14:57 / gen3 08:15:03 in the D1 run). Now the
+worker stamps `appliedGeneration` at the end of every drain iteration, so the
+entries of iteration `k` become ready while iteration `k+1` is still pending.
+On Linux the same rule lives in `runtime-dependency-overlay.py` and
+`openpath-native-host.py::is_runtime_dependency_ready`, and the in-place
+"before" snapshot defect is fixed so metadata refreshes are persisted.
+
+**Worker hot path (Windows).** `Invoke-OpenPathRuntimeDependencyFastApply` no
+longer runs `Get-OpenPathConfig` + `Sync-FirefoxNativeHostMirror` on every
+batch: the mirror is rebuilt only when the fingerprint of `data\whitelist.txt`
+and `data\config.json` changes (`data\native-host-mirror-sync.json`), and any
+sync performed by the update flow records the same fingerprint. The queue
+drain builds the whitelist/protected/blocked sets once per batch instead of
+once per request. Acrylic's generated files are only rewritten when their
+content changed (the ~35 KB INI and `AcrylicHosts.txt`), the service wait
+polls at 100 ms, and the DNS client cache flush prefers an in-process
+`DnsFlushResolverCache` P/Invoke over the ~500 ms `Clear-DnsClientCache`
+cmdlet (reload -> flush -> stamp order preserved). The total debounce is
+`100 ms` (worker watcher) + `150 ms` (fast apply) <= 300 ms.
+
+**Busy heartbeat.** While a batch is applying, the worker publishes
+`busySince` / `busyStage` and refreshes them per iteration and around the
+Acrylic reload through the optional `-WorkerStatePath`. The native host treats
+a busy mark younger than 120 s as "worker alive", so a >10 s batch no longer
+triggers a duplicate schtasks fast apply (observed in Phase 2A: pid 3292
+restarted Acrylic again after the worker had already stamped ready).
+
+**Non-blocking protocol.** `allow-local-runtime-dependency` and its batch
+variant accept `mode: 'enqueue'`: the host validates and queues, ensures the
+apply path will run (Windows nudges the apply task only when the worker is not
+alive; Linux relies on the systemd path unit) and answers immediately with the
+per-entry state (`ready` / `pending` / `denied` / `error`). Without `mode` the
+blocking behavior is unchanged, so the signed extension of `main` keeps
+working. `check-local-runtime-dependency` accepts a batch and answers per
+entry after a single overlay read. Both hosts echo an optional request `id` in
+the response for the persistent transport of Phase 2C, and the Windows host
+caches the expensive validation sets per process keyed by whitelist/state
+file metadata.
+
+Measured outcome (Windows desktop-survival lab VM 111, synthetic burst +
+two cold Reddit runs `BR1`/`BR2`; full data in
+`evidence/spa-runtime-deps-phase2b-20260930-1250/`):
+
+- Synthetic burst (20 new dependencies over 3 s, `mode: "enqueue"`, one
+  persistent native host process): 20/20 entries ready, per-entry
+  enqueue -> ready 1.7-3.1 s, and entries of an iteration were observed ready
+  within <=~60 ms of that iteration's stamp while the next iteration was still
+  pending. Worker iterations took 1.4/1.5/1.5 s (b4); the whole batch applied
+  in 5.1 s including three Acrylic restarts (`acrylicReloadMs=2433`).
+- Hot path (vs the Phase 2A D1 baseline): the config + mirror preamble went
+  from ~5 s per batch to 2-66 ms (`mirrorSynced=False`); the DNS flush went
+  from 506-589 ms to 0-3 ms; the INI/hosts writers skip unchanged content; the
+  total debounce is 250 ms (100 + 150).
+- Cold Reddit runs (extension from `main`, blocking mode): first iteration
+  detection -> stamp 3.0 s (BR1) and 6.6 s (BR2, cold caches: 4.6 s queue
+  processing + 2.4 s Acrylic reload); the first dependency wave reported
+  `ready` at T0+13.3 s (BR1) / T0+13.0 s (BR2), and the re-issued requests
+  resolved at T0+13-15 s (BR1) / +13-18 s (BR2); the screendumps render the
+  full first visit from +30 s. The remaining request -> ready latency is the
+  per-message native host cold start (Phase 2C transport) plus the Acrylic
+  service stop/start, not queue work.
+- Zero post-ready negatives for every overlay entry in both runs: no
+  `NS_ERROR_UNKNOWN_HOST` after the entry's own generation was stamped, and no
+  dependency-host 9501/9003 entries in the Windows cache after that point.
+- Zero schtasks fallbacks and zero duplicate fast applies: every blocking
+  message took `stage=worker-fresh skippedTaskTrigger=true`; the one lock
+  contention observed (13:59:35) made the worker wait and retry, and the batch
+  was applied once the lock freed. A 30 s simulated busy batch keeps the
+  native host from triggering the fallback (unit-covered).
+- Guards preserved: the worker survives a reboot, the watchdog relaunched it
+  after a kill within ~75 s, `example.org` still returns no address (Windows
+  cache status 9501) and the served whitelist did not change.
 
 ## Verification
 
