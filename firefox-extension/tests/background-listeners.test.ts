@@ -2,7 +2,10 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Browser, WebRequest } from 'webextension-polyfill';
 
-import { registerBackgroundListeners } from '../src/lib/background-listeners.js';
+import {
+  registerBackgroundListeners,
+  type RuntimeDependencyCancellationContext,
+} from '../src/lib/background-listeners.js';
 
 interface BlockedScreenContext {
   tabId: number;
@@ -70,19 +73,27 @@ function createListenerHarness(
     recordDependencyObservationEvent?: Parameters<
       typeof registerBackgroundListeners
     >[0]['recordDependencyObservationEvent'];
+    shouldCancelPendingRuntimeDependency?: () => boolean;
   } = {}
 ): {
   addedBlocks: BlockedScreenContext[];
   autoAllowCalls: unknown[];
+  cancelledRuntimeDependencies: RuntimeDependencyCancellationContext[];
   localRuntimeDependencyCalls: unknown[];
   beforeRequestFilters: unknown[];
   confirmCalls: ConfirmBlockedScreenContext[];
+  mainFrameNavigations: { tabId: number; url: string }[];
+  mainFrameRequests: { tabId: number; url: string; method?: string }[];
+  navigationCommits: { tabId: number; url: string }[];
   redirects: BlockedScreenContext[];
   runtimeMessage:
     | ((message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => unknown)
     | null;
   webRequestBefore: WebRequestBeforeListener | null;
   webNavigationBefore: WebNavigationBeforeListener | null;
+  webNavigationCommitted:
+    | ((details: { frameId: number; tabId: number; url: string }) => void)
+    | null;
   webNavigationError: WebNavigationErrorListener | null;
   webRequestError: WebRequestErrorListener | null;
 } {
@@ -92,9 +103,16 @@ function createListenerHarness(
   const beforeRequestFilters: unknown[] = [];
   const confirmCalls: ConfirmBlockedScreenContext[] = [];
   const redirects: BlockedScreenContext[] = [];
+  const cancelledRuntimeDependencies: RuntimeDependencyCancellationContext[] = [];
+  const mainFrameNavigations: { tabId: number; url: string }[] = [];
+  const mainFrameRequests: { tabId: number; url: string; method?: string }[] = [];
+  const navigationCommits: { tabId: number; url: string }[] = [];
   let webRequestBefore: WebRequestBeforeListener | null = null;
   let webRequestError: WebRequestErrorListener | null = null;
   let webNavigationBefore: WebNavigationBeforeListener | null = null;
+  let webNavigationCommitted:
+    | ((details: { frameId: number; tabId: number; url: string }) => void)
+    | null = null;
   let webNavigationError: WebNavigationErrorListener | null = null;
   let runtimeMessage:
     | ((message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => unknown)
@@ -118,6 +136,13 @@ function createListenerHarness(
       onBeforeNavigate: {
         addListener: (listener: WebNavigationBeforeListener) => {
           webNavigationBefore = listener;
+        },
+      },
+      onCommitted: {
+        addListener: (
+          listener: (details: { frameId: number; tabId: number; url: string }) => void
+        ) => {
+          webNavigationCommitted = listener;
         },
       },
       onErrorOccurred: {
@@ -184,6 +209,21 @@ function createListenerHarness(
     ...(options.recordDependencyObservationEvent
       ? { recordDependencyObservationEvent: options.recordDependencyObservationEvent }
       : {}),
+    ...(options.shouldCancelPendingRuntimeDependency
+      ? { shouldCancelPendingRuntimeDependency: options.shouldCancelPendingRuntimeDependency }
+      : {}),
+    onRuntimeDependencyCancelled: (context: RuntimeDependencyCancellationContext): void => {
+      cancelledRuntimeDependencies.push(context);
+    },
+    noteMainFrameNavigation: (context: { tabId: number; url: string }): void => {
+      mainFrameNavigations.push(context);
+    },
+    noteMainFrameRequest: (context: { tabId: number; url: string; method?: string }): void => {
+      mainFrameRequests.push(context);
+    },
+    noteNavigationCommitted: (context: { tabId: number; url: string }): void => {
+      navigationCommits.push(context);
+    },
     redirectToBlockedScreen: (context: BlockedScreenContext) => {
       redirects.push(context);
       return Promise.resolve();
@@ -220,8 +260,17 @@ function createListenerHarness(
       | null {
       return runtimeMessage;
     },
+    cancelledRuntimeDependencies,
+    mainFrameNavigations,
+    mainFrameRequests,
+    navigationCommits,
     get webNavigationBefore(): WebNavigationBeforeListener | null {
       return webNavigationBefore;
+    },
+    get webNavigationCommitted():
+      | ((details: { frameId: number; tabId: number; url: string }) => void)
+      | null {
+      return webNavigationCommitted;
     },
     get webNavigationError(): WebNavigationErrorListener | null {
       return webNavigationError;
@@ -1489,5 +1538,208 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(harness.confirmCalls, []);
     assert.deepEqual(harness.redirects, []);
     assert.deepEqual(harness.autoAllowCalls, []);
+  });
+});
+
+void describe('background listeners runtime dependency cancellation', () => {
+  interface ObservationEvent {
+    dependencyHost?: string;
+    kind?: string;
+    type?: string;
+  }
+
+  void test('cancels a pending dependency at budget expiry when the persistent transport is active', async () => {
+    const events: ObservationEvent[] = [];
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: () => new Promise(() => undefined),
+      localRuntimeDependencyTimeoutMs: 200,
+      recordDependencyObservationEvent: (event) => {
+        events.push(event as ObservationEvent);
+      },
+      shouldCancelPendingRuntimeDependency: () => true,
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const result = await harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      frameId: 0,
+      method: 'GET',
+      requestId: 'req-cancel-1',
+      tabId: 44,
+      type: 'stylesheet',
+      url: 'https://www.redditstatic.com/styles.css',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.deepEqual(result, { cancel: true });
+    assert.deepEqual(harness.cancelledRuntimeDependencies, [
+      {
+        anchorHost: 'www.reddit.com',
+        dependencyHost: 'www.redditstatic.com',
+        documentUrl: 'https://www.reddit.com/r/openpath',
+        frameId: 0,
+        requestId: 'req-cancel-1',
+        requestType: 'stylesheet',
+        tabId: 44,
+      },
+    ]);
+    const cancelledEvent = events.find((event) => event.kind === 'cancelled-pending');
+    assert.ok(cancelledEvent, 'expected a cancelled-pending diagnostic event');
+    assert.equal(cancelledEvent.dependencyHost, 'www.redditstatic.com');
+  });
+
+  void test('releases instead of cancelling when the persistent transport is absent', async () => {
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: () => new Promise(() => undefined),
+      localRuntimeDependencyTimeoutMs: 200,
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const result = await harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      frameId: 0,
+      method: 'GET',
+      requestId: 'req-release-1',
+      tabId: 44,
+      type: 'script',
+      url: 'https://www.redditstatic.com/app.js',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.deepEqual(result, {});
+    assert.deepEqual(harness.cancelledRuntimeDependencies, []);
+  });
+
+  void test('releases a pending dependency that becomes ready within the budget', async () => {
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: async () => {
+        await waitForMs(20);
+        return { success: true, runtimeDependencyState: 'ready' };
+      },
+      localRuntimeDependencyTimeoutMs: 400,
+      shouldCancelPendingRuntimeDependency: () => true,
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const startedAt = Date.now();
+    const result = await harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      frameId: 0,
+      method: 'GET',
+      requestId: 'req-ready-1',
+      tabId: 44,
+      type: 'script',
+      url: 'https://www.redditstatic.com/app.js',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.deepEqual(result, {});
+    assert.ok(Date.now() - startedAt < 300);
+    assert.deepEqual(harness.cancelledRuntimeDependencies, []);
+  });
+
+  void test('consults the cancellation capability at expiry time, not at request time', async () => {
+    let capability = false;
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: () => new Promise(() => undefined),
+      localRuntimeDependencyTimeoutMs: 250,
+      shouldCancelPendingRuntimeDependency: () => capability,
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const resultPromise = harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      frameId: 0,
+      method: 'GET',
+      requestId: 'req-live-1',
+      tabId: 44,
+      type: 'image',
+      url: 'https://i.redd.it/pic.png',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    await waitForMs(50);
+    capability = true;
+
+    assert.deepEqual(await resultPromise, { cancel: true });
+    assert.equal(harness.cancelledRuntimeDependencies.length, 1);
+  });
+
+  void test('suppresses blocked-domain handling for cancelled pending requests', async () => {
+    const events: ObservationEvent[] = [];
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: () => new Promise(() => undefined),
+      localRuntimeDependencyTimeoutMs: 150,
+      recordDependencyObservationEvent: (event) => {
+        events.push(event as ObservationEvent);
+      },
+      shouldCancelPendingRuntimeDependency: () => true,
+    });
+    assert.ok(harness.webRequestBefore);
+    assert.ok(harness.webRequestError);
+
+    const result = await harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      frameId: 0,
+      method: 'GET',
+      requestId: 'req-cancel-9',
+      tabId: 44,
+      type: 'image',
+      url: 'https://i.redd.it/pic.png',
+    } as WebRequest.OnBeforeRequestDetailsType);
+    assert.deepEqual(result, { cancel: true });
+
+    // The cancel surfaces as a network error: it must not count as a blocked
+    // domain nor trigger the blocked screen.
+    harness.webRequestError({
+      error: 'NS_ERROR_UNKNOWN_HOST',
+      frameId: 0,
+      requestId: 'req-cancel-9',
+      tabId: 44,
+      type: 'image',
+      url: 'https://i.redd.it/pic.png',
+    } as WebRequest.OnErrorOccurredDetailsType);
+    await waitForAsyncListeners();
+
+    assert.deepEqual(harness.addedBlocks, []);
+    assert.deepEqual(harness.redirects, []);
+    const suppressedEvent = events.find(
+      (event) => event.kind === 'cancelled-pending' && event.type === 'image'
+    );
+    assert.ok(suppressedEvent, 'expected the error event to be attributed to the cancel');
+
+    // A different failing dependency request still records a blocked domain.
+    harness.webRequestError({
+      error: 'NS_ERROR_UNKNOWN_HOST',
+      frameId: 0,
+      requestId: 'req-other-1',
+      tabId: 44,
+      type: 'image',
+      url: 'https://i.redd.it/other.png',
+    } as WebRequest.OnErrorOccurredDetailsType);
+    await waitForAsyncListeners();
+
+    assert.equal(harness.addedBlocks.length, 1);
+  });
+
+  void test('feeds main-frame navigation, request and commit signals for the auto-reload', () => {
+    const harness = createListenerHarness();
+    assert.ok(harness.webRequestBefore);
+    assert.ok(harness.webNavigationBefore);
+    assert.ok(harness.webNavigationCommitted);
+
+    harness.webNavigationBefore({ frameId: 0, tabId: 5, url: 'https://www.reddit.com/' });
+    harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/',
+      frameId: 0,
+      method: 'GET',
+      requestId: 'req-nav-1',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://www.reddit.com/',
+    } as WebRequest.OnBeforeRequestDetailsType);
+    harness.webNavigationCommitted({ frameId: 0, tabId: 5, url: 'https://www.reddit.com/' });
+
+    assert.deepEqual(harness.mainFrameNavigations, [{ tabId: 5, url: 'https://www.reddit.com/' }]);
+    assert.deepEqual(harness.mainFrameRequests, [
+      { tabId: 5, url: 'https://www.reddit.com/', method: 'GET' },
+    ]);
+    assert.deepEqual(harness.navigationCommits, [{ tabId: 5, url: 'https://www.reddit.com/' }]);
   });
 });

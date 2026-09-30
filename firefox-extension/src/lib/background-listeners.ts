@@ -1,7 +1,10 @@
 import type { Browser, Runtime, WebNavigation, WebRequest } from 'webextension-polyfill';
 import { getErrorMessage, logger } from './logger.js';
-import { withTimeoutOrFallback } from './async-timeout.js';
-import { isPendingRuntimeDependencyResponse } from './runtime-dependency-protocol.js';
+import {
+  DEFAULT_LOCAL_RUNTIME_DEPENDENCY_PERSISTENT_SOFT_TIMEOUT_MS,
+  LOCAL_RUNTIME_DEPENDENCY_PERSISTENT_SOFT_TIMEOUT_BY_TYPE_MS,
+  isPendingRuntimeDependencyResponse,
+} from './runtime-dependency-protocol.js';
 import { t } from './i18n.js';
 import { shouldClearBlockedMonitorStateOnNavigate } from './blocked-screen-contract.js';
 import { BLOCKED_SCREEN_PATH, ROUTE_BLOCK_REASON, extractHostname } from './path-blocking.js';
@@ -18,6 +21,25 @@ import type { OpenPathDependencyObservationEventInput } from './dependency-obser
 import type { NavigationState } from './navigation-state.js';
 
 const MAX_CAPTIVE_PORTAL_RECOVERY_HOSTS = 16;
+/** Window in which an onErrorOccurred event is attributed to our own cancellation. */
+const CANCELLED_PENDING_REQUEST_TTL_MS = 15_000;
+
+export interface RuntimeDependencyCancellationContext {
+  anchorHost: string;
+  dependencyHost: string;
+  frameId: number;
+  requestType: string;
+  tabId: number;
+  documentUrl?: string;
+  originUrl?: string;
+  requestId?: string;
+}
+
+export interface MainFrameNavigationContext {
+  tabId: number;
+  url: string;
+  method?: string;
+}
 
 interface BackgroundListenersOptions {
   addBlockedDomain: (
@@ -53,17 +75,24 @@ interface BackgroundListenersOptions {
   handleRuntimeMessage: (message: unknown, sender: Runtime.MessageSender) => Promise<unknown>;
   localRuntimeDependencyTimeoutMs?: number;
   navigationState?: NavigationState;
+  noteMainFrameNavigation?: (context: MainFrameNavigationContext) => void;
+  noteMainFrameRequest?: (context: MainFrameNavigationContext) => void;
+  noteNavigationCommitted?: (context: MainFrameNavigationContext) => void;
+  onRuntimeDependencyCancelled?: (context: RuntimeDependencyCancellationContext) => void;
   recordDependencyObservationEvent?: (event: OpenPathDependencyObservationEventInput) => void;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
   saveBlockedPageContext?: (tabId: number, domain: string, originalUrl: string | undefined) => void;
+  shouldCancelPendingRuntimeDependency?: () => boolean;
 }
 
 const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_MS = 5000;
 // Budgets cover queue write + agent apply + local DNS reload. They are the
 // extension-side release valve: a proven-ready result releases earlier, and
-// the local diagnostic log records how often the cap is reached.
-// Windows measurements (2026-09-27) showed Acrylic fast-apply latencies of
-// ~4.2 s for a first batch, so render-blocking types get a wider budget.
+// a cancelled-pending entry is repaired by the single auto-reload. Windows
+// measurements (2026-09-27) showed Acrylic fast-apply latencies of ~4.2 s for
+// a first batch, so render-blocking types get a wider budget; with the
+// persistent transport the budgets are retuned to cover the cold port connect
+// (see `runtime-dependency-protocol.ts`).
 const LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_BY_TYPE_MS = new Map<string, number>([
   ['fetch', 5000],
   ['xmlhttprequest', 5000],
@@ -73,7 +102,6 @@ const LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_BY_TYPE_MS = new Map<string, number>
   ['stylesheet', 6000],
   ['font', 6000],
 ]);
-const LOCAL_RUNTIME_DEPENDENCY_NEVER_SETTLES = new Promise<never>(() => undefined);
 
 function extractRequestHostname(url: string | undefined): string | null {
   if (!url) {
@@ -170,22 +198,49 @@ function resolveAnchorHost(
 
 function resolveLocalRuntimeDependencySoftTimeoutMs(
   requestType: string,
-  overrideTimeoutMs?: number
+  overrideTimeoutMs: number | undefined,
+  persistentTransportActive: boolean
 ): number {
   if (overrideTimeoutMs !== undefined) {
     return overrideTimeoutMs;
   }
+  const normalizedType = requestType.toLowerCase();
+  if (persistentTransportActive) {
+    return (
+      LOCAL_RUNTIME_DEPENDENCY_PERSISTENT_SOFT_TIMEOUT_BY_TYPE_MS.get(normalizedType) ??
+      DEFAULT_LOCAL_RUNTIME_DEPENDENCY_PERSISTENT_SOFT_TIMEOUT_MS
+    );
+  }
   return (
-    LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_BY_TYPE_MS.get(requestType.toLowerCase()) ??
+    LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_BY_TYPE_MS.get(normalizedType) ??
     DEFAULT_LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_MS
   );
 }
 
-function waitForLocalRuntimeDependencySoftTimeout(
+interface RuntimeDependencyWaitOptions {
+  onCancelled: (context: RuntimeDependencyCancellationContext) => void;
+  overrideTimeoutMs?: number;
+  /**
+   * Live check for the persistent transport + auto-reload capability. It is
+   * consulted when the budget is armed (budget family) and again at expiry
+   * (cancel vs release), because a cold port may become ready mid-wait.
+   */
+  shouldCancel: () => boolean;
+}
+
+/**
+ * Waits for the native allow flow to prove readiness within the request's
+ * budget. With the persistent transport active, a budget expiry while the
+ * entry is still pending cancels the request (no DNS query, no negative
+ * answer) so the single auto-reload can repair the page once the dependency
+ * becomes ready. Without it the historical release behavior is preserved.
+ */
+function waitForLocalRuntimeDependencyDecision(
   promise: Promise<unknown>,
   requestType: string,
-  overrideTimeoutMs?: number
-): Promise<Record<string, never>> {
+  context: RuntimeDependencyCancellationContext,
+  options: RuntimeDependencyWaitOptions
+): Promise<Record<string, never> | { cancel: true }> {
   void promise.catch((error: unknown) => {
     logger.error('[Monitor] Error applying local runtime dependency', {
       error: getErrorMessage(error),
@@ -193,35 +248,70 @@ function waitForLocalRuntimeDependencySoftTimeout(
     });
   });
 
-  // Only a proven-ready result releases the request early; pending/queued
-  // results keep waiting until the soft timeout, and terminal failures
-  // (denied/error) fall through immediately so the request fails fast.
-  const timeoutMs = resolveLocalRuntimeDependencySoftTimeoutMs(requestType, overrideTimeoutMs);
-  let stillWaitingOnNative = true;
-  const decidedPromise = promise.then(
-    (response) => {
-      if (isPendingRuntimeDependencyResponse(response)) {
-        return LOCAL_RUNTIME_DEPENDENCY_NEVER_SETTLES;
-      }
-      stillWaitingOnNative = false;
-      return response;
-    },
-    (error: unknown) => {
-      stillWaitingOnNative = false;
-      throw error;
-    }
+  const timeoutMs = resolveLocalRuntimeDependencySoftTimeoutMs(
+    requestType,
+    options.overrideTimeoutMs,
+    options.shouldCancel()
   );
 
-  return withTimeoutOrFallback(decidedPromise, timeoutMs, {}).then(() => {
-    if (stillWaitingOnNative) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const settle = (value: Record<string, never> | { cancel: true }): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+      resolve(value);
+    };
+
+    timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      if (options.shouldCancel()) {
+        logger.debug('[Monitor] Local runtime dependency cancelled at budget', {
+          requestType,
+          timeoutMs,
+          dependencyHost: context.dependencyHost,
+        });
+        try {
+          options.onCancelled(context);
+        } catch (error) {
+          logger.warn('[Monitor] Error recordando dependencia cancelada', {
+            error: getErrorMessage(error),
+          });
+        }
+        settle({ cancel: true });
+        return;
+      }
+
       // Local diagnostic only: the request was released before the native host
       // proved readiness, which is the signal used to retune the budgets.
       logger.debug('[Monitor] Local runtime dependency soft timeout reached', {
         requestType,
         timeoutMs,
       });
-    }
-    return {};
+      settle({});
+    }, timeoutMs);
+
+    // Only a proven-ready result releases the request early; pending/queued
+    // results keep waiting until the budget, and terminal failures
+    // (denied/error) fall through immediately so the request fails fast.
+    promise.then(
+      (response) => {
+        if (isPendingRuntimeDependencyResponse(response)) {
+          return;
+        }
+        settle({});
+      },
+      () => {
+        settle({});
+      }
+    );
   });
 }
 
@@ -297,6 +387,36 @@ function parseCaptivePortalRuntimeDependencyMessage(message: unknown): {
 export function registerBackgroundListeners(options: BackgroundListenersOptions): void {
   const tabAnchorHosts = new Map<number, string>();
   const captivePortalRecoveryHostsByTab = new Map<number, Set<string>>();
+  const cancelledPendingRequests = new Map<string, number>();
+
+  function rememberCancelledPendingRequest(context: RuntimeDependencyCancellationContext): void {
+    if (!context.requestId) {
+      return;
+    }
+    const now = Date.now();
+    for (const [requestId, cancelledAt] of cancelledPendingRequests) {
+      if (now - cancelledAt > CANCELLED_PENDING_REQUEST_TTL_MS) {
+        cancelledPendingRequests.delete(requestId);
+      }
+    }
+    cancelledPendingRequests.set(context.requestId, now);
+  }
+
+  function wasCancelledPendingRequest(requestId: string | undefined): boolean {
+    if (!requestId) {
+      return false;
+    }
+    const cancelledAt = cancelledPendingRequests.get(requestId);
+    if (cancelledAt === undefined) {
+      return false;
+    }
+    if (Date.now() - cancelledAt > CANCELLED_PENDING_REQUEST_TTL_MS) {
+      cancelledPendingRequests.delete(requestId);
+      return false;
+    }
+    return true;
+  }
+
   const configuredCaptivePortalRecovery = options.recoverCaptivePortalNavigation;
   const recoverCaptivePortalNavigation = configuredCaptivePortalRecovery
     ? (
@@ -335,6 +455,13 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
     (details: WebRequest.OnBeforeRequestDetailsType) => {
       const dependencyHost = extractRequestHostname(details.url);
       const anchorHost = resolveAnchorHost(details, tabAnchorHosts);
+      if (details.type === 'main_frame' && details.tabId >= 0) {
+        options.noteMainFrameRequest?.({
+          tabId: details.tabId,
+          url: details.url,
+          method: details.method,
+        });
+      }
       options.recordDependencyObservationEvent?.({
         source: 'webRequest.onBeforeRequest',
         tabId: details.tabId,
@@ -386,15 +513,44 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           return;
         }
 
-        return waitForLocalRuntimeDependencySoftTimeout(
+        return waitForLocalRuntimeDependencyDecision(
           options.allowLocalRuntimeDependency({
             anchorHost,
             dependencyHost,
             requestType: details.type,
           }),
           details.type,
-          options.localRuntimeDependencyTimeoutMs
-        );
+          {
+            anchorHost,
+            dependencyHost,
+            frameId: details.frameId,
+            requestType: details.type,
+            tabId: details.tabId,
+            ...(details.documentUrl ? { documentUrl: details.documentUrl } : {}),
+            ...(details.originUrl ? { originUrl: details.originUrl } : {}),
+            ...(details.requestId ? { requestId: details.requestId } : {}),
+          },
+          {
+            shouldCancel: options.shouldCancelPendingRuntimeDependency ?? ((): boolean => false),
+            ...(options.localRuntimeDependencyTimeoutMs !== undefined
+              ? { overrideTimeoutMs: options.localRuntimeDependencyTimeoutMs }
+              : {}),
+            onCancelled: (context) => {
+              rememberCancelledPendingRequest(context);
+              options.recordDependencyObservationEvent?.({
+                source: 'webRequest.onBeforeRequest',
+                tabId: context.tabId,
+                frameId: context.frameId,
+                ...(context.requestId ? { requestId: context.requestId } : {}),
+                type: context.requestType,
+                kind: 'cancelled-pending',
+                anchorHost: context.anchorHost,
+                dependencyHost: context.dependencyHost,
+              });
+              options.onRuntimeDependencyCancelled?.(context);
+            },
+          }
+        ).then((decision) => ('cancel' in decision ? { cancel: true } : {}));
       }
 
       if (details.type === 'main_frame' && details.tabId >= 0 && dependencyHost) {
@@ -437,6 +593,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.webRequest.onErrorOccurred.addListener(
     (details: WebRequest.OnErrorOccurredDetailsType) => {
+      const cancelledPending = wasCancelledPendingRequest(details.requestId);
       const anchorHost = resolveAnchorHost(details, tabAnchorHosts);
       const dependencyHost = extractRequestHostname(details.url);
       if (anchorHost && dependencyHost && anchorHost !== dependencyHost) {
@@ -465,7 +622,13 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
         type: details.type,
         ...(anchorHost ? { anchorHost } : {}),
         ...(dependencyHost ? { dependencyHost } : {}),
+        ...(cancelledPending ? { kind: 'cancelled-pending' } : {}),
       });
+      if (cancelledPending) {
+        // Our own budget cancellation is not a blocked domain: it must not
+        // feed the badge/blocked screen nor trigger a native policy check.
+        return;
+      }
       const hostname = extractHostname(details.url);
       if (!hostname) {
         return;
@@ -498,6 +661,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           details.tabId,
           navigationHost
         );
+        options.noteMainFrameNavigation?.({ tabId: details.tabId, url: details.url });
       }
       options.recordDependencyObservationEvent?.({
         source: 'webNavigation.onBeforeNavigate',
@@ -529,6 +693,23 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       }
     }
   );
+
+  // onCommitted marks the current navigation's document commit; the auto-reload
+  // module uses it to keep the navigation identity current without treating it
+  // as a newer navigation.
+  const webNavigationOnCommitted = (
+    options.browser.webNavigation as unknown as {
+      onCommitted?: {
+        addListener: (listener: (details: WebNavigation.OnCommittedDetailsType) => void) => void;
+      };
+    }
+  ).onCommitted;
+  webNavigationOnCommitted?.addListener((details: WebNavigation.OnCommittedDetailsType) => {
+    if (details.frameId !== 0) {
+      return;
+    }
+    options.noteNavigationCommitted?.({ tabId: details.tabId, url: details.url });
+  });
 
   options.browser.webNavigation.onHistoryStateUpdated.addListener(
     (details: WebNavigation.OnHistoryStateUpdatedDetailsType) => {

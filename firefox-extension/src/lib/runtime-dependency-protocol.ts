@@ -39,6 +39,70 @@ export const LOCAL_RUNTIME_DEPENDENCY_OVERLAY_VERSION = 1;
 export const LOCAL_RUNTIME_DEPENDENCY_QUEUE_SOURCE = 'firefox-webrequest-local';
 
 /**
+ * Persistent native transport (Phase 2C).
+ *
+ * Hosts that announce this protocol version answer `ping` with a capability
+ * list and keep serving messages over a long-lived `connectNative` port, which
+ * removes the per-message native host cold start (1.2-2.5 s per message in the
+ * Phase 2B Windows lab, up to 7 s for the first one after login).
+ */
+export const NATIVE_HOST_PROTOCOL_VERSION = 2;
+
+export const NATIVE_HOST_CAPABILITIES = {
+  enqueue: 'runtime-dependency-enqueue',
+  checkBatch: 'runtime-dependency-check-batch',
+  idEcho: 'message-id-echo',
+  autoReload: 'runtime-dependency-auto-reload',
+} as const;
+
+export type NativeHostCapability =
+  (typeof NATIVE_HOST_CAPABILITIES)[keyof typeof NATIVE_HOST_CAPABILITIES];
+
+/** Timeout for the capability probe after `connectNative` (covers a cold host start). */
+export const NATIVE_TRANSPORT_PROBE_TIMEOUT_MS = 10_000;
+/** Default per-request timeout over the port; a timeout marks the port unhealthy. */
+export const NATIVE_TRANSPORT_REQUEST_TIMEOUT_MS = 3_000;
+/** Reconnect backoff for a dropped/unhealthy port: base delay and ceiling. */
+export const NATIVE_TRANSPORT_RECONNECT_BASE_DELAY_MS = 1_000;
+export const NATIVE_TRANSPORT_RECONNECT_MAX_DELAY_MS = 30_000;
+/**
+ * How long a dependency request waits for the persistent port before taking
+ * the legacy one-shot path. The first dependency of a page may wait through a
+ * cold port connect; later ones get a shorter window because a healthy port is
+ * either already open or known to be unavailable.
+ */
+export const LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_FIRST_MS = 4_000;
+export const LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_MS = 3_000;
+/** Poll cadence for pending dependencies over the persistent port. */
+export const LOCAL_RUNTIME_DEPENDENCY_PROBE_INTERVAL_MS = 150;
+/** Pending entries older than this are dropped instead of polled forever. */
+export const LOCAL_RUNTIME_DEPENDENCY_PROBE_MAX_ENTRY_AGE_MS = 120_000;
+
+/**
+ * Soft-wait budgets while the persistent transport is active. They only bound
+ * the cancel decision (and the legacy release); a proven-ready entry is
+ * released much earlier by the prober.
+ */
+export const LOCAL_RUNTIME_DEPENDENCY_PERSISTENT_SOFT_TIMEOUT_BY_TYPE_MS = new Map<string, number>([
+  ['fetch', 8_000],
+  ['xmlhttprequest', 8_000],
+  ['image', 8_000],
+  ['imageset', 8_000],
+  ['script', 10_000],
+  ['stylesheet', 10_000],
+  ['font', 10_000],
+]);
+export const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_PERSISTENT_SOFT_TIMEOUT_MS = 8_000;
+
+/** Once an auto-reload fires, the tab is not auto-reloaded again for this long. */
+export const RUNTIME_DEPENDENCY_AUTO_RELOAD_TAB_COOLDOWN_MS = 30_000;
+/** Wave coalescing before the single auto-reload is issued. */
+export const RUNTIME_DEPENDENCY_AUTO_RELOAD_COALESCE_MS = 400;
+/** A dependency cancelled in frame 0 of a navigation may only be repaired by an
+ *  auto-reload while the navigation is at most this old. */
+export const RUNTIME_DEPENDENCY_AUTO_RELOAD_MAX_NAVIGATION_AGE_MS = 30_000;
+
+/**
  * Readiness of a local runtime dependency as observed by the extension.
  *
  * - `ready`: the native host proved the dependency is operative in the local

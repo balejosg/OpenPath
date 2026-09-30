@@ -1,19 +1,33 @@
-import type { Browser, Runtime } from 'webextension-polyfill';
+import type { Browser } from 'webextension-polyfill';
 
 import { t } from './i18n.js';
 import { getErrorMessage, logger as defaultLogger } from './logger.js';
 import type { NativeResponse } from './native-response.types.js';
+import {
+  createPersistentNativeTransport,
+  isProtocolVersionSupported,
+  type PersistentNativeTransport,
+  type PersistentNativeTransportOptions,
+} from './persistent-native-transport.js';
+import {
+  createRuntimeDependencyProber,
+  type RuntimeDependencyProber,
+} from './runtime-dependency-prober.js';
 import {
   LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS,
   LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES,
   LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES,
   LOCAL_RUNTIME_DEPENDENCY_CACHE_STALE_TTL_MS,
   LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS,
+  LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_FIRST_MS,
+  LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_MS,
   LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
+  NATIVE_HOST_CAPABILITIES,
   RUNTIME_DEPENDENCY_ACTIONS,
   createRuntimeDependencyCacheKey,
   createRuntimeDependencyPendingKey,
   isReadyRuntimeDependencyCheckResponse,
+  isReadyRuntimeDependencyResponse,
   resolveRuntimeDependencyReadiness,
   type LocalRuntimeDependencyInput,
 } from './runtime-dependency-protocol.js';
@@ -126,10 +140,20 @@ export interface NativeMessagingClient {
   ) => Promise<VerifyResponse>;
   connect: () => Promise<boolean>;
   isAvailable: () => Promise<boolean>;
+  /** True when the host announced and the port serves the enqueue protocol. */
+  isPersistentTransportReady: () => boolean;
+  /** True when a cancelled pending dependency may be repaired by one auto-reload. */
+  isAutoReloadCapable: () => boolean;
+  /** Subscribes to pending dependencies becoming ready after a cancellation. */
+  onRuntimeDependencyApplied: (
+    listener: (input: LocalRuntimeDependencyInput) => void
+  ) => () => void;
   recoverCaptivePortalNavigation: (
     input: CaptivePortalRecoveryInput
   ) => Promise<CaptivePortalRecoveryResponse>;
   requestLocalWhitelistUpdate: (domains?: string[]) => Promise<boolean>;
+  /** Cheap periodic reads (policy version, blocked subdomains, allowed paths). */
+  sendCheapRead: (message: unknown) => Promise<unknown>;
   sendMessage: (message: unknown) => Promise<unknown>;
   warmUp: () => Promise<void>;
 }
@@ -138,13 +162,27 @@ export function createNativeMessagingClient(options: {
   browserApi?: Browser;
   hostName: string;
   logger?: Pick<typeof defaultLogger, 'error' | 'info'>;
+  persistentTransport?: PersistentNativeTransport;
+  persistentTransportOptions?: Partial<
+    Omit<PersistentNativeTransportOptions, 'browserApi' | 'hostName' | 'logger'>
+  >;
   runtimeDependencyCacheMaxEntries?: number;
+  runtimeDependencyProber?: RuntimeDependencyProber;
 }): NativeMessagingClient {
   const browserApi = options.browserApi ?? browser;
   const logger = options.logger ?? defaultLogger;
   const runtimeDependencyCacheMaxEntries =
     options.runtimeDependencyCacheMaxEntries ?? LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES;
-  let nativePort: Runtime.Port | null = null;
+  const transport =
+    options.persistentTransport ??
+    createPersistentNativeTransport({
+      browserApi,
+      hostName: options.hostName,
+      logger,
+      ...options.persistentTransportOptions,
+    });
+  let persistentPortWaitUsed = false;
+  const runtimeDependencyAppliedListeners = new Set<(input: LocalRuntimeDependencyInput) => void>();
   const runtimeDependencyCache = new Map<string, RuntimeDependencyCacheEntry>();
   const queuedRuntimeDependencyDedupeCache = new Map<
     string,
@@ -157,47 +195,150 @@ export function createNativeMessagingClient(options: {
     Promise<NativeResponse | null>
   >();
   let runtimeDependencyBatchTimer: ReturnType<typeof setTimeout> | null = null;
+  const runtimeDependencyProber =
+    options.runtimeDependencyProber ??
+    createRuntimeDependencyProber({
+      checkBatch: (inputs) => checkRuntimeDependencyBatch(inputs),
+    });
 
-  async function connect(): Promise<boolean> {
-    return new Promise((resolve) => {
+  function isPersistentTransportReady(): boolean {
+    return (
+      transport.isReady() &&
+      transport.supports(NATIVE_HOST_CAPABILITIES.enqueue) &&
+      transport.supports(NATIVE_HOST_CAPABILITIES.idEcho)
+    );
+  }
+
+  function isAutoReloadCapable(): boolean {
+    return isPersistentTransportReady() && transport.supports(NATIVE_HOST_CAPABILITIES.autoReload);
+  }
+
+  function supportsCheapReads(): boolean {
+    return transport.isReady() && isProtocolVersionSupported(transport.getProtocolVersion());
+  }
+
+  async function sendCheapRead(message: unknown): Promise<unknown> {
+    if (!supportsCheapReads()) {
+      return await sendMessage(message);
+    }
+    try {
+      return await transport.call(message as Record<string, unknown>);
+    } catch (error) {
+      logger.info('[Monitor] Persistent native read failed; using one-shot host', {
+        error: getErrorMessage(error),
+      });
+      return await sendMessage(message);
+    }
+  }
+
+  function onRuntimeDependencyApplied(
+    listener: (input: LocalRuntimeDependencyInput) => void
+  ): () => void {
+    runtimeDependencyAppliedListeners.add(listener);
+    return () => {
+      runtimeDependencyAppliedListeners.delete(listener);
+    };
+  }
+
+  function notifyRuntimeDependencyApplied(input: LocalRuntimeDependencyInput): void {
+    for (const listener of [...runtimeDependencyAppliedListeners]) {
       try {
-        nativePort = browserApi.runtime.connectNative(options.hostName);
-        nativePort.onDisconnect.addListener(() => {
-          logger.info('[Monitor] Native host disconnected', {
-            lastError: browserApi.runtime.lastError,
-          });
-          nativePort = null;
-          // Do NOT auto-reconnect here: a host that is absent disconnects immediately on every
-          // connectNative, which would turn this into a 1/sec reconnect-and-log storm. sendMessage
-          // reconnects lazily when a check is actually needed, and warmUp() re-warms on demand.
-        });
-
-        logger.info('[Monitor] Native host connected');
-        resolve(true);
+        listener(input);
       } catch (error) {
-        logger.error('[Monitor] Error conectando Native host', {
+        logger.error('[Monitor] Error notificando dependencia aplicada', {
           error: getErrorMessage(error),
         });
-        nativePort = null;
-        resolve(false);
       }
+    }
+  }
+
+  function isCheckBatchUnsupported(response: unknown): boolean {
+    if (!response || typeof response !== 'object') {
+      return true;
+    }
+    const candidate = response as { success?: unknown; error?: unknown };
+    if (candidate.success === true) {
+      return false;
+    }
+    const error = typeof candidate.error === 'string' ? candidate.error.toLowerCase() : '';
+    return error.includes('unknown action') || error.includes('unsupported');
+  }
+
+  async function checkRuntimeDependencyBatch(
+    inputs: LocalRuntimeDependencyInput[]
+  ): Promise<{ success: boolean; results?: NativeResponse[]; error?: string }> {
+    if (transport.isReady() && transport.supports(NATIVE_HOST_CAPABILITIES.checkBatch)) {
+      const response = (await transport.call({
+        action: RUNTIME_DEPENDENCY_ACTIONS.checkLocal,
+        entries: inputs.map((input) => ({
+          anchorHost: input.anchorHost,
+          dependencyHost: input.dependencyHost,
+        })),
+      })) as { success?: unknown; results?: unknown };
+      if (!isCheckBatchUnsupported(response) && Array.isArray(response.results)) {
+        return { success: true, results: response.results as NativeResponse[] };
+      }
+    }
+
+    const results: NativeResponse[] = [];
+    for (const input of inputs) {
+      try {
+        const response = (await sendMessage({
+          action: RUNTIME_DEPENDENCY_ACTIONS.checkLocal,
+          anchorHost: input.anchorHost,
+          dependencyHost: input.dependencyHost,
+        })) as NativeResponse;
+        results.push(response);
+      } catch (error) {
+        results.push({
+          success: false,
+          error: getErrorMessage(error),
+          runtimeDependencyState: 'error',
+        });
+      }
+    }
+    return { success: results.length > 0, results };
+  }
+
+  async function checkRuntimeDependency(
+    input: LocalRuntimeDependencyInput
+  ): Promise<NativeResponse> {
+    const batch = await checkRuntimeDependencyBatch([input]);
+    const results = batch.results ?? [];
+    const normalized = input.dependencyHost.toLowerCase();
+    const match = results.find((candidate) => {
+      const host = (candidate as { dependencyHost?: unknown }).dependencyHost;
+      return typeof host === 'string' && host.toLowerCase() === normalized;
     });
+    return match ?? results[0] ?? { success: false, runtimeDependencyState: 'error' };
+  }
+
+  function resolvePersistentPortWaitMs(): number {
+    if (!persistentPortWaitUsed) {
+      persistentPortWaitUsed = true;
+      return LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_FIRST_MS;
+    }
+    return LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_MS;
+  }
+
+  async function ensurePersistentTransportForBatch(): Promise<boolean> {
+    if (isPersistentTransportReady()) {
+      return true;
+    }
+    if (!transport.isReady()) {
+      await transport.waitUntilReady(resolvePersistentPortWaitMs());
+    }
+    return isPersistentTransportReady();
+  }
+
+  async function connect(): Promise<boolean> {
+    return await transport.ensureConnected();
   }
 
   async function sendMessage(message: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const attempt = async (): Promise<void> => {
         try {
-          // connectNative() owns the long-lived native-host availability state, while
-          // sendNativeMessage() keeps individual request/response actions one-shot.
-          if (!nativePort) {
-            const connected = await connect();
-            if (!connected) {
-              reject(new Error(t('popupNativeHostConnectError')));
-              return;
-            }
-          }
-
           const response = await browserApi.runtime.sendNativeMessage(
             options.hostName,
             message as object
@@ -381,11 +522,9 @@ export function createNativeMessagingClient(options: {
 
     const confirmation = (async (): Promise<NativeResponse | null> => {
       try {
-        const response = (await sendMessage({
-          action: RUNTIME_DEPENDENCY_ACTIONS.checkLocal,
-          anchorHost: input.anchorHost,
-          dependencyHost: input.dependencyHost,
-        })) as LocalRuntimeDependencyCheckResponse;
+        const response = (await checkRuntimeDependency(
+          input
+        )) as LocalRuntimeDependencyCheckResponse;
         if (isReadyRuntimeDependencyCheckResponse(response)) {
           cacheReadyRuntimeDependency(input);
           return createReadyRuntimeDependencyResponse(input, { confirmed: true });
@@ -544,6 +683,48 @@ export function createNativeMessagingClient(options: {
       return;
     }
 
+    if (await ensurePersistentTransportForBatch()) {
+      try {
+        const persistentBatchResponse = (await transport.call({
+          action: RUNTIME_DEPENDENCY_ACTIONS.allowLocalBatch,
+          mode: 'enqueue',
+          entries: batch.map((request) => request.input),
+        })) as LocalRuntimeDependencyBatchResponse;
+
+        if (!isBatchUnsupported(persistentBatchResponse)) {
+          batch.forEach((request, index) => {
+            const response = findBatchResult(persistentBatchResponse, request.input, index);
+            if (resolveRuntimeDependencyReadiness(response) !== 'pending') {
+              cacheRuntimeDependencySuccess(request.input, response);
+              settleRuntimeDependencyRequest(request, response);
+              return;
+            }
+
+            // The host accepted the entry but has not proven it yet. Keep the
+            // request promise open so the prober can release it on `ready`
+            // (or the caller's budget can cancel it), and let the auto-reload
+            // module observe the eventual application.
+            cacheRuntimeDependencySuccess(request.input, response);
+            runtimeDependencyProber.register(request.input, (finalResponse) => {
+              if (isReadyRuntimeDependencyResponse(finalResponse)) {
+                cacheReadyRuntimeDependency(request.input);
+              }
+              settleRuntimeDependencyRequest(request, finalResponse);
+              if (isReadyRuntimeDependencyResponse(finalResponse)) {
+                notifyRuntimeDependencyApplied(request.input);
+              }
+            });
+          });
+          return;
+        }
+      } catch (error) {
+        logger.info('[Monitor] Persistent dependency enqueue failed; using the one-shot path', {
+          error: getErrorMessage(error),
+        });
+        transport.markUnhealthy('dependency enqueue failed');
+      }
+    }
+
     try {
       const batchResponse = (await sendMessage({
         action: RUNTIME_DEPENDENCY_ACTIONS.allowLocalBatch,
@@ -593,15 +774,18 @@ export function createNativeMessagingClient(options: {
       }
     }
 
-    const queuedDedupeResponse = getQueuedRuntimeDependencyDedupe(input);
-    if (queuedDedupeResponse) {
-      return queuedDedupeResponse;
-    }
-
     const pendingKey = createRuntimeDependencyPendingKey(input);
+    // An in-flight operation owns the settled state of the entry: a queued
+    // dependency registered with the prober must share the same promise so it
+    // is released by `ready` instead of its soft budget.
     const existingRequest = pendingRuntimeDependencyByKey.get(pendingKey);
     if (existingRequest) {
       return existingRequest;
+    }
+
+    const queuedDedupeResponse = getQueuedRuntimeDependencyDedupe(input);
+    if (queuedDedupeResponse) {
+      return queuedDedupeResponse;
     }
 
     const pendingRequest = new Promise<NativeResponse>((resolve, reject) => {
@@ -627,15 +811,15 @@ export function createNativeMessagingClient(options: {
     return pendingRequest;
   }
 
-  async function warmUp(): Promise<void> {
-    if (nativePort !== null) {
-      return;
-    }
+  function warmUp(): Promise<void> {
+    // Fire-and-forget pre-warm: opening the port (and probing capabilities) here
+    // keeps the first blocked dependency from paying the native host cold start.
     try {
-      await connect();
+      void transport.ensureConnected();
     } catch {
       // best-effort pre-warm; errors are intentionally swallowed
     }
+    return Promise.resolve();
   }
 
   return {
@@ -643,8 +827,12 @@ export function createNativeMessagingClient(options: {
     checkDomains,
     connect,
     isAvailable,
+    isAutoReloadCapable,
+    isPersistentTransportReady,
+    onRuntimeDependencyApplied,
     recoverCaptivePortalNavigation,
     requestLocalWhitelistUpdate,
+    sendCheapRead,
     sendMessage,
     warmUp,
   };

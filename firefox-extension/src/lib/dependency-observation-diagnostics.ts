@@ -4,7 +4,8 @@ export type OpenPathDependencyObservationSource =
   | 'webRequest.onBeforeRequest'
   | 'webRequest.onErrorOccurred'
   | 'webNavigation.onBeforeNavigate'
-  | 'webNavigation.onErrorOccurred';
+  | 'webNavigation.onErrorOccurred'
+  | 'runtimeDependencyAutoReload';
 
 export interface OpenPathDependencyObservationNativeVerify {
   success?: boolean;

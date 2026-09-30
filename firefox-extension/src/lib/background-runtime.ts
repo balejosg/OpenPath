@@ -21,6 +21,7 @@ import {
   type NativeResponse,
   type VerifyResponse,
 } from './native-messaging-client.js';
+import { createRuntimeDependencyAutoReloadController } from './runtime-dependency-auto-reload.js';
 import { createNavigationState } from './navigation-state.js';
 import { createCaptivePortalRecoveryController } from './captive-portal-recovery-controller.js';
 import {
@@ -29,6 +30,7 @@ import {
   type SubmitBlockedDomainResult,
 } from './request-api.js';
 import {
+  BLOCKED_SCREEN_PATH,
   buildBlockedScreenRedirectUrl,
   extractHostname,
   type NativeBlockedPathsResponse,
@@ -105,24 +107,41 @@ export function createBackgroundRuntime(
     logger,
   });
   const extensionOrigin = browser.runtime.getURL('/');
+  const runtimeDependencyAutoReload = createRuntimeDependencyAutoReloadController({
+    browserTabs: browser.tabs,
+    isCapable: () => nativeMessagingClient.isAutoReloadCapable(),
+    isExcludedUrl: (url) =>
+      url.startsWith(extensionOrigin) ||
+      url.startsWith('moz-extension://') ||
+      url.includes(BLOCKED_SCREEN_PATH),
+    recordEvent: (event) => {
+      recordOpenPathDependencyObservationEvent({
+        source: 'runtimeDependencyAutoReload',
+        tabId: event.tabId,
+        kind: `auto-reload:${event.reason}`,
+        ...(event.dependencyHost ? { dependencyHost: event.dependencyHost } : {}),
+        ...(event.requestType ? { type: event.requestType } : {}),
+      });
+    },
+  });
   const blockedPathRulesController = createBackgroundPathRulesController({
     extensionOrigin,
     getBlockedPaths: async () =>
-      (await nativeMessagingClient.sendMessage({
+      (await nativeMessagingClient.sendCheapRead({
         action: 'get-blocked-paths',
       })) as NativeBlockedPathsResponse,
   });
   const blockedSubdomainRulesController = createBackgroundSubdomainRulesController({
     extensionOrigin,
     getBlockedSubdomains: async () =>
-      (await nativeMessagingClient.sendMessage({
+      (await nativeMessagingClient.sendCheapRead({
         action: 'get-blocked-subdomains',
       })) as NativeBlockedSubdomainsResponse,
   });
   const allowedPathRulesController = createBackgroundAllowedPathRulesController({
     extensionOrigin,
     getAllowedPaths: async () =>
-      (await nativeMessagingClient.sendMessage({
+      (await nativeMessagingClient.sendCheapRead({
         action: 'get-allowed-paths',
       })) as NativeAllowedPathsResponse,
   });
@@ -160,7 +179,7 @@ export function createBackgroundRuntime(
   const navigationState = createNavigationState();
   const tabReconciliationController = createBackgroundTabReconciliationController({
     getPolicyVersion: async () => {
-      const response = (await nativeMessagingClient.sendMessage({
+      const response = (await nativeMessagingClient.sendCheapRead({
         action: 'get-policy-version',
       })) as { success?: boolean; version?: string; error?: string };
       return {
@@ -475,6 +494,7 @@ export function createBackgroundRuntime(
           }
         }
         captivePortalRecoveryController.disposeTab(tabId);
+        runtimeDependencyAutoReload.disposeTab(tabId);
       },
       evaluateBlockedPath: blockedPathRulesController.evaluateRequest,
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,
@@ -483,9 +503,25 @@ export function createBackgroundRuntime(
       recoverCaptivePortalNavigation,
       handleRuntimeMessage,
       navigationState,
+      noteMainFrameNavigation: (context) => {
+        runtimeDependencyAutoReload.noteNavigationStarted(context);
+      },
+      noteMainFrameRequest: (context) => {
+        runtimeDependencyAutoReload.noteMainFrameRequest(context);
+      },
+      noteNavigationCommitted: (context) => {
+        runtimeDependencyAutoReload.noteNavigationCommitted(context);
+      },
+      onRuntimeDependencyCancelled: (context) => {
+        runtimeDependencyAutoReload.noteDependencyCancelled(context);
+      },
       recordDependencyObservationEvent: recordOpenPathDependencyObservationEvent,
       redirectToBlockedScreen,
       saveBlockedPageContext,
+      shouldCancelPendingRuntimeDependency: () => nativeMessagingClient.isAutoReloadCapable(),
+    });
+    nativeMessagingClient.onRuntimeDependencyApplied((input) => {
+      runtimeDependencyAutoReload.noteDependencyReady(input);
     });
     registerCaptivePortalListeners();
     await blockedPathRulesController.init();

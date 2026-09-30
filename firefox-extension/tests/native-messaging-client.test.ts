@@ -3,6 +3,9 @@ import { describe, test } from 'node:test';
 import type { Browser } from 'webextension-polyfill';
 
 import { createNativeMessagingClient } from '../src/lib/native-messaging-client.js';
+import type { PersistentNativeTransport } from '../src/lib/persistent-native-transport.js';
+import type { RuntimeDependencyProber } from '../src/lib/runtime-dependency-prober.js';
+import type { NativeResponse } from '../src/lib/native-response.types.js';
 import {
   LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS,
   LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES,
@@ -13,6 +16,7 @@ import {
   LOCAL_RUNTIME_DEPENDENCY_QUEUE_SOURCE,
   LOCAL_RUNTIME_DEPENDENCY_QUEUE_VERSION,
   LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
+  NATIVE_HOST_CAPABILITIES,
   RUNTIME_DEPENDENCY_ACTIONS,
   createRuntimeDependencyCacheKey,
   createRuntimeDependencyPendingKey,
@@ -923,5 +927,268 @@ await describe('native messaging client', async () => {
     await client.warmUp();
     await client.warmUp();
     assert.equal(connectNativeCalls, 1);
+  });
+});
+
+await describe('native messaging client persistent transport', async () => {
+  const input = {
+    anchorHost: 'www.reddit.com',
+    dependencyHost: 'www.redditstatic.com',
+    requestType: 'script',
+  };
+
+  function waitForMs(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  function createFakeTransportStub(
+    options: {
+      ready?: boolean;
+      capabilities?: string[];
+      callImpl?: (message: Record<string, unknown>) => Promise<unknown>;
+    } = {}
+  ): {
+    transport: PersistentNativeTransport;
+    calls: Record<string, unknown>[];
+    markedUnhealthy: string[];
+  } {
+    const ready = options.ready ?? true;
+    const capabilitySet = new Set(
+      options.capabilities ?? [
+        NATIVE_HOST_CAPABILITIES.enqueue,
+        NATIVE_HOST_CAPABILITIES.checkBatch,
+        NATIVE_HOST_CAPABILITIES.idEcho,
+        NATIVE_HOST_CAPABILITIES.autoReload,
+      ]
+    );
+    const calls: Record<string, unknown>[] = [];
+    const markedUnhealthy: string[] = [];
+    const transport: PersistentNativeTransport = {
+      ensureConnected: () => Promise.resolve(ready),
+      waitUntilReady: () => Promise.resolve(ready),
+      isReady: () => ready,
+      supports: (capability) => ready && capabilitySet.has(capability),
+      getProtocolVersion: () => 2,
+      getCapabilities: () => capabilitySet,
+      call: (message) => {
+        calls.push(message);
+        return options.callImpl ? options.callImpl(message) : Promise.resolve({ success: true });
+      },
+      markUnhealthy: (reason) => {
+        markedUnhealthy.push(reason);
+      },
+      shutdown: () => undefined,
+    };
+    return { transport, calls, markedUnhealthy };
+  }
+
+  function createFakeProberStub(): {
+    prober: RuntimeDependencyProber;
+    settle: (target: typeof input, response: NativeResponse) => boolean;
+    count: () => number;
+  } {
+    const entries = new Map<string, { onSettled: (response: NativeResponse) => void }>();
+    const keyOf = (target: typeof input): string => `${target.anchorHost}|${target.dependencyHost}`;
+    const prober: RuntimeDependencyProber = {
+      register: (regInput, onSettled) => {
+        entries.set(keyOf(regInput), { onSettled });
+      },
+      has: (regInput) => entries.has(keyOf(regInput)),
+      size: () => entries.size,
+      stop: () => undefined,
+    };
+    return {
+      prober,
+      settle: (target: typeof input, response: NativeResponse): boolean => {
+        const entry = entries.get(keyOf(target));
+        if (!entry) return false;
+        entries.delete(keyOf(target));
+        entry.onSettled(response);
+        return true;
+      },
+      count: () => entries.size,
+    };
+  }
+
+  await test('enqueues over the port and releases the request when the prober observes ready', async () => {
+    const { transport, calls } = createFakeTransportStub({
+      callImpl: (message) => {
+        if (message.action === 'allow-local-runtime-dependency-batch') {
+          return Promise.resolve({
+            success: true,
+            results: [{ success: true, runtimeDependencyState: 'pending', ...input }],
+          });
+        }
+        return Promise.resolve({ success: true });
+      },
+    });
+    const fakeProber = createFakeProberStub();
+    const client = createNativeMessagingClient({
+      browserApi: createBrowserStub({ success: true }),
+      hostName: 'whitelist_native_host',
+      persistentTransport: transport,
+      runtimeDependencyProber: fakeProber.prober,
+    });
+    const applied: unknown[] = [];
+    client.onRuntimeDependencyApplied((appliedInput) => {
+      applied.push(appliedInput);
+    });
+
+    const pendingPromise = client.allowLocalRuntimeDependency(input);
+    await waitForMs(60);
+
+    assert.equal(calls.length, 1);
+    const batchCall = calls[0];
+    assert.ok(batchCall, 'expected one persistent batch call');
+    assert.equal(batchCall.action, 'allow-local-runtime-dependency-batch');
+    assert.equal(batchCall.mode, 'enqueue');
+    assert.equal(fakeProber.count(), 1);
+
+    let settled = false;
+    void pendingPromise.then(() => {
+      settled = true;
+    });
+    await waitForMs(20);
+    assert.equal(settled, false, 'a pending entry must keep the request open');
+
+    assert.equal(
+      fakeProber.settle(input, { success: true, runtimeDependencyState: 'ready' }),
+      true
+    );
+    const response = await pendingPromise;
+    assert.equal(response.runtimeDependencyState, 'ready');
+    assert.deepEqual(applied, [input]);
+  });
+
+  await test('falls back to the one-shot path when the port call fails', async () => {
+    const { transport, markedUnhealthy } = createFakeTransportStub({
+      callImpl: () => Promise.reject(new Error('port broke')),
+    });
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      results: [{ success: true, runtimeDependencyState: 'queued', ...input }],
+    }));
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+      persistentTransport: transport,
+    });
+
+    const response = await client.allowLocalRuntimeDependency(input);
+
+    assert.equal(response.success, true);
+    assert.equal(messages.length, 1);
+    assert.deepEqual(markedUnhealthy, ['dependency enqueue failed']);
+  });
+
+  await test('keeps the legacy flow when the host does not announce enqueue', async () => {
+    const { transport, calls } = createFakeTransportStub({
+      capabilities: [NATIVE_HOST_CAPABILITIES.checkBatch, NATIVE_HOST_CAPABILITIES.idEcho],
+    });
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      results: [{ success: true, ...input }],
+    }));
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+      persistentTransport: transport,
+    });
+
+    assert.equal(client.isPersistentTransportReady(), false);
+    const response = await client.allowLocalRuntimeDependency(input);
+
+    assert.equal(response.success, true);
+    assert.equal(calls.length, 0);
+    assert.equal(messages.length, 1);
+    assert.equal(
+      (messages[0] as { action?: string }).action,
+      'allow-local-runtime-dependency-batch'
+    );
+  });
+
+  await test('gates the auto-reload capability on the full enqueue protocol', () => {
+    const partial = createFakeTransportStub({
+      capabilities: [NATIVE_HOST_CAPABILITIES.enqueue, NATIVE_HOST_CAPABILITIES.idEcho],
+    });
+    const partialClient = createNativeMessagingClient({
+      browserApi: createBrowserStub({ success: true }),
+      hostName: 'whitelist_native_host',
+      persistentTransport: partial.transport,
+    });
+    assert.equal(partialClient.isPersistentTransportReady(), true);
+    assert.equal(partialClient.isAutoReloadCapable(), false);
+
+    const full = createFakeTransportStub();
+    const fullClient = createNativeMessagingClient({
+      browserApi: createBrowserStub({ success: true }),
+      hostName: 'whitelist_native_host',
+      persistentTransport: full.transport,
+    });
+    assert.equal(fullClient.isAutoReloadCapable(), true);
+  });
+
+  await test('sends cheap periodic reads over the port and falls back to one-shot hosts', async () => {
+    const { transport, calls } = createFakeTransportStub();
+    const client = createNativeMessagingClient({
+      browserApi: createBrowserStub({ success: true }),
+      hostName: 'whitelist_native_host',
+      persistentTransport: transport,
+    });
+    await client.sendCheapRead({ action: 'get-policy-version' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.action, 'get-policy-version');
+
+    const notReady = createFakeTransportStub({ ready: false });
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      version: 'v1',
+    }));
+    const legacyClient = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+      persistentTransport: notReady.transport,
+    });
+    const response = (await legacyClient.sendCheapRead({ action: 'get-policy-version' })) as {
+      version?: string;
+    };
+    assert.equal(response.version, 'v1');
+    assert.equal(messages.length, 1);
+    assert.equal(notReady.calls.length, 0);
+  });
+
+  await test('a second request for the same pending dependency resolves with the same ready state', async () => {
+    const { transport } = createFakeTransportStub({
+      callImpl: (message) => {
+        if (message.action === 'allow-local-runtime-dependency-batch') {
+          return Promise.resolve({
+            success: true,
+            results: [{ success: true, runtimeDependencyState: 'pending', ...input }],
+          });
+        }
+        return Promise.resolve({ success: true });
+      },
+    });
+    const fakeProber = createFakeProberStub();
+    const client = createNativeMessagingClient({
+      browserApi: createBrowserStub({ success: true }),
+      hostName: 'whitelist_native_host',
+      persistentTransport: transport,
+      runtimeDependencyProber: fakeProber.prober,
+    });
+
+    const first = client.allowLocalRuntimeDependency(input);
+    await waitForMs(60);
+    const second = client.allowLocalRuntimeDependency(input);
+    await waitForMs(20);
+
+    assert.equal(fakeProber.count(), 1, 'the prober must keep a single pending entry');
+    fakeProber.settle(input, { success: true, runtimeDependencyState: 'ready' });
+
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    assert.equal(firstResponse.runtimeDependencyState, 'ready');
+    assert.equal(secondResponse.runtimeDependencyState, 'ready');
   });
 });
