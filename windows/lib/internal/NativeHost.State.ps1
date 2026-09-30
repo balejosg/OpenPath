@@ -1,4 +1,7 @@
-if (-not (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromFile' -ErrorAction SilentlyContinue)) {
+# Guard on the function this file actually consumes: a context that already
+# imported Common may expose FromFile without FromLines, and the old guard would
+# then skip loading the parser and break Get-WhitelistSections at runtime.
+if (-not (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromLines' -ErrorAction SilentlyContinue)) {
     $whitelistSectionsCandidatePaths = @()
     if ($PSScriptRoot) {
         $whitelistSectionsCandidatePaths += (Join-Path $PSScriptRoot 'Common.Whitelist.Sections.ps1')

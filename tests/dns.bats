@@ -629,6 +629,131 @@ JSON
     [ "$(stat -c '%a' "$overlay")" = "644" ]
 }
 
+@test "runtime dependency overlay stamps per-entry generations for new dependencies" {
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    mkdir -p "$VAR_STATE_DIR"
+    local overlay="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    local helper="$PROJECT_DIR/linux/libexec/runtime-dependency-overlay.py"
+    local requests_one="$TEST_TMP_DIR/requests-one.jsonl"
+    local requests_two="$TEST_TMP_DIR/requests-two.jsonl"
+    cat > "$requests_one" <<'JSON'
+{"version":1,"queuedAt":"2099-01-01T00:00:00Z","anchorHost":"allowed.example","dependencyHost":"cdn.example","requestType":"fetch","source":"firefox-webrequest-local"}
+JSON
+    cat > "$requests_two" <<'JSON'
+{"version":1,"queuedAt":"2099-01-01T00:00:00Z","anchorHost":"allowed.example","dependencyHost":"cdn2.example","requestType":"script","source":"firefox-webrequest-local"}
+JSON
+
+    run python3 "$helper" update \
+        --overlay "$overlay" --requests "$requests_one" \
+        --whitelist "allowed.example" --protected-hosts "" --blocked-subdomains ""
+    [ "$status" -eq 0 ]
+    run python3 "$helper" mark-applied --overlay "$overlay"
+    [ "$status" -eq 0 ]
+
+    # Adding one dependency stamps only the new entry; the applied entry keeps
+    # its own generation so readiness is decided per entry, not per document.
+    run python3 "$helper" update \
+        --overlay "$overlay" --requests "$requests_two" \
+        --whitelist "allowed.example" --protected-hosts "" --blocked-subdomains ""
+    [ "$status" -eq 0 ]
+
+    run python3 - "$overlay" <<'PY'
+import json
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+assert doc["generation"] == 2, doc
+assert doc["appliedGeneration"] == 1, doc
+by_host = {entry["dependencyHost"]: entry for entry in doc["entries"]}
+assert by_host["cdn.example"]["generation"] == 1, by_host
+assert by_host["cdn2.example"]["generation"] == 2, by_host
+PY
+    [ "$status" -eq 0 ]
+}
+
+@test "runtime dependency overlay persists metadata refreshes without a generation bump" {
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    mkdir -p "$VAR_STATE_DIR"
+    local overlay="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    local helper="$PROJECT_DIR/linux/libexec/runtime-dependency-overlay.py"
+    local requests="$TEST_TMP_DIR/requests.jsonl"
+    cat > "$requests" <<'JSON'
+{"version":1,"queuedAt":"2099-01-01T00:00:00Z","anchorHost":"allowed.example","dependencyHost":"cdn.example","requestType":"fetch","source":"firefox-webrequest-local"}
+JSON
+
+    run python3 "$helper" update \
+        --overlay "$overlay" --requests "$requests" \
+        --whitelist "allowed.example" --protected-hosts "" --blocked-subdomains ""
+    [ "$status" -eq 0 ]
+    run python3 "$helper" mark-applied --overlay "$overlay"
+    [ "$status" -eq 0 ]
+
+    local first_last_seen
+    first_last_seen=$(python3 - "$overlay" <<'PY'
+import json
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+print(doc["entries"][0]["lastSeen"])
+PY
+)
+
+    # The in-place mutation bug meant a same-pair refresh was never persisted
+    # (the "before" snapshot was taken after the dicts were mutated).
+    sleep 1
+    run python3 "$helper" update \
+        --overlay "$overlay" --requests "$requests" \
+        --whitelist "allowed.example" --protected-hosts "" --blocked-subdomains ""
+    [ "$status" -eq 0 ]
+
+    run python3 - "$overlay" "$first_last_seen" <<'PY'
+import json
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+entry = doc["entries"][0]
+assert doc["generation"] == 1, doc
+assert doc["appliedGeneration"] == 1, doc
+assert entry["generation"] == 1, entry
+assert entry["lastSeen"] > sys.argv[2], (entry["lastSeen"], sys.argv[2])
+PY
+    [ "$status" -eq 0 ]
+}
+
+@test "runtime dependency overlay prune does not bump the generation when nothing is stale" {
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    mkdir -p "$VAR_STATE_DIR"
+    local overlay="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    local helper="$PROJECT_DIR/linux/libexec/runtime-dependency-overlay.py"
+    local requests="$TEST_TMP_DIR/requests.jsonl"
+    cat > "$requests" <<'JSON'
+{"version":1,"queuedAt":"2099-01-01T00:00:00Z","anchorHost":"allowed.example","dependencyHost":"cdn.example","requestType":"fetch","source":"firefox-webrequest-local"}
+JSON
+
+    run python3 "$helper" update \
+        --overlay "$overlay" --requests "$requests" \
+        --whitelist "allowed.example" --protected-hosts "" --blocked-subdomains ""
+    [ "$status" -eq 0 ]
+    run python3 "$helper" mark-applied --overlay "$overlay"
+    [ "$status" -eq 0 ]
+
+    run python3 "$helper" domains \
+        --overlay "$overlay" --prune true \
+        --whitelist "allowed.example" --protected-hosts "" --blocked-subdomains ""
+    [ "$status" -eq 0 ]
+
+    run python3 - "$overlay" <<'PY'
+import json
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+assert doc["generation"] == 1, doc
+assert doc["appliedGeneration"] == 1, doc
+assert len(doc["entries"]) == 1, doc
+PY
+    [ "$status" -eq 0 ]
+}
+
 @test "generate_dnsmasq_config includes domains from whitelist" {
     export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
     export PRIMARY_DNS="8.8.8.8"

@@ -55,22 +55,125 @@ function Read-OpenPathRuntimeDependencyOverlay {
     [CmdletBinding()]
     param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
 
-    if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) { return @() }
+    return @((Read-OpenPathRuntimeDependencyOverlayDocument -Path $Path).Entries)
+}
+
+function Read-OpenPathRuntimeDependencyOverlayDocument {
+    # deserializes the full overlay document (document generation, applied generation, entries)
+    [CmdletBinding()]
+    param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
+
+    $document = [PSCustomObject]@{
+        Generation = 0
+        AppliedGeneration = 0
+        Entries = @()
+    }
+    if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) { return $document }
 
     try {
         $raw = Get-Content $Path -Raw -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $document }
         $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
-        return @($parsed.entries)
+        $generation = if ($parsed.PSObject.Properties['generation']) { [int]$parsed.generation } else { 0 }
+        $appliedGeneration = if ($parsed.PSObject.Properties['appliedGeneration']) { [int]$parsed.appliedGeneration } else { 0 }
+        return [PSCustomObject]@{
+            Generation = $generation
+            AppliedGeneration = $appliedGeneration
+            Entries = @($parsed.entries)
+        }
     }
     catch {
         Write-OpenPathLog "Failed to read runtime dependency overlay: $_" -Level WARN
-        return @()
+        return $document
     }
 }
 
+function Get-OpenPathRuntimeDependencyEntryGeneration {
+    # returns the per-entry generation when present and positive, else 0 (legacy entry without a stamp)
+    [CmdletBinding()]
+    param([AllowNull()][object]$Entry)
+
+    if ($null -eq $Entry) { return 0 }
+
+    $value = $null
+    if ($Entry -is [System.Collections.IDictionary]) {
+        if ($Entry.Contains('generation')) { $value = $Entry['generation'] }
+    }
+    elseif ($Entry.PSObject.Properties['generation']) {
+        $value = $Entry.generation
+    }
+
+    if ($null -eq $value) { return 0 }
+    try {
+        $generation = [int]$value
+    }
+    catch {
+        return 0
+    }
+    if ($generation -le 0) { return 0 }
+    return $generation
+}
+
+function Test-OpenPathRuntimeDependencyEntryReady {
+    <#
+    .SYNOPSIS
+    Returns true when an overlay entry is operative: stamped entries gate on their own generation,
+    legacy entries without a generation fall back to the document-level rule.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Entry,
+        [int]$AppliedGeneration = 0,
+        [int]$DocumentGeneration = 0
+    )
+
+    if ($null -eq $Entry) { return $false }
+
+    $entryGeneration = Get-OpenPathRuntimeDependencyEntryGeneration -Entry $Entry
+    if ($entryGeneration -gt 0) {
+        return ($AppliedGeneration -ge $entryGeneration)
+    }
+
+    return ($DocumentGeneration -gt 0 -and $AppliedGeneration -ge $DocumentGeneration)
+}
+
+function Get-OpenPathRuntimeDependencyPairKey {
+    # builds the case-insensitive anchor|dependency key used to compare overlay entry sets
+    [CmdletBinding()]
+    param([AllowNull()][object]$Entry)
+
+    if ($null -eq $Entry) { return '' }
+    $anchor = if ($Entry.PSObject.Properties['anchorHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $Entry.anchorHost } else { '' }
+    $dependency = if ($Entry.PSObject.Properties['dependencyHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $Entry.dependencyHost } else { '' }
+    if (-not $anchor -or -not $dependency) { return '' }
+    return "$anchor|$dependency"
+}
+
+function Set-OpenPathRuntimeDependencyEntryGeneration {
+    # stamps a per-entry generation on an overlay entry object
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$Entry,
+        [Parameter(Mandatory = $true)][int]$Generation
+    )
+
+    if ($Entry -is [System.Collections.IDictionary]) {
+        $Entry['generation'] = $Generation
+        return
+    }
+    $Entry | Add-Member -MemberType NoteProperty -Name 'generation' -Value $Generation -Force
+}
+
 function Write-OpenPathRuntimeDependencyOverlay {
-    # serializes entries with version, content generation, applied generation, and updatedAt to the overlay json file
+    <#
+    .SYNOPSIS
+    Serializes entries with version, content generation, applied generation, and updatedAt to the overlay json file.
+    .DESCRIPTION
+    Entries that were not present in the previous document (newly resolvable pairs) are stamped
+    with a fresh per-entry generation and move the document generation. Metadata-only refreshes
+    and prune rewrites keep the document generation, so already-applied entries never fall back
+    to `pending` because another entry is still waiting to be applied.
+    #>
     [CmdletBinding()]
     param(
         [object[]]$Entries = @(),
@@ -82,26 +185,42 @@ function Write-OpenPathRuntimeDependencyOverlay {
         Ensure-OpenPathCapabilityStorageDirectory -Path $directory | Out-Null
     }
 
-    $previousGeneration = 0
-    $previousAppliedGeneration = 0
-    if (Test-Path $Path -ErrorAction SilentlyContinue) {
-        try {
-            $existingRaw = Get-Content $Path -Raw -ErrorAction Stop
-            if (-not [string]::IsNullOrWhiteSpace($existingRaw)) {
-                $existing = $existingRaw | ConvertFrom-Json -ErrorAction Stop
-                if ($existing.PSObject.Properties['generation']) { $previousGeneration = [int]$existing.generation }
-                if ($existing.PSObject.Properties['appliedGeneration']) { $previousAppliedGeneration = [int]$existing.appliedGeneration }
+    $previousDocument = Read-OpenPathRuntimeDependencyOverlayDocument -Path $Path
+    $previousGeneration = [int]$previousDocument.Generation
+    $previousAppliedGeneration = [int]$previousDocument.AppliedGeneration
+    $previousPairs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($previousEntry in @($previousDocument.Entries)) {
+        $previousKey = Get-OpenPathRuntimeDependencyPairKey -Entry $previousEntry
+        if ($previousKey) { [void]$previousPairs.Add($previousKey) }
+    }
+
+    $addedPairs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($Entries)) {
+        $key = Get-OpenPathRuntimeDependencyPairKey -Entry $entry
+        if ($key -and -not $previousPairs.Contains($key)) {
+            [void]$addedPairs.Add($key)
+        }
+    }
+
+    $nextGeneration = $previousGeneration
+    if ($addedPairs.Count -gt 0) {
+        $nextGeneration = $previousGeneration + 1
+        foreach ($entry in @($Entries)) {
+            $key = Get-OpenPathRuntimeDependencyPairKey -Entry $entry
+            if ($key -and $addedPairs.Contains($key)) {
+                Set-OpenPathRuntimeDependencyEntryGeneration -Entry $entry -Generation $nextGeneration
             }
         }
-        catch {
-            $previousGeneration = 0
-            $previousAppliedGeneration = 0
-        }
+    }
+
+    foreach ($entry in @($Entries)) {
+        $entryGeneration = Get-OpenPathRuntimeDependencyEntryGeneration -Entry $entry
+        if ($entryGeneration -gt $nextGeneration) { $nextGeneration = $entryGeneration }
     }
 
     @{
         version = $script:OpenPathRuntimeDependencyOverlayVersion
-        generation = $previousGeneration + 1
+        generation = $nextGeneration
         appliedGeneration = $previousAppliedGeneration
         updatedAt = (Get-Date).ToUniversalTime().ToString('o')
         entries = @($Entries)
@@ -166,6 +285,7 @@ function Update-OpenPathRuntimeDependencyOverlay {
 
     $whitelistSet = New-OpenPathRuntimeDependencyWhitelistSet -WhitelistedDomains $WhitelistedDomains
     $protectedSet = Get-OpenPathRuntimeDependencyProtectedHosts
+    $blockedSubdomainSet = New-OpenPathRuntimeDependencyBlockedSubdomainSet -BlockedSubdomains $BlockedSubdomains
     $now = (Get-Date).ToUniversalTime()
     $expiresAt = $now.AddDays([Math]::Max(1, $TtlDays))
     $keptEntries = @()
@@ -187,7 +307,7 @@ function Update-OpenPathRuntimeDependencyOverlay {
             -not (Test-OpenPathWhitelistCoversHost -Hostname $entryAnchor -WhitelistSet $whitelistSet) -or
             (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $entryAnchor -ProtectedHosts $protectedSet) -or
             (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $entryDependency -ProtectedHosts $protectedSet) -or
-            (Test-OpenPathBlockedSubdomainMatch -Domain $entryDependency -BlockedSubdomains $BlockedSubdomains)
+            (Test-OpenPathBlockedSubdomainMatch -Domain $entryDependency -BlockedSubdomains $BlockedSubdomains -BlockedSubdomainSet $blockedSubdomainSet)
         ) {
             continue
         }
@@ -202,7 +322,10 @@ function Update-OpenPathRuntimeDependencyOverlay {
             -Message $request `
             -WhitelistedDomains $WhitelistedDomains `
             -BlockedSubdomains $BlockedSubdomains `
-            -SkipOverlayCheck
+            -SkipOverlayCheck `
+            -WhitelistSet $whitelistSet `
+            -ProtectedHosts $protectedSet `
+            -BlockedSubdomainSet $blockedSubdomainSet
         if ($candidate.Valid -ne $true) {
             $rejected += 1
             continue
@@ -287,6 +410,7 @@ function Get-OpenPathRuntimeDependencyDomains {
 
     $whitelistSet = New-OpenPathRuntimeDependencyWhitelistSet -WhitelistedDomains $WhitelistedDomains
     $protectedSet = Get-OpenPathRuntimeDependencyProtectedHosts
+    $blockedSubdomainSet = New-OpenPathRuntimeDependencyBlockedSubdomainSet -BlockedSubdomains $BlockedSubdomains
     $now = Get-Date
     $entries = @(Read-OpenPathRuntimeDependencyOverlay)
     $keptEntries = @()
@@ -309,7 +433,7 @@ function Get-OpenPathRuntimeDependencyDomains {
             $isExpired -or
             -not (Test-OpenPathWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet) -or
             (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $dependencyHost -ProtectedHosts $protectedSet) -or
-            (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains) -or
+            (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains -BlockedSubdomainSet $blockedSubdomainSet) -or
             -not (Test-OpenPathDomainFormat -Domain $dependencyHost)
         ) {
             continue

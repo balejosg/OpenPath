@@ -180,16 +180,32 @@ function Invoke-AcrylicPolicyStateLocked {
 }
 
 function Write-AcrylicTextFile {
-    # writes $Content atomically via a temp-then-rename to $Path; refuses to write blank or zero-byte output.
+    # writes $Content atomically via a temp-then-rename to $Path; refuses to write blank or zero-byte output; returns false when -SkipIfUnchanged detected identical content.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
-        [Parameter(Mandatory = $true)][string]$Description
+        [Parameter(Mandatory = $true)][string]$Description,
+        [switch]$SkipIfUnchanged
     )
 
     if ([string]::IsNullOrWhiteSpace($Content)) {
         throw "Refusing to write blank $Description to $Path"
+    }
+
+    # Rewriting generated Acrylic files that already hold the identical content
+    # costs seconds on large INIs (the affinity mask carries the whole whitelist)
+    # and forces downstream reload heuristics; skip the write when nothing moved.
+    if ($SkipIfUnchanged -and (Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue)) {
+        try {
+            $existingContent = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+            if ([string]$existingContent -eq $Content) {
+                return $false
+            }
+        }
+        catch {
+            # Fall through and rewrite when the existing file cannot be read.
+        }
     }
 
     $directory = Split-Path -Path $Path -Parent
@@ -220,6 +236,8 @@ function Write-AcrylicTextFile {
             Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
         }
     }
+
+    return $true
 }
 
 function Write-AcrylicConfigFile {
@@ -227,10 +245,11 @@ function Write-AcrylicConfigFile {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
+        [switch]$SkipIfUnchanged
     )
 
-    Write-AcrylicTextFile -Path $Path -Content $Content -Description 'AcrylicConfiguration.ini'
+    return (Write-AcrylicTextFile -Path $Path -Content $Content -Description 'AcrylicConfiguration.ini' -SkipIfUnchanged:$SkipIfUnchanged)
 }
 
 function Write-AcrylicHostsFile {
@@ -238,8 +257,9 @@ function Write-AcrylicHostsFile {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
+        [switch]$SkipIfUnchanged
     )
 
-    Write-AcrylicTextFile -Path $Path -Content $Content -Description 'AcrylicHosts.txt'
+    return (Write-AcrylicTextFile -Path $Path -Content $Content -Description 'AcrylicHosts.txt' -SkipIfUnchanged:$SkipIfUnchanged)
 }

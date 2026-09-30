@@ -365,7 +365,9 @@ function Wait-AcrylicServiceStatus {
     Polls the Acrylic service until it reaches the requested status or the timeout expires.
     .DESCRIPTION
     Uses the ServiceController wait method when available, then falls back to a polling loop
-    at 500 ms intervals until the deadline.
+    at 100 ms intervals until the deadline. The short poll keeps the runtime dependency
+    hot path's service-wait segment (0.5-7 s of the 2A baseline) as tight as the service
+    manager allows.
     #>
     [CmdletBinding()]
     param(
@@ -393,7 +395,7 @@ function Wait-AcrylicServiceStatus {
         if ($service -and ([string]$service.Status) -eq $Status) {
             return $service
         }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 100
     } while ((Get-Date) -lt $deadline)
 
     return (Get-Service -Name $Name -ErrorAction SilentlyContinue)
@@ -511,15 +513,47 @@ function Restart-AcrylicService {
 function Clear-OpenPathDnsClientCache {
     <#
     .SYNOPSIS
-    Flushes the Windows DNS client resolver cache, falling back to ipconfig when the cmdlet is unavailable.
+    Flushes the Windows DNS client resolver cache, preferring an in-process P/Invoke fast path.
     .DESCRIPTION
     Runtime dependency readiness requires that a brand-new OS-level lookup already resolves after
     the local overlay was applied. Windows keeps its own negative answers (status 9501/9003), so the
-    fast apply flushes this cache before stamping the applied generation. Best-effort and bounded:
-    returns $true when a flush command completed successfully.
+    fast apply flushes this cache before stamping the applied generation.
+
+    The Clear-DnsClientCache cmdlet costs ~500 ms per call (measured in the Phase 2A lab);
+    DnsFlushResolverCache via dnsapi.dll returns in single-digit milliseconds. The cmdlet and
+    ipconfig /flushdns remain as fallbacks. Best-effort and bounded: returns $true when a flush
+    path completed successfully.
     #>
     [CmdletBinding()]
     param()
+
+    try {
+        if (-not ('OpenPath.DnsClientCache' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace OpenPath
+{
+    public static class DnsClientCache
+    {
+        [DllImport("dnsapi.dll", EntryPoint = "DnsFlushResolverCache", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool FlushResolverCache();
+    }
+}
+'@ -ErrorAction Stop
+        }
+
+        if ([OpenPath.DnsClientCache]::FlushResolverCache()) {
+            return $true
+        }
+    }
+    catch {
+        if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
+            Write-OpenPathLog "DnsFlushResolverCache fast path unavailable; falling back to Clear-DnsClientCache: $_" -Level WARN
+        }
+    }
 
     try {
         if (Get-Command -Name 'Clear-DnsClientCache' -ErrorAction SilentlyContinue) {

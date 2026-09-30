@@ -71,19 +71,60 @@ function Write-OpenPathRuntimeDependencyWorkerState {
     }
 }
 
+function Set-OpenPathRuntimeDependencyWorkerBusyState {
+    <#
+    .SYNOPSIS
+    Marks the worker busy for a pipeline stage with a read-modify-write of the state file.
+    .DESCRIPTION
+    Called by the worker before starting a batch and by the fast apply around its own stages
+    (queue iteration, Acrylic reload, DNS flush, generation stamp). A long batch keeps
+    `busySince` fresh so the native host never falls back to the scheduled task while the
+    worker is demonstrably applying, even when the idle heartbeat age exceeds its window.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$StatePath,
+        [Parameter(Mandatory = $true)][string]$Stage
+    )
+
+    if ([string]::IsNullOrWhiteSpace($StatePath) -or -not (Test-Path $StatePath -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    try {
+        $parsed = Get-Content -Path $StatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $state = @{}
+        foreach ($property in $parsed.PSObject.Properties) { $state[$property.Name] = $property.Value }
+
+        $now = (Get-Date).ToUniversalTime()
+        if (-not $state['busySince']) {
+            $state['busySince'] = $now.ToString('o')
+            $state['busySinceEpochMs'] = [long][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        }
+        $state['busyStage'] = $Stage
+        return (Write-OpenPathRuntimeDependencyWorkerState -State $state -StatePath $StatePath)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Test-OpenPathRuntimeDependencyWorkerFresh {
     <#
     .SYNOPSIS
-    Returns true when the resident worker heartbeat is recent enough to be considered alive.
+    Returns true when the resident worker heartbeat (or a recent busy mark) is recent enough to be considered alive.
     .DESCRIPTION
     Used by the Firefox native host to skip the schtasks fallback trigger when the
-    resident worker is demonstrably running. Timestamps slightly in the future are
-    tolerated up to 30 seconds to absorb clock adjustment noise.
+    resident worker is demonstrably running. A worker applying a long batch refreshes
+    `busySince`; that counts as alive for a wider window than the idle heartbeat.
+    Timestamps slightly in the future are tolerated up to 30 seconds to absorb clock
+    adjustment noise.
     #>
     [CmdletBinding()]
     param(
         [string]$StatePath = '',
         [int]$MaxAgeSeconds = 10,
+        [int]$BusyMaxAgeSeconds = 120,
         [AllowNull()][object]$Now = $null
     )
 
@@ -99,6 +140,9 @@ function Test-OpenPathRuntimeDependencyWorkerFresh {
         if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
         $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
 
+        $reference = if ($null -ne $Now) { [DateTimeOffset]$Now } else { [DateTimeOffset]::UtcNow }
+        $referenceMs = $reference.ToUnixTimeMilliseconds()
+
         $heartbeatMs = $null
         if ($parsed.PSObject.Properties['heartbeatEpochMs'] -and $parsed.heartbeatEpochMs) {
             $heartbeatMs = [long]$parsed.heartbeatEpochMs
@@ -111,11 +155,31 @@ function Test-OpenPathRuntimeDependencyWorkerFresh {
                 [System.Globalization.DateTimeStyles]::RoundtripKind
             ).ToUnixTimeMilliseconds()
         }
-        if ($null -eq $heartbeatMs) { return $false }
+        if ($null -ne $heartbeatMs) {
+            $ageMs = $referenceMs - $heartbeatMs
+            if ($ageMs -ge -30000 -and $ageMs -le ([Math]::Max(1, $MaxAgeSeconds) * 1000)) {
+                return $true
+            }
+        }
 
-        $reference = if ($null -ne $Now) { [DateTimeOffset]$Now } else { [DateTimeOffset]::UtcNow }
-        $ageMs = $reference.ToUnixTimeMilliseconds() - $heartbeatMs
-        return ($ageMs -ge -30000 -and $ageMs -le ([Math]::Max(1, $MaxAgeSeconds) * 1000))
+        $busySinceMs = $null
+        if ($parsed.PSObject.Properties['busySinceEpochMs'] -and $parsed.busySinceEpochMs) {
+            $busySinceMs = [long]$parsed.busySinceEpochMs
+        }
+        elseif ($parsed.PSObject.Properties['busySince'] -and $parsed.busySince) {
+            # ps-culture-allow: InvariantCulture and RoundtripKind are passed explicitly on the following lines.
+            $busySinceMs = [long][DateTimeOffset]::Parse(
+                [string]$parsed.busySince,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind
+            ).ToUnixTimeMilliseconds()
+        }
+        if ($null -ne $busySinceMs) {
+            $busyAgeMs = $referenceMs - $busySinceMs
+            return ($busyAgeMs -ge -30000 -and $busyAgeMs -le ([Math]::Max(1, $BusyMaxAgeSeconds) * 1000))
+        }
+
+        return $false
     }
     catch {
         return $false
@@ -210,7 +274,7 @@ function Start-OpenPathRuntimeDependencyWorker {
     }
     if (-not $ApplyAction) {
         $ApplyAction = {
-            Invoke-OpenPathRuntimeDependencyFastApply -OpenPathRoot $OpenPathRoot -PassThru
+            Invoke-OpenPathRuntimeDependencyFastApply -OpenPathRoot $OpenPathRoot -WorkerStatePath $StatePath -PassThru
         }
     }
 
@@ -269,9 +333,13 @@ function Start-OpenPathRuntimeDependencyWorker {
                 [System.Threading.Thread]::Sleep([Math]::Max(0, $DebounceMs))
                 $applyStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                 try {
-                    # Refresh the heartbeat before the apply so the native host does not
-                    # fall back to the scheduled task while the worker is busy applying.
+                    # Mark the worker busy for the whole batch and refresh the heartbeat so
+                    # the native host does not fall back to the scheduled task while the
+                    # worker is busy applying; a recent busy mark counts as alive.
                     $state['lastResult'] = 'applying'
+                    $state['busySince'] = (Get-Date).ToUniversalTime().ToString('o')
+                    $state['busySinceEpochMs'] = [long][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                    $state['busyStage'] = 'queue'
                     Write-OpenPathRuntimeDependencyWorkerState -State $state -StatePath $StatePath | Out-Null
                     $applyResult = Invoke-OpenPathRuntimeDependencyWorkerApply `
                         -ApplyAction $ApplyAction `
@@ -300,6 +368,9 @@ function Start-OpenPathRuntimeDependencyWorker {
                         Write-OpenPathLog "Runtime dependency worker apply failed: $_" -Level ERROR
                     }
                 }
+                $state['busySince'] = ''
+                $state['busySinceEpochMs'] = 0
+                $state['busyStage'] = ''
                 Write-OpenPathRuntimeDependencyWorkerState -State $state -StatePath $StatePath | Out-Null
             }
             elseif ($lastHeartbeat.Elapsed.TotalSeconds -ge [Math]::Max(1, $HeartbeatSeconds)) {

@@ -91,7 +91,10 @@ function Update-AcrylicHost {
         }
         Write-OpenPathLog "Generating AcrylicHosts.txt with $(@($definition.EffectiveWhitelistedDomains).Count) domains..."
         $content = ConvertTo-AcrylicHostsContent -Definition $definition
-        Write-AcrylicHostsFile -Path $hostsPath -Content $content
+        $hostsWritten = [bool](Write-AcrylicHostsFile -Path $hostsPath -Content $content -SkipIfUnchanged)
+        if (-not $hostsWritten) {
+            Write-OpenPathLog "AcrylicHosts.txt unchanged; skipping rewrite"
+        }
 
         $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -BlockedSubdomains $definition.BlockedSubdomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains -CaptivePortalDomains $definition.CaptivePortalDomains
         if (-not $configurationUpdated) {
@@ -269,8 +272,13 @@ function Set-AcrylicConfiguration {
     $iniContent = Set-AcrylicAllowedAddress -Content $iniContent -Key 'IP1' -Value '127.*'
     $iniContent = Set-AcrylicAllowedAddress -Content $iniContent -Key 'IP2' -Value '::1'
 
-    Write-AcrylicConfigFile -Path $configPath -Content $iniContent
-    Write-OpenPathLog "Acrylic configuration updated"
+    $iniWritten = [bool](Write-AcrylicConfigFile -Path $configPath -Content $iniContent -SkipIfUnchanged)
+    if ($iniWritten) {
+        Write-OpenPathLog "Acrylic configuration updated"
+    }
+    else {
+        Write-OpenPathLog "Acrylic configuration unchanged; skipping rewrite"
+    }
     if ($splitDnsActive) {
         Write-OpenPathLog "Acrylic split DNS active: $($normalizedPortalDomains -join ', ') -> $($portalUpstreams -join ', ')"
     }

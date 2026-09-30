@@ -55,6 +55,52 @@ Describe "Runtime dependency worker" {
             Set-Content -Path $isoPath -Value $iso -Encoding UTF8
             Test-OpenPathRuntimeDependencyWorkerFresh -StatePath $isoPath -MaxAgeSeconds 10 | Should -BeTrue
         }
+
+        It "treats a recent busy mark as alive while a long batch is applying" {
+            $busyPath = Join-Path $TestDrive 'busy.json'
+            # An in-flight 30 s batch does not refresh the idle heartbeat every few
+            # seconds; the fresh busy mark must keep the native host from falling
+            # back to the scheduled task.
+            $state = @{
+                heartbeatEpochMs = [DateTimeOffset]::UtcNow.AddSeconds(-25).ToUnixTimeMilliseconds()
+                busySince = [DateTimeOffset]::UtcNow.AddSeconds(-5).ToString('o')
+                busySinceEpochMs = [DateTimeOffset]::UtcNow.AddSeconds(-5).ToUnixTimeMilliseconds()
+                busyStage = 'acrylic-reload'
+            } | ConvertTo-Json
+            Set-Content -Path $busyPath -Value $state -Encoding UTF8
+
+            Test-OpenPathRuntimeDependencyWorkerFresh -StatePath $busyPath -MaxAgeSeconds 10 -BusyMaxAgeSeconds 120 | Should -BeTrue
+            # Beyond the busy window the worker is not considered alive either.
+            Test-OpenPathRuntimeDependencyWorkerFresh -StatePath $busyPath -MaxAgeSeconds 10 -BusyMaxAgeSeconds 2 | Should -BeFalse
+        }
+
+        It "marks the worker busy without discarding the recorded state fields" {
+            $busyStatePath = Join-Path $TestDrive 'busy-state.json'
+            Write-OpenPathRuntimeDependencyWorkerState -State @{ pid = 1234; cycles = 9; applied = 2 } -StatePath $busyStatePath -SkipReadAccess | Out-Null
+
+            # Age the heartbeat so the busy refresh is observable.
+            $aged = Get-Content $busyStatePath -Raw | ConvertFrom-Json
+            $aged.heartbeatEpochMs = [DateTimeOffset]::UtcNow.AddSeconds(-40).ToUnixTimeMilliseconds()
+            $aged.heartbeatAt = [DateTimeOffset]::UtcNow.AddSeconds(-40).ToString('o')
+            $aged | ConvertTo-Json -Depth 6 | Set-Content -Path $busyStatePath -Encoding UTF8
+
+            Set-OpenPathRuntimeDependencyWorkerBusyState -StatePath $busyStatePath -Stage 'acrylic-reload' | Should -BeTrue
+            $first = Get-Content $busyStatePath -Raw | ConvertFrom-Json
+            $first.pid | Should -Be 1234
+            $first.cycles | Should -Be 9
+            $first.applied | Should -Be 2
+            $first.busyStage | Should -Be 'acrylic-reload'
+            $first.busySince | Should -Not -BeNullOrEmpty
+            Test-OpenPathRuntimeDependencyWorkerFresh -StatePath $busyStatePath -MaxAgeSeconds 10 -BusyMaxAgeSeconds 120 | Should -BeTrue
+
+            # A later stage refresh keeps the original busySince and advances the stage.
+            $busySince = [string]$first.busySince
+            Set-OpenPathRuntimeDependencyWorkerBusyState -StatePath $busyStatePath -Stage 'generation-stamp' | Should -BeTrue
+            $second = Get-Content $busyStatePath -Raw | ConvertFrom-Json
+            $second.busySince | Should -Be $busySince
+            $second.busyStage | Should -Be 'generation-stamp'
+            [long]$second.heartbeatEpochMs | Should -BeGreaterOrEqual ([long]$first.heartbeatEpochMs)
+        }
     }
 
     Context "Apply retry" {

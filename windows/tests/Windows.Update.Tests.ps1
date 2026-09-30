@@ -365,7 +365,7 @@ Describe "Update Script" {
 
             Assert-ContentContainsAll -Content $runtimeContent -Needles @(
                 'function Invoke-OpenPathRuntimeDependencyFastApply',
-                'Sync-FirefoxNativeHostMirror -Config $config -WhitelistPath $whitelistPath',
+                'Sync-FirefoxNativeHostMirrorIfChanged -OpenPathRoot $OpenPathRoot -WhitelistPath $whitelistPath',
                 'Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru',
                 '$overlayUnappliedBefore',
                 '$maxDrainIterations',
@@ -378,14 +378,26 @@ Describe "Update Script" {
                 'acrylicHostsChanged=',
                 'queueProcessedMs',
                 'overlayWriteMs',
-                'acrylicReloadMs'
+                'acrylicReloadMs',
+                'mirrorSynced',
+                'mirrorSyncMs',
+                '[System.Threading.Thread]::Sleep(150)',
+                '$updateWorkerBusyStage',
+                'WorkerStatePath'
             )
+
+            # Hot path: the config read + mirror rebuild must not run unconditionally
+            # on every dependency batch (it cost ~5 s of the Phase 2A baseline).
+            $runtimeContent | Should -Match 'function Sync-FirefoxNativeHostMirrorIfChanged'
+            $runtimeContent | Should -Match 'function Get-OpenPathNativeHostMirrorSyncStatePath'
 
             $fastApplyStart = $runtimeContent.IndexOf('function Invoke-OpenPathRuntimeDependencyFastApply')
             $updateCycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
             $fastApplyBody = $runtimeContent.Substring($fastApplyStart, $updateCycleStart - $fastApplyStart)
             $fastApplyBody | Should -Match '(?s)Test-Path \$whitelistPath.*?Invoke-OpenPathRuntimeDependencyQueueApply'
             $fastApplyBody | Should -Not -Match 'Get-OpenPathWhitelistDownloadResult'
+            $fastApplyBody | Should -Not -Match 'Sync-FirefoxNativeHostMirror -Config \$config'
+            $fastApplyBody | Should -Not -Match 'Get-OpenPathConfig'
 
             Assert-ContentContainsAll -Content $scriptContent -Needles @(
                 '#Requires -RunAsAdministrator',
@@ -393,6 +405,54 @@ Describe "Update Script" {
                 'Invoke-OpenPathRuntimeDependencyFastApply -OpenPathRoot $OpenPathRoot',
                 'exit $exitCode'
             )
+        }
+
+        It "Stamps the applied generation at the end of every drain iteration" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+            $fastApplyStart = $runtimeContent.IndexOf('function Invoke-OpenPathRuntimeDependencyFastApply')
+            $updateCycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
+            $fastApplyBody = $runtimeContent.Substring($fastApplyStart, $updateCycleStart - $fastApplyStart)
+
+            # Reload branch (after the DNS flush) and the unchanged branch: the
+            # entries of each iteration must become ready without waiting for a
+            # later, still-pending iteration.
+            ([regex]::Matches($fastApplyBody, 'Set-OpenPathRuntimeDependencyOverlayApplied \| Out-Null')).Count | Should -Be 2
+            $fastApplyBody | Should -Match '(?s)\$dnsFlushOk.*?Set-OpenPathRuntimeDependencyOverlayApplied \| Out-Null'
+            $fastApplyBody | Should -Match 'overlay generation stamped: appliedGeneration='
+        }
+
+        It "Skips the native host mirror sync until the whitelist or config inputs change" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+
+            Assert-ContentContainsAll -Content $runtimeContent -Needles @(
+                'function Sync-FirefoxNativeHostMirrorIfChanged',
+                'Get-OpenPathFileStateFingerprint',
+                '$previous -eq $fingerprint',
+                'data\native-host-mirror-sync.json'
+            )
+
+            Import-Module $runtimePath -Force -ErrorAction SilentlyContinue
+            $mirrorRoot = Join-Path $TestDrive 'mirror-root'
+            $dataDir = Join-Path $mirrorRoot 'data'
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            Set-Content -Path (Join-Path $dataDir 'whitelist.txt') -Value "## WHITELIST$([Environment]::NewLine)reddit.com"
+            Set-Content -Path (Join-Path $dataDir 'config.json') -Value '{}'
+
+            # Recording the current inputs makes the gate skip without reading the
+            # config or rebuilding the mirror.
+            Update-OpenPathNativeHostMirrorSyncState -OpenPathRoot $mirrorRoot | Out-Null
+            $statePath = Get-OpenPathNativeHostMirrorSyncStatePath -OpenPathRoot $mirrorRoot
+            Test-Path $statePath | Should -BeTrue
+            (Get-Content $statePath -Raw).Trim() | Should -Not -BeNullOrEmpty
+            (Sync-FirefoxNativeHostMirrorIfChanged -OpenPathRoot $mirrorRoot) | Should -BeFalse
+
+            # Changing the whitelist makes the fingerprint stale.
+            Add-Content -Path (Join-Path $dataDir 'whitelist.txt') -Value ([Environment]::NewLine + 'example.com')
+            $recorded = (Get-Content $statePath -Raw).Trim()
+            $current = ('{0}|{1}' -f (Get-OpenPathFileStateFingerprint -Path (Join-Path $dataDir 'whitelist.txt')), (Get-OpenPathFileStateFingerprint -Path (Join-Path $dataDir 'config.json')))
+            $recorded | Should -Not -Be $current
         }
     }
 

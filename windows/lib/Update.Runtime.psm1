@@ -365,11 +365,21 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
 
         [int]$LockWaitTimeoutSeconds = 20,
 
+        [string]$WorkerStatePath = '',
+
         [switch]$PassThru
     )
 
     $OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
     Initialize-OpenPathUpdateRuntimeSession -OpenPathRoot $OpenPathRoot
+
+    $updateWorkerBusyStage = {
+        param([string]$Stage)
+        if ([string]::IsNullOrWhiteSpace($WorkerStatePath)) { return }
+        if (Get-Command -Name 'Set-OpenPathRuntimeDependencyWorkerBusyState' -ErrorAction SilentlyContinue) {
+            Set-OpenPathRuntimeDependencyWorkerBusyState -StatePath $WorkerStatePath -Stage $Stage | Out-Null
+        }
+    }
 
     $mutex = $null
     $lockAcquired = $false
@@ -389,6 +399,8 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         dnsFlushMs = 0
         dnsFlushOk = $false
         appliedGeneration = 0
+        mirrorSynced = $false
+        mirrorSyncMs = 0
         changed = $false
     }
 
@@ -451,8 +463,18 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
             }
         }
 
-        $config = Get-OpenPathConfig
-        Sync-FirefoxNativeHostMirror -Config $config -WhitelistPath $whitelistPath
+        $config = $null
+        $mirrorSyncStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        # Hot path: the mirror only changes when the whitelist or config inputs change.
+        # Rebuilding it on every dependency batch cost ~5 s of the 2A baseline
+        # (08:14:39 "fast apply" -> 08:14:44 "detected 6 queue file(s)").
+        $mirrorSynced = [bool](Sync-FirefoxNativeHostMirrorIfChanged -OpenPathRoot $OpenPathRoot -WhitelistPath $whitelistPath)
+        $mirrorSyncStopwatch.Stop()
+        $metrics['mirrorSynced'] = [bool]$mirrorSynced
+        $metrics['mirrorSyncMs'] = [int]$mirrorSyncStopwatch.ElapsedMilliseconds
+        if ($mirrorSynced) {
+            Write-OpenPathLog "Runtime dependency fast apply synced the Firefox native host mirror (ms=$($mirrorSyncStopwatch.ElapsedMilliseconds))"
+        }
 
         $queuePath = Join-Path $OpenPathRoot 'data\runtime-dependency-queue'
         $maxDrainIterations = 3
@@ -466,10 +488,13 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         }
         # Debounce: triggers that arrive together (page fan-out) should land their
         # queue files before the first scan, so a burst is applied in one overlay
-        # write and one Acrylic reload instead of one reload per batch.
-        [System.Threading.Thread]::Sleep(300)
+        # write and one Acrylic reload instead of one reload per batch. Kept inside
+        # the worker's total debounce budget (worker 100 ms + 150 ms here <= 300 ms).
+        [System.Threading.Thread]::Sleep(150)
         do {
             $drainIterations += 1
+            & $updateWorkerBusyStage("iteration-$drainIterations")
+            $iterationStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru
             $metrics['queueProcessedMs'] = [int]$metrics['queueProcessedMs'] + [int]$queueResult.QueueProcessedMs
             $metrics['queueProcessed'] = [int]$metrics['queueProcessed'] + [int]$queueResult.Processed
@@ -484,6 +509,7 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                 break
             }
             if ($queueResult.AcrylicHostsChanged -or $overlayUnappliedBefore) {
+                & $updateWorkerBusyStage('acrylic-reload')
                 $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                 $acrylicReloaded = [bool](Restart-AcrylicService)
                 $reloadStopwatch.Stop()
@@ -498,6 +524,7 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                 # lookup resolves: the Windows DNS client keeps its own negative
                 # answers (NODATA/9501). Flush before stamping the applied generation
                 # so `ready` implies a fresh system lookup already succeeds.
+                & $updateWorkerBusyStage('dns-flush')
                 $dnsFlushStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                 $dnsFlushOk = [bool](Clear-OpenPathDnsClientCache)
                 $dnsFlushStopwatch.Stop()
@@ -512,6 +539,9 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
 
                 # Only a successful reload proves the new overlay content is operative;
                 # the native host waits for this marker before reporting `ready`.
+                # Stamping at the end of every iteration is what lets the entries of
+                # this iteration become ready even when later batches are pending.
+                & $updateWorkerBusyStage('generation-stamp')
                 Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
                 $appliedGeneration = 0
                 try {
@@ -531,6 +561,9 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                 Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
             }
 
+            $iterationStopwatch.Stop()
+            Write-OpenPathLog "Runtime dependency fast apply iteration $drainIterations staged ready in $($iterationStopwatch.ElapsedMilliseconds) ms"
+
             $overlayUnappliedBefore = $false
             # Queue files written while this run was applying would otherwise be
             # dropped (the scheduled task ignores re-triggers while it runs), so
@@ -542,7 +575,7 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
             }
         } while ($pendingQueueFiles.Count -gt 0 -and $drainIterations -lt $maxDrainIterations)
 
-        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} acrylicHostsChanged={3} iterations={4} queueProcessedMs={5} overlayWriteMs={6} acrylicHostUpdateMs={7} acrylicReloadMs={8} detectedQueueFiles={9} dnsFlushMs={10} dnsFlushOk={11} appliedGeneration={12}" -f `
+        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} acrylicHostsChanged={3} iterations={4} queueProcessedMs={5} overlayWriteMs={6} acrylicHostUpdateMs={7} acrylicReloadMs={8} detectedQueueFiles={9} dnsFlushMs={10} dnsFlushOk={11} appliedGeneration={12} mirrorSynced={13} mirrorSyncMs={14}" -f `
                 $metrics['queueProcessed'], `
                 $metrics['queueRejected'], `
                 $metrics['changed'], `
@@ -555,7 +588,9 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                 $metrics['detectedQueueFiles'], `
                 $metrics['dnsFlushMs'], `
                 $metrics['dnsFlushOk'], `
-                $metrics['appliedGeneration'])
+                $metrics['appliedGeneration'], `
+                $metrics['mirrorSynced'], `
+                $metrics['mirrorSyncMs'])
         Write-OpenPathLog "=== Runtime dependency fast apply completed ==="
     }
     catch {
@@ -922,6 +957,115 @@ function Write-UpdateCatchLog {
     }
 }
 
+function Get-OpenPathNativeHostMirrorSyncStatePath {
+    # returns the small state file that records which whitelist/config fingerprint the native host mirror was last synced from
+    [CmdletBinding()]
+    param([string]$OpenPathRoot = '')
+
+    if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {
+        $OpenPathRoot = Resolve-OpenPathWindowsRoot
+    }
+    return (Join-Path $OpenPathRoot 'data\native-host-mirror-sync.json')
+}
+
+function Get-OpenPathFileStateFingerprint {
+    # cheap change detector for an input file: write time + length, empty when the file is absent
+    [CmdletBinding()]
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue)) { return '' }
+    try {
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+        return ('{0}|{1}' -f $item.LastWriteTimeUtc.Ticks, $item.Length)
+    }
+    catch {
+        return ''
+    }
+}
+
+function Update-OpenPathNativeHostMirrorSyncState {
+    # records the current whitelist/config fingerprint as synced; best-effort
+    [CmdletBinding()]
+    param(
+        [string]$OpenPathRoot = '',
+        [string]$WhitelistPath = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {
+        $OpenPathRoot = Resolve-OpenPathWindowsRoot
+    }
+    if ([string]::IsNullOrWhiteSpace($WhitelistPath)) {
+        $WhitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
+    }
+
+    try {
+        $statePath = Get-OpenPathNativeHostMirrorSyncStatePath -OpenPathRoot $OpenPathRoot
+        $directory = Split-Path $statePath -Parent
+        if ($directory -and -not (Test-Path -LiteralPath $directory -ErrorAction SilentlyContinue)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        $fingerprint = ('{0}|{1}' -f (Get-OpenPathFileStateFingerprint -Path $WhitelistPath), (Get-OpenPathFileStateFingerprint -Path (Join-Path $OpenPathRoot 'data\config.json')))
+        Set-Content -LiteralPath $statePath -Value $fingerprint -Encoding ASCII -Force
+    }
+    catch {
+        Write-UpdateCatchLog "Failed to record native host mirror sync state: $_" -Level WARN
+    }
+}
+
+function Sync-FirefoxNativeHostMirrorIfChanged {
+    <#
+    .SYNOPSIS
+    Syncs the Firefox native host mirror only when the whitelist or config inputs changed since the last sync.
+    .DESCRIPTION
+    The runtime dependency hot path must not rebuild the mirror on every batch: the
+    Phase 2A baseline spent ~5 s there before even looking at the queue. When the
+    fingerprint of data\whitelist.txt and data\config.json matches the last recorded
+    sync, the mirrored state is already current and the sync is skipped.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$OpenPathRoot = '',
+        [string]$WhitelistPath = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {
+        $OpenPathRoot = Resolve-OpenPathWindowsRoot
+    }
+    if ([string]::IsNullOrWhiteSpace($WhitelistPath)) {
+        $WhitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
+    }
+    if (-not (Test-Path -LiteralPath $WhitelistPath -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    $statePath = Get-OpenPathNativeHostMirrorSyncStatePath -OpenPathRoot $OpenPathRoot
+    $fingerprint = ('{0}|{1}' -f (Get-OpenPathFileStateFingerprint -Path $WhitelistPath), (Get-OpenPathFileStateFingerprint -Path (Join-Path $OpenPathRoot 'data\config.json')))
+
+    $previous = ''
+    if (Test-Path -LiteralPath $statePath -ErrorAction SilentlyContinue) {
+        try {
+            $previous = ([string](Get-Content -LiteralPath $statePath -Raw -ErrorAction Stop)).Trim()
+        }
+        catch {
+            $previous = ''
+        }
+    }
+    if ($previous -and $previous -eq $fingerprint) {
+        return $false
+    }
+
+    try {
+        $config = Get-OpenPathConfig
+        Sync-OpenPathFirefoxNativeHostState -Config $config -WhitelistPath $WhitelistPath | Out-Null
+        Set-Content -LiteralPath $statePath -Value $fingerprint -Encoding ASCII -Force
+        return $true
+    }
+    catch {
+        Write-UpdateCatchLog "Firefox native host mirror sync failed: $_" -Level WARN
+        return $false
+    }
+}
+
 function Sync-FirefoxNativeHostMirror {
     <#
     .SYNOPSIS
@@ -939,6 +1083,11 @@ function Sync-FirefoxNativeHostMirror {
 
     try {
         Sync-OpenPathFirefoxNativeHostState -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist:$ClearWhitelist | Out-Null
+        if (-not $ClearWhitelist) {
+            # Record the synced input fingerprint so the runtime dependency hot path
+            # can skip rebuilding the mirror until the whitelist/config changes.
+            Update-OpenPathNativeHostMirrorSyncState -WhitelistPath $WhitelistPath
+        }
     }
     catch {
         Write-OpenPathLog "Firefox native host mirror sync failed: $_" -Level WARN
@@ -957,5 +1106,11 @@ Export-ModuleMember -Function @(
     'Invoke-OpenPathRuntimeDependencyFastApply',
     'Start-OpenPathRuntimeDependencyWorker',
     'Get-OpenPathRuntimeDependencyWorkerStatePath',
-    'Sync-FirefoxNativeHostMirror'
+    'Set-OpenPathRuntimeDependencyWorkerBusyState',
+    'Test-OpenPathRuntimeDependencyWorkerFresh',
+    'Sync-FirefoxNativeHostMirror',
+    'Sync-FirefoxNativeHostMirrorIfChanged',
+    'Get-OpenPathNativeHostMirrorSyncStatePath',
+    'Get-OpenPathFileStateFingerprint',
+    'Update-OpenPathNativeHostMirrorSyncState'
 )

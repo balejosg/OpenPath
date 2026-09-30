@@ -424,7 +424,7 @@ Describe "DNS Module" {
             }
         }
 
-        It "Tracks overlay content and applied generations for readiness checks" {
+        It "Tracks per-entry overlay generations for readiness checks" {
             InModuleScope DNS {
                 $overlayPath = Join-Path $TestDrive "runtime-dependency-generation.json"
                 $entry = [PSCustomObject]@{
@@ -441,26 +441,127 @@ Describe "DNS Module" {
                 $firstWrite = Get-Content $overlayPath -Raw | ConvertFrom-Json
                 $firstWrite.generation | Should -Be 1
                 $firstWrite.appliedGeneration | Should -Be 0
+                $firstWrite.entries[0].generation | Should -Be 1
 
                 Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath | Should -BeTrue
                 $firstApplied = Get-Content $overlayPath -Raw | ConvertFrom-Json
                 $firstApplied.appliedGeneration | Should -Be 1
 
-                # Rewriting content bumps the generation without claiming it was applied.
-                Write-OpenPathRuntimeDependencyOverlay -Entries @($entry) -Path $overlayPath
+                # Rewriting the same content (metadata refresh / prune) keeps the
+                # document generation, so already-applied entries stay ready.
+                Write-OpenPathRuntimeDependencyOverlay -Entries (Read-OpenPathRuntimeDependencyOverlay -Path $overlayPath) -Path $overlayPath
                 $rewrite = Get-Content $overlayPath -Raw | ConvertFrom-Json
-                $rewrite.generation | Should -Be 2
+                $rewrite.generation | Should -Be 1
                 $rewrite.appliedGeneration | Should -Be 1
+                (Test-OpenPathRuntimeDependencyEntryReady -Entry $rewrite.entries[0] -AppliedGeneration $rewrite.appliedGeneration -DocumentGeneration $rewrite.generation) | Should -BeTrue
+
+                # A new pair bumps the document generation and stamps only the new entry.
+                $second = [PSCustomObject]@{
+                    dependencyHost = 'cdn-second.example'
+                    anchorHost = 'www.reddit.com'
+                    requestTypes = @('image')
+                    firstSeen = [DateTimeOffset]::UtcNow.ToString('o')
+                    lastSeen = [DateTimeOffset]::UtcNow.ToString('o')
+                    expiresAt = [DateTimeOffset]::UtcNow.AddDays(1).ToString('o')
+                    source = 'firefox-webrequest-local'
+                }
+                Write-OpenPathRuntimeDependencyOverlay -Entries @(@($rewrite.entries) + @($second)) -Path $overlayPath
+                $secondWrite = Get-Content $overlayPath -Raw | ConvertFrom-Json
+                $secondWrite.generation | Should -Be 2
+                $secondWrite.appliedGeneration | Should -Be 1
+
+                $firstEntry = @($secondWrite.entries | Where-Object { $_.dependencyHost -eq 'cdn-generation.example' })[0]
+                $secondEntry = @($secondWrite.entries | Where-Object { $_.dependencyHost -eq 'cdn-second.example' })[0]
+                $firstEntry.generation | Should -Be 1
+                $secondEntry.generation | Should -Be 2
+
+                # The applied entry is ready even while the new one is still unapplied.
+                (Test-OpenPathRuntimeDependencyEntryReady -Entry $firstEntry -AppliedGeneration 1 -DocumentGeneration 2) | Should -BeTrue
+                (Test-OpenPathRuntimeDependencyEntryReady -Entry $secondEntry -AppliedGeneration 1 -DocumentGeneration 2) | Should -BeFalse
 
                 Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath | Should -BeTrue
                 $secondApplied = Get-Content $overlayPath -Raw | ConvertFrom-Json
                 $secondApplied.appliedGeneration | Should -Be 2
+                (Test-OpenPathRuntimeDependencyEntryReady -Entry $secondEntry -AppliedGeneration 2 -DocumentGeneration 2) | Should -BeTrue
+
+                # Legacy entries without a per-entry stamp fall back to the document rule.
+                $legacyEntry = [PSCustomObject]@{ dependencyHost = 'legacy.example'; anchorHost = 'www.reddit.com' }
+                (Test-OpenPathRuntimeDependencyEntryReady -Entry $legacyEntry -AppliedGeneration 2 -DocumentGeneration 2) | Should -BeTrue
+                (Test-OpenPathRuntimeDependencyEntryReady -Entry $legacyEntry -AppliedGeneration 1 -DocumentGeneration 2) | Should -BeFalse
 
                 # An already-applied overlay is a no-op.
                 Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath | Should -BeTrue
                 $unchanged = Get-Content $overlayPath -Raw | ConvertFrom-Json
                 $unchanged.generation | Should -Be 2
                 $unchanged.appliedGeneration | Should -Be 2
+            }
+        }
+
+        It "Skips rewriting generated Acrylic files whose content is unchanged" {
+            InModuleScope DNS {
+                $path = Join-Path $TestDrive 'AcrylicHosts.txt'
+                (Write-AcrylicTextFile -Path $path -Content "line1`n" -Description 'test content') | Should -BeTrue
+                $firstWrite = (Get-Item -LiteralPath $path).LastWriteTimeUtc
+
+                Start-Sleep -Milliseconds 50
+                (Write-AcrylicTextFile -Path $path -Content "line1`n" -Description 'test content' -SkipIfUnchanged) | Should -BeFalse
+                (Get-Item -LiteralPath $path).LastWriteTimeUtc | Should -Be $firstWrite
+
+                (Write-AcrylicTextFile -Path $path -Content "line2`n" -Description 'test content' -SkipIfUnchanged) | Should -BeTrue
+                (Get-Content -LiteralPath $path -Raw) | Should -Be "line2`n"
+            }
+        }
+
+        It "Tightens the Acrylic service wait and DNS flush hot paths" {
+            $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
+            $serviceContent = Get-Content $servicePath -Raw
+
+            Assert-ContentContainsAll -Content $serviceContent -Needles @(
+                'function Wait-AcrylicServiceStatus',
+                'Start-Sleep -Milliseconds 100',
+                'function Clear-OpenPathDnsClientCache',
+                'DnsFlushResolverCache',
+                'ipconfig'
+            )
+
+            $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
+            $configContent = Get-Content $configPath -Raw
+            Assert-ContentContainsAll -Content $configContent -Needles @(
+                'Write-AcrylicHostsFile -Path $hostsPath -Content $content -SkipIfUnchanged',
+                'Write-AcrylicConfigFile -Path $configPath -Content $iniContent -SkipIfUnchanged',
+                'Acrylic configuration unchanged; skipping rewrite'
+            )
+        }
+
+        It "Builds runtime dependency validation sets once per batch and caches them per process" {
+            $overlayPath = Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Overlay.ps1"
+            $overlayContent = Get-Content $overlayPath -Raw
+            Assert-ContentContainsAll -Content $overlayContent -Needles @(
+                '$blockedSubdomainSet = New-OpenPathRuntimeDependencyBlockedSubdomainSet',
+                '-WhitelistSet $whitelistSet',
+                '-ProtectedHosts $protectedSet',
+                '-BlockedSubdomainSet $blockedSubdomainSet'
+            )
+
+            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Policy.ps1"
+            $policyContent = Get-Content $policyPath -Raw
+            Assert-ContentContainsAll -Content $policyContent -Needles @(
+                'function New-OpenPathRuntimeDependencyPolicyContext',
+                'function Get-OpenPathRuntimeDependencyPolicyContext',
+                '[System.Collections.Generic.HashSet[string]]$WhitelistSet',
+                '[System.Collections.Generic.HashSet[string]]$ProtectedHosts',
+                '[System.Collections.Generic.HashSet[string]]$BlockedSubdomainSet'
+            )
+
+            InModuleScope DNS {
+                $contextA = Get-OpenPathRuntimeDependencyPolicyContext -CacheKey 'key-1' -WhitelistedDomains @('allowed.example') -BlockedSubdomains @()
+                $contextB = Get-OpenPathRuntimeDependencyPolicyContext -CacheKey 'key-1' -WhitelistedDomains @('other.example') -BlockedSubdomains @()
+                # Same cache key: the cached context is returned even when the inputs differ.
+                [object]::ReferenceEquals($contextA, $contextB) | Should -BeTrue
+
+                $contextC = Get-OpenPathRuntimeDependencyPolicyContext -CacheKey 'key-2' -WhitelistedDomains @('other.example') -BlockedSubdomains @()
+                [object]::ReferenceEquals($contextA, $contextC) | Should -BeFalse
+                $contextC.WhitelistSet.Contains('other.example') | Should -BeTrue
             }
         }
 

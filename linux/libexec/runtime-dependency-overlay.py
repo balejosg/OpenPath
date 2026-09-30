@@ -134,6 +134,20 @@ def read_generations(path: Path) -> tuple[int, int]:
     return max(generation, 0), max(applied_generation, 0)
 
 
+def entry_generation(entry: dict[str, Any]) -> int:
+    """Returns the per-entry generation when present, else 0 (legacy entry)."""
+    value = entry.get("generation")
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        return 0
+    return value
+
+
+def next_document_generation(entries: list[dict[str, Any]], previous_generation: int) -> int:
+    """Document generation is the highest per-entry generation ever stamped."""
+    return max([max(previous_generation, 0)] + [entry_generation(entry) for entry in entries])
+
+
+
 def prune_entries(
     entries: list[dict[str, Any]],
     now: datetime,
@@ -211,8 +225,14 @@ def command_update(args: argparse.Namespace) -> int:
     protected_hosts = split_hosts(args.protected_hosts)
     blocked_subdomains = split_hosts(args.blocked_subdomains)
     overlay_path = Path(args.overlay)
+    previous_generation, previous_applied = read_generations(overlay_path)
     entries = prune_entries(load_overlay(overlay_path), now, whitelist, protected_hosts, blocked_subdomains)
     by_key = {(entry["anchorHost"], entry["dependencyHost"]): entry for entry in entries}
+    # Snapshot the pruned content before the merge loop mutates the entry dicts
+    # in place. Taking it afterwards (the historical defect) made every
+    # metadata-only refresh look like "unchanged", so the refreshed lastSeen /
+    # expiresAt values were never persisted and entries expired early.
+    before = json.dumps(entries, sort_keys=True)
     processed = 0
     rejected = 0
 
@@ -251,17 +271,26 @@ def command_update(args: argparse.Namespace) -> int:
             existing["lastSeen"] = isoformat(now)
             existing["expiresAt"] = isoformat(now + ttl)
 
+    # Per-entry generations: only facts that make a dependency newly resolvable
+    # (a pair that was not in the pruned snapshot) move the document
+    # generation. Metadata-only refreshes and prune rewrites keep it, so an
+    # already-applied entry never falls back to "not ready" because another
+    # entry is waiting to be applied.
+    added_keys = [key for key in by_key if key not in {(entry.get("anchorHost"), entry.get("dependencyHost")) for entry in entries}]
+    if added_keys:
+        new_generation = previous_generation + 1
+        for key in added_keys:
+            by_key[key]["generation"] = new_generation
+
     next_entries = sorted(by_key.values(), key=lambda item: item.get("lastSeen", ""), reverse=True)[: args.capacity]
-    before = json.dumps(entries, sort_keys=True)
     after = json.dumps(next_entries, sort_keys=True)
     changed = before != after
     if changed or not overlay_path.exists():
-        previous_generation, previous_applied = read_generations(overlay_path)
         write_overlay(
             overlay_path,
             next_entries,
             now,
-            previous_generation + 1,
+            next_document_generation(next_entries, previous_generation),
             previous_applied,
         )
     widen_overlay_permissions(overlay_path)
@@ -289,14 +318,18 @@ def command_domains(args: argparse.Namespace) -> int:
     protected_hosts = split_hosts(args.protected_hosts)
     blocked_subdomains = split_hosts(args.blocked_subdomains)
     overlay_path = Path(args.overlay)
-    entries = prune_entries(load_overlay(overlay_path), now, whitelist, protected_hosts, blocked_subdomains)
-    if args.prune == "true":
+    existing_entries = load_overlay(overlay_path)
+    entries = prune_entries(existing_entries, now, whitelist, protected_hosts, blocked_subdomains)
+    if args.prune == "true" and json.dumps(entries, sort_keys=True) != json.dumps(existing_entries, sort_keys=True):
+        # Pruning drops stale entries only; it never makes a remaining entry
+        # newly resolvable, so the document generation must not move (that
+        # would reopen the "not ready" window for already-applied entries).
         previous_generation, previous_applied = read_generations(overlay_path)
         write_overlay(
             overlay_path,
             entries,
             now,
-            previous_generation + 1,
+            next_document_generation(entries, previous_generation),
             previous_applied,
         )
     for host in sorted({entry["dependencyHost"] for entry in entries}):

@@ -31,8 +31,20 @@ function Test-OpenPathBlockedSubdomainMatch {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
-        [string[]]$BlockedSubdomains = @()
+        [string[]]$BlockedSubdomains = @(),
+        [System.Collections.Generic.HashSet[string]]$BlockedSubdomainSet = $null
     )
+
+    if ($BlockedSubdomainSet) {
+        if ($BlockedSubdomainSet.Contains($Domain)) { return $true }
+        foreach ($blockedEntry in $BlockedSubdomainSet) {
+            if (-not $blockedEntry) { continue }
+            if ($Domain.EndsWith(".$blockedEntry", [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        }
+        return $false
+    }
 
     foreach ($blockedSubdomain in @($BlockedSubdomains)) {
         $blocked = Normalize-OpenPathRuntimeDependencyHost -Value $blockedSubdomain
@@ -42,6 +54,19 @@ function Test-OpenPathBlockedSubdomainMatch {
     }
 
     return $false
+}
+
+function New-OpenPathRuntimeDependencyBlockedSubdomainSet {
+    # builds a case-insensitive hashset of normalized blocked-subdomain entries for batch validation
+    [CmdletBinding()]
+    param([string[]]$BlockedSubdomains = @())
+
+    $blockedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($blockedSubdomain in @($BlockedSubdomains)) {
+        $normalized = Normalize-OpenPathRuntimeDependencyHost -Value $blockedSubdomain
+        if ($normalized) { [void]$blockedSet.Add($normalized) }
+    }
+    return $blockedSet
 }
 
 function Test-OpenPathWhitelistCoversHost {
@@ -177,6 +202,59 @@ function New-OpenPathRuntimeDependencyWhitelistSet {
     return $whitelistSet
 }
 
+$script:OpenPathRuntimeDependencyPolicyContextCache = @{}
+
+function New-OpenPathRuntimeDependencyPolicyContext {
+    <#
+    .SYNOPSIS
+    Builds the expensive runtime dependency validation sets once so a batch of candidates does not rebuild them per request.
+    #>
+    [CmdletBinding()]
+    param(
+        [string[]]$WhitelistedDomains = @(),
+        [string[]]$BlockedSubdomains = @(),
+        [AllowNull()][PSCustomObject]$State = $null
+    )
+
+    return [PSCustomObject]@{
+        WhitelistSet = New-OpenPathRuntimeDependencyWhitelistSet -WhitelistedDomains $WhitelistedDomains
+        ProtectedHosts = Get-OpenPathRuntimeDependencyProtectedHosts -State $State
+        BlockedSubdomainSet = New-OpenPathRuntimeDependencyBlockedSubdomainSet -BlockedSubdomains $BlockedSubdomains
+    }
+}
+
+function Get-OpenPathRuntimeDependencyPolicyContext {
+    <#
+    .SYNOPSIS
+    Returns a process-cached runtime dependency validation context, rebuilt when $CacheKey changes.
+    .DESCRIPTION
+    The native host runs one candidate batch per message; rebuilding the protected-host catalog and
+    whitelist set per request shows up in the hot path. The cache key is derived from the whitelist
+    mirror and native state file metadata (mtime/size), so a staged policy change invalidates it.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CacheKey,
+        [string[]]$WhitelistedDomains = @(),
+        [string[]]$BlockedSubdomains = @(),
+        [AllowNull()][PSCustomObject]$State = $null
+    )
+
+    if ($script:OpenPathRuntimeDependencyPolicyContextCache.ContainsKey('Key') -and $script:OpenPathRuntimeDependencyPolicyContextCache['Key'] -eq $CacheKey) {
+        return $script:OpenPathRuntimeDependencyPolicyContextCache['Context']
+    }
+
+    $context = New-OpenPathRuntimeDependencyPolicyContext `
+        -WhitelistedDomains $WhitelistedDomains `
+        -BlockedSubdomains $BlockedSubdomains `
+        -State $State
+    $script:OpenPathRuntimeDependencyPolicyContextCache = @{
+        Key = $CacheKey
+        Context = $context
+    }
+    return $context
+}
+
 function Test-OpenPathRuntimeDependencyCandidate {
     # validates a dependency message against whitelist, protected host, and blocked subdomain rules; returns Valid flag plus resolved host/type or a failure result
     [CmdletBinding()]
@@ -185,7 +263,10 @@ function Test-OpenPathRuntimeDependencyCandidate {
         [string[]]$WhitelistedDomains = @(),
         [string[]]$BlockedSubdomains = @(),
         [AllowNull()][PSCustomObject]$State = $null,
-        [switch]$SkipOverlayCheck
+        [switch]$SkipOverlayCheck,
+        [System.Collections.Generic.HashSet[string]]$WhitelistSet = $null,
+        [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null,
+        [System.Collections.Generic.HashSet[string]]$BlockedSubdomainSet = $null
     )
 
     if (Test-OpenPathRuntimeDependencySensitiveField -Message $Message) {
@@ -218,31 +299,31 @@ function Test-OpenPathRuntimeDependencyCandidate {
         }
     }
 
-    $whitelistSet = New-OpenPathRuntimeDependencyWhitelistSet -WhitelistedDomains $WhitelistedDomains
-    if (-not (Test-OpenPathWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet)) {
+    $effectiveWhitelistSet = if ($WhitelistSet) { $WhitelistSet } else { New-OpenPathRuntimeDependencyWhitelistSet -WhitelistedDomains $WhitelistedDomains }
+    if (-not (Test-OpenPathWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $effectiveWhitelistSet)) {
         return @{
             Valid = $false
             Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Anchor host is not locally whitelisted' }
         }
     }
 
-    $protectedHosts = Get-OpenPathRuntimeDependencyProtectedHosts -State $State
+    $effectiveProtectedHosts = if ($ProtectedHosts) { $ProtectedHosts } else { Get-OpenPathRuntimeDependencyProtectedHosts -State $State }
     if (
-        (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $anchorHost -ProtectedHosts $protectedHosts) -or
-        (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $dependencyHost -ProtectedHosts $protectedHosts)
+        (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $anchorHost -ProtectedHosts $effectiveProtectedHosts) -or
+        (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $dependencyHost -ProtectedHosts $effectiveProtectedHosts)
     ) {
         return @{
             Valid = $false
             Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Protected hosts are not accepted as runtime dependencies' }
         }
     }
-    if (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains) {
+    if (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains -BlockedSubdomainSet $BlockedSubdomainSet) {
         return @{
             Valid = $false
             Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Blocked hosts are not accepted as runtime dependencies' }
         }
     }
-    if (Test-OpenPathWhitelistCoversHost -Hostname $dependencyHost -WhitelistSet $whitelistSet) {
+    if (Test-OpenPathWhitelistCoversHost -Hostname $dependencyHost -WhitelistSet $effectiveWhitelistSet) {
         return @{
             Valid = $false
             Result = @{ success = $true; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'dependency-already-whitelisted' }
