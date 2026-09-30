@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: `firefox-extension/`
-> Last verified: 2026-07-02
+> Last verified: 2026-09-30
 > Source of truth: `firefox-extension/README.md`
 
 This package contains the OpenPath browser-extension assets used to detect blocked resources and support managed browser rollout workflows.
@@ -18,8 +18,15 @@ Firefox blocked-path and blocked-subdomain enforcement lives in this extension r
 - Firefox Core includes local Google game blocking for known Snake, doodle-game, and interactive logo-game surfaces.
 - Firefox Core includes a Google Search/Doodles visual guard content script that locally neutralizes detected playable game widgets.
 - Firefox Core includes an isolated-world page activity relay only; it does not inject a MAIN-world resource observer or relay AJAX/subresource URLs from content scripts.
-- On Windows, Firefox may send `{ anchorHost, dependencyHost, requestType }` from `webRequest` to the local native host so the Windows client can maintain an exact-host Acrylic runtime-dependency overlay. Those dependency hosts are never sent to the OpenPath service.
+- On Windows and Linux, Firefox may send `{ anchorHost, dependencyHost, requestType }` from `webRequest` to the local native host so the agent can maintain an exact-host runtime-dependency overlay. Those dependency hosts are never sent to the OpenPath service.
+- With a Phase 2C-capable host, the background keeps one persistent native-messaging port (instead of one process per message), queues dependencies with `mode: "enqueue"`, and polls readiness over that port. An older host keeps the one-shot behavior unchanged.
 - Firefox Core does not include Android support, remote automatic AJAX/page-resource allowlisting, or live/automatic AMO upload.
+
+## Visible behavior (for support and center operators)
+
+- Most blocked resources keep the documented behavior: they fail while the local agent is deciding and load immediately once the agent proves the exception is active.
+- With a persistent-transport host, a render-blocking resource (`script`, `stylesheet`, `font`) that is still not proven when its wait budget expires is cancelled instead of allowed through. The page may therefore render without that resource for a moment.
+- When the agent later activates that exception, the extension reloads the affected tab **once** to pick the resource up (the reload is skipped if you already navigated somewhere else, used POST, or the wait took longer than 30 s). No manual reload is needed, and at most one automatic reload happens per navigation.
 
 ## Local Development
 

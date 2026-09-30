@@ -29,13 +29,52 @@ are handled entirely inside the extension; those are defined in
 
 Every response includes at minimum `{ success: boolean }`. Errors add `{ error: string }`.
 
+### Persistent transport (Phase 2C)
+
+The background keeps **one long-lived `connectNative` port** per browser
+session. Opening it removes the per-message native host cold start measured in
+Phase 2B (1.2-2.5 s per `sendNativeMessage`, up to 7 s for the first one after
+login) and lets the host answer many messages from one process.
+
+- On connect, the extension probes the host with a `ping` carrying a monotonic
+  `id` (probe timeout 10 s to cover a cold start). A host that answers with
+  `protocolVersion` >= 2 and `capabilities` is served over the port; a host
+  without capabilities keeps the historical one-shot behavior exactly (same
+  budgets, same messages).
+- Capabilities announced by `ping`:
+  - `runtime-dependency-enqueue`
+  - `runtime-dependency-check-batch`
+  - `message-id-echo`
+  - `runtime-dependency-auto-reload`
+- Actions served over the port: `ping`,
+  `allow-local-runtime-dependency(-batch)` with `mode: "enqueue"`,
+  `check-local-runtime-dependency` (batch) and the cheap periodic reads
+  (`get-policy-version`, `get-blocked-paths`, `get-blocked-subdomains`,
+  `get-allowed-paths`). Everything else (`check`, `update-whitelist`,
+  captive-portal recovery, `get-config`, `get-machine-token`, ...) stays
+  one-shot so a slow action never blocks the port.
+- Requests over the port are correlated by the echoed `id`; a request timeout
+  (3 s) tears the port down and the extension reconnects with exponential
+  backoff (1 s .. 30 s) while in-flight dependency work is redone through the
+  one-shot path.
+- **Retirement switch (no new XPI required):** setting
+  `runtimeDependencyPersistentTransportDisabled: true` in the Windows agent
+  config (`data\config.json`) or writing `disabled` in
+  `/etc/openpath/runtime-dependency-persistent-transport.conf` (override:
+  `OPENPATH_RUNTIME_DEPENDENCY_TRANSPORT_CONF`) makes the host stop announcing
+  `runtime-dependency-enqueue` and `runtime-dependency-auto-reload`; the
+  extension then behaves like the legacy one-shot client. Default: announced.
+- Poll-style actions (`check` batch, policy/subdomain/path reads) are logged as
+  aggregates (once per minute or per 500 messages) plus state transitions, not
+  one line per message.
+
 ---
 
 ## Message Types
 
 | Message type                           | Direction         | Payload fields (request -> response)                                                                                                                                                                                                                                                                                                                                                                                                  | TS definition (file:symbol)                                                                                                                                                                                                               | PS handler (file:function)                                                                                                                                                                                                                                                                                   |
 | -------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ping`                                 | Extension -> Host | Request: _(none)_ / Response: `{ success, action: 'ping', message: 'pong', version }`                                                                                                                                                                                                                                                                                                                                                 | `firefox-extension/src/lib/native-messaging-client.ts::isAvailable` (sends `{ action: 'ping' }`)                                                                                                                                          | `windows/lib/internal/NativeHost.Actions.MessageDispatch.ps1::Invoke-NativeHostMessageAction` (`'ping'` branch)                                                                                                                                                                                              |
+| `ping`                                 | Extension -> Host | Request: `{ id?: number }` / Response: `{ success, action: 'ping', message: 'pong', version, protocolVersion: number, capabilities: string[] }` (the `id` is echoed back when supplied; capabilities as listed under _Persistent transport_)                                                                                                                                                                                          | `firefox-extension/src/lib/native-messaging-client.ts::isAvailable` (sends `{ action: 'ping' }`)                                                                                                                                          | `windows/lib/internal/NativeHost.Actions.MessageDispatch.ps1::Invoke-NativeHostMessageAction` (`'ping'` branch)                                                                                                                                                                                              |
 | `get-hostname`                         | Extension -> Host | Request: _(none)_ / Response: `{ success, action: 'get-hostname', hostname: string }`                                                                                                                                                                                                                                                                                                                                                 | `firefox-extension/src/lib/native-messaging-client.ts` (called via `sendMessage({ action: 'get-hostname' })` in `background-runtime.ts`)                                                                                                  | `windows/lib/internal/NativeHost.Actions.MessageDispatch.ps1::Invoke-NativeHostMessageAction` (`'get-hostname'` branch)                                                                                                                                                                                      |
 | `get-machine-token`                    | Extension -> Host | Request: _(none)_ / Response: `{ success, action: 'get-machine-token', token: string }` or `{ success: false, error }`                                                                                                                                                                                                                                                                                                                | `firefox-extension/src/lib/native-messaging-client.ts` (called via `sendMessage({ action: 'get-machine-token' })` in `background-runtime.ts`)                                                                                             | `windows/lib/internal/NativeHost.Actions.MessageDispatch.ps1::Invoke-NativeHostMessageAction` (`'get-machine-token'` branch)                                                                                                                                                                                 |
 | `get-config`                           | Extension -> Host | Request: _(none)_ / Response: `{ success, action: 'get-config', apiUrl, requestApiUrl, fallbackApiUrls, hostname, machineToken, whitelistUrl }` or `{ success: false, error }`                                                                                                                                                                                                                                                        | `firefox-extension/src/lib/config-storage-native.ts::NativeConfigMessageSender` (type alias for `(msg: { action: 'get-config' }) => Promise<unknown>`)                                                                                    | `windows/lib/internal/NativeHost.Actions.MessageDispatch.ps1::Invoke-NativeHostMessageAction` (`'get-config'` branch)                                                                                                                                                                                        |
@@ -135,6 +174,32 @@ The overlay is read once and the response is
 `{ success, action, count, results: [{ success, anchorHost, dependencyHost, ready, runtimeDependencyState, expiresAt? }] }`.
 The historical single-pair request still works and keeps its response shape
 (with `expiresAt` now also reported when present).
+
+### Cancellation and automatic reload
+
+When the persistent transport is active (enqueue + id-echo + auto-reload
+capabilities), a dependency request whose budget expires while the entry is
+still `pending` is **cancelled** instead of released: the request never reaches
+DNS, so no negative answer is cached and the page does not gain a permanent
+failure for that host. The soft budgets in this mode are 10 000 ms for
+`script`/`stylesheet`/`font` and 8 000 ms for `fetch`/`xmlhttprequest`/
+`image`/`imageset`.
+
+While cancelled dependencies are pending, the extension polls them over the
+port (`check-local-runtime-dependency` batch every ~150 ms). When one becomes
+`ready`:
+
+- the request is released normally if it was still held;
+- for a cancelled render-critical request (`script`/`stylesheet`/`font` in the
+  main frame of the tab's current navigation), the extension may reload the tab
+  **once**: after a 400 ms coalescing window, and only if the host announced
+  `runtime-dependency-auto-reload`, the navigation is still the same (no newer
+  main-frame navigation), the current URL matches ignoring the fragment, the
+  navigation was a GET, it is at most 30 s old, the tab was not reloaded by
+  this mechanism in the last 30 s, and the tab is not one of the extension's
+  own pages, the blocked screen or a captive-portal flow. The reload is
+  recorded as a `runtimeDependencyAutoReload` dependency-observation
+  diagnostic event with its reason.
 
 ### Correlation ids
 

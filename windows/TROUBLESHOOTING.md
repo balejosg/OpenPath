@@ -290,6 +290,30 @@ state; the per-user native host log records
 `stage=queue-written ... mode=enqueue workerTriggered=true|false` when the
 resident worker was not alive and the scheduled apply task had to be nudged.
 
+Persistent native transport (Phase 2C):
+
+- The Firefox background keeps one native host process per browser session
+  (`connectNative`) instead of one process per message. The first `ping`
+  advertises `protocolVersion` and `capabilities`; an old host (no
+  capabilities) is served one-shot exactly as before.
+- The per-user native host log no longer records one line per poll. Expect
+  `stage=chatty-aggregate action=check-local-runtime-dependency count=N` once
+  per minute (or per 500 messages) and a
+  `stage=runtime-dependency-ready-transition` line the first time a dependency
+  becomes ready in a session. Missing per-message lines are intentional.
+- To roll the new transport back without touching the browser extension, set
+  the retirement switch in `C:\OpenPath\data\config.json`:
+  `"runtimeDependencyPersistentTransportDisabled": true` (or a string
+  `"true"`). The host then stops announcing `runtime-dependency-enqueue` and
+  `runtime-dependency-auto-reload`; restart Firefox so it re-probes. Linux uses
+  `/etc/openpath/runtime-dependency-persistent-transport.conf` containing
+  `disabled`.
+- If a page reloads once by itself shortly after first loading a site, that is
+  the single automatic reload that repairs a cancelled render-blocking resource
+  (`script`/`stylesheet`/`font`) once the agent applies its exception. It never
+  reloads twice for the same navigation and is skipped for POST navigations,
+  stale navigations, the blocked screen and captive-portal flows.
+
 If the machine is not enrolled, re-enroll:
 
 ```powershell

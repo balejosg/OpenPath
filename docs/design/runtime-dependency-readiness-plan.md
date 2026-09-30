@@ -529,6 +529,72 @@ two cold Reddit runs `BR1`/`BR2`; full data in
   after a kill within ~75 s, `example.org` still returns no address (Windows
   cache status 9501) and the served whitelist did not change.
 
+### Phase 2C: persistent native transport, cancel, and one automatic reload (2026-09-30)
+
+Phase 2B measured the remaining first-visit problem precisely: every message
+paid a native host cold start (1.2-2.5 s per `sendNativeMessage`, up to 7 s
+after login), 83 host processes in 3.7 minutes, and a held request was
+_released_ at its 5-6 s budget while the apply finished at T0+13 s. The page
+then had to retry by itself, which it only did when the request happened to be
+re-issued late (BR1 rendered without CSS; BR2 only worked by luck).
+
+Phase 2C moves the extension and the hosts to a persistent protocol:
+
+- **Capabilities.** `ping` now answers `protocolVersion: 2` and
+  `capabilities: [...]`. A host that does not is served exactly like before
+  (same messages, same 5/6 s budgets, same release behavior). The retirement
+  switch (`runtimeDependencyPersistentTransportDisabled` in the Windows config,
+  `runtime-dependency-persistent-transport.conf` on Linux) drops the
+  `runtime-dependency-enqueue` and `runtime-dependency-auto-reload`
+  capabilities so the fleet can be rolled back without re-signing the XPI.
+- **One port.** The background keeps one `connectNative` port, probes it with a
+  capability `ping` (10 s cold-start timeout), correlates responses by a
+  monotonic `id`, and uses it for the dependency flow plus the cheap periodic
+  reads (`get-policy-version`, `get-blocked-paths`, `get-blocked-subdomains`,
+  `get-allowed-paths`). A port timeout tears it down with exponential backoff
+  (1 s .. 30 s) and the in-flight dependency work is redone one-shot. Cold
+  prewarm happens at background start and on `onBeforeNavigate` frame 0.
+- **Enqueue + prober.** Dependencies coalesce for 25 ms (<= 20 entries) and are
+  sent with `mode: "enqueue"`; `pending` entries stay open and are polled with
+  a batch `check` every 150 ms (one in flight). `ready` releases the hold,
+  `denied`/`error` releases it as a failure, exactly like 2B.
+- **Budgets.** While the persistent transport is active the soft budgets are
+  10 s for `script`/`stylesheet`/`font` and 8 s for
+  `fetch`/`xmlhttprequest`/`image`/`imageset`. Justification from 2B: the first
+  worker apply reached ready at T0+13.0-13.3 s (first wave) but individual
+  requests were issued up to 7 s into the navigation; a 10 s budget covers
+  apply windows up to ~10 s while the 12 s element-probe timeout and the 15 s
+  driver timeout in the Selenium student-policy scenarios still hold. The
+  budget is only the _cancel/release_ bound: the prober releases as soon as the
+  host proves readiness (1.7-3.1 s in the 2B burst).
+- **Cancel instead of release.** With the persistent transport active, a budget
+  expiry while the entry is still `pending` returns `{ cancel: true }` from the
+  `onBeforeRequest` listener. No DNS query happens, so no negative answer is
+  cached and the page does not permanently fail that host. The cancellation is
+  recorded as a `cancelled-pending` dependency-observation event and its
+  request id is remembered so the resulting `onErrorOccurred` (typically
+  `NS_BINDING_ABORTED`, otherwise `NS_ERROR_UNKNOWN_HOST`) is not counted as a
+  blocked domain and never reaches the blocked screen or a native `check`.
+- **One automatic reload.** When a cancelled render-critical request
+  (`script`/`stylesheet`/`font`, frame 0) becomes ready, the tab is reloaded
+  once after a 400 ms coalescing window, provided all conditions hold: the host
+  announced `runtime-dependency-auto-reload`, the navigation is still the same
+  one (no newer main-frame navigation or commit), the URL matches ignoring the
+  fragment, the main-frame request was a GET, the navigation is at most 30 s
+  old, no auto-reload happened for that navigation in the last 30 s, and the
+  tab is not an extension page, the blocked screen or a captive-portal flow.
+  The reload is recorded with its reason (`reloaded`, `url-mismatch`,
+  `navigation-too-old`, ...) in the dependency-observation diagnostics.
+- **Host freshness and log policy.** A persistent host re-reads state and
+  whitelist sections on every message (the validation context cache is keyed by
+  whitelist/state mtime+size, so a staged policy change invalidates it). Poll
+  actions are logged as transitions/aggregates (once per minute or 500
+  messages) instead of one line per message, and the Windows hot path was
+  measured in-process (ping ~9 ms, batch check ~6 ms, enqueue ~72 ms).
+
+Measured outcome (fill-in after the lab run): see
+`evidence/spa-runtime-deps-phase2c-<timestamp>/summary.md`.
+
 ## Verification
 
 Focused suites per package (no broad CI first):
