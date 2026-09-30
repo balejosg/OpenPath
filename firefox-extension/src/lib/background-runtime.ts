@@ -515,6 +515,9 @@ export function createBackgroundRuntime(
       onRuntimeDependencyCancelled: (context) => {
         runtimeDependencyAutoReload.noteDependencyCancelled(context);
       },
+      prewarmNativeTransport: () => {
+        void nativeMessagingClient.warmUp();
+      },
       recordDependencyObservationEvent: recordOpenPathDependencyObservationEvent,
       redirectToBlockedScreen,
       saveBlockedPageContext,

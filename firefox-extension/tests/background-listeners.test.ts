@@ -73,6 +73,7 @@ function createListenerHarness(
     recordDependencyObservationEvent?: Parameters<
       typeof registerBackgroundListeners
     >[0]['recordDependencyObservationEvent'];
+    prewarmNativeTransport?: () => void;
     shouldCancelPendingRuntimeDependency?: () => boolean;
   } = {}
 ): {
@@ -212,6 +213,9 @@ function createListenerHarness(
     ...(options.shouldCancelPendingRuntimeDependency
       ? { shouldCancelPendingRuntimeDependency: options.shouldCancelPendingRuntimeDependency }
       : {}),
+    prewarmNativeTransport: () => {
+      options.prewarmNativeTransport?.();
+    },
     onRuntimeDependencyCancelled: (context: RuntimeDependencyCancellationContext): void => {
       cancelledRuntimeDependencies.push(context);
     },
@@ -1716,6 +1720,21 @@ void describe('background listeners runtime dependency cancellation', () => {
     await waitForAsyncListeners();
 
     assert.equal(harness.addedBlocks.length, 1);
+  });
+
+  void test('pre-warms the persistent transport on main-frame navigation start', () => {
+    const prewarmCalls: number[] = [];
+    const harness = createListenerHarness({
+      prewarmNativeTransport: () => {
+        prewarmCalls.push(1);
+      },
+    });
+    assert.ok(harness.webNavigationBefore);
+
+    harness.webNavigationBefore({ frameId: 0, tabId: 5, url: 'https://www.reddit.com/' });
+    harness.webNavigationBefore({ frameId: 2, tabId: 5, url: 'https://www.reddit.com/frame' });
+
+    assert.equal(prewarmCalls.length, 1);
   });
 
   void test('feeds main-frame navigation, request and commit signals for the auto-reload', () => {

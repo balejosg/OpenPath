@@ -79,6 +79,8 @@ interface BackgroundListenersOptions {
   noteMainFrameRequest?: (context: MainFrameNavigationContext) => void;
   noteNavigationCommitted?: (context: MainFrameNavigationContext) => void;
   onRuntimeDependencyCancelled?: (context: RuntimeDependencyCancellationContext) => void;
+  /** Pre-warms the persistent native port when a main-frame navigation starts. */
+  prewarmNativeTransport?: () => void;
   recordDependencyObservationEvent?: (event: OpenPathDependencyObservationEventInput) => void;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
   saveBlockedPageContext?: (tabId: number, domain: string, originalUrl: string | undefined) => void;
@@ -662,6 +664,15 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           navigationHost
         );
         options.noteMainFrameNavigation?.({ tabId: details.tabId, url: details.url });
+        // Pre-warm the persistent port at navigation start so the first
+        // dependency of the page meets a ready host (no-op when connected).
+        try {
+          options.prewarmNativeTransport?.();
+        } catch (error) {
+          logger.debug('[Monitor] Native transport prewarm failed', {
+            error: getErrorMessage(error),
+          });
+        }
       }
       options.recordDependencyObservationEvent?.({
         source: 'webNavigation.onBeforeNavigate',
