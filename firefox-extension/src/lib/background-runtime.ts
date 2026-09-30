@@ -518,6 +518,7 @@ export function createBackgroundRuntime(
       prewarmNativeTransport: () => {
         void nativeMessagingClient.warmUp();
       },
+      usesPersistentBudgets: () => nativeMessagingClient.isPersistentTransportPending(),
       recordDependencyObservationEvent: recordOpenPathDependencyObservationEvent,
       redirectToBlockedScreen,
       saveBlockedPageContext,

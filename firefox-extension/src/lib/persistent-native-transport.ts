@@ -41,6 +41,8 @@ export type PersistentNativeTransportState =
 export interface PersistentNativeTransport {
   /** Opens the port when idle (or when the backoff window has elapsed) and probes capabilities. */
   ensureConnected: () => Promise<boolean>;
+  /** True while the port/capability probe is in flight (decision not known yet). */
+  isConnecting: () => boolean;
   /** Waits for an in-flight connection for at most `timeoutMs`; true only when ready. */
   waitUntilReady: (timeoutMs: number) => Promise<boolean>;
   isReady: () => boolean;
@@ -381,6 +383,7 @@ export function createPersistentNativeTransport(
   return {
     ensureConnected,
     waitUntilReady,
+    isConnecting: (): boolean => state === 'connecting',
     isReady: (): boolean => state === 'ready',
     supports: (capability: string): boolean => state === 'ready' && capabilities.has(capability),
     getProtocolVersion: (): number => protocolVersion,

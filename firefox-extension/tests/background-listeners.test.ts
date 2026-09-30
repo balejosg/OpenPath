@@ -4,6 +4,7 @@ import type { Browser, WebRequest } from 'webextension-polyfill';
 
 import {
   registerBackgroundListeners,
+  resolveLocalRuntimeDependencySoftTimeoutMs,
   type RuntimeDependencyCancellationContext,
 } from '../src/lib/background-listeners.js';
 
@@ -75,6 +76,7 @@ function createListenerHarness(
     >[0]['recordDependencyObservationEvent'];
     prewarmNativeTransport?: () => void;
     shouldCancelPendingRuntimeDependency?: () => boolean;
+    usesPersistentBudgets?: () => boolean;
   } = {}
 ): {
   addedBlocks: BlockedScreenContext[];
@@ -212,6 +214,9 @@ function createListenerHarness(
       : {}),
     ...(options.shouldCancelPendingRuntimeDependency
       ? { shouldCancelPendingRuntimeDependency: options.shouldCancelPendingRuntimeDependency }
+      : {}),
+    ...(options.usesPersistentBudgets
+      ? { usesPersistentBudgets: options.usesPersistentBudgets }
       : {}),
     prewarmNativeTransport: () => {
       options.prewarmNativeTransport?.();
@@ -1720,6 +1725,17 @@ void describe('background listeners runtime dependency cancellation', () => {
     await waitForAsyncListeners();
 
     assert.equal(harness.addedBlocks.length, 1);
+  });
+
+  void test('selects the persistent budget family while the transport decision is in flight', () => {
+    // Legacy host: historical 5 s / 6 s budgets.
+    assert.equal(resolveLocalRuntimeDependencySoftTimeoutMs('fetch', undefined, false), 5000);
+    assert.equal(resolveLocalRuntimeDependencySoftTimeoutMs('script', undefined, false), 6000);
+    // Persistent (or still connecting): widened budgets.
+    assert.equal(resolveLocalRuntimeDependencySoftTimeoutMs('fetch', undefined, true), 8000);
+    assert.equal(resolveLocalRuntimeDependencySoftTimeoutMs('stylesheet', undefined, true), 10000);
+    // An explicit override (tests/tools) always wins.
+    assert.equal(resolveLocalRuntimeDependencySoftTimeoutMs('stylesheet', 123, true), 123);
   });
 
   void test('pre-warms the persistent transport on main-frame navigation start', () => {

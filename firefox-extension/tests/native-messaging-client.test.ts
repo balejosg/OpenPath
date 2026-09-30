@@ -946,6 +946,7 @@ await describe('native messaging client persistent transport', async () => {
   function createFakeTransportStub(
     options: {
       ready?: boolean;
+      connecting?: boolean;
       capabilities?: string[];
       callImpl?: (message: Record<string, unknown>) => Promise<unknown>;
     } = {}
@@ -965,9 +966,11 @@ await describe('native messaging client persistent transport', async () => {
     );
     const calls: Record<string, unknown>[] = [];
     const markedUnhealthy: string[] = [];
+    const connecting = options.connecting ?? false;
     const transport: PersistentNativeTransport = {
       ensureConnected: () => Promise.resolve(ready),
       waitUntilReady: () => Promise.resolve(ready),
+      isConnecting: () => connecting,
       isReady: () => ready,
       supports: (capability) => ready && capabilitySet.has(capability),
       getProtocolVersion: () => 2,
@@ -1107,6 +1110,32 @@ await describe('native messaging client persistent transport', async () => {
       (messages[0] as { action?: string }).action,
       'allow-local-runtime-dependency-batch'
     );
+  });
+
+  await test('reports the transport as pending while the capability probe is in flight', () => {
+    const connecting = createFakeTransportStub({ ready: false, connecting: true });
+    const connectingClient = createNativeMessagingClient({
+      browserApi: createBrowserStub({ success: true }),
+      hostName: 'whitelist_native_host',
+      persistentTransport: connecting.transport,
+    });
+    assert.equal(connectingClient.isPersistentTransportPending(), true);
+
+    const ready = createFakeTransportStub();
+    const readyClient = createNativeMessagingClient({
+      browserApi: createBrowserStub({ success: true }),
+      hostName: 'whitelist_native_host',
+      persistentTransport: ready.transport,
+    });
+    assert.equal(readyClient.isPersistentTransportPending(), true);
+
+    const idle = createFakeTransportStub({ ready: false });
+    const idleClient = createNativeMessagingClient({
+      browserApi: createBrowserStub({ success: true }),
+      hostName: 'whitelist_native_host',
+      persistentTransport: idle.transport,
+    });
+    assert.equal(idleClient.isPersistentTransportPending(), false);
   });
 
   await test('gates the auto-reload capability on the full enqueue protocol', () => {

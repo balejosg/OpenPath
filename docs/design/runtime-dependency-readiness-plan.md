@@ -592,6 +592,19 @@ Phase 2C moves the extension and the hosts to a persistent protocol:
   messages) instead of one line per message, and the Windows hot path was
   measured in-process (ping ~9 ms, batch check ~6 ms, enqueue ~72 ms).
 
+Correction from the lab (2026-09-30, same day): the first lab run showed the
+first dependency batch arriving about 1 s into the page load, before the
+browser had even spawned the host process (about 6 s under a cold Firefox load
+plus a 3 s spawn/probe). The 4 s first-port wait expired before the port
+existed, so the batch fell to the one-shot path and its stylesheet was
+_released_ at the legacy 6 s budget: at that expiry the persistent capability
+was not ready, so nobody could cancel it, and the page rendered unstyled until
+the single auto-reload repaired it. The first port wait now covers the full
+probe window (10 s) and the persistent budget family applies while the port is
+ready **or still connecting**, so a cold first batch waits for the port
+decision, enqueues, and its render-critical entries are cancelled at their
+persistent budget (then repaired by the reload) instead of being released.
+
 Measured outcome (fill-in after the lab run): see
 `evidence/spa-runtime-deps-phase2c-<timestamp>/summary.md`.
 

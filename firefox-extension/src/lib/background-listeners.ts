@@ -81,6 +81,11 @@ interface BackgroundListenersOptions {
   onRuntimeDependencyCancelled?: (context: RuntimeDependencyCancellationContext) => void;
   /** Pre-warms the persistent native port when a main-frame navigation starts. */
   prewarmNativeTransport?: () => void;
+  /**
+   * True while the persistent transport is ready or still connecting, so the
+   * wider persistent budgets apply even before the capability decision lands.
+   */
+  usesPersistentBudgets?: () => boolean;
   recordDependencyObservationEvent?: (event: OpenPathDependencyObservationEventInput) => void;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
   saveBlockedPageContext?: (tabId: number, domain: string, originalUrl: string | undefined) => void;
@@ -198,7 +203,7 @@ function resolveAnchorHost(
   );
 }
 
-function resolveLocalRuntimeDependencySoftTimeoutMs(
+export function resolveLocalRuntimeDependencySoftTimeoutMs(
   requestType: string,
   overrideTimeoutMs: number | undefined,
   persistentTransportActive: boolean
@@ -222,12 +227,10 @@ function resolveLocalRuntimeDependencySoftTimeoutMs(
 interface RuntimeDependencyWaitOptions {
   onCancelled: (context: RuntimeDependencyCancellationContext) => void;
   overrideTimeoutMs?: number;
-  /**
-   * Live check for the persistent transport + auto-reload capability. It is
-   * consulted when the budget is armed (budget family) and again at expiry
-   * (cancel vs release), because a cold port may become ready mid-wait.
-   */
+  /** Live check for the persistent transport + auto-reload capability at expiry. */
   shouldCancel: () => boolean;
+  /** Budget family at arm time (persistent while ready OR still connecting). */
+  usesPersistentBudgets: () => boolean;
 }
 
 /**
@@ -253,7 +256,7 @@ function waitForLocalRuntimeDependencyDecision(
   const timeoutMs = resolveLocalRuntimeDependencySoftTimeoutMs(
     requestType,
     options.overrideTimeoutMs,
-    options.shouldCancel()
+    options.usesPersistentBudgets()
   );
 
   return new Promise((resolve) => {
@@ -534,6 +537,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           },
           {
             shouldCancel: options.shouldCancelPendingRuntimeDependency ?? ((): boolean => false),
+            usesPersistentBudgets: options.usesPersistentBudgets ?? ((): boolean => false),
             ...(options.localRuntimeDependencyTimeoutMs !== undefined
               ? { overrideTimeoutMs: options.localRuntimeDependencyTimeoutMs }
               : {}),

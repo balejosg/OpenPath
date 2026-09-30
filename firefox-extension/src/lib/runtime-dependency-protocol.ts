@@ -68,10 +68,12 @@ export const NATIVE_TRANSPORT_RECONNECT_MAX_DELAY_MS = 30_000;
 /**
  * How long a dependency request waits for the persistent port before taking
  * the legacy one-shot path. The first dependency of a page may wait through a
- * cold port connect; later ones get a shorter window because a healthy port is
- * either already open or known to be unavailable.
+ * cold port connect (the browser can take several seconds to spawn the host
+ * under a cold Firefox load, so the first window covers the full capability
+ * probe); later ones get a shorter window because a healthy port is either
+ * already open or known to be unavailable.
  */
-export const LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_FIRST_MS = 4_000;
+export const LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_FIRST_MS = 10_000;
 export const LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_MS = 3_000;
 /** Poll cadence for pending dependencies over the persistent port. */
 export const LOCAL_RUNTIME_DEPENDENCY_PROBE_INTERVAL_MS = 150;

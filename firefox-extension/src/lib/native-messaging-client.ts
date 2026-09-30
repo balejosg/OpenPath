@@ -144,6 +144,11 @@ export interface NativeMessagingClient {
   isPersistentTransportReady: () => boolean;
   /** True when a cancelled pending dependency may be repaired by one auto-reload. */
   isAutoReloadCapable: () => boolean;
+  /**
+   * True when the port is ready or a connect/probe is still in flight, i.e. the
+   * persistent budget family should apply (the decision is not known yet).
+   */
+  isPersistentTransportPending: () => boolean;
   /** Subscribes to pending dependencies becoming ready after a cancellation. */
   onRuntimeDependencyApplied: (
     listener: (input: LocalRuntimeDependencyInput) => void
@@ -211,6 +216,10 @@ export function createNativeMessagingClient(options: {
 
   function isAutoReloadCapable(): boolean {
     return isPersistentTransportReady() && transport.supports(NATIVE_HOST_CAPABILITIES.autoReload);
+  }
+
+  function isPersistentTransportPending(): boolean {
+    return transport.isReady() || transport.isConnecting();
   }
 
   function supportsCheapReads(): boolean {
@@ -828,6 +837,7 @@ export function createNativeMessagingClient(options: {
     connect,
     isAvailable,
     isAutoReloadCapable,
+    isPersistentTransportPending,
     isPersistentTransportReady,
     onRuntimeDependencyApplied,
     recoverCaptivePortalNavigation,
