@@ -186,6 +186,10 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                         param($ArgumentList, $InputText)
                         $first = [string](@($ArgumentList)[0])
                         $script:FirstVisitTestState.Calls.Add("InvokeHostCommand:$first")
+                        if ($first -eq 'python3') {
+                            # The DNS fixture probe must answer like the lab resolver.
+                            return 'DNS-OK'
+                        }
                         if ($first -eq 'curl') {
                             if ($script:FirstVisitTestState.ReportJson) {
                                 return ('{"runId":"12345","requests":9,"browserRequests":8,"lastReport":' + $script:FirstVisitTestState.ReportJson + '}')
@@ -301,7 +305,9 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
         }
 
         BeforeEach {
-            $script:OpenPathFirstVisitCaptureOffsets = @(0)
+            # The capture offsets live in the module scope; inject a single
+            # immediate capture so the dispatch tests never sleep for screendumps.
+            & (Get-Module ProxmoxWindowsLab) { $script:OpenPathFirstVisitCaptureOffsets = @(0) }
             $script:FirstVisitArtifacts = Join-Path $TestDrive ('first-visit-' + [guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $script:FirstVisitArtifacts -Force | Out-Null
             $script:FirstVisitTemplate = Join-Path $script:FirstVisitArtifacts 'template.exe'

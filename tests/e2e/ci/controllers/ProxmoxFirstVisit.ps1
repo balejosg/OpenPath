@@ -166,9 +166,12 @@ function Send-OpenPathFirstVisitStep {
     if ($start -lt 0 -or $end -le $start) { throw "first-visit-guest-result-missing-$Phase-$Step" }
     try { $harness = $jsonText.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop }
     catch { throw "first-visit-guest-result-invalid-$Phase-$Step" }
+    $resultArchive = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.json"
+    try { [IO.File]::WriteAllText($resultArchive, $jsonText.Substring($start, $end - $start + 1), [Text.UTF8Encoding]::new($false)) } catch { }
     if ([string]$harness.status -ne 'passed' -or $exitCode -ne 0) {
         $failures = @($harness.failures) -join ','
-        throw "first-visit-guest-step-failed-$Phase-$Step-$failures"
+        $bodyJson = ($harness.body | ConvertTo-Json -Depth 6 -Compress)
+        throw "first-visit-guest-step-failed-$Phase-$Step-$failures body=$bodyJson"
     }
     return $harness
 }
@@ -535,7 +538,7 @@ Write-Output 'autologon-on'
         [pscustomobject]@{ requests = [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests'); workerStateJson = $workerStateJson }
     }
     else { [pscustomobject]@{ requests = 0; workerStateJson = $workerStateJson } }
-    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines @($collect.body.state.collect.diagnosticSample) -StartupProfiles @($collect.body.state.collect.startupProfiles) -FixtureState $metricsFixture -Verdict $verdict -LogLines @($collect.body.state.collect.openpathTail)
+    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines @($collect.body.state.collect.diagnosticSample) -StartupProfiles @($collect.body.state.collect.startupProfiles) -FixtureState $metricsFixture -Verdict $verdict -LogLines @(Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'openpathTail')
     $metricsPath = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'metrics.json'
     [IO.File]::WriteAllText($metricsPath, ($metrics | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
     $studentUser = [string]$settings.StudentUserName

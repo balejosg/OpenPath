@@ -313,6 +313,28 @@ switch ($Step) {
         }
         $script:Body.firefoxPolicyForce = $managed
         if (-not $managed) { $script:Failures.Add('firefox-policy-not-force-installed') }
+        # Lab-only: production points install_url at the managed API. The lab
+        # fixture does not serve extension bytes, so the policy is pointed at the
+        # locally staged signed XPI (the Phase 2E lab proved file:// installs).
+        $xpi = @(Get-ChildItem -Path "$OpenPathRoot\browser-extension" -Recurse -Filter '*openpath*.xpi' -ErrorAction SilentlyContinue |
+                Sort-Object Length -Descending | Select-Object -First 1)
+        if ($xpi.Count -gt 0) {
+            $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
+            Copy-Item -LiteralPath $xpi[0].FullName -Destination $labXpi -Force
+            $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+            $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
+            if ($null -eq $entry) {
+                $policy.policies.ExtensionSettings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue ([pscustomobject]@{ installation_mode = 'force_installed' }) -Force
+                $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
+            }
+            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi' -Force
+            [IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+            $script:Body.xpiStaged = $labXpi
+            $script:Body.policyInstallUrl = 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
+        }
+        else {
+            $script:Failures.Add('firefox-release-xpi-missing')
+        }
         Start-Sleep -Seconds 20
         $plan = Get-FixturePlan
         $script:Body.plan = [ordered]@{
