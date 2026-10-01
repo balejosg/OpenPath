@@ -45,6 +45,13 @@ function validateAmoMetadata(metadataPath) {
   if (typeof approvalNotes !== 'string' || approvalNotes.trim().length === 0) {
     fail(`AMO metadata must include version.approval_notes: ${metadataPath}`);
   }
+  // AMO rejects approval notes longer than 3000 characters with a Bad Request
+  // (observed in the Phase 2D release pipeline); fail locally instead.
+  if (approvalNotes.length > 3000) {
+    fail(
+      `AMO metadata version.approval_notes must be at most 3000 characters (got ${approvalNotes.length}): ${metadataPath}`
+    );
+  }
 
   const releaseNotes = metadata.version?.release_notes;
   if (!releaseNotes || typeof releaseNotes !== 'object' || Array.isArray(releaseNotes)) {
