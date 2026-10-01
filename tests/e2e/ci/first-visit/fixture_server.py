@@ -250,6 +250,7 @@ class FixtureState:
         self.font_path = font_path
         self.lock = threading.Lock()
         self.requests = 0
+        self.browser_requests = 0
         self.last_report = None
         self.started_at = time.time()
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -262,6 +263,11 @@ class FixtureState:
     def log_request(self, entry: dict) -> None:
         with self.lock:
             self.requests += 1
+            note = str(entry.get("note") or "")
+            if note.startswith("anchor=") or note.startswith("wave"):
+                # Only a browser fetching page content counts here: the lane's
+                # plan/state curls and the agent's whitelist bootstrap do not.
+                self.browser_requests += 1
             with self.requests_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry) + "\n")
 
@@ -332,6 +338,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 {
                     "runId": plan["runId"],
                     "requests": self.state.requests,
+                    "browserRequests": self.state.browser_requests,
                     "lastReport": self.state.last_report,
                     "whitelistSha256": self.state.whitelist_sha256,
                 },

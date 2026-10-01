@@ -285,6 +285,15 @@ function Get-OpenPathFirstVisitMetrics {
         if ($match.Success) { $reloadReasons += $match.Groups[1].Value }
     }
     $holdOutcomes = @($DiagnosticLines | Where-Object { $_ -match 'kind":"hold-outcome' })
+    $workerApplyMs = -1
+    $overlayStamps = 0
+    if ($FixtureState -and (Get-OpenPathLabField -InputObject $FixtureState -Name 'workerStateJson')) {
+        try {
+            $worker = [string](Get-OpenPathLabField -InputObject $FixtureState -Name 'workerStateJson') | ConvertFrom-Json
+            $workerApplyMs = [int](Get-OpenPathLabField -InputObject $worker -Name 'lastApplyMs')
+        }
+        catch { }
+    }
     return [ordered]@{
         schemaVersion  = 1
         scenario       = $Scenario
@@ -305,6 +314,8 @@ function Get-OpenPathFirstVisitMetrics {
         diagnosticLines = $DiagnosticLines.Count
         holdOutcomes   = $holdOutcomes.Count
         hostProfile    = $hostProfile
+        workerApplyMs  = $workerApplyMs
+        overlayStamps  = $overlayStamps
         fixture        = if ($FixtureState) { [ordered]@{ requests = [int]$FixtureState.requests } } else { $null }
     }
 }
@@ -323,6 +334,11 @@ function Invoke-OpenPathFirstVisitPrepare {
     )
     $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
     $firstVisit = Get-OpenPathFirstVisitSettings -Payload $Payload -Config $Config
+    # A transport dry-run lab cannot produce a first-visit verdict; report
+    # BLOCKED instead of a green run with no evidence.
+    if ([string](Get-OpenPathLabField -InputObject $Config -Name 'mode') -ne 'acceptance') {
+        throw 'first-visit-requires-acceptance-lab-config'
+    }
     Start-OpenPathLabAcceptanceVm -Transport $Transport -Vmid $Vmid -Snapshot $Snapshot -TimeoutSeconds $TimeoutSeconds -RestoreBaseline $RestoreBaseline
     $bootId = [string](& $Transport.GetGuestBootId $Vmid)
     if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-guest-not-ready' }
@@ -402,6 +418,9 @@ function Invoke-OpenPathFirstVisitObserve {
     $firstVisit = Get-OpenPathLabField -InputObject $Payload -Name 'firstVisit'
     $scenario = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'scenario') } else { 'first-visit-settled' }
     if (-not $scenario) { $scenario = 'first-visit-settled' }
+    if ([string](Get-OpenPathLabField -InputObject $Config -Name 'mode') -ne 'acceptance') {
+        throw 'first-visit-requires-acceptance-lab-config'
+    }
     $harnessGuestPath = [string]$state.harnessGuestPath
     $captureDir = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'captures'
     New-Item -ItemType Directory -Path $captureDir -Force | Out-Null
@@ -437,16 +456,34 @@ Write-Output 'autologon-on'
     # The verdict comes from the page self-report (never from MOZ_LOG).
     $fixtureUrl = [string]$state.fixtureUrl
     $report = $null
+    $stateTextForObserve = ''
     $deadline = (Get-Date).AddSeconds(90)
     while ((Get-Date) -lt $deadline) {
-        $stateText = (& $Transport.InvokeHostCommand @('curl', '-s', '--max-time', '10', "$fixtureUrl/state.json") '').Trim()
-        if ($stateText.StartsWith('{')) {
-            $fixtureState = $stateText | ConvertFrom-Json
+        $stateTextForObserve = (& $Transport.InvokeHostCommand @('curl', '-s', '--max-time', '10', "$fixtureUrl/state.json") '').Trim()
+        if ($stateTextForObserve.StartsWith('{')) {
+            $fixtureState = $stateTextForObserve | ConvertFrom-Json
             if ($fixtureState.lastReport) { $report = $fixtureState.lastReport; break }
         }
         Start-Sleep -Seconds 5
     }
+    $evidenceDir = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'guest-logs'
+    New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
+    $fixtureState = $null
+    if ($stateTextForObserve) {
+        try { $fixtureState = $stateTextForObserve | ConvertFrom-Json } catch { }
+    }
+    $browserRequests = if ($fixtureState) { [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'browserRequests') } else { 0 }
+    if ($browserRequests -le 0) {
+        # Only the plan/state curls and the whitelist bootstrap reached the
+        # fixture: the browser never fetched page content. That is an
+        # infrastructure outage, never a product failure.
+        throw 'first-visit-fixture-served-no-requests'
+    }
     $collect = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'collect' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
+    $mozExtract = @(Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'mozExtract')
+    if ($mozExtract.Count -gt 0) {
+        [IO.File]::WriteAllLines((Join-Path $evidenceDir 'moz-extract.txt'), $mozExtract, [Text.UTF8Encoding]::new($false))
+    }
     $security = $null
     if ($scenario -in @('first-visit-settled', 'first-visit-control')) {
         $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
@@ -455,11 +492,14 @@ Write-Output 'autologon-on'
     }
     $plan = $state.plan
     $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario
-    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines @($collect.body.state.collect.diagnosticSample) -StartupProfiles @($collect.body.state.collect.startupProfiles) -FixtureState $null -Verdict $verdict
+    $workerStateJson = [string](Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'workerState')
+    $metricsFixture = if ($fixtureState) {
+        [pscustomobject]@{ requests = [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests'); workerStateJson = $workerStateJson }
+    }
+    else { [pscustomobject]@{ requests = 0; workerStateJson = $workerStateJson } }
+    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines @($collect.body.state.collect.diagnosticSample) -StartupProfiles @($collect.body.state.collect.startupProfiles) -FixtureState $metricsFixture -Verdict $verdict
     $metricsPath = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'metrics.json'
     [IO.File]::WriteAllText($metricsPath, ($metrics | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
-    $evidenceDir = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'guest-logs'
-    New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
     $studentUser = [string]$settings.StudentUserName
     Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath "C:\Users\$studentUser\AppData\Local\OpenPath\native-host.log" -LocalPath (Join-Path $evidenceDir 'native-host.log') | Out-Null
     Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath 'C:\OpenPath\logs\openpath.log' -LocalPath (Join-Path $evidenceDir 'openpath.log') | Out-Null

@@ -141,6 +141,11 @@ class FixtureServerTests(unittest.TestCase):
         styles = self.plan["anchors"]["a1"]["roles"]["styles"]
         status, _ = self.fetch(styles, "/first-visit.css")
         self.assertEqual(status, 200)
+        status, _ = self.fetch(anchor, "/")
+        self.assertEqual(status, 200)
+        status, body = self.fetch("whatever.example", "/state.json")
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(json.loads(body)["browserRequests"], 2, "anchor + styles are browser requests")
         report = {"runId": "unit-run", "loads": 2, "waves": {"cssApplied": True}}
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/__report",

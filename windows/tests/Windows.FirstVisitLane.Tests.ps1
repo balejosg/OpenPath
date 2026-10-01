@@ -132,7 +132,7 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
         BeforeAll {
             function New-FirstVisitFakePlan {
                 return @'
-{"schemaVersion":1,"runId":"12345","anchors":{"a1":{"host":"anchor1-ab12cd.192.168.1.150.sslip.io","roles":{"styles":"styles1-ab12cd.192.168.1.150.sslip.io","core":"core1-ab12cd.192.168.1.150.sslip.io","deferred":"deferred1-ab12cd.192.168.1.150.sslip.io","font":"font1-ab12cd.192.168.1.150.sslip.io","image":"image1-ab12cd.192.168.1.150.sslip.io","api":"api1-ab12cd.192.168.1.150.sslip.io"}},"a2":{"host":"anchor2-ab12cd.192.168.1.150.sslip.io","roles":{}}},"controlDependencies":["styles1-ab12cd.192.168.1.150.sslip.io","core1-ab12cd.192.168.1.150.sslip.io","deferred1-ab12cd.192.168.1.150.sslip.io","font1-ab12cd.192.168.1.150.sslip.io","image1-ab12cd.192.168.1.150.sslip.io","api1-ab12cd.192.168.1.150.sslip.io"],"neverLearnable":"blocked9-ab12cd.192.168.1.150.sslip.io","unlisted":"unlisted8-ab12cd.192.168.1.150.sslip.io","whitelistHosts":["anchor1-ab12cd.192.168.1.150.sslip.io","anchor2-ab12cd.192.168.1.150.sslip.io"],"blockedSubdomains":["blocked9-ab12cd.192.168.1.150.sslip.io"]}
+{"schemaVersion":1,"runId":"12345","anchors":{"a1":{"host":"anchor1-ab12cd.192.168.1.150.sslip.io","roles":{"styles":"styles1-ab12cd.192.168.1.150.sslip.io","core":"core1-ab12cd.192.168.1.150.sslip.io","deferred":"deferred1-ab12cd.192.168.1.150.sslip.io","font":"font1-ab12cd.192.168.1.150.sslip.io","image":"image1-ab12cd.192.168.1.150.sslip.io","apiservice":"api1-ab12cd.192.168.1.150.sslip.io"}},"a2":{"host":"anchor2-ab12cd.192.168.1.150.sslip.io","roles":{}}},"controlDependencies":["styles1-ab12cd.192.168.1.150.sslip.io","core1-ab12cd.192.168.1.150.sslip.io","deferred1-ab12cd.192.168.1.150.sslip.io","font1-ab12cd.192.168.1.150.sslip.io","image1-ab12cd.192.168.1.150.sslip.io","api1-ab12cd.192.168.1.150.sslip.io"],"neverLearnable":"blocked9-ab12cd.192.168.1.150.sslip.io","unlisted":"unlisted8-ab12cd.192.168.1.150.sslip.io","whitelistHosts":["anchor1-ab12cd.192.168.1.150.sslip.io","anchor2-ab12cd.192.168.1.150.sslip.io"],"blockedSubdomains":["blocked9-ab12cd.192.168.1.150.sslip.io"]}
 '@
             }
             function New-FirstVisitReportJson {
@@ -167,7 +167,7 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                         $script:FirstVisitTestState.Calls.Add("InvokeHostCommand:$first")
                         if ($first -eq 'curl') {
                             if ($script:FirstVisitTestState.ReportJson) {
-                                return ('{"runId":"12345","requests":9,"lastReport":' + $script:FirstVisitTestState.ReportJson + '}')
+                                return ('{"runId":"12345","requests":9,"browserRequests":8,"lastReport":' + $script:FirstVisitTestState.ReportJson + '}')
                             }
                             return ($script:FirstVisitTestState.PlanJson)
                         }

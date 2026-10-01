@@ -51,22 +51,26 @@ foreach ($repetition in 1..$Repetitions) {
         }
         [IO.File]::WriteAllText($payloadPath, ($payload | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         $scenarioFailed = $false
-        try {
-            foreach ($mode in @('Prepare', 'Observe', 'Cleanup')) {
-                $phaseArguments = @('-NoProfile', '-NonInteractive')
-                if ([IO.Path]::GetFileName($hostCommand.Source) -ieq 'powershell.exe') { $phaseArguments += @('-ExecutionPolicy', 'Bypass') }
-                & $hostCommand.Source @phaseArguments -File $phaseScript -Mode $mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $scenarioId -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -ControllerCommand $ControllerCommand -ControllerPayloadPath $payloadPath
-                $phaseExit = $LASTEXITCODE
-                if ($phaseExit -ne 0) {
-                    $scenarioFailed = $true
-                    if ($phaseExit -eq 2) { $blocked = $true }
-                    break
-                }
+        foreach ($mode in @('Prepare', 'Observe')) {
+            $phaseArguments = @('-NoProfile', '-NonInteractive')
+            if ([IO.Path]::GetFileName($hostCommand.Source) -ieq 'powershell.exe') { $phaseArguments += @('-ExecutionPolicy', 'Bypass') }
+            & $hostCommand.Source @phaseArguments -File $phaseScript -Mode $mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $scenarioId -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -ControllerCommand $ControllerCommand -ControllerPayloadPath $payloadPath
+            $phaseExit = $LASTEXITCODE
+            if ($phaseExit -ne 0) {
+                $scenarioFailed = $true
+                if ($phaseExit -eq 2) { $blocked = $true }
+                break
             }
         }
-        catch {
+        # Teardown is unconditional: cleanup rolls the VM back and releases the
+        # lab lock even when prepare or observe failed (Phase 3A requirement).
+        $cleanupArguments = @('-NoProfile', '-NonInteractive')
+        if ([IO.Path]::GetFileName($hostCommand.Source) -ieq 'powershell.exe') { $cleanupArguments += @('-ExecutionPolicy', 'Bypass') }
+        & $hostCommand.Source @cleanupArguments -File $phaseScript -Mode 'Cleanup' -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $scenarioId -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -ControllerCommand $ControllerCommand -ControllerPayloadPath $payloadPath
+        $cleanupExit = $LASTEXITCODE
+        if ($cleanupExit -ne 0) {
             $scenarioFailed = $true
-            [Console]::Error.WriteLine(('FIRST_VISIT_SCENARIO_FAILED: {0}' -f $_.Exception.Message))
+            if ($cleanupExit -eq 2) { $blocked = $true }
         }
         if ($scenarioFailed) { $failed = $true }
     }

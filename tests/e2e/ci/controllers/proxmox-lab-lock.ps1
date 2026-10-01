@@ -28,7 +28,7 @@ if (-not $ConfigPath) {
 }
 $config = Read-OpenPathProxmoxLabConfig -Path $ConfigPath
 $transport = New-OpenPathProxmoxLabTransport -Config $config
-$lockFile = [string](Get-OpenPathLabField -InputObject $config -Name 'lockFile')
+$lockFile = [string]($config.PSObject.Properties['lockFile'].Value)
 if ([string]::IsNullOrWhiteSpace($lockFile)) { throw 'lab-lock-file-missing' }
 
 switch ($Action) {

@@ -1399,21 +1399,10 @@ void describe('Firefox release signing helpers', () => {
     assert.match(stdoutChunks.join(''), /AMO version status addonId=b0694d0ac22b478c88f7/);
   });
 
-  void test('waitForAmoSignedXpi rejects unlisted downloads until AMO exposes signed bits', async () => {
+  void test('waitForAmoSignedXpi never accepts unsigned bytes and keeps polling until the deadline', async () => {
     const artifactsDir = createTempDir('openpath-firefox-amo-unlisted-download-');
     const requests: string[] = [];
-    const responses = [
-      new Response(
-        JSON.stringify({
-          file: {
-            status: 'unreviewed',
-            url: 'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi',
-          },
-        }),
-        { status: 200 }
-      ),
-      new Response('unsigned-unlisted-xpi', { status: 200 }),
-    ];
+    let clock = Date.parse('2026-05-07T05:00:00Z');
 
     await assert.rejects(
       waitForAmoSignedXpi({
@@ -1424,27 +1413,46 @@ void describe('Firefox release signing helpers', () => {
         artifactsDir,
         timeoutMs: 10_000,
         pollIntervalMs: 1,
-        nowImpl: () => Date.parse('2026-05-07T05:00:00Z'),
+        // Each poll advances the clock so the loop reaches its deadline instead
+        // of spinning on the mock.
+        nowImpl: () => {
+          clock += 4000;
+          return clock;
+        },
         sleepImpl: () => Promise.resolve(),
         stdout: { write: () => undefined },
         fetchImpl: (input) => {
           const requestUrl =
             input instanceof Request ? input.url : input instanceof URL ? input.href : input;
           requests.push(requestUrl);
-          const response = responses.shift();
-          if (!response) {
-            throw new Error(`unexpected request ${requestUrl}`);
+          if (requestUrl.includes('/versions/')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  file: {
+                    status: 'unreviewed',
+                    url: 'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi',
+                  },
+                }),
+                { status: 200 }
+              )
+            );
           }
-          return Promise.resolve(response);
+          return Promise.resolve(new Response('unsigned-unlisted-xpi', { status: 200 }));
         },
       }),
-      /AMO signature files/
+      /manual-review-required: AMO accepted version but fileStatus=unreviewed/
     );
 
-    assert.deepEqual(requests, [
-      'https://addons.mozilla.org/api/v5/addons/addon/openpath-block-monitor%40openpath/versions/v2.0.81977786.682142437/',
-      'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi',
-    ]);
+    assert.ok(requests.length >= 3, 'the unsigned file must be retried, never accepted');
+    assert.equal(
+      requests[0],
+      'https://addons.mozilla.org/api/v5/addons/addon/openpath-block-monitor%40openpath/versions/v2.0.81977786.682142437/'
+    );
+    assert.equal(
+      requests[1],
+      'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi'
+    );
   });
 
   void test('waitForAmoSignedXpi reports manual-review-required when unreviewed outlives recovery', async () => {
@@ -1820,6 +1828,56 @@ void describe('Firefox release signing helpers', () => {
     assert.equal(versionPolls, 2);
     assert.match(stdoutChunks.join(''), /AMO version already exists/);
     assert.match(stdoutChunks.join(''), /fileStatus=missing/);
+  });
+
+  void test('waitForAmoSignedXpi keeps polling while the AMO file is not signed yet', async () => {
+    const artifactsDir = createTempDir('openpath-firefox-amo-unsigned-');
+    const stdoutChunks: string[] = [];
+    let downloads = 0;
+    const signedXpiPath = await waitForAmoSignedXpi({
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      addonId: 'b0694d0ac22b478c88f7',
+      version: '2.0.123.456',
+      artifactsDir,
+      timeoutMs: 30_000,
+      pollIntervalMs: 1,
+      nowImpl: () => Date.parse('2026-05-03T05:00:00Z'),
+      sleepImpl: () => Promise.resolve(),
+      stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+      fetchImpl: (input) => {
+        const requestUrl =
+          input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+        if (requestUrl.includes('/versions/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                file: {
+                  status: 'unreviewed',
+                  url: 'https://addons.mozilla.org/firefox/downloads/file/1/unsigned.zip.xpi',
+                },
+                version: '2.0.123.456',
+                id: '1',
+              }),
+              { status: 200 }
+            )
+          );
+        }
+        downloads += 1;
+        if (downloads === 1) {
+          // A freshly submitted version can expose bytes without META-INF yet.
+          return Promise.resolve(new Response(Buffer.from('unsigned-bytes'), { status: 200 }));
+        }
+        return Promise.resolve(
+          new Response(bufferToArrayBuffer(signedXpiFixtureBuffer()), { status: 200 })
+        );
+      },
+    });
+
+    assert.equal(downloads, 2);
+    assert.equal(readFileSync(signedXpiPath).subarray(0, 2).toString('utf8'), 'PK');
+    assert.match(stdoutChunks.join(''), /not signed yet/);
+    assert.match(stdoutChunks.join(''), /Downloaded AMO signed XPI/);
   });
 
   void test('recoverSignedXpiFromAmo ignores unrelated failures without touching AMO', async () => {

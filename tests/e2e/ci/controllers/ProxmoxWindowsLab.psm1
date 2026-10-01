@@ -19,7 +19,11 @@ $script:OpenPathLabBlockedErrorCodes = @(
     'desktop-lab-scenario-unmapped',
     'desktop-lab-acceptance-not-implemented',
     'desktop-lab-transport-invalid',
-    'desktop-lab-transport-unavailable'
+    'desktop-lab-transport-unavailable',
+    'first-visit-requires-acceptance-lab-config',
+    'first-visit-fixture-plan-unavailable',
+    'first-visit-dns-fixture-unavailable',
+    'first-visit-fixture-served-no-requests'
 )
 
 $script:OpenPathLabRequiredTransportKeys = @(

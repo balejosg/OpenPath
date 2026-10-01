@@ -30,9 +30,9 @@
       "name": "@puppeteer/browsers",
       "severity": "high",
       "isDirect": false,
-      "via": ["extract-zip"],
+      "via": ["extract-zip", "proxy-agent"],
       "effects": ["find-chrome-bin", "puppeteer-core"],
-      "range": "<=2.13.2",
+      "range": "*",
       "nodes": ["node_modules/@puppeteer/browsers"],
       "fixAvailable": true
     },
@@ -263,6 +263,31 @@
       "effects": [],
       "range": ">=2.0.0 <2.11.0",
       "nodes": ["node_modules/baseline-browser-mapping"],
+      "fixAvailable": true
+    },
+    "basic-ftp": {
+      "name": "basic-ftp",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1240853,
+          "name": "basic-ftp",
+          "dependency": "basic-ftp",
+          "title": "basic-ftp: Quadratic-time CPU denial of service in Client.list() Unix directory-listing parser (RE_LINE backtracking)",
+          "url": "https://github.com/advisories/GHSA-c475-qrg2-pj4r",
+          "severity": "high",
+          "cwe": ["CWE-1333"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": "<=6.2.0"
+        }
+      ],
+      "effects": ["get-uri"],
+      "range": "<=6.2.0",
+      "nodes": ["node_modules/basic-ftp"],
       "fixAvailable": true
     },
     "body-parser": {
@@ -634,6 +659,16 @@
         "isSemVerMajor": false
       }
     },
+    "get-uri": {
+      "name": "get-uri",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["basic-ftp"],
+      "effects": ["pac-proxy-agent"],
+      "range": ">=5.0.0",
+      "nodes": ["node_modules/get-uri"],
+      "fixAvailable": true
+    },
     "image-size": {
       "name": "image-size",
       "severity": "high",
@@ -924,6 +959,16 @@
         "isSemVerMajor": true
       }
     },
+    "pac-proxy-agent": {
+      "name": "pac-proxy-agent",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["get-uri"],
+      "effects": ["proxy-agent"],
+      "range": ">=6.0.0",
+      "nodes": ["node_modules/pac-proxy-agent"],
+      "fixAvailable": true
+    },
     "postcss": {
       "name": "postcss",
       "severity": "high",
@@ -961,6 +1006,16 @@
       "effects": [],
       "range": "<=8.5.22",
       "nodes": ["node_modules/postcss"],
+      "fixAvailable": true
+    },
+    "proxy-agent": {
+      "name": "proxy-agent",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["pac-proxy-agent"],
+      "effects": ["@puppeteer/browsers"],
+      "range": ">=6.0.0",
+      "nodes": ["node_modules/proxy-agent"],
       "fixAvailable": true
     },
     "puppeteer-core": {
@@ -1309,9 +1364,9 @@
       "info": 0,
       "low": 1,
       "moderate": 6,
-      "high": 23,
+      "high": 27,
       "critical": 0,
-      "total": 30
+      "total": 34
     },
     "dependencies": {
       "prod": 273,

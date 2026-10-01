@@ -239,36 +239,28 @@ switch ($Step) {
             $script:Body.installerExit = $process.ExitCode
             # A production-like offline install applies policies and tasks after
             # the silent installer returns; wait for the essential surfaces.
-            $deadline = (Get-Date).AddSeconds(600)
+            $deadline = (Get-Date).AddSeconds(900)
             $ready = $false
+            $firefoxDeadline = (Get-Date).AddSeconds(900)
             while ((Get-Date) -lt $deadline) {
                 $hasScript = Test-Path -LiteralPath "$OpenPathRoot\OpenPath.ps1"
                 $hasUninstall = Test-Path -LiteralPath "$OpenPathRoot\Uninstall-OpenPath.ps1"
                 $service = Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue
-                if ($hasScript -and $hasUninstall -and $service) { $ready = $true; break }
+                if ($hasScript -and $hasUninstall -and $service) { $ready = $true }
+                if ($ready -and (Get-FirefoxInstallPath)) { break }
                 Start-Sleep -Seconds 10
             }
-            $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
-            $managed = $false
-            if (Test-Path -LiteralPath $policyPath) {
-                try {
-                    $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
-                    $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
-                    $managed = ($entry.installation_mode -eq 'force_installed')
-                }
-                catch { }
-            }
+            # The Firefox managed policy is applied by the agent update flow
+            # (configure), so only the install surfaces are required here.
             $tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'OpenPath-*' } | ForEach-Object { $_.TaskName })
             $script:Body.install = [ordered]@{
-                ready              = $ready
-                uninstaller        = (Test-Path -LiteralPath "$OpenPathRoot\Uninstall-OpenPath.ps1")
-                acrylicService     = [string](Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue).Status
-                firefoxPolicyForce = $managed
-                tasks              = @($tasks)
-                firefoxInstalled   = [bool](Get-FirefoxInstallPath)
+                ready            = $ready
+                uninstaller      = (Test-Path -LiteralPath "$OpenPathRoot\Uninstall-OpenPath.ps1")
+                acrylicService   = [string](Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue).Status
+                tasks            = @($tasks)
+                firefoxInstalled = [bool](Get-FirefoxInstallPath)
             }
             if (-not $ready) { $script:Failures.Add('install-not-ready') }
-            if (-not $managed) { $script:Failures.Add('firefox-policy-not-force-installed') }
             if (-not (Get-FirefoxInstallPath)) { $script:Failures.Add('firefox-missing') }
         }
         Complete-Step
@@ -304,6 +296,23 @@ switch ($Step) {
         $script:Body.registered = $registered
         $update = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\OpenPath\scripts\Update-OpenPath.ps1') -RedirectStandardOutput 'C:\OpenPathLab\logs\update.out.log' -RedirectStandardError 'C:\OpenPathLab\logs\update.err.log' -PassThru -Wait -WindowStyle Hidden
         $script:Body.updateExit = $update.ExitCode
+        $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
+        $managed = $false
+        $policyDeadline = (Get-Date).AddSeconds(300)
+        while ((Get-Date) -lt $policyDeadline) {
+            if (Test-Path -LiteralPath $policyPath) {
+                try {
+                    $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+                    $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
+                    $managed = ($entry.installation_mode -eq 'force_installed')
+                }
+                catch { }
+            }
+            if ($managed) { break }
+            Start-Sleep -Seconds 10
+        }
+        $script:Body.firefoxPolicyForce = $managed
+        if (-not $managed) { $script:Failures.Add('firefox-policy-not-force-installed') }
         Start-Sleep -Seconds 20
         $plan = Get-FixturePlan
         $script:Body.plan = [ordered]@{
@@ -313,6 +322,16 @@ switch ($Step) {
             controlDeps        = @($plan.controlDependencies)
             whitelistHosts     = @($plan.whitelistHosts)
         }
+        # Direct probe of the DNS fixture (never through Acrylic): if the
+        # fixture itself is down the run is INFRA, not a product failure.
+        $fixtureDnsOk = $false
+        try {
+            $probe = @(Resolve-DnsName -Name 'probe.127.0.0.1.sslip.io' -Server $dnsIp -Type A -DnsOnly -ErrorAction Stop | Where-Object { $_.Type -eq 'A' })
+            $fixtureDnsOk = [bool](@($probe | Where-Object { $_.IPAddress -eq '127.0.0.1' }).Count -gt 0)
+        }
+        catch { $fixtureDnsOk = $false }
+        $script:Body.fixtureDnsOk = $fixtureDnsOk
+        if (-not $fixtureDnsOk) { $script:Failures.Add('first-visit-dns-fixture-unavailable') }
         $script:Body.dnsBefore = @(
             Resolve-Probe -HostName ([string]$plan.anchors.a1.host)
             Resolve-Probe -HostName ([string]$plan.anchors.a1.roles.styles)
@@ -413,8 +432,15 @@ switch ($Step) {
         if (Test-Path -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json") {
             $workerState = Get-Content -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json" -Raw
         }
+        $mozExtract = @()
+        $mozFiles = @(Get-ChildItem 'C:\OpenPathLab\moz' -Filter '*.log*' -ErrorAction SilentlyContinue)
+        foreach ($mozFile in $mozFiles) {
+            $mozExtract += @(Select-String -LiteralPath $mozFile.FullName -Pattern 'nsHostResolver|nsHttp' -ErrorAction SilentlyContinue |
+                    Select-Object -First 400 | ForEach-Object { $_.Line })
+        }
         $script:Body.collect = [ordered]@{
             extension            = $profile
+            mozExtract           = @($mozExtract | Select-Object -First 600)
             diagnosticLines      = $diagnostics.Count
             diagnosticSample     = @($diagnostics | Select-Object -First 12)
             startupProfiles      = @($profiles | Select-Object -Last 4)

@@ -72,3 +72,6 @@ tests/e2e/artifacts/
 
 # Superpowers SDD scratch (briefs, reports, ledger) — local only
 .superpowers/
+
+# Phase 3A: python fixtures under tests/ (bytecode caches)
+__pycache__/

@@ -418,15 +418,26 @@ export async function waitForAmoSignedXpi(options) {
     );
 
     if (fileUrl && (fileStatus === 'public' || fileStatus === 'unreviewed')) {
-      const signedXpiPath = await downloadAmoSignedXpi({
-        fileUrl,
-        apiKey,
-        apiSecret,
-        artifactsDir,
-        fetchImpl,
-      });
-      stdout.write(`[sign:firefox-release] Downloaded AMO signed XPI ${signedXpiPath}\n`);
-      return signedXpiPath;
+      try {
+        const signedXpiPath = await downloadAmoSignedXpi({
+          fileUrl,
+          apiKey,
+          apiSecret,
+          artifactsDir,
+          fetchImpl,
+        });
+        stdout.write(`[sign:firefox-release] Downloaded AMO signed XPI ${signedXpiPath}\n`);
+        return signedXpiPath;
+      } catch (error) {
+        // Phase 3A G4: a freshly submitted version can expose a file url whose
+        // bytes are not signed yet (the winning run is still being processed).
+        // Keep polling instead of failing the losing run.
+        stdout.write(
+          `[sign:firefox-release] AMO file is not signed yet (${String(
+            error && error.message ? error.message : error
+          )}); continuing to poll\n`
+        );
+      }
     }
 
     if (fileStatus === 'disabled') {
