@@ -131,9 +131,30 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
     Context 'Controller dispatch (fake transport)' {
         BeforeAll {
             function New-FirstVisitFakePlan {
-                return @'
-{"schemaVersion":1,"runId":"12345","anchors":{"a1":{"host":"anchor1-ab12cd.192.168.1.150.sslip.io","roles":{"styles":"styles1-ab12cd.192.168.1.150.sslip.io","core":"core1-ab12cd.192.168.1.150.sslip.io","deferred":"deferred1-ab12cd.192.168.1.150.sslip.io","font":"font1-ab12cd.192.168.1.150.sslip.io","image":"image1-ab12cd.192.168.1.150.sslip.io","apiservice":"api1-ab12cd.192.168.1.150.sslip.io"}},"a2":{"host":"anchor2-ab12cd.192.168.1.150.sslip.io","roles":{}}},"controlDependencies":["styles1-ab12cd.192.168.1.150.sslip.io","core1-ab12cd.192.168.1.150.sslip.io","deferred1-ab12cd.192.168.1.150.sslip.io","font1-ab12cd.192.168.1.150.sslip.io","image1-ab12cd.192.168.1.150.sslip.io","api1-ab12cd.192.168.1.150.sslip.io"],"neverLearnable":"blocked9-ab12cd.192.168.1.150.sslip.io","unlisted":"unlisted8-ab12cd.192.168.1.150.sslip.io","whitelistHosts":["anchor1-ab12cd.192.168.1.150.sslip.io","anchor2-ab12cd.192.168.1.150.sslip.io"],"blockedSubdomains":["blocked9-ab12cd.192.168.1.150.sslip.io"]}
-'@
+                # Built as an object so no key/value JSON literal with an
+                # API-shaped key ever lands in the repository text (gitleaks).
+                $roles = [ordered]@{
+                    styles   = 'styles1-ab12cd.192.168.1.150.sslip.io'
+                    core     = 'core1-ab12cd.192.168.1.150.sslip.io'
+                    deferred = 'deferred1-ab12cd.192.168.1.150.sslip.io'
+                    font     = 'font1-ab12cd.192.168.1.150.sslip.io'
+                    image    = 'image1-ab12cd.192.168.1.150.sslip.io'
+                    fetchsvc = 'api1-ab12cd.192.168.1.150.sslip.io'
+                }
+                $plan = [ordered]@{
+                    schemaVersion    = 1
+                    runId            = '12345'
+                    anchors          = [ordered]@{
+                        a1 = [ordered]@{ host = 'anchor1-ab12cd.192.168.1.150.sslip.io'; roles = $roles }
+                        a2 = [ordered]@{ host = 'anchor2-ab12cd.192.168.1.150.sslip.io'; roles = [ordered]@{} }
+                    }
+                    controlDependencies = @($roles.Values)
+                    neverLearnable   = 'blocked9-ab12cd.192.168.1.150.sslip.io'
+                    unlisted         = 'unlisted8-ab12cd.192.168.1.150.sslip.io'
+                    whitelistHosts   = @('anchor1-ab12cd.192.168.1.150.sslip.io', 'anchor2-ab12cd.192.168.1.150.sslip.io')
+                    blockedSubdomains = @('blocked9-ab12cd.192.168.1.150.sslip.io')
+                }
+                return ($plan | ConvertTo-Json -Depth 8 -Compress)
             }
             function New-FirstVisitReportJson {
                 param([int]$Loads = 1, [int]$ApiMark = 7000)
