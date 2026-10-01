@@ -60,8 +60,28 @@ export type NativeHostCapability =
 
 /** Timeout for the capability probe after `connectNative` (covers a cold host start). */
 export const NATIVE_TRANSPORT_PROBE_TIMEOUT_MS = 10_000;
-/** Default per-request timeout over the port; a timeout marks the port unhealthy. */
-export const NATIVE_TRANSPORT_REQUEST_TIMEOUT_MS = 3_000;
+/**
+ * Default per-request timeout over the port for calls that do not pass an
+ * action-specific timeout. Phase 2D: a request timeout no longer tears the
+ * port down; it only rejects the call and lets the liveness probe decide.
+ */
+export const NATIVE_TRANSPORT_REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * Per-action port timeouts (Phase 2D D1). Writing the queue and nudging the
+ * resident worker is slower than a read, and the native host can brief
+ * non-responses while it is busy; the timeout must not be so tight that a slow
+ * host is mistaken for a dead one.
+ */
+export const NATIVE_TRANSPORT_ENQUEUE_TIMEOUT_MS = 10_000;
+export const NATIVE_TRANSPORT_CHECK_TIMEOUT_MS = 5_000;
+export const NATIVE_TRANSPORT_CHEAP_READ_TIMEOUT_MS = 5_000;
+/**
+ * Liveness rule (Phase 2D D1): a timed-out call only marks the port dead when
+ * the host has been completely silent for this long and a probe ping also
+ * times out.
+ */
+export const NATIVE_TRANSPORT_LIVENESS_STALE_MS = 15_000;
+export const NATIVE_TRANSPORT_LIVENESS_PING_TIMEOUT_MS = 5_000;
 /** Reconnect backoff for a dropped/unhealthy port: base delay and ceiling. */
 export const NATIVE_TRANSPORT_RECONNECT_BASE_DELAY_MS = 1_000;
 export const NATIVE_TRANSPORT_RECONNECT_MAX_DELAY_MS = 30_000;

@@ -3,6 +3,8 @@ import type { Browser, Runtime } from 'webextension-polyfill';
 import { getErrorMessage } from './logger.js';
 import {
   NATIVE_HOST_PROTOCOL_VERSION,
+  NATIVE_TRANSPORT_LIVENESS_PING_TIMEOUT_MS,
+  NATIVE_TRANSPORT_LIVENESS_STALE_MS,
   NATIVE_TRANSPORT_PROBE_TIMEOUT_MS,
   NATIVE_TRANSPORT_RECONNECT_BASE_DELAY_MS,
   NATIVE_TRANSPORT_RECONNECT_MAX_DELAY_MS,
@@ -20,8 +22,16 @@ export interface PersistentNativeTransportOptions {
   logger: PersistentNativeTransportLogger;
   /** Capability probe timeout after connectNative (covers a cold host start). */
   probeTimeoutMs?: number;
-  /** Default per-request timeout; a timeout tears the port down with backoff. */
+  /**
+   * Default per-request timeout for calls without an action-specific one. A
+   * timed-out call is rejected but does not disconnect the port by itself
+   * (Phase 2D); only the liveness rule can tear it down.
+   */
   requestTimeoutMs?: number;
+  /** A timed-out call only probes liveness after this much host silence. */
+  livenessStaleMs?: number;
+  /** Liveness probe ping timeout: if it also expires the port is considered dead. */
+  livenessPingTimeoutMs?: number;
   reconnectBaseDelayMs?: number;
   reconnectMaxDelayMs?: number;
   now?: () => number;
@@ -105,6 +115,9 @@ export function createPersistentNativeTransport(
   const logger = options.logger;
   const probeTimeoutMs = options.probeTimeoutMs ?? NATIVE_TRANSPORT_PROBE_TIMEOUT_MS;
   const requestTimeoutMs = options.requestTimeoutMs ?? NATIVE_TRANSPORT_REQUEST_TIMEOUT_MS;
+  const livenessStaleMs = options.livenessStaleMs ?? NATIVE_TRANSPORT_LIVENESS_STALE_MS;
+  const livenessPingTimeoutMs =
+    options.livenessPingTimeoutMs ?? NATIVE_TRANSPORT_LIVENESS_PING_TIMEOUT_MS;
   const reconnectBaseDelayMs =
     options.reconnectBaseDelayMs ?? NATIVE_TRANSPORT_RECONNECT_BASE_DELAY_MS;
   const reconnectMaxDelayMs =
@@ -120,6 +133,8 @@ export function createPersistentNativeTransport(
   let reconnectAttempts = 0;
   let nextReconnectAt = 0;
   let stopped = false;
+  let lastHostMessageAt = now();
+  let livenessProbeInFlight = false;
   const pendingCalls = new Map<number, PendingCall>();
 
   function rejectAllPendingCalls(reason: string): void {
@@ -176,6 +191,9 @@ export function createPersistentNativeTransport(
     if (port !== target) {
       return;
     }
+    // Any message from the current port proves the host is alive; the liveness
+    // probe uses this timestamp to avoid declaring a live-but-busy host dead.
+    lastHostMessageAt = now();
 
     const responseId = resolveResponseId(message);
     if (responseId !== null) {
@@ -208,6 +226,7 @@ export function createPersistentNativeTransport(
 
   function attachPort(newPort: Runtime.Port): void {
     port = newPort;
+    lastHostMessageAt = now();
     newPort.onDisconnect.addListener(() => {
       handleDisconnect(newPort);
     });
@@ -216,7 +235,40 @@ export function createPersistentNativeTransport(
     });
   }
 
-  function callOnPort(message: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+  /**
+   * Liveness rule (Phase 2D D1): a request timeout is not proof of death. Only
+   * when the port produced no message for `livenessStaleMs` and a probe ping
+   * also times out is the connection torn down with backoff.
+   */
+  function probeLivenessAfterTimeout(): void {
+    if (stopped || !port || state !== 'ready' || livenessProbeInFlight) {
+      return;
+    }
+    if (now() - lastHostMessageAt < livenessStaleMs) {
+      // Recent host traffic (or the just-answered call) proves it is alive.
+      return;
+    }
+    livenessProbeInFlight = true;
+    callOnPort({ action: 'ping' }, livenessPingTimeoutMs, true)
+      .catch(() => {
+        if (stopped) {
+          return;
+        }
+        logger.info('[Monitor] Native host liveness probe timed out; reconnecting', {
+          staleMs: now() - lastHostMessageAt,
+        });
+        markBackoff('liveness probe timed out');
+      })
+      .finally(() => {
+        livenessProbeInFlight = false;
+      });
+  }
+
+  function callOnPort(
+    message: Record<string, unknown>,
+    timeoutMs: number,
+    internal = false
+  ): Promise<unknown> {
     if (!port) {
       return Promise.reject(new Error('native transport port is not open'));
     }
@@ -227,7 +279,9 @@ export function createPersistentNativeTransport(
       const timer = setTimeout(() => {
         pendingCalls.delete(requestId);
         reject(new Error(`native transport call ${requestId.toString()} timed out`));
-        markBackoff(`call ${requestId.toString()} timed out`);
+        if (!internal) {
+          probeLivenessAfterTimeout();
+        }
       }, timeoutMs);
       pendingCalls.set(requestId, { reject, resolve, timer });
       try {

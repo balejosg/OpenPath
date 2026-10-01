@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { describe, mock, test } from 'node:test';
 import type { Browser } from 'webextension-polyfill';
 
 import { createNativeMessagingClient } from '../src/lib/native-messaging-client.js';
@@ -17,6 +17,9 @@ import {
   LOCAL_RUNTIME_DEPENDENCY_QUEUE_VERSION,
   LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
   NATIVE_HOST_CAPABILITIES,
+  NATIVE_TRANSPORT_CHECK_TIMEOUT_MS,
+  NATIVE_TRANSPORT_CHEAP_READ_TIMEOUT_MS,
+  NATIVE_TRANSPORT_ENQUEUE_TIMEOUT_MS,
   RUNTIME_DEPENDENCY_ACTIONS,
   createRuntimeDependencyCacheKey,
   createRuntimeDependencyPendingKey,
@@ -25,6 +28,12 @@ import {
   isReadyRuntimeDependencyResponse,
   resolveRuntimeDependencyReadiness,
 } from '../src/lib/runtime-dependency-protocol.js';
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 function createBrowserStub(sendResult: unknown): Browser {
   return {
@@ -949,10 +958,12 @@ await describe('native messaging client persistent transport', async () => {
       connecting?: boolean;
       capabilities?: string[];
       callImpl?: (message: Record<string, unknown>) => Promise<unknown>;
+      settleConnecting?: boolean;
     } = {}
   ): {
     transport: PersistentNativeTransport;
     calls: Record<string, unknown>[];
+    callOptions: { timeoutMs?: number }[];
     markedUnhealthy: string[];
   } {
     const ready = options.ready ?? true;
@@ -965,18 +976,25 @@ await describe('native messaging client persistent transport', async () => {
       ]
     );
     const calls: Record<string, unknown>[] = [];
+    const callOptions: { timeoutMs?: number }[] = [];
     const markedUnhealthy: string[] = [];
-    const connecting = options.connecting ?? false;
+    let connecting = options.connecting ?? false;
     const transport: PersistentNativeTransport = {
       ensureConnected: () => Promise.resolve(ready),
-      waitUntilReady: () => Promise.resolve(ready),
+      waitUntilReady: () => {
+        if (connecting && options.settleConnecting) {
+          connecting = false;
+        }
+        return Promise.resolve(ready);
+      },
       isConnecting: () => connecting,
       isReady: () => ready,
       supports: (capability) => ready && capabilitySet.has(capability),
       getProtocolVersion: () => 2,
       getCapabilities: () => capabilitySet,
-      call: (message) => {
+      call: (message, callOption) => {
         calls.push(message);
+        callOptions.push(callOption ?? {});
         return options.callImpl ? options.callImpl(message) : Promise.resolve({ success: true });
       },
       markUnhealthy: (reason) => {
@@ -984,7 +1002,7 @@ await describe('native messaging client persistent transport', async () => {
       },
       shutdown: () => undefined,
     };
-    return { transport, calls, markedUnhealthy };
+    return { transport, calls, callOptions, markedUnhealthy };
   }
 
   function createFakeProberStub(): {
@@ -1065,10 +1083,42 @@ await describe('native messaging client persistent transport', async () => {
     assert.deepEqual(applied, [input]);
   });
 
-  await test('falls back to the one-shot path when the port call fails', async () => {
-    const { transport, markedUnhealthy } = createFakeTransportStub({
-      callImpl: () => Promise.reject(new Error('port broke')),
+  await test('keeps a slow port call pending instead of falling back while the port is live', async () => {
+    const { transport, calls, markedUnhealthy } = createFakeTransportStub({
+      callImpl: () => Promise.reject(new Error('slow host')),
     });
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      results: [{ success: true, runtimeDependencyState: 'queued', ...input }],
+    }));
+    const fakeProber = createFakeProberStub();
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+      persistentTransport: transport,
+      runtimeDependencyProber: fakeProber.prober,
+    });
+
+    const pendingPromise = client.allowLocalRuntimeDependency(input);
+    await waitForMs(60);
+
+    // Phase 2D D1: a slow enqueue must not spawn one-shot hosts while the port
+    // is still reported as live; the entries stay pending on the prober.
+    assert.equal(calls.length, 1);
+    assert.equal(messages.length, 0);
+    assert.equal(fakeProber.count(), 1);
+    assert.deepEqual(markedUnhealthy, []);
+
+    let settled = false;
+    void pendingPromise.then(() => {
+      settled = true;
+    });
+    await waitForMs(20);
+    assert.equal(settled, false);
+  });
+
+  await test('falls back to the one-shot path after the port is gone', async () => {
+    const { transport } = createFakeTransportStub({ ready: false });
     const { browser, messages } = createRecordingBrowserStub(() => ({
       success: true,
       results: [{ success: true, runtimeDependencyState: 'queued', ...input }],
@@ -1083,7 +1133,119 @@ await describe('native messaging client persistent transport', async () => {
 
     assert.equal(response.success, true);
     assert.equal(messages.length, 1);
-    assert.deepEqual(markedUnhealthy, ['dependency enqueue failed']);
+  });
+
+  await test('never falls back to the one-shot path while the capability probe is in flight', async () => {
+    const { transport, calls } = createFakeTransportStub({ ready: false, connecting: true });
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      results: [{ success: true, ...input }],
+    }));
+    const fakeProber = createFakeProberStub();
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+      persistentTransport: transport,
+      runtimeDependencyProber: fakeProber.prober,
+    });
+
+    const pendingPromise = client.allowLocalRuntimeDependency(input);
+    await waitForMs(60);
+
+    // Still connecting: keep the entry pending on the prober, never legacy.
+    assert.equal(messages.length, 0);
+    assert.equal(calls.length, 0);
+    assert.equal(fakeProber.count(), 1);
+    assert.equal(
+      fakeProber.settle(input, { success: true, runtimeDependencyState: 'ready' }),
+      true
+    );
+    const response = await pendingPromise;
+    assert.equal(response.runtimeDependencyState, 'ready');
+  });
+
+  await test('settles an in-flight probe before deciding on the legacy path', async () => {
+    const { transport, calls } = createFakeTransportStub({
+      ready: false,
+      connecting: true,
+      settleConnecting: true,
+      callImpl: () =>
+        Promise.resolve({
+          success: true,
+          results: [{ success: true, runtimeDependencyState: 'ready', ...input }],
+        }),
+    });
+    // The stub reports ready:false, so the client must not treat the port as
+    // ready even after the probe settles; it takes the documented legacy path.
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      results: [{ success: true, runtimeDependencyState: 'ready', ...input }],
+    }));
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+      persistentTransport: transport,
+    });
+
+    const response = await client.allowLocalRuntimeDependency(input);
+    assert.equal(response.success, true);
+    assert.equal(messages.length, 1);
+    assert.equal(calls.length, 0);
+  });
+
+  await test('uses per-action port timeouts for enqueue, checks and cheap reads', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const { transport, calls, callOptions } = createFakeTransportStub({
+        callImpl: (message) => {
+          if (message.action === 'allow-local-runtime-dependency-batch') {
+            return Promise.resolve({
+              success: true,
+              results: [{ success: true, runtimeDependencyState: 'pending', ...input }],
+            });
+          }
+          if (message.action === 'check-local-runtime-dependency') {
+            return Promise.resolve({
+              success: true,
+              results: [{ success: true, runtimeDependencyState: 'ready', ...input }],
+            });
+          }
+          return Promise.resolve({ success: true });
+        },
+      });
+      const client = createNativeMessagingClient({
+        browserApi: createBrowserStub({ success: true }),
+        hostName: 'whitelist_native_host',
+        persistentTransport: transport,
+      });
+
+      const pendingResult = client.allowLocalRuntimeDependency(input);
+      mock.timers.tick(LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS);
+      await flushMicrotasks();
+      mock.timers.tick(150);
+      await flushMicrotasks();
+      const settledResponse = await pendingResult;
+      assert.equal(settledResponse.runtimeDependencyState, 'ready');
+
+      await client.sendCheapRead({ action: 'get-policy-version' });
+
+      const enqueueIndex = calls.findIndex(
+        (message) => message.action === 'allow-local-runtime-dependency-batch'
+      );
+      const checkIndex = calls.findIndex(
+        (message) => message.action === 'check-local-runtime-dependency'
+      );
+      const readIndex = calls.findIndex((message) => message.action === 'get-policy-version');
+      assert.ok(enqueueIndex >= 0 && checkIndex >= 0 && readIndex >= 0);
+      assert.equal(callOptions[enqueueIndex]?.timeoutMs, NATIVE_TRANSPORT_ENQUEUE_TIMEOUT_MS);
+      assert.equal(callOptions[checkIndex]?.timeoutMs, NATIVE_TRANSPORT_CHECK_TIMEOUT_MS);
+      assert.equal(callOptions[readIndex]?.timeoutMs, NATIVE_TRANSPORT_CHEAP_READ_TIMEOUT_MS);
+      assert.equal(NATIVE_TRANSPORT_ENQUEUE_TIMEOUT_MS, 10_000);
+      assert.equal(NATIVE_TRANSPORT_CHECK_TIMEOUT_MS, 5_000);
+      assert.equal(NATIVE_TRANSPORT_CHEAP_READ_TIMEOUT_MS, 5_000);
+    } finally {
+      mock.timers.reset();
+    }
   });
 
   await test('keeps the legacy flow when the host does not announce enqueue', async () => {

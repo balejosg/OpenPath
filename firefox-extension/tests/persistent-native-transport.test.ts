@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { describe, mock, test } from 'node:test';
 import type { Browser, Runtime } from 'webextension-polyfill';
 
 import {
@@ -8,6 +8,12 @@ import {
   type PersistentNativeTransport,
 } from '../src/lib/persistent-native-transport.js';
 import { NATIVE_HOST_CAPABILITIES } from '../src/lib/runtime-dependency-protocol.js';
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 interface FakePort {
   name: string;
@@ -211,25 +217,137 @@ await describe('persistent native transport', async () => {
     assert.equal(harness.ports.length, 1);
   });
 
-  await test('a request timeout marks the port unhealthy with exponential backoff', async () => {
-    const harness = createHarness({ pingResponse: capablePing });
-    const transport = createTransport(harness, {
-      requestTimeoutMs: 20,
-      reconnectBaseDelayMs: 1000,
-    });
-    await transport.ensureConnected();
+  await test('a slow call does not disconnect a live port (per-action timeouts)', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const harness = createHarness({ pingResponse: capablePing });
+      const transport = createTransport(harness);
+      assert.equal(await transport.ensureConnected(), true);
+      const port = harness.ports[0];
+      assert.ok(port, 'expected a connected port');
 
-    await assert.rejects(transport.call({ action: 'check-local-runtime-dependency' }), /timed out/);
-    assert.equal(transport.isReady(), false);
+      // An enqueue that takes 2 s resolves under the 10 s action timeout.
+      const enqueue = transport.call(
+        { action: 'allow-local-runtime-dependency-batch' },
+        { timeoutMs: 10_000 }
+      );
+      mock.timers.tick(2_000);
+      port.emitMessage({ id: (port.sent[1] as { id: number }).id, success: true });
+      await enqueue;
+      assert.equal(transport.isReady(), true);
 
-    // Within the backoff window the transport refuses to reconnect.
-    assert.equal(await transport.ensureConnected(), false);
-    assert.equal(harness.ports.length, 1);
+      // A check that takes 4 s resolves under the 5 s action timeout; the old
+      // 3 s default tore the port down here (Phase 2C behaviour).
+      const check = transport.call(
+        { action: 'check-local-runtime-dependency' },
+        { timeoutMs: 5_000 }
+      );
+      mock.timers.tick(4_000);
+      port.emitMessage({
+        id: (port.sent[2] as { id: number }).id,
+        success: true,
+        ready: true,
+      });
+      await check;
+      assert.equal(transport.isReady(), true);
+      assert.equal(harness.ports.length, 1);
+      assert.equal(
+        harness.logger.infos.some((entry) => entry.includes('liveness')),
+        false
+      );
+    } finally {
+      mock.timers.reset();
+    }
+  });
 
-    // After the window elapses a new connection is attempted.
-    harness.nowValue.value += 1500;
-    assert.equal(await transport.ensureConnected(), true);
-    assert.equal(harness.ports.length, 2);
+  await test('a timed-out call keeps the port when the liveness ping is answered', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let pingCount = 0;
+      const harness = createHarness({
+        pingResponse: (message) => {
+          pingCount += 1;
+          // Only the connect probe gets an automatic answer; the liveness ping
+          // is answered manually below.
+          return pingCount === 1 ? capablePing(message) : undefined;
+        },
+      });
+      const transport = createTransport(harness, {
+        livenessStaleMs: 15_000,
+        livenessPingTimeoutMs: 5_000,
+      });
+      assert.equal(await transport.ensureConnected(), true);
+      const port = harness.ports[0];
+      assert.ok(port, 'expected a connected port');
+
+      // The host is silent for 15 s and then a call times out.
+      harness.nowValue.value += 15_000;
+      const hung = transport.call(
+        { action: 'check-local-runtime-dependency' },
+        { timeoutMs: 1_000 }
+      );
+      mock.timers.tick(1_000);
+      await assert.rejects(hung, /timed out/);
+
+      const livenessPing = port.sent.find(
+        (message) =>
+          (message as { action?: string }).action === 'ping' &&
+          (message as { id?: number }).id !== 1
+      );
+      assert.ok(livenessPing, 'expected a liveness ping on the same port');
+      port.emitMessage({ success: true, id: (livenessPing as { id: number }).id });
+      await flushMicrotasks();
+
+      assert.equal(transport.isReady(), true);
+      assert.equal(harness.ports.length, 1);
+
+      // A new call still works over the kept port.
+      const next = transport.call({ action: 'get-policy-version' }, { timeoutMs: 5_000 });
+      port.emitMessage({
+        id: (port.sent[port.sent.length - 1] as { id: number }).id,
+        success: true,
+        version: 'v3',
+      });
+      assert.deepEqual(await next, {
+        success: true,
+        id: (port.sent[port.sent.length - 1] as { id: number }).id,
+        version: 'v3',
+      });
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  await test('a liveness failure tears the port down with backoff', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let pingCount = 0;
+      const harness = createHarness({
+        pingResponse: (message) => {
+          pingCount += 1;
+          return pingCount === 1 ? capablePing(message) : undefined;
+        },
+      });
+      const transport = createTransport(harness, {
+        livenessStaleMs: 15_000,
+        livenessPingTimeoutMs: 2_000,
+        reconnectBaseDelayMs: 1_000,
+      });
+      assert.equal(await transport.ensureConnected(), true);
+
+      harness.nowValue.value += 15_000;
+      const hung = transport.call({ action: 'check-local-runtime-dependency' }, { timeoutMs: 500 });
+      mock.timers.tick(500);
+      await assert.rejects(hung, /timed out/);
+      mock.timers.tick(2_000);
+      await flushMicrotasks();
+
+      assert.equal(transport.isReady(), false);
+      assert.equal(await transport.ensureConnected(), false);
+      assert.equal(harness.ports.length, 1);
+    } finally {
+      mock.timers.reset();
+    }
   });
 
   await test('a dropped port rejects in-flight calls and reconnects after the backoff window', async () => {

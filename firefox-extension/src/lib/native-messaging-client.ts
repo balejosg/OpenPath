@@ -23,6 +23,10 @@ import {
   LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_MS,
   LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
   NATIVE_HOST_CAPABILITIES,
+  NATIVE_TRANSPORT_CHECK_TIMEOUT_MS,
+  NATIVE_TRANSPORT_CHEAP_READ_TIMEOUT_MS,
+  NATIVE_TRANSPORT_ENQUEUE_TIMEOUT_MS,
+  NATIVE_TRANSPORT_PROBE_TIMEOUT_MS,
   RUNTIME_DEPENDENCY_ACTIONS,
   createRuntimeDependencyCacheKey,
   createRuntimeDependencyPendingKey,
@@ -227,11 +231,19 @@ export function createNativeMessagingClient(options: {
   }
 
   async function sendCheapRead(message: unknown): Promise<unknown> {
+    if (!supportsCheapReads() && transport.isConnecting()) {
+      // While the capability probe is in flight the decision is unknown: wait
+      // for it instead of spawning a one-shot host that duplicates the port
+      // (Phase 2D D1).
+      await transport.waitUntilReady(resolvePortConnectSettleWaitMs());
+    }
     if (!supportsCheapReads()) {
       return await sendMessage(message);
     }
     try {
-      return await transport.call(message as Record<string, unknown>);
+      return await transport.call(message as Record<string, unknown>, {
+        timeoutMs: NATIVE_TRANSPORT_CHEAP_READ_TIMEOUT_MS,
+      });
     } catch (error) {
       logger.info('[Monitor] Persistent native read failed; using one-shot host', {
         error: getErrorMessage(error),
@@ -276,14 +288,36 @@ export function createNativeMessagingClient(options: {
   async function checkRuntimeDependencyBatch(
     inputs: LocalRuntimeDependencyInput[]
   ): Promise<{ success: boolean; results?: NativeResponse[]; error?: string }> {
-    if (transport.isReady() && transport.supports(NATIVE_HOST_CAPABILITIES.checkBatch)) {
-      const response = (await transport.call({
-        action: RUNTIME_DEPENDENCY_ACTIONS.checkLocal,
-        entries: inputs.map((input) => ({
+    const canUsePort = (): boolean =>
+      transport.isReady() && transport.supports(NATIVE_HOST_CAPABILITIES.checkBatch);
+    if (!canUsePort() && transport.isConnecting()) {
+      await transport.waitUntilReady(resolvePortConnectSettleWaitMs());
+    }
+    if (!canUsePort() && transport.isConnecting()) {
+      // Still probing: report the entries as pending instead of spawning a
+      // one-shot host while the port may become ready (Phase 2D D1).
+      return {
+        success: true,
+        results: inputs.map((input) => ({
+          success: true,
           anchorHost: input.anchorHost,
           dependencyHost: input.dependencyHost,
+          ready: false,
+          runtimeDependencyState: 'pending',
         })),
-      })) as { success?: unknown; results?: unknown };
+      };
+    }
+    if (canUsePort()) {
+      const response = (await transport.call(
+        {
+          action: RUNTIME_DEPENDENCY_ACTIONS.checkLocal,
+          entries: inputs.map((input) => ({
+            anchorHost: input.anchorHost,
+            dependencyHost: input.dependencyHost,
+          })),
+        },
+        { timeoutMs: NATIVE_TRANSPORT_CHECK_TIMEOUT_MS }
+      )) as { success?: unknown; results?: unknown };
       if (!isCheckBatchUnsupported(response) && Array.isArray(response.results)) {
         return { success: true, results: response.results as NativeResponse[] };
       }
@@ -330,14 +364,42 @@ export function createNativeMessagingClient(options: {
     return LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_MS;
   }
 
-  async function ensurePersistentTransportForBatch(): Promise<boolean> {
+  /**
+   * Bounded wait for an in-flight capability probe to settle. The probe has its
+   * own timeout, so this only needs enough headroom to observe the result.
+   */
+  function resolvePortConnectSettleWaitMs(): number {
+    return NATIVE_TRANSPORT_PROBE_TIMEOUT_MS + 1_000;
+  }
+
+  type PersistentFlowDecision = 'ready' | 'connecting' | 'legacy';
+
+  /**
+   * Decides how a runtime dependency batch may travel (Phase 2D D1):
+   * - `ready`: the persistent port serves the enqueue protocol;
+   * - `connecting`: a probe is still in flight, so the batch must wait (the
+   *   one-shot path is forbidden while the port may still be live);
+   * - `legacy`: no persistent transport is possible (older host or the backoff
+   *   window after a real disconnect), so the one-shot path is the documented
+   *   fallback.
+   */
+  async function resolvePersistentFlowDecision(): Promise<PersistentFlowDecision> {
     if (isPersistentTransportReady()) {
-      return true;
+      return 'ready';
     }
-    if (!transport.isReady()) {
+    if (!transport.isReady() && !transport.isConnecting()) {
       await transport.waitUntilReady(resolvePersistentPortWaitMs());
     }
-    return isPersistentTransportReady();
+    if (isPersistentTransportReady()) {
+      return 'ready';
+    }
+    if (transport.isConnecting()) {
+      await transport.waitUntilReady(resolvePortConnectSettleWaitMs());
+    }
+    if (isPersistentTransportReady()) {
+      return 'ready';
+    }
+    return transport.isConnecting() ? 'connecting' : 'legacy';
   }
 
   async function connect(): Promise<boolean> {
@@ -683,6 +745,24 @@ export function createNativeMessagingClient(options: {
     request.reject(error);
   }
 
+  function registerBatchWithProber(batch: PendingLocalRuntimeDependency[]): void {
+    batch.forEach((request) => {
+      // The host accepted (or may still accept) the entry but has not proven it
+      // yet. Keep the request promise open so the prober can release it on
+      // `ready` (or the caller's budget can cancel it), and let the auto-reload
+      // module observe the eventual application.
+      runtimeDependencyProber.register(request.input, (finalResponse) => {
+        if (isReadyRuntimeDependencyResponse(finalResponse)) {
+          cacheReadyRuntimeDependency(request.input);
+        }
+        settleRuntimeDependencyRequest(request, finalResponse);
+        if (isReadyRuntimeDependencyResponse(finalResponse)) {
+          notifyRuntimeDependencyApplied(request.input);
+        }
+      });
+    });
+  }
+
   async function flushRuntimeDependencyBatch(): Promise<void> {
     const batch = pendingRuntimeDependencies.splice(0, LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES);
     if (pendingRuntimeDependencies.length > 0) {
@@ -692,13 +772,25 @@ export function createNativeMessagingClient(options: {
       return;
     }
 
-    if (await ensurePersistentTransportForBatch()) {
+    const decision = await resolvePersistentFlowDecision();
+    if (decision === 'connecting') {
+      // The capability probe is still in flight: keep the entries pending on
+      // the prober instead of spawning one-shot hosts (Phase 2D D1). The
+      // checks will use the port as soon as the probe settles.
+      registerBatchWithProber(batch);
+      return;
+    }
+
+    if (decision === 'ready') {
       try {
-        const persistentBatchResponse = (await transport.call({
-          action: RUNTIME_DEPENDENCY_ACTIONS.allowLocalBatch,
-          mode: 'enqueue',
-          entries: batch.map((request) => request.input),
-        })) as LocalRuntimeDependencyBatchResponse;
+        const persistentBatchResponse = (await transport.call(
+          {
+            action: RUNTIME_DEPENDENCY_ACTIONS.allowLocalBatch,
+            mode: 'enqueue',
+            entries: batch.map((request) => request.input),
+          },
+          { timeoutMs: NATIVE_TRANSPORT_ENQUEUE_TIMEOUT_MS }
+        )) as LocalRuntimeDependencyBatchResponse;
 
         if (!isBatchUnsupported(persistentBatchResponse)) {
           batch.forEach((request, index) => {
@@ -709,28 +801,26 @@ export function createNativeMessagingClient(options: {
               return;
             }
 
-            // The host accepted the entry but has not proven it yet. Keep the
-            // request promise open so the prober can release it on `ready`
-            // (or the caller's budget can cancel it), and let the auto-reload
-            // module observe the eventual application.
             cacheRuntimeDependencySuccess(request.input, response);
-            runtimeDependencyProber.register(request.input, (finalResponse) => {
-              if (isReadyRuntimeDependencyResponse(finalResponse)) {
-                cacheReadyRuntimeDependency(request.input);
-              }
-              settleRuntimeDependencyRequest(request, finalResponse);
-              if (isReadyRuntimeDependencyResponse(finalResponse)) {
-                notifyRuntimeDependencyApplied(request.input);
-              }
-            });
+            registerBatchWithProber([request]);
           });
           return;
         }
       } catch (error) {
+        if (transport.isReady() || transport.isConnecting()) {
+          // A slow enqueue is not proof of death (Phase 2D D1): keep the port
+          // and its entries, and let the prober confirm readiness when the host
+          // catches up. The request budget still bounds the caller's wait.
+          logger.info(
+            '[Monitor] Persistent dependency enqueue was slow; keeping the port and pending entries',
+            { error: getErrorMessage(error) }
+          );
+          registerBatchWithProber(batch);
+          return;
+        }
         logger.info('[Monitor] Persistent dependency enqueue failed; using the one-shot path', {
           error: getErrorMessage(error),
         });
-        transport.markUnhealthy('dependency enqueue failed');
       }
     }
 
