@@ -272,15 +272,39 @@ function Invoke-OpenPathRuntimeDependencyWorkerPrewarm {
     }
 
     $metrics = [ordered]@{
-        totalMs         = 0
-        dnsFlushTypeMs  = 0
-        sectionsMs      = 0
-        policySetsMs    = 0
-        overlayMs       = 0
-        acrylicRenderMs = 0
-        ready           = $false
+        totalMs          = 0
+        nativeHostWarmMs = 0
+        dnsFlushTypeMs   = 0
+        sectionsMs       = 0
+        policySetsMs     = 0
+        overlayMs        = 0
+        acrylicRenderMs  = 0
+        ready            = $false
     }
     $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    # 0. Native host file warm-read: the first host process after a reboot pays
+    #    a multi-second OS scan on its first script read (4.2-4.4 s in the S3
+    #    class-boot lab runs). Reading the staged native host files from the
+    #    already-running worker warms the OS/AMSI cache before the browser
+    #    spawns the host.
+    $stageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        if (Get-Command -Name 'Get-OpenPathCapabilityStoragePath' -ErrorAction SilentlyContinue) {
+            $nativeRoot = Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostRoot -OpenPathRoot $OpenPathRoot
+            if ($nativeRoot -and (Test-Path -LiteralPath $nativeRoot -ErrorAction SilentlyContinue)) {
+                foreach ($nativeFile in @(Get-ChildItem -LiteralPath $nativeRoot -Recurse -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Extension -in @('.ps1', '.psm1', '.json', '.txt', '.cmd') })) {
+                    $null = [System.IO.File]::ReadAllBytes($nativeFile.FullName)
+                }
+            }
+        }
+    }
+    catch {
+        # A warm-read failure must never stop the worker.
+    }
+    $stageStopwatch.Stop()
+    $metrics['nativeHostWarmMs'] = [int]$stageStopwatch.ElapsedMilliseconds
 
     # 1. DNS flush P/Invoke type: the first real flush compiles it (1.7 s in R2).
     $stageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -383,8 +407,9 @@ function Invoke-OpenPathRuntimeDependencyWorkerPrewarm {
     $metrics['totalMs'] = [int]$totalStopwatch.ElapsedMilliseconds
 
     if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
-        Write-OpenPathLog ("Runtime dependency worker prewarm stage=prewarm ms={0} dnsFlushTypeMs={1} sectionsMs={2} policySetsMs={3} overlayMs={4} acrylicRenderMs={5} ready={6}" -f `
+        Write-OpenPathLog ("Runtime dependency worker prewarm stage=prewarm ms={0} nativeHostWarmMs={1} dnsFlushTypeMs={2} sectionsMs={3} policySetsMs={4} overlayMs={5} acrylicRenderMs={6} ready={7}" -f `
                 $metrics['totalMs'], `
+                $metrics['nativeHostWarmMs'], `
                 $metrics['dnsFlushTypeMs'], `
                 $metrics['sectionsMs'], `
                 $metrics['policySetsMs'], `

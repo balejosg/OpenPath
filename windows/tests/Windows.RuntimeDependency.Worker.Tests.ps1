@@ -243,6 +243,14 @@ Describe "Runtime dependency worker" {
             Set-Content -Path $prewarmWhitelist -Value "## WHITELIST`nreddit.com`n" -Encoding UTF8
 
             $script:prewarmCalls = @()
+            $prewarmNativeRoot = Join-Path $TestDrive 'prewarm-native'
+            New-Item -ItemType Directory -Path $prewarmNativeRoot -Force | Out-Null
+            Set-Content -Path (Join-Path $prewarmNativeRoot 'NativeHost.State.ps1') -Value '# warm-read fixture' -Encoding UTF8
+            function Get-OpenPathCapabilityStoragePath {
+                param([string]$Name, [string]$OpenPathRoot = '')
+                if ($Name -eq 'FirefoxNativeHostRoot') { return $prewarmNativeRoot }
+                return (Join-Path $TestDrive "capability-$Name")
+            }
             function Get-OpenPathWhitelistSectionsFromFile {
                 param([string]$Path)
                 $script:prewarmCalls += 'sections'
@@ -284,6 +292,7 @@ Describe "Runtime dependency worker" {
             }
             finally {
                 foreach ($functionName in @(
+                        'Get-OpenPathCapabilityStoragePath',
                         'Get-OpenPathWhitelistSectionsFromFile',
                         'Initialize-OpenPathDnsFlushType',
                         'Get-OpenPathRuntimeDependencyDomains',
@@ -306,7 +315,7 @@ Describe "Runtime dependency worker" {
             $metrics.totalMs | Should -BeGreaterOrEqual 0
             $prewarmLog = @($script:capturedPrewarmLogs | Where-Object { $_ -match 'stage=prewarm' })
             $prewarmLog.Count | Should -Be 1
-            $prewarmLog[0] | Should -Match 'stage=prewarm ms=\d+'
+            $prewarmLog[0] | Should -Match 'stage=prewarm ms=\d+ nativeHostWarmMs=\d+'
         }
 
         It "keeps the worker session prewarm in the startup script before the watch loop" {
