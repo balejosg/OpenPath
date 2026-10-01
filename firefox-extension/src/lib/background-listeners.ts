@@ -98,6 +98,8 @@ interface BackgroundListenersOptions {
     ms?: number;
   }) => void;
   onRuntimeDependencyCancelled?: (context: RuntimeDependencyCancellationContext) => void;
+  /** Phase 2E: a held request was released by its budget (repairable). */
+  onRuntimeDependencyReleased?: (context: RuntimeDependencyCancellationContext) => void;
   /** Pre-warms the persistent native port when a main-frame navigation starts. */
   prewarmNativeTransport?: () => void;
   /**
@@ -245,6 +247,8 @@ export function resolveLocalRuntimeDependencySoftTimeoutMs(
 
 interface RuntimeDependencyWaitOptions {
   onCancelled: (context: RuntimeDependencyCancellationContext) => void;
+  /** Phase 2E: called when the request is released by its soft budget instead. */
+  onReleased?: (context: RuntimeDependencyCancellationContext) => void;
   overrideTimeoutMs?: number;
   /** Live check for the persistent transport + auto-reload capability at expiry. */
   shouldCancel: () => boolean;
@@ -331,6 +335,13 @@ function waitForLocalRuntimeDependencyDecision(
         timeoutMs,
       });
       notifyOutcome('released-soft-timeout');
+      try {
+        options.onReleased?.(context);
+      } catch (error) {
+        logger.warn('[Monitor] Error recordando dependencia liberada', {
+          error: getErrorMessage(error),
+        });
+      }
       settle({});
     }, timeoutMs);
 
@@ -597,6 +608,9 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
                 outcome,
                 ms: elapsedMs,
               });
+            },
+            onReleased: (context) => {
+              options.onRuntimeDependencyReleased?.(context);
             },
             onCancelled: (context) => {
               rememberCancelledPendingRequest(context);

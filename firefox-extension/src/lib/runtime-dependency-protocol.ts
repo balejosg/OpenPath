@@ -65,8 +65,15 @@ export const NATIVE_HOST_CAPABILITIES = {
 export type NativeHostCapability =
   (typeof NATIVE_HOST_CAPABILITIES)[keyof typeof NATIVE_HOST_CAPABILITIES];
 
-/** Timeout for the capability probe after `connectNative` (covers a cold host start). */
-export const NATIVE_TRANSPORT_PROBE_TIMEOUT_MS = 10_000;
+/**
+ * Timeout for the capability probe after `connectNative` (covers a cold host
+ * start). Phase 2E: the first host of a class-boot session needs 12-15 s on a
+ * cold Windows logon (E4 diagnosis), so a 10 s probe timed out and the
+ * extension fell back to one-shot hosts, which have no readiness notification
+ * and therefore no reload repair. 25 s covers the measured cold start while a
+ * genuinely dead host still falls back after a bounded wait.
+ */
+export const NATIVE_TRANSPORT_PROBE_TIMEOUT_MS = 25_000;
 /**
  * Default per-request timeout over the port for calls that do not pass an
  * action-specific timeout. Phase 2D: a request timeout no longer tears the

@@ -550,6 +550,88 @@ await describe('runtime dependency auto-reload', async () => {
     );
   });
 
+  await test('repairs a request released at its budget when the dependency becomes ready later', async () => {
+    // Phase 2E (class boot): the port was still connecting at the soft budget,
+    // so the render-critical request was released instead of cancelled; the
+    // later ready must still trigger the single repair reload.
+    const harness = createAutoReloadHarness({ currentUrl: 'https://www.reddit.com/' });
+    harness.controller.noteDependencyReleased({
+      dependencyHost: 'www.redditstatic.com',
+      frameId: 0,
+      requestType: 'stylesheet',
+      tabId: 5,
+      documentUrl: 'https://www.reddit.com/',
+    });
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'www.redditstatic.com',
+      requestType: 'stylesheet',
+    });
+    await waitForMs(40);
+
+    assert.deepEqual(harness.reloads, [5]);
+    assert.deepEqual(
+      harness.events.map((event) => event.reason),
+      ['reloaded']
+    );
+  });
+
+  await test('a released request in another document never reloads', async () => {
+    const harness = createAutoReloadHarness({ currentUrl: 'https://www.reddit.com/r/openpath' });
+    startNavigation(harness, 5, 'https://www.reddit.com/r/openpath');
+    harness.controller.noteDependencyReleased({
+      dependencyHost: 'www.redditstatic.com',
+      frameId: 0,
+      requestType: 'stylesheet',
+      tabId: 5,
+      documentUrl: 'https://www.reddit.com/r/openpath',
+    });
+    harness.setCurrentUrl('https://www.reddit.com/r/other');
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'www.redditstatic.com',
+      requestType: 'stylesheet',
+    });
+    await waitForMs(40);
+
+    assert.deepEqual(harness.reloads, []);
+    assert.deepEqual(
+      harness.events.map((event) => event.reason),
+      ['url-mismatch']
+    );
+  });
+
+  await test('ignores released non-render types and sub-frame requests', async () => {
+    const harness = createAutoReloadHarness({ currentUrl: 'https://www.reddit.com/' });
+    startNavigation(harness, 5, 'https://www.reddit.com/');
+    harness.controller.noteDependencyReleased({
+      dependencyHost: 'i.redd.it',
+      frameId: 0,
+      requestType: 'image',
+      tabId: 5,
+    });
+    harness.controller.noteDependencyReleased({
+      dependencyHost: 'www.redditstatic.com',
+      frameId: 3,
+      requestType: 'stylesheet',
+      tabId: 5,
+    });
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'i.redd.it',
+      requestType: 'image',
+    });
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'www.redditstatic.com',
+      requestType: 'stylesheet',
+    });
+    await waitForMs(40);
+
+    assert.deepEqual(harness.reloads, []);
+    assert.deepEqual(harness.events, []);
+  });
+
   await test('keeps working when the reload call fails', async () => {
     const harness = createAutoReloadHarness({
       reloadImpl: () => Promise.reject(new Error('tab gone')),

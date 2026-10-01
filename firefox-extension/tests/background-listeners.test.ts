@@ -82,6 +82,7 @@ function createListenerHarness(
   addedBlocks: BlockedScreenContext[];
   autoAllowCalls: unknown[];
   cancelledRuntimeDependencies: RuntimeDependencyCancellationContext[];
+  releasedRuntimeDependencies: RuntimeDependencyCancellationContext[];
   localRuntimeDependencyCalls: unknown[];
   beforeRequestFilters: unknown[];
   confirmCalls: ConfirmBlockedScreenContext[];
@@ -107,6 +108,7 @@ function createListenerHarness(
   const confirmCalls: ConfirmBlockedScreenContext[] = [];
   const redirects: BlockedScreenContext[] = [];
   const cancelledRuntimeDependencies: RuntimeDependencyCancellationContext[] = [];
+  const releasedRuntimeDependencies: RuntimeDependencyCancellationContext[] = [];
   const mainFrameNavigations: { tabId: number; url: string }[] = [];
   const mainFrameRequests: { tabId: number; url: string; method?: string }[] = [];
   const navigationCommits: { tabId: number; url: string }[] = [];
@@ -224,6 +226,9 @@ function createListenerHarness(
     onRuntimeDependencyCancelled: (context: RuntimeDependencyCancellationContext): void => {
       cancelledRuntimeDependencies.push(context);
     },
+    onRuntimeDependencyReleased: (context: RuntimeDependencyCancellationContext): void => {
+      releasedRuntimeDependencies.push(context);
+    },
     noteMainFrameNavigation: (context: { tabId: number; url: string }): void => {
       mainFrameNavigations.push(context);
     },
@@ -270,6 +275,7 @@ function createListenerHarness(
       return runtimeMessage;
     },
     cancelledRuntimeDependencies,
+    releasedRuntimeDependencies,
     mainFrameNavigations,
     mainFrameRequests,
     navigationCommits,
@@ -686,6 +692,33 @@ void describe('background listeners blocked-screen routing', () => {
       `expected queued dependency to wait for the soft timeout, got ${String(elapsedMs)}`
     );
     assert.ok(elapsedMs < 1500, `expected bounded soft wait, got ${String(elapsedMs)}`);
+  });
+
+  void test('reports a budget release (not a cancellation) while the port is connecting', async () => {
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: async () => {
+        await waitForMs(20);
+        return { success: true, queued: true };
+      },
+      localRuntimeDependencyTimeoutMs: 200,
+      usesPersistentBudgets: () => true,
+      shouldCancelPendingRuntimeDependency: () => false,
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const result = harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/',
+      tabId: 7,
+      type: 'stylesheet',
+      url: 'https://www.redditstatic.com/shreddit/styles.css',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
+    assert.deepEqual(harness.cancelledRuntimeDependencies, []);
+    assert.equal(harness.releasedRuntimeDependencies.length, 1);
+    assert.equal(harness.releasedRuntimeDependencies[0]?.dependencyHost, 'www.redditstatic.com');
+    assert.equal(harness.releasedRuntimeDependencies[0]?.documentUrl, 'https://www.reddit.com/');
   });
 
   void test('releases denied dependencies without waiting for the soft timeout', async () => {

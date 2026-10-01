@@ -34,6 +34,8 @@ export interface AutoReloadDiagnosticEvent {
   kind: 'auto-reload';
   navigationId?: number;
   reason: string;
+  /** Phase 2E: the repaired request was released (not cancelled) at its budget. */
+  released?: boolean;
   requestType?: string;
   tabId: number;
 }
@@ -53,6 +55,13 @@ export interface RuntimeDependencyAutoReloadOptions {
 
 export interface RuntimeDependencyAutoReloadController {
   noteDependencyCancelled: (context: AutoReloadCancellationContext) => void;
+  /**
+   * Phase 2E: a render-critical frame-0 request was released by its soft timeout
+   * while the dependency was still unproven (the port was connecting and the
+   * capability was unknown). It is repaired by the same single auto-reload when
+   * the dependency later becomes ready.
+   */
+  noteDependencyReleased: (context: AutoReloadCancellationContext) => void;
   noteDependencyReady: (input: LocalRuntimeDependencyInput) => void;
   noteMainFrameRequest: (context: AutoReloadNavigationContext) => void;
   noteNavigationCommitted: (context: AutoReloadNavigationContext) => void;
@@ -88,6 +97,8 @@ interface CancelledRecord {
   documentUrl?: string;
   documentHost?: string;
   documentToken?: number;
+  /** Phase 2E: true when the request was released by its soft budget. */
+  released: boolean;
 }
 
 /**
@@ -229,6 +240,7 @@ export function createRuntimeDependencyAutoReloadController(
         reason,
         tabId,
         dependencyHost: cancelled.dependencyHost,
+        ...(cancelled.released ? { released: true } : {}),
         ...(cancelled.navigationId >= 0 ? { navigationId: cancelled.navigationId } : {}),
       });
     };
@@ -332,6 +344,64 @@ export function createRuntimeDependencyAutoReloadController(
       historyUpdatedAt: 0,
       host: hostOf(context.url),
     };
+  }
+
+  function rememberRepairRecord(context: AutoReloadCancellationContext, released: boolean): void {
+    if (
+      context.frameId !== 0 ||
+      !AUTO_RELOAD_RENDER_CRITICAL_TYPES.has(context.requestType.toLowerCase())
+    ) {
+      return;
+    }
+    pruneCancelledRecords();
+    let navigation = navigations.get(context.tabId);
+    if (!navigation && context.documentUrl) {
+      // Phase 2E E3: the background may have started after the navigation
+      // events. Rebuild the identity from the frame-0 request's document URL
+      // instead of recording navigationId -1 and losing the repair.
+      navigation = {
+        committed: false,
+        committedAt: 0,
+        id: nextNavigationId++,
+        method: '',
+        methodKnown: false,
+        startedAt: now(),
+        url: context.documentUrl,
+        documentToken: documentTokenByTab.get(context.tabId) ?? 0,
+        formSubmit: false,
+        historyUpdatedAt: 0,
+        host: hostOf(context.documentUrl),
+      };
+      navigations.set(context.tabId, navigation);
+      recordExtensionDiagnostic({
+        kind: 'navigation',
+        source: 'document-url-fallback',
+        tabId: context.tabId,
+        navigationId: navigation.id,
+        host: navigation.host,
+        methodKnown: false,
+        committed: false,
+      });
+    }
+    cancelledRecords.push({
+      dependencyHost: context.dependencyHost.toLowerCase(),
+      navigationId: navigation?.id ?? -1,
+      recordedAt: now(),
+      requestType: context.requestType.toLowerCase(),
+      tabId: context.tabId,
+      ...(context.documentUrl ? { documentUrl: context.documentUrl } : {}),
+      ...(context.documentUrl ? { documentHost: hostOf(context.documentUrl) } : {}),
+      ...(navigation ? { documentToken: navigation.documentToken } : {}),
+      released,
+    });
+    recordExtensionDiagnostic({
+      kind: 'hold-outcome',
+      tabId: context.tabId,
+      frameId: context.frameId,
+      type: context.requestType.toLowerCase(),
+      dependencyHost: context.dependencyHost.toLowerCase(),
+      outcome: released ? 'released-budget' : 'cancelled-budget',
+    });
   }
 
   return {
@@ -440,61 +510,14 @@ export function createRuntimeDependencyAutoReloadController(
       });
     },
     noteDependencyCancelled: (context): void => {
-      if (
-        context.frameId !== 0 ||
-        !AUTO_RELOAD_RENDER_CRITICAL_TYPES.has(context.requestType.toLowerCase())
-      ) {
-        return;
-      }
-      pruneCancelledRecords();
-      let navigation = navigations.get(context.tabId);
-      if (!navigation && context.documentUrl) {
-        // Phase 2E E3: the background may have started after the navigation
-        // events. Rebuild the identity from the cancelled frame-0 request's
-        // document URL instead of recording navigationId -1 and losing the
-        // repair.
-        navigation = {
-          committed: false,
-          committedAt: 0,
-          id: nextNavigationId++,
-          method: '',
-          methodKnown: false,
-          startedAt: now(),
-          url: context.documentUrl,
-          documentToken: documentTokenByTab.get(context.tabId) ?? 0,
-          formSubmit: false,
-          historyUpdatedAt: 0,
-          host: hostOf(context.documentUrl),
-        };
-        navigations.set(context.tabId, navigation);
-        recordExtensionDiagnostic({
-          kind: 'navigation',
-          source: 'cancelled-document-url-fallback',
-          tabId: context.tabId,
-          navigationId: navigation.id,
-          host: navigation.host,
-          methodKnown: false,
-          committed: false,
-        });
-      }
-      cancelledRecords.push({
-        dependencyHost: context.dependencyHost.toLowerCase(),
-        navigationId: navigation?.id ?? -1,
-        recordedAt: now(),
-        requestType: context.requestType.toLowerCase(),
-        tabId: context.tabId,
-        ...(context.documentUrl ? { documentUrl: context.documentUrl } : {}),
-        ...(context.documentUrl ? { documentHost: hostOf(context.documentUrl) } : {}),
-        ...(navigation ? { documentToken: navigation.documentToken } : {}),
-      });
-      recordExtensionDiagnostic({
-        kind: 'hold-outcome',
-        tabId: context.tabId,
-        frameId: context.frameId,
-        type: context.requestType.toLowerCase(),
-        dependencyHost: context.dependencyHost.toLowerCase(),
-        outcome: 'cancelled-budget',
-      });
+      rememberRepairRecord(context, false);
+    },
+    noteDependencyReleased: (context): void => {
+      // Phase 2E: the request was released by its soft timeout while the port
+      // was still connecting, so neither the capability nor the readiness could
+      // be proven. Repair it with the same single auto-reload when the
+      // dependency becomes ready in the same document.
+      rememberRepairRecord(context, true);
     },
     noteDependencyReady: (input): void => {
       pruneCancelledRecords();

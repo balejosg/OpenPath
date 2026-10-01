@@ -549,6 +549,9 @@ export function createBackgroundRuntime(
       onRuntimeDependencyCancelled: (context) => {
         runtimeDependencyAutoReload.noteDependencyCancelled(context);
       },
+      onRuntimeDependencyReleased: (context) => {
+        runtimeDependencyAutoReload.noteDependencyReleased(context);
+      },
       getTransportState: () => nativeMessagingClient.getTransportState(),
       recordExtensionDiagnostic,
       prewarmNativeTransport: () => {
