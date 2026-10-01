@@ -4,6 +4,7 @@ import {
   DEFAULT_LOCAL_RUNTIME_DEPENDENCY_PERSISTENT_SOFT_TIMEOUT_MS,
   LOCAL_RUNTIME_DEPENDENCY_PERSISTENT_SOFT_TIMEOUT_BY_TYPE_MS,
   isPendingRuntimeDependencyResponse,
+  resolveRuntimeDependencyReadiness,
 } from './runtime-dependency-protocol.js';
 import { t } from './i18n.js';
 import { shouldClearBlockedMonitorStateOnNavigate } from './blocked-screen-contract.js';
@@ -39,6 +40,8 @@ export interface MainFrameNavigationContext {
   tabId: number;
   url: string;
   method?: string;
+  /** webNavigation.onCommitted transition type (e.g. 'form_submit'). */
+  transitionType?: string;
 }
 
 interface BackgroundListenersOptions {
@@ -78,6 +81,22 @@ interface BackgroundListenersOptions {
   noteMainFrameNavigation?: (context: MainFrameNavigationContext) => void;
   noteMainFrameRequest?: (context: MainFrameNavigationContext) => void;
   noteNavigationCommitted?: (context: MainFrameNavigationContext) => void;
+  /** Same-document history update (replaceState/pushState), for URL tolerance. */
+  noteHistoryStateUpdated?: (context: MainFrameNavigationContext) => void;
+  /** Phase 2E E1: current persistent transport state for hold diagnostics. */
+  getTransportState?: () => string;
+  /** Phase 2E E1: records a held dependency request and its outcome. */
+  recordExtensionDiagnostic?: (event: {
+    kind: 'hold' | 'hold-outcome';
+    tabId?: number;
+    frameId?: number;
+    type?: string;
+    anchorHost?: string;
+    dependencyHost?: string;
+    transport?: string;
+    outcome?: string;
+    ms?: number;
+  }) => void;
   onRuntimeDependencyCancelled?: (context: RuntimeDependencyCancellationContext) => void;
   /** Pre-warms the persistent native port when a main-frame navigation starts. */
   prewarmNativeTransport?: () => void;
@@ -231,6 +250,8 @@ interface RuntimeDependencyWaitOptions {
   shouldCancel: () => boolean;
   /** Budget family at arm time (persistent while ready OR still connecting). */
   usesPersistentBudgets: () => boolean;
+  /** Phase 2E E1: outcome of a held request with its elapsed time. */
+  onOutcome?: (outcome: string, elapsedMs: number) => void;
 }
 
 /**
@@ -258,6 +279,7 @@ function waitForLocalRuntimeDependencyDecision(
     options.overrideTimeoutMs,
     options.usesPersistentBudgets()
   );
+  const holdStartedAt = Date.now();
 
   return new Promise((resolve) => {
     let settled = false;
@@ -271,6 +293,13 @@ function waitForLocalRuntimeDependencyDecision(
         clearTimeout(timer);
       }
       resolve(value);
+    };
+    const notifyOutcome = (outcome: string): void => {
+      try {
+        options.onOutcome?.(outcome, Math.max(0, Date.now() - holdStartedAt));
+      } catch {
+        // diagnostics must never break the request flow
+      }
     };
 
     timer = setTimeout(() => {
@@ -290,6 +319,7 @@ function waitForLocalRuntimeDependencyDecision(
             error: getErrorMessage(error),
           });
         }
+        notifyOutcome('cancelled-budget');
         settle({ cancel: true });
         return;
       }
@@ -300,6 +330,7 @@ function waitForLocalRuntimeDependencyDecision(
         requestType,
         timeoutMs,
       });
+      notifyOutcome('released-soft-timeout');
       settle({});
     }, timeoutMs);
 
@@ -311,9 +342,13 @@ function waitForLocalRuntimeDependencyDecision(
         if (isPendingRuntimeDependencyResponse(response)) {
           return;
         }
+        notifyOutcome(
+          resolveRuntimeDependencyReadiness(response) === 'ready' ? 'ready' : 'terminal'
+        );
         settle({});
       },
       () => {
+        notifyOutcome('error');
         settle({});
       }
     );
@@ -518,6 +553,16 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           return;
         }
 
+        options.recordExtensionDiagnostic?.({
+          kind: 'hold',
+          tabId: details.tabId,
+          frameId: details.frameId,
+          type: details.type,
+          anchorHost,
+          dependencyHost,
+          ...(options.getTransportState ? { transport: options.getTransportState() } : {}),
+        });
+
         return waitForLocalRuntimeDependencyDecision(
           options.allowLocalRuntimeDependency({
             anchorHost,
@@ -541,6 +586,18 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
             ...(options.localRuntimeDependencyTimeoutMs !== undefined
               ? { overrideTimeoutMs: options.localRuntimeDependencyTimeoutMs }
               : {}),
+            onOutcome: (outcome, elapsedMs) => {
+              options.recordExtensionDiagnostic?.({
+                kind: 'hold-outcome',
+                tabId: details.tabId,
+                frameId: details.frameId,
+                type: details.type,
+                anchorHost,
+                dependencyHost,
+                outcome,
+                ms: elapsedMs,
+              });
+            },
             onCancelled: (context) => {
               rememberCancelledPendingRequest(context);
               options.recordDependencyObservationEvent?.({
@@ -723,7 +780,13 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
     if (details.frameId !== 0) {
       return;
     }
-    options.noteNavigationCommitted?.({ tabId: details.tabId, url: details.url });
+    options.noteNavigationCommitted?.({
+      tabId: details.tabId,
+      url: details.url,
+      ...(typeof details.transitionType === 'string'
+        ? { transitionType: details.transitionType }
+        : {}),
+    });
   });
 
   options.browser.webNavigation.onHistoryStateUpdated.addListener(
@@ -731,6 +794,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       if (details.frameId !== 0) {
         return;
       }
+      options.noteHistoryStateUpdated?.({ tabId: details.tabId, url: details.url });
       const result = options.evaluateAllowedPath({
         type: 'main_frame',
         url: details.url,

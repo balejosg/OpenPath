@@ -133,7 +133,7 @@ await describe('runtime dependency auto-reload', async () => {
     assert.deepEqual(harness.reloads, [5]);
   });
 
-  await test('ignores non-render types, sub-frame requests and unknown tabs', async () => {
+  await test('ignores non-render types and sub-frame requests; reports unknown tabs', async () => {
     const harness = createAutoReloadHarness();
     startNavigation(harness, 5);
     harness.controller.noteDependencyCancelled({
@@ -165,7 +165,12 @@ await describe('runtime dependency auto-reload', async () => {
     await waitForMs(40);
 
     assert.deepEqual(harness.reloads, []);
-    assert.deepEqual(harness.events, []);
+    // Phase 2E E3: no silent discards; the unknown tab reports its reason while
+    // non-render types and sub-frame requests never enter the repair path.
+    assert.deepEqual(
+      harness.events.map((event) => event.reason),
+      ['navigation-unknown']
+    );
   });
 
   await test('does not reload when a newer navigation replaced the cancelled one', async () => {
@@ -187,6 +192,11 @@ await describe('runtime dependency auto-reload', async () => {
     await waitForMs(40);
 
     assert.deepEqual(harness.reloads, []);
+    // Phase 2E E3: the superseded navigation reports its reason (no silent drop).
+    assert.deepEqual(
+      harness.events.map((event) => event.reason),
+      ['navigation-mismatch']
+    );
   });
 
   await test('does not reload POST navigations or stale navigations', async () => {
@@ -410,6 +420,134 @@ await describe('runtime dependency auto-reload', async () => {
     harness.controller.disposeTab(5);
     await waitForMs(80);
     assert.deepEqual(harness.reloads, []);
+  });
+
+  await test('repairs a cancellation recorded before any navigation event (late background)', async () => {
+    // Phase 2E E3 / S3: the background starts after the page load; no
+    // onBeforeNavigate/onBeforeRequest/onCommitted ever reached it and the
+    // cancellation only carries the frame-0 request's documentUrl.
+    const harness = createAutoReloadHarness({ currentUrl: 'https://www.reddit.com/' });
+    harness.controller.noteDependencyCancelled({
+      dependencyHost: 'www.redditstatic.com',
+      frameId: 0,
+      requestType: 'stylesheet',
+      tabId: 5,
+      documentUrl: 'https://www.reddit.com/',
+    });
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'www.redditstatic.com',
+      requestType: 'stylesheet',
+    });
+    await waitForMs(40);
+
+    assert.deepEqual(harness.reloads, [5]);
+    assert.deepEqual(
+      harness.events.map((event) => event.reason),
+      ['reloaded']
+    );
+  });
+
+  await test('allows the reload when the main-frame method was never observed', async () => {
+    const harness = createAutoReloadHarness({ currentUrl: 'https://www.reddit.com/' });
+    harness.controller.noteNavigationStarted({ tabId: 5, url: 'https://www.reddit.com/' });
+    harness.controller.noteNavigationCommitted({ tabId: 5, url: 'https://www.reddit.com/' });
+    harness.controller.noteDependencyCancelled({
+      dependencyHost: 'www.redditstatic.com',
+      frameId: 0,
+      requestType: 'stylesheet',
+      tabId: 5,
+    });
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'www.redditstatic.com',
+      requestType: 'stylesheet',
+    });
+    await waitForMs(40);
+
+    assert.deepEqual(harness.reloads, [5]);
+  });
+
+  await test('tolerates a replaceState path change after a history update', async () => {
+    let currentNow = 1_000_000;
+    const harness = createAutoReloadHarness({
+      now: () => currentNow,
+      currentUrl: 'https://www.reddit.com/r/openpath',
+    });
+    startNavigation(harness, 5);
+    currentNow += 1_500;
+    harness.controller.noteHistoryStateUpdated({
+      tabId: 5,
+      url: 'https://www.reddit.com/r/popular',
+    });
+    harness.controller.noteDependencyCancelled({
+      dependencyHost: 'www.redditstatic.com',
+      frameId: 0,
+      requestType: 'stylesheet',
+      tabId: 5,
+    });
+    harness.setCurrentUrl('https://www.reddit.com/r/popular');
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'www.redditstatic.com',
+      requestType: 'stylesheet',
+    });
+    await waitForMs(40);
+
+    assert.deepEqual(harness.reloads, [5]);
+  });
+
+  await test('never reloads another same-origin document without a history signal', async () => {
+    const harness = createAutoReloadHarness();
+    startNavigation(harness, 5, 'https://www.reddit.com/r/openpath');
+    harness.controller.noteDependencyCancelled({
+      dependencyHost: 'www.redditstatic.com',
+      frameId: 0,
+      requestType: 'stylesheet',
+      tabId: 5,
+    });
+    // The tab moved to another same-origin path without any history update.
+    harness.setCurrentUrl('https://www.reddit.com/r/other');
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'www.redditstatic.com',
+      requestType: 'stylesheet',
+    });
+    await waitForMs(40);
+
+    assert.deepEqual(harness.reloads, []);
+    assert.deepEqual(
+      harness.events.map((event) => event.reason),
+      ['url-mismatch']
+    );
+  });
+
+  await test('blocks form_submit commits even when the method is unknown', async () => {
+    const harness = createAutoReloadHarness();
+    harness.controller.noteNavigationStarted({ tabId: 5, url: 'https://www.reddit.com/search' });
+    harness.controller.noteNavigationCommitted({
+      tabId: 5,
+      url: 'https://www.reddit.com/search',
+      transitionType: 'form_submit',
+    });
+    harness.controller.noteDependencyCancelled({
+      dependencyHost: 'www.redditstatic.com',
+      frameId: 0,
+      requestType: 'script',
+      tabId: 5,
+    });
+    harness.controller.noteDependencyReady({
+      anchorHost: 'www.reddit.com',
+      dependencyHost: 'www.redditstatic.com',
+      requestType: 'script',
+    });
+    await waitForMs(40);
+
+    assert.deepEqual(harness.reloads, []);
+    assert.deepEqual(
+      harness.events.map((event) => event.reason),
+      ['navigation-form-submit']
+    );
   });
 
   await test('keeps working when the reload call fails', async () => {

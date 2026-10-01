@@ -44,6 +44,16 @@ import {
 } from './dependency-observation-diagnostics.js';
 import { t } from './i18n.js';
 import { createBlockedScreenConfirmer } from './blocked-screen-confirmer.js';
+import {
+  drainExtensionDiagnostics,
+  onExtensionDiagnostic,
+  recordExtensionDiagnostic,
+} from './extension-diagnostics.js';
+import { createExtensionDiagnosticsReporter } from './extension-diagnostics-reporter.js';
+import {
+  EXTENSION_DIAGNOSTICS_BATCH_MAX,
+  EXTENSION_DIAGNOSTICS_INTERVAL_MS,
+} from './runtime-dependency-protocol.js';
 
 interface BlockedScreenContext {
   tabId: number;
@@ -475,6 +485,27 @@ export function createBackgroundRuntime(
   });
 
   async function init(): Promise<void> {
+    // Phase 2E E1: background start time (the first diagnostic event).
+    recordExtensionDiagnostic({
+      kind: 'background-start',
+      ts: Date.now(),
+      source: 'background.init',
+    });
+    const diagnosticsReporter = createExtensionDiagnosticsReporter({
+      drain: drainExtensionDiagnostics,
+      send: (events) => nativeMessagingClient.reportExtensionDiagnostics(events),
+      isCapable: () => nativeMessagingClient.isExtensionDiagnosticsCapable(),
+      intervalMs: EXTENSION_DIAGNOSTICS_INTERVAL_MS,
+      batchSize: EXTENSION_DIAGNOSTICS_BATCH_MAX,
+      onError: (error) => {
+        logger.debug('[Monitor] Extension diagnostics batch failed', {
+          error: getErrorMessage(error),
+        });
+      },
+    });
+    onExtensionDiagnostic(() => {
+      diagnosticsReporter.notify();
+    });
     // Pre-warm the native connection so the first blocked-screen confirmation does not pay the
     // connect() cost while the user waits for the page. Fire-and-forget; warmUp never throws.
     void nativeMessagingClient.warmUp();
@@ -512,9 +543,14 @@ export function createBackgroundRuntime(
       noteNavigationCommitted: (context) => {
         runtimeDependencyAutoReload.noteNavigationCommitted(context);
       },
+      noteHistoryStateUpdated: (context) => {
+        runtimeDependencyAutoReload.noteHistoryStateUpdated(context);
+      },
       onRuntimeDependencyCancelled: (context) => {
         runtimeDependencyAutoReload.noteDependencyCancelled(context);
       },
+      getTransportState: () => nativeMessagingClient.getTransportState(),
+      recordExtensionDiagnostic,
       prewarmNativeTransport: () => {
         void nativeMessagingClient.warmUp();
       },

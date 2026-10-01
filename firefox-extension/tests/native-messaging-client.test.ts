@@ -81,6 +81,7 @@ await describe('native messaging client', async () => {
       allowLocal: 'allow-local-runtime-dependency',
       allowLocalBatch: 'allow-local-runtime-dependency-batch',
       checkLocal: 'check-local-runtime-dependency',
+      reportExtensionDiagnostics: 'report-extension-diagnostics',
     });
     assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS, 25);
     assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES, 20);
@@ -992,6 +993,8 @@ await describe('native messaging client persistent transport', async () => {
       supports: (capability) => ready && capabilitySet.has(capability),
       getProtocolVersion: () => 2,
       getCapabilities: () => capabilitySet,
+      getState: () =>
+        ready ? ('ready' as const) : connecting ? ('connecting' as const) : ('idle' as const),
       call: (message, callOption) => {
         calls.push(message);
         callOptions.push(callOption ?? {});

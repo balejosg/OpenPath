@@ -44,6 +44,7 @@ RUNTIME_DEPENDENCY_READY_POLL_MS_DEFAULT = 100
 # Phase 2C persistent transport protocol version and retirement switch.
 NATIVE_HOST_PROTOCOL_VERSION = 2
 RUNTIME_DEPENDENCY_TRANSPORT_CONF_DEFAULT = "/etc/openpath/runtime-dependency-persistent-transport.conf"
+EXTENSION_DIAGNOSTICS_CONF_DEFAULT = "/etc/openpath/extension-diagnostics.conf"
 CHATTY_ACTIONS = {
     "check-local-runtime-dependency",
     "get-policy-version",
@@ -538,7 +539,119 @@ def get_native_host_capabilities():
     capabilities.append("message-id-echo")
     if not persistent_transport_disabled():
         capabilities.append("runtime-dependency-auto-reload")
+    if not persistent_transport_disabled() and not extension_diagnostics_disabled():
+        capabilities.append("extension-diagnostics")
     return capabilities
+
+
+def get_extension_diagnostics_conf_path():
+    return Path(
+        os.environ.get(
+            "OPENPATH_EXTENSION_DIAGNOSTICS_CONF",
+            EXTENSION_DIAGNOSTICS_CONF_DEFAULT,
+        )
+    )
+
+
+def extension_diagnostics_disabled():
+    """Retirement switch for the Phase 2E extension diagnostics action.
+
+    Reads /etc/openpath/extension-diagnostics.conf (or the
+    OPENPATH_EXTENSION_DIAGNOSTICS_CONF override) so turning the diagnostics off
+    never requires a new XPI. Default: enabled.
+    """
+    try:
+        path = get_extension_diagnostics_conf_path()
+        if not path.is_file():
+            return False
+        content = path.read_text(encoding="utf-8", errors="replace").strip().lower()
+    except OSError:
+        return False
+    if not content:
+        return False
+    if "=" in content:
+        _, _, content = content.partition("=")
+        content = content.strip()
+    return content in {"1", "true", "yes", "on", "disabled"}
+
+
+EXTENSION_DIAGNOSTIC_ALLOWED_FIELDS = (
+    "ts", "kind", "tabId", "frameId", "type", "anchorHost", "dependencyHost",
+    "host", "transport", "from", "to", "outcome", "ms", "reason", "navigationId",
+    "methodKnown", "committed", "source",
+)
+_extension_diagnostic_window = {"start": time.time(), "messages": 0}
+
+_URL_LIKE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+
+def sanitize_extension_diagnostic_event(event):
+    """Phase 2E E1 sanitizer: hosts, types, reason codes, ids and ms only.
+
+    URLs, free text and unknown fields are dropped so a compromised or buggy
+    caller cannot leak page data into the user's native-host.log.
+    """
+    sanitized = {}
+    if not isinstance(event, dict):
+        return sanitized
+    for field in EXTENSION_DIAGNOSTIC_ALLOWED_FIELDS:
+        if field not in event:
+            continue
+        value = event[field]
+        if isinstance(value, bool):
+            sanitized[field] = value
+            continue
+        if isinstance(value, (int, float)):
+            sanitized[field] = int(value)
+            continue
+        text = str(value).strip()
+        if not text or _URL_LIKE.match(text):
+            continue
+        sanitized[field] = text[:120]
+    return sanitized
+
+
+def handle_report_extension_diagnostics(message):
+    """Writes the extension diagnostics batch as stage=extension-diagnostic lines."""
+    written = 0
+    dropped = 0
+    try:
+        now = time.time()
+        if now - _extension_diagnostic_window["start"] >= 60:
+            _extension_diagnostic_window["start"] = now
+            _extension_diagnostic_window["messages"] = 0
+        _extension_diagnostic_window["messages"] += 1
+        if _extension_diagnostic_window["messages"] > 60:
+            return {
+                "success": True,
+                "action": "report-extension-diagnostics",
+                "written": 0,
+                "rateLimited": True,
+            }
+
+        events = message.get("events", [])
+        if not isinstance(events, list):
+            events = []
+        for event in events[:50]:
+            sanitized = sanitize_extension_diagnostic_event(event)
+            if not sanitized:
+                continue
+            log_debug("stage=extension-diagnostic " + json.dumps(sanitized, separators=(",", ":")))
+            written += 1
+        if len(events) > 50:
+            dropped = len(events) - 50
+    except Exception as error:  # pragma: no cover - defensive
+        return {
+            "success": False,
+            "action": "report-extension-diagnostics",
+            "error": f"extension diagnostics failed: {error}",
+        }
+    return {
+        "success": True,
+        "action": "report-extension-diagnostics",
+        "written": written,
+        "dropped": dropped,
+    }
 
 
 _chatty_action_state = {"counts": {}, "last_summary": time.time()}
@@ -1562,6 +1675,9 @@ def dispatch_message(message):
         if "expiresAt" in state:
             response["expiresAt"] = state["expiresAt"]
         return response
+
+    elif action == "report-extension-diagnostics":
+        return handle_report_extension_diagnostics(message)
 
     elif action == "allow-local-runtime-dependency-batch":
         mode = str(message.get("mode", "")).strip().lower()

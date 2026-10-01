@@ -221,7 +221,8 @@ $script:NativeHostChattyActions = @(
     'get-policy-version',
     'get-blocked-paths',
     'get-blocked-subdomains',
-    'get-allowed-paths'
+    'get-allowed-paths',
+    'report-extension-diagnostics'
 )
 
 function Test-NativeHostChattyAction {
@@ -330,7 +331,152 @@ function Get-NativeHostCapabilities {
     if (-not (Test-NativeHostPersistentTransportDisabled)) {
         $capabilities.Add('runtime-dependency-auto-reload')
     }
+    if (-not (Test-NativeHostPersistentTransportDisabled) -and -not (Test-NativeHostExtensionDiagnosticsDisabled)) {
+        $capabilities.Add('extension-diagnostics')
+    }
     return $capabilities.ToArray()
+}
+
+function Test-NativeHostExtensionDiagnosticsDisabled {
+    <#
+    .SYNOPSIS
+    Phase 2E E1 retirement switch for the extension-diagnostics action. Reads
+    the Windows agent config (data\config.json, key extensionDiagnosticsDisabled)
+    so turning the diagnostics off never requires a new XPI. Default: enabled.
+    #>
+    try {
+        $configPath = Join-Path $script:OpenPathRoot 'data\config.json'
+        if (-not (Test-Path -LiteralPath $configPath -ErrorAction SilentlyContinue)) { return $false }
+        $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if (-not $config.PSObject.Properties['extensionDiagnosticsDisabled']) { return $false }
+
+        $value = $config.extensionDiagnosticsDisabled
+        if ($value -is [bool]) { return [bool]$value }
+        if ($value -is [string]) {
+            return ([string]$value).Trim().ToLowerInvariant() -in @('1', 'true', 'yes', 'on', 'disabled')
+        }
+        return [bool]$value
+    }
+    catch {
+        return $false
+    }
+}
+
+$script:NativeHostExtensionDiagnosticAllowedFields = @(
+    'ts', 'kind', 'tabId', 'frameId', 'type', 'anchorHost', 'dependencyHost', 'host',
+    'transport', 'from', 'to', 'outcome', 'ms', 'reason', 'navigationId', 'methodKnown',
+    'committed', 'source'
+)
+$script:NativeHostExtensionDiagnosticWindow = $null
+
+function ConvertTo-NativeHostExtensionDiagnosticEvent {
+    <#
+    .SYNOPSIS
+    Phase 2E E1 sanitizer: hosts, types, reason codes, ids and ms only. URLs,
+    free text and unknown fields are dropped so a compromised or buggy caller
+    cannot leak page data into the user's native-host.log.
+    #>
+    param([Parameter(Mandatory = $false)][object]$Event)
+
+    $sanitized = [ordered]@{}
+    if ($null -eq $Event) { return $sanitized }
+
+    foreach ($field in $script:NativeHostExtensionDiagnosticAllowedFields) {
+        $value = $null
+        if ($Event -is [System.Collections.IDictionary]) {
+            if (-not $Event.Contains($field)) { continue }
+            $value = $Event[$field]
+        }
+        else {
+            $property = $Event.PSObject.Properties[$field]
+            if ($null -eq $property) { continue }
+            $value = $property.Value
+        }
+        if ($null -eq $value) { continue }
+
+        if ($value -is [bool]) {
+            $sanitized[$field] = [bool]$value
+            continue
+        }
+        if ($value -is [int] -or $value -is [long] -or $value -is [double] -or $value -is [decimal]) {
+            $sanitized[$field] = [int]$value
+            continue
+        }
+        $text = ([string]$value).Trim()
+        if ($text.Length -eq 0) { continue }
+        if ($text -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { continue }
+        if ($text.Length -gt 120) { $text = $text.Substring(0, 120) }
+        $sanitized[$field] = $text
+    }
+
+    return $sanitized
+}
+
+function Invoke-NativeHostReportExtensionDiagnostics {
+    <#
+    .SYNOPSIS
+    Phase 2E E1: writes the extension diagnostics batch (at most 50 events per
+    message, at most 60 messages per minute) as one
+    `stage=extension-diagnostic {json}` line per event.
+    #>
+    param([Parameter(Mandatory = $false)][object]$Message)
+
+    $written = 0
+    $dropped = 0
+    try {
+        $window = $script:NativeHostExtensionDiagnosticWindow
+        $now = Get-Date
+        if ($null -eq $window -or ($now - $window.start).TotalSeconds -ge 60) {
+            $window = @{ start = $now; messages = 0; dropped = 0 }
+            $script:NativeHostExtensionDiagnosticWindow = $window
+        }
+        $window.messages = [int]$window.messages + 1
+        if ($window.messages -gt 60) {
+            $window.dropped = [int]$window.dropped + 1
+            return @{
+                success = $true
+                action = 'report-extension-diagnostics'
+                written = 0
+                rateLimited = $true
+            }
+        }
+
+        $events = @()
+        if ($null -ne $Message) {
+            if ($Message -is [System.Collections.IDictionary]) {
+                if ($Message.Contains('events')) { $events = @($Message['events']) }
+            }
+            else {
+                $property = $Message.PSObject.Properties['events']
+                if ($null -ne $property) { $events = @($property.Value) }
+            }
+        }
+
+        foreach ($event in ($events | Select-Object -First 50)) {
+            $sanitized = ConvertTo-NativeHostExtensionDiagnosticEvent -Event $event
+            if ($sanitized.Count -eq 0) { continue }
+            $json = $sanitized | ConvertTo-Json -Compress -Depth 3
+            Write-NativeHostLog ("stage=extension-diagnostic " + $json)
+            $written = $written + 1
+        }
+        if ($events.Count -gt 50) {
+            $dropped = [int]$events.Count - 50
+        }
+    }
+    catch {
+        return @{
+            success = $false
+            action = 'report-extension-diagnostics'
+            error = "extension diagnostics failed: $($_.Exception.Message)"
+        }
+    }
+
+    return @{
+        success = $true
+        action = 'report-extension-diagnostics'
+        written = $written
+        dropped = $dropped
+    }
 }
 
 function Get-NativeHostProtocolVersion {

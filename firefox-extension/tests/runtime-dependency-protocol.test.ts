@@ -25,6 +25,7 @@ void test('runtime dependency protocol exports stable native-host constants', ()
     allowLocal: 'allow-local-runtime-dependency',
     allowLocalBatch: 'allow-local-runtime-dependency-batch',
     checkLocal: 'check-local-runtime-dependency',
+    reportExtensionDiagnostics: 'report-extension-diagnostics',
   });
   assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS, 25);
   assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES, 20);

@@ -1056,7 +1056,80 @@ void test('linux native host announces the persistent transport protocol and cap
     'runtime-dependency-check-batch',
     'message-id-echo',
     'runtime-dependency-auto-reload',
+    'extension-diagnostics',
   ]);
+});
+
+void test('linux native host extension-diagnostics switch retires only that action', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-diag-switch-'));
+  const switchPath = join(runtimeDir, 'extension-diagnostics.conf');
+  writeFileSync(switchPath, 'disabled\n', 'utf8');
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+      OPENPATH_EXTENSION_DIAGNOSTICS_CONF: switchPath,
+    },
+    { action: 'ping' }
+  ) as {
+    capabilities?: string[];
+    protocolVersion?: number;
+  };
+
+  assert.equal(response.protocolVersion, 2);
+  assert.deepEqual(response.capabilities, [
+    'runtime-dependency-enqueue',
+    'runtime-dependency-check-batch',
+    'message-id-echo',
+    'runtime-dependency-auto-reload',
+  ]);
+});
+
+void test('linux native host writes sanitized extension diagnostics and caps the batch', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-diag-log-'));
+  const events = [];
+  for (let index = 0; index < 60; index += 1) {
+    events.push({
+      kind: 'hold',
+      dependencyHost: 'cdn.example',
+      anchorHost: 'https://evil.example/private?token=secret',
+      reason: 'https://tracker.example/pixel?id=1',
+      tabId: index,
+      ms: 12,
+      unexpected: 'must-be-dropped',
+    });
+  }
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+    },
+    { action: 'report-extension-diagnostics', events }
+  ) as {
+    dropped?: number;
+    success?: boolean;
+    written?: number;
+  };
+
+  assert.equal(response.success, true);
+  assert.equal(response.written, 50);
+  assert.equal(response.dropped, 10);
+
+  const logContent = readFileSync(join(runtimeDir, 'openpath', 'native-host.log'), 'utf8');
+  const lines = logContent
+    .split('\n')
+    .filter((line) => line.includes('stage=extension-diagnostic'));
+  assert.equal(lines.length, 50);
+  const first = lines[0] ?? '';
+  assert.match(first, /"kind":"hold"/);
+  assert.match(first, /cdn\.example/);
+  assert.match(first, /"ms":12/);
+  assert.doesNotMatch(first, /evil\.example/);
+  assert.doesNotMatch(first, /tracker\.example/);
+  assert.doesNotMatch(first, /unexpected/);
+  assert.doesNotMatch(first, /must-be-dropped/);
 });
 
 void test('linux native host retirement switch drops enqueue and auto-reload', () => {

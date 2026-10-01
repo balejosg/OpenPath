@@ -164,6 +164,10 @@ function Invoke-NativeHostMessageAction {
             return (Invoke-NativeHostCaptivePortalRecoveryAction -Message $Message)
         }
 
+        'report-extension-diagnostics' {
+            return (Invoke-NativeHostReportExtensionDiagnostics -Message $Message)
+        }
+
         default {
             return @{
                 success = $false

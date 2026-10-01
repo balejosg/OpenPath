@@ -2276,8 +2276,88 @@ Describe "Browser Module - Native Host" {
             }
         }
 
-        It "Picks up whitelist changes between messages of one persistent process" {
+        It "Announces the extension-diagnostics capability and honors its own switch" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-diag-capabilities-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                New-Item -ItemType Directory -Path (Join-Path $tempRoot 'data') -Force | Out-Null
+                $script:StatePath = Join-Path $tempRoot 'native-state.json'
+                $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
+                Set-Content -Path $script:WhitelistPath -Value '## WHITELIST' -Encoding ASCII
+                . $nativeHostActionsPath
+                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+
+                $ping = Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })
+                @($ping.capabilities) | Should -Contain 'extension-diagnostics'
+
+                # Its own switch retires only the diagnostics action.
+                @{ extensionDiagnosticsDisabled = $true } |
+                    ConvertTo-Json | Set-Content -Path (Join-Path $tempRoot 'data\config.json') -Encoding UTF8
+                $offPing = Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })
+                @($offPing.capabilities) | Should -Not -Contain 'extension-diagnostics'
+                @($offPing.capabilities) | Should -Contain 'runtime-dependency-enqueue'
+                @($offPing.capabilities) | Should -Contain 'runtime-dependency-auto-reload'
+
+                # The transport retirement switch also drops the diagnostics.
+                @{ runtimeDependencyPersistentTransportDisabled = $true } |
+                    ConvertTo-Json | Set-Content -Path (Join-Path $tempRoot 'data\config.json') -Encoding UTF8
+                @((Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })).capabilities) |
+                    Should -Not -Contain 'extension-diagnostics'
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Writes sanitized stage=extension-diagnostic lines and caps the batch at 50" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $global:CapturedExtensionDiagnosticLines = @()
+            function Write-NativeHostLog {
+                param([string]$Message)
+                $global:CapturedExtensionDiagnosticLines += $Message
+            }
+            try {
+                . $nativeHostActionsPath
+
+                $events = @()
+                for ($index = 0; $index -lt 60; $index++) {
+                    $events += @{
+                        kind = 'hold'
+                        dependencyHost = 'cdn.example'
+                        anchorHost = 'https://evil.example/private?token=secret'
+                        reason = 'https://tracker.example/pixel?id=1'
+                        tabId = $index
+                        ms = 12
+                        unexpected = 'must-be-dropped'
+                    }
+                }
+                $response = Invoke-NativeHostReportExtensionDiagnostics -Message @{ events = $events }
+                $response.success | Should -BeTrue
+                $response.written | Should -Be 50
+                $response.dropped | Should -Be 10
+                $global:CapturedExtensionDiagnosticLines.Count | Should -Be 50
+                $first = $global:CapturedExtensionDiagnosticLines[0]
+                $first | Should -Match 'stage=extension-diagnostic \{'
+                $first | Should -Match '"kind":"hold"'
+                $first | Should -Match 'cdn\.example'
+                $first | Should -Match '"ms":12'
+                $first | Should -Not -Match 'evil\.example'
+                $first | Should -Not -Match 'tracker\.example'
+                $first | Should -Not -Match 'unexpected'
+                $first | Should -Not -Match 'must-be-dropped'
+            }
+            finally {
+                Remove-Variable -Name CapturedExtensionDiagnosticLines -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Picks up whitelist changes between messages of one persistent process" {            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }

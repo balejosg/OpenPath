@@ -714,3 +714,39 @@ Physical acceptance (manual, per Evidence Ladder): first visit to Reddit on a
 freshly installed student machine (Windows and Linux) loads the page
 completely without manual reload; overlay shows the learned dependencies;
 no new AMO permissions in the signed XPI manifest.
+
+## Phase 2E: observability, reload repair and class-boot latency
+
+Phase 2E adds three things on top of 2D, grouped in one XPI-affecting push:
+
+- **Extension diagnostics (E1).** A bounded in-memory buffer
+  (`firefox-extension/src/lib/extension-diagnostics.ts`) records background
+  start, transport transitions, navigation identity, every held request with its
+  transport state and outcome, and every auto-reload decision _with its reason_
+  (the paths that used to be silent now report `navigation-mismatch`,
+  `navigation-unknown`, `url-mismatch`, `navigation-form-submit`, ...). A
+  rate-limited reporter (at most one message every 2 s, at most 50 events,
+  `report-extension-diagnostics` over the persistent port) sends the batches to
+  the native host, which sanitizes them (hosts, types, reason codes, ids and ms
+  only; URLs and unknown fields are dropped) and writes one
+  `stage=extension-diagnostic {json}` line per event to the user's
+  `native-host.log`. The capability `extension-diagnostics` is announced by
+  `ping` unless the host config disables it
+  (`windows`: `data\config.json` key `extensionDiagnosticsDisabled`; `linux`:
+  `/etc/openpath/extension-diagnostics.conf` or
+  `OPENPATH_EXTENSION_DIAGNOSTICS_CONF`), so retiring it never needs a new XPI.
+- **Auto-reload repair (E2/E3).** Navigation identity is built from any
+  available event (webRequest main frame, `onBeforeNavigate`, `onCommitted`,
+  `onHistoryStateUpdated`) and, as a fallback for a background that starts late,
+  from the cancelled frame-0 request's `documentUrl`. An unknown method allows
+  the reload unless `onCommitted` reported `form_submit`; URL comparison
+  tolerates same-path history changes and path changes with an observed
+  history update, and never reloads when the tab is in another document.
+- **Class-boot latency (E4/E5).** The first host process of each user session
+  still pays the platform's first-script cost (AppLocker/AMSI/Defender; measured
+  in the Phase 2E lab), so render-critical budgets stay at 10 s and the repair
+  path above covers the gap.
+
+Evidence: `evidence/spa-runtime-deps-phase2e-20261001-1514/` (including the
+reusable `analyze-mozlog-2e.py` channel-matched MOZ_LOG analyzer and
+`e1-timeline.py`).

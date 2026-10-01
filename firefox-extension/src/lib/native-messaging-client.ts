@@ -22,6 +22,7 @@ import {
   LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_FIRST_MS,
   LOCAL_RUNTIME_DEPENDENCY_PORT_WAIT_MS,
   LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
+  EXTENSION_DIAGNOSTICS_HOST_TIMEOUT_MS,
   NATIVE_HOST_CAPABILITIES,
   NATIVE_TRANSPORT_CHECK_TIMEOUT_MS,
   NATIVE_TRANSPORT_CHEAP_READ_TIMEOUT_MS,
@@ -148,6 +149,12 @@ export interface NativeMessagingClient {
   isPersistentTransportReady: () => boolean;
   /** True when a cancelled pending dependency may be repaired by one auto-reload. */
   isAutoReloadCapable: () => boolean;
+  /** Phase 2E E1: true when the host announced the extension-diagnostics capability. */
+  isExtensionDiagnosticsCapable: () => boolean;
+  /** Current persistent transport state (diagnostics/tests). */
+  getTransportState: () => string;
+  /** Phase 2E E1: best-effort diagnostic batch over the persistent port. */
+  reportExtensionDiagnostics: (events: unknown[]) => Promise<unknown>;
   /**
    * True when the port is ready or a connect/probe is still in flight, i.e. the
    * persistent budget family should apply (the decision is not known yet).
@@ -220,6 +227,32 @@ export function createNativeMessagingClient(options: {
 
   function isAutoReloadCapable(): boolean {
     return isPersistentTransportReady() && transport.supports(NATIVE_HOST_CAPABILITIES.autoReload);
+  }
+
+  /** Phase 2E E1: true when the host announced the diagnostics capability. */
+  function isExtensionDiagnosticsCapable(): boolean {
+    return (
+      isPersistentTransportReady() &&
+      transport.supports(NATIVE_HOST_CAPABILITIES.extensionDiagnostics)
+    );
+  }
+
+  /** Phase 2E E1: best-effort diagnostic batch over the persistent port. */
+  async function reportExtensionDiagnostics(events: unknown[]): Promise<unknown> {
+    if (!isExtensionDiagnosticsCapable() || events.length === 0) {
+      return { success: false, skipped: true };
+    }
+    return transport.call(
+      {
+        action: RUNTIME_DEPENDENCY_ACTIONS.reportExtensionDiagnostics,
+        events,
+      },
+      { timeoutMs: EXTENSION_DIAGNOSTICS_HOST_TIMEOUT_MS }
+    );
+  }
+
+  function getTransportState(): string {
+    return transport.getState();
   }
 
   function isPersistentTransportPending(): boolean {
@@ -927,10 +960,13 @@ export function createNativeMessagingClient(options: {
     connect,
     isAvailable,
     isAutoReloadCapable,
+    isExtensionDiagnosticsCapable,
     isPersistentTransportPending,
     isPersistentTransportReady,
+    getTransportState,
     onRuntimeDependencyApplied,
     recoverCaptivePortalNavigation,
+    reportExtensionDiagnostics,
     requestLocalWhitelistUpdate,
     sendCheapRead,
     sendMessage,

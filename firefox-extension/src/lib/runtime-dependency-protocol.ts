@@ -10,7 +10,13 @@ export const RUNTIME_DEPENDENCY_ACTIONS = {
   allowLocal: 'allow-local-runtime-dependency',
   allowLocalBatch: 'allow-local-runtime-dependency-batch',
   checkLocal: 'check-local-runtime-dependency',
+  reportExtensionDiagnostics: 'report-extension-diagnostics',
 } as const;
+
+/** Phase 2E E1: diagnostics batching limits (also enforced by the hosts). */
+export const EXTENSION_DIAGNOSTICS_INTERVAL_MS = 2_000;
+export const EXTENSION_DIAGNOSTICS_BATCH_MAX = 50;
+export const EXTENSION_DIAGNOSTICS_HOST_TIMEOUT_MS = 5_000;
 
 /**
  * Coalescing window for new runtime dependencies. Short enough that a single
@@ -53,6 +59,7 @@ export const NATIVE_HOST_CAPABILITIES = {
   checkBatch: 'runtime-dependency-check-batch',
   idEcho: 'message-id-echo',
   autoReload: 'runtime-dependency-auto-reload',
+  extensionDiagnostics: 'extension-diagnostics',
 } as const;
 
 export type NativeHostCapability =

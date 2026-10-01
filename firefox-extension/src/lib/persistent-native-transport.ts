@@ -1,6 +1,7 @@
 import type { Browser, Runtime } from 'webextension-polyfill';
 
 import { getErrorMessage } from './logger.js';
+import { recordExtensionDiagnostic } from './extension-diagnostics.js';
 import {
   NATIVE_HOST_PROTOCOL_VERSION,
   NATIVE_TRANSPORT_LIVENESS_PING_TIMEOUT_MS,
@@ -58,6 +59,8 @@ export interface PersistentNativeTransport {
   isReady: () => boolean;
   supports: (capability: string) => boolean;
   getProtocolVersion: () => number;
+  /** Current lifecycle state, for diagnostics and tests. */
+  getState: () => PersistentNativeTransportState;
   getCapabilities: () => ReadonlySet<string>;
   /** Sends an id-correlated message over the port; rejects when the port is unusable. */
   call: (message: Record<string, unknown>, options?: { timeoutMs?: number }) => Promise<unknown>;
@@ -125,6 +128,24 @@ export function createPersistentNativeTransport(
   const now = options.now ?? ((): number => Date.now());
 
   let state: PersistentNativeTransportState = 'idle';
+  let stateChangedAt = now();
+
+  function setState(next: PersistentNativeTransportState): void {
+    if (next === state) {
+      return;
+    }
+    const previous = state;
+    const elapsed = Math.max(0, now() - stateChangedAt);
+    state = next;
+    stateChangedAt = now();
+    recordExtensionDiagnostic({
+      kind: 'transport',
+      ts: Date.now(),
+      from: previous,
+      to: next,
+      ms: elapsed,
+    });
+  }
   let port: Runtime.Port | null = null;
   let capabilities = new Set<string>();
   let protocolVersion = 0;
@@ -167,7 +188,7 @@ export function createPersistentNativeTransport(
       }
     }
     if (state !== 'backoff') {
-      state = 'backoff';
+      setState('backoff');
       scheduleReconnect();
     }
     rejectAllPendingCalls(reason);
@@ -181,7 +202,7 @@ export function createPersistentNativeTransport(
     port = null;
     capabilities = new Set();
     protocolVersion = 0;
-    state = 'backoff';
+    setState('backoff');
     scheduleReconnect();
     rejectAllPendingCalls('native port disconnected');
     logger.info('[Monitor] Native host port disconnected');
@@ -309,7 +330,7 @@ export function createPersistentNativeTransport(
     if (stopped) {
       return Promise.resolve(false);
     }
-    state = 'connecting';
+    setState('connecting');
     capabilities = new Set();
     protocolVersion = 0;
     connectPromise = (async (): Promise<boolean> => {
@@ -329,7 +350,7 @@ export function createPersistentNativeTransport(
         protocolVersion = parsed.protocolVersion;
         reconnectAttempts = 0;
         nextReconnectAt = 0;
-        state = capabilities.size > 0 ? 'ready' : 'legacy';
+        setState(capabilities.size > 0 ? 'ready' : 'legacy');
         logger.info('[Monitor] Native host capabilities probed', {
           protocolVersion,
           capabilities: [...capabilities],
@@ -442,6 +463,7 @@ export function createPersistentNativeTransport(
     supports: (capability: string): boolean => state === 'ready' && capabilities.has(capability),
     getProtocolVersion: (): number => protocolVersion,
     getCapabilities: (): ReadonlySet<string> => capabilities,
+    getState: (): PersistentNativeTransportState => state,
     call,
     markUnhealthy: (reason: string): void => {
       markBackoff(reason);
@@ -458,7 +480,7 @@ export function createPersistentNativeTransport(
           // already disconnected
         }
       }
-      state = 'idle';
+      setState('idle');
     },
   };
 }
