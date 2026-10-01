@@ -241,6 +241,161 @@ function Invoke-OpenPathRuntimeDependencyWorkerApply {
     }
 }
 
+function Invoke-OpenPathRuntimeDependencyWorkerPrewarm {
+    <#
+    .SYNOPSIS
+    Warms the first-batch cold path: DNS flush type, policy sets, validation, overlay and Acrylic render.
+    .DESCRIPTION
+    Phase 2D D3. The resident worker runs this before its watch loop so the
+    first dependency batch does not pay Add-Type compilation, policy set
+    construction, the overlay read or the Acrylic content generation. It is
+    read-only with respect to policy state: the Acrylic generation is a dry run
+    and the real queue is not touched. Returns per-stage millisecond metrics and
+    logs a single `stage=prewarm` line.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$OpenPathRoot = '',
+        [string]$WhitelistPath = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {
+        if (Get-Command -Name 'Resolve-OpenPathWindowsRoot' -ErrorAction SilentlyContinue) {
+            try { $OpenPathRoot = Resolve-OpenPathWindowsRoot } catch { $OpenPathRoot = '' }
+        }
+        if (-not $OpenPathRoot -and (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue)) {
+            $OpenPathRoot = [string]$script:OpenPathRoot
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($WhitelistPath) -and $OpenPathRoot) {
+        $WhitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
+    }
+
+    $metrics = [ordered]@{
+        totalMs         = 0
+        dnsFlushTypeMs  = 0
+        sectionsMs      = 0
+        policySetsMs    = 0
+        overlayMs       = 0
+        acrylicRenderMs = 0
+        ready           = $false
+    }
+    $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    # 1. DNS flush P/Invoke type: the first real flush compiles it (1.7 s in R2).
+    $stageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        if (Get-Command -Name 'Initialize-OpenPathDnsFlushType' -ErrorAction SilentlyContinue) {
+            $null = Initialize-OpenPathDnsFlushType
+        }
+    }
+    catch {
+        # A missing fast path falls back to Clear-DnsClientCache at flush time.
+    }
+    $stageStopwatch.Stop()
+    $metrics['dnsFlushTypeMs'] = [int]$stageStopwatch.ElapsedMilliseconds
+
+    # 2. Whitelist sections: cheap file read + parse (reused by every batch).
+    $sections = $null
+    $stageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        if ($WhitelistPath -and (Test-Path -LiteralPath $WhitelistPath -ErrorAction SilentlyContinue)) {
+            if (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromFile' -ErrorAction SilentlyContinue) {
+                $sections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
+            }
+            elseif (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromLines' -ErrorAction SilentlyContinue) {
+                $lines = @([System.IO.File]::ReadAllText($WhitelistPath) -split "`r?`n")
+                $sections = Get-OpenPathWhitelistSectionsFromLines -Lines $lines
+            }
+        }
+    }
+    catch {
+        $sections = $null
+    }
+    $stageStopwatch.Stop()
+    $metrics['sectionsMs'] = [int]$stageStopwatch.ElapsedMilliseconds
+
+    if ($sections) {
+        $whitelistDomains = @($sections.Whitelist)
+        $blockedSubdomains = @($sections.BlockedSubdomains)
+
+        # 3. Policy sets: whitelist set, protected hosts, blocked subdomain set.
+        $stageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            if (Get-Command -Name 'Get-OpenPathRuntimeDependencyDomains' -ErrorAction SilentlyContinue) {
+                $null = Get-OpenPathRuntimeDependencyDomains -WhitelistedDomains $whitelistDomains -BlockedSubdomains $blockedSubdomains
+            }
+        }
+        catch {
+            # Pre-warming must never stop the worker.
+        }
+        $stageStopwatch.Stop()
+        $metrics['policySetsMs'] = [int]$stageStopwatch.ElapsedMilliseconds
+
+        # 4. Overlay read + validation: an isolated temp queue with a single
+        #    invalid request exercises the read/validate path without touching
+        #    the real queue or writing the overlay.
+        $stageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            if (Get-Command -Name 'Read-OpenPathRuntimeDependencyOverlay' -ErrorAction SilentlyContinue) {
+                $null = @(Read-OpenPathRuntimeDependencyOverlay)
+            }
+            if (Get-Command -Name 'Invoke-OpenPathRuntimeDependencyQueue' -ErrorAction SilentlyContinue) {
+                $prewarmQueue = Join-Path ([System.IO.Path]::GetTempPath()) ('openpath-prewarm-' + [Guid]::NewGuid().ToString('N'))
+                try {
+                    [System.IO.Directory]::CreateDirectory($prewarmQueue) | Out-Null
+                    @{ anchorHost = ''; dependencyHost = ''; requestType = 'script' } |
+                        ConvertTo-Json -Depth 4 |
+                        Set-Content -Path (Join-Path $prewarmQueue 'prewarm-invalid.json') -Encoding UTF8 -Force
+                    $null = Invoke-OpenPathRuntimeDependencyQueue `
+                        -WhitelistedDomains $whitelistDomains `
+                        -BlockedSubdomains $blockedSubdomains `
+                        -QueuePath $prewarmQueue
+                }
+                finally {
+                    Remove-Item -LiteralPath $prewarmQueue -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        catch {
+            # Pre-warming must never stop the worker.
+        }
+        $stageStopwatch.Stop()
+        $metrics['overlayMs'] = [int]$stageStopwatch.ElapsedMilliseconds
+
+        # 5. Acrylic content dry run: render everything, write nothing.
+        $stageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            if (Get-Command -Name 'Initialize-OpenPathAcrylicHostRenderDryRun' -ErrorAction SilentlyContinue) {
+                $null = Initialize-OpenPathAcrylicHostRenderDryRun -WhitelistedDomains $whitelistDomains -BlockedSubdomains $blockedSubdomains
+            }
+        }
+        catch {
+            # Pre-warming must never stop the worker.
+        }
+        $stageStopwatch.Stop()
+        $metrics['acrylicRenderMs'] = [int]$stageStopwatch.ElapsedMilliseconds
+
+        $metrics['ready'] = $true
+    }
+
+    $totalStopwatch.Stop()
+    $metrics['totalMs'] = [int]$totalStopwatch.ElapsedMilliseconds
+
+    if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
+        Write-OpenPathLog ("Runtime dependency worker prewarm stage=prewarm ms={0} dnsFlushTypeMs={1} sectionsMs={2} policySetsMs={3} overlayMs={4} acrylicRenderMs={5} ready={6}" -f `
+                $metrics['totalMs'], `
+                $metrics['dnsFlushTypeMs'], `
+                $metrics['sectionsMs'], `
+                $metrics['policySetsMs'], `
+                $metrics['overlayMs'], `
+                $metrics['acrylicRenderMs'], `
+                $metrics['ready'])
+    }
+
+    return [PSCustomObject]$metrics
+}
+
 function Start-OpenPathRuntimeDependencyWorker {
     <#
     .SYNOPSIS
@@ -258,7 +413,10 @@ function Start-OpenPathRuntimeDependencyWorker {
         [string]$QueuePath = '',
         [string]$StatePath = '',
         [scriptblock]$ApplyAction = $null,
-        [int]$WatcherTimeoutMs = 1000,
+        # Sweep interval when the watcher has nothing to report. Phase 2D D3:
+        # a missed watcher event must not delay detection beyond the 300 ms
+        # queueFileAgeMs bound, so the idle sweep is 250 ms instead of 1 s.
+        [int]$WatcherTimeoutMs = 250,
         [int]$DebounceMs = 100,
         [int]$RetryDelayMs = 500,
         [int]$HeartbeatSeconds = 5,
@@ -324,11 +482,31 @@ function Start-OpenPathRuntimeDependencyWorker {
             $state['queueFiles'] = $queueFiles.Count
 
             if ($queueFiles.Count -gt 0) {
+                # Phase 2D D3: expose how long the oldest queued request waited
+                # before the worker noticed it (acceptance bound: <= 300 ms).
+                $queueFileAgeMs = -1
+                try {
+                    $oldestWriteTimeUtc = $null
+                    foreach ($queueFile in $queueFiles) {
+                        $writeTimeUtc = [System.IO.File]::GetLastWriteTimeUtc($queueFile)
+                        if ($null -eq $oldestWriteTimeUtc -or $writeTimeUtc -lt $oldestWriteTimeUtc) {
+                            $oldestWriteTimeUtc = $writeTimeUtc
+                        }
+                    }
+                    if ($null -ne $oldestWriteTimeUtc) {
+                        $queueFileAgeMs = [int][Math]::Max(0, ([DateTime]::UtcNow - $oldestWriteTimeUtc).TotalMilliseconds)
+                    }
+                }
+                catch {
+                    $queueFileAgeMs = -1
+                }
+                $state['queueFileAgeMs'] = $queueFileAgeMs
+
                 # Debounce: a page fan-out lands its queue files within milliseconds of
                 # each other; waiting a short beat collapses the burst into one overlay
                 # write and one Acrylic reload.
                 if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
-                    Write-OpenPathLog "Runtime dependency worker detected $($queueFiles.Count) queue file(s)"
+                    Write-OpenPathLog "Runtime dependency worker detected $($queueFiles.Count) queue file(s) queueFileAgeMs=$queueFileAgeMs"
                 }
                 [System.Threading.Thread]::Sleep([Math]::Max(0, $DebounceMs))
                 $applyStopwatch = [System.Diagnostics.Stopwatch]::StartNew()

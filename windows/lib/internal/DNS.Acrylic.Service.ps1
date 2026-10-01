@@ -510,6 +510,45 @@ function Restart-AcrylicService {
     }
 }
 
+function Initialize-OpenPathDnsFlushType {
+    <#
+    .SYNOPSIS
+    Compiles the DnsFlushResolverCache P/Invoke wrapper once.
+    .DESCRIPTION
+    The first real flush otherwise pays the Add-Type compilation on the critical
+    path (1.7 s in the Phase 2C R2 lab, 4 s under load). The resident runtime
+    dependency worker pre-warms this type at startup (Phase 2D D3).
+    Returns $true when the type is available.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if ('OpenPath.DnsClientCache' -as [type]) {
+        return $true
+    }
+
+    try {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace OpenPath
+{
+    public static class DnsClientCache
+    {
+        [DllImport("dnsapi.dll", EntryPoint = "DnsFlushResolverCache", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool FlushResolverCache();
+    }
+}
+'@ -ErrorAction Stop
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
 function Clear-OpenPathDnsClientCache {
     <#
     .SYNOPSIS
@@ -528,22 +567,7 @@ function Clear-OpenPathDnsClientCache {
     param()
 
     try {
-        if (-not ('OpenPath.DnsClientCache' -as [type])) {
-            Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-namespace OpenPath
-{
-    public static class DnsClientCache
-    {
-        [DllImport("dnsapi.dll", EntryPoint = "DnsFlushResolverCache", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool FlushResolverCache();
-    }
-}
-'@ -ErrorAction Stop
-        }
+        $null = Initialize-OpenPathDnsFlushType
 
         if ([OpenPath.DnsClientCache]::FlushResolverCache()) {
             return $true

@@ -24,5 +24,9 @@ Initialize-OpenPathUpdateRuntimeSession -OpenPathRoot $OpenPathRoot
 $prewarmStopwatch.Stop()
 Write-OpenPathLog ("Runtime dependency worker runtime session pre-warmed (ms={0})" -f $prewarmStopwatch.ElapsedMilliseconds)
 
+# Phase 2D D3: warm the first-batch cold path (DNS flush type, policy sets,
+# validation, overlay, Acrylic render) and record `stage=prewarm` metrics.
+$null = Invoke-OpenPathRuntimeDependencyWorkerPrewarm -OpenPathRoot $OpenPathRoot
+
 $exitCode = Start-OpenPathRuntimeDependencyWorker -OpenPathRoot $OpenPathRoot
 exit $exitCode

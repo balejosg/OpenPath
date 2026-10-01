@@ -1105,6 +1105,7 @@ Export-ModuleMember -Function @(
     'Invoke-OpenPathRuntimeDependencyQueueApply',
     'Invoke-OpenPathRuntimeDependencyFastApply',
     'Start-OpenPathRuntimeDependencyWorker',
+    'Invoke-OpenPathRuntimeDependencyWorkerPrewarm',
     'Get-OpenPathRuntimeDependencyWorkerStatePath',
     'Set-OpenPathRuntimeDependencyWorkerBusyState',
     'Test-OpenPathRuntimeDependencyWorkerFresh',

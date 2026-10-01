@@ -202,6 +202,120 @@ Describe "Runtime dependency worker" {
             $heartbeatIndex | Should -BeGreaterThan 0
             $applyIndex | Should -BeGreaterThan $heartbeatIndex
         }
+
+        It "logs the oldest queue file age when it detects a batch" {
+            $ageQueue = Join-Path $TestDrive 'age-queue'
+            New-Item -ItemType Directory -Path $ageQueue -Force | Out-Null
+            Set-Content -Path (Join-Path $ageQueue 'request-age.json') -Value '{}' -Encoding UTF8
+            $ageState = Join-Path $TestDrive 'age-state.json'
+
+            $script:capturedWorkerLogs = @()
+            function Write-OpenPathLog {
+                param([string]$Message, [string]$Level = 'INFO')
+                $script:capturedWorkerLogs += [string]$Message
+            }
+
+            try {
+                Start-OpenPathRuntimeDependencyWorker `
+                    -QueuePath $ageQueue `
+                    -StatePath $ageState `
+                    -ApplyAction { return @{ ExitCode = 0; LockBusy = $false } } `
+                    -Once `
+                    -DebounceMs 10 `
+                    -WatcherTimeoutMs 100 | Should -Be 0
+            }
+            finally {
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+
+            $detected = @($script:capturedWorkerLogs | Where-Object { $_ -match 'detected 1 queue file' })
+            $detected.Count | Should -Be 1
+            $detected[0] | Should -Match 'queueFileAgeMs=\d+'
+        }
+    }
+
+    Context "Worker prewarm" {
+        It "runs every prewarm stage with read-only doubles and logs stage=prewarm" {
+            $prewarmRoot = Join-Path $TestDrive 'prewarm-root'
+            $prewarmData = Join-Path $prewarmRoot 'data'
+            New-Item -ItemType Directory -Path $prewarmData -Force | Out-Null
+            $prewarmWhitelist = Join-Path $prewarmData 'whitelist.txt'
+            Set-Content -Path $prewarmWhitelist -Value "## WHITELIST`nreddit.com`n" -Encoding UTF8
+
+            $script:prewarmCalls = @()
+            function Get-OpenPathWhitelistSectionsFromFile {
+                param([string]$Path)
+                $script:prewarmCalls += 'sections'
+                return [PSCustomObject]@{ Whitelist = @('reddit.com'); BlockedSubdomains = @(); IsDisabled = $false }
+            }
+            function Initialize-OpenPathDnsFlushType {
+                $script:prewarmCalls += 'dnsType'
+                return $true
+            }
+            function Get-OpenPathRuntimeDependencyDomains {
+                param([string[]]$WhitelistedDomains = @(), [string[]]$BlockedSubdomains = @(), [switch]$Prune)
+                $script:prewarmCalls += 'policySets'
+                return @('cdn.example')
+            }
+            function Read-OpenPathRuntimeDependencyOverlay {
+                $script:prewarmCalls += 'overlayRead'
+                return @()
+            }
+            function Invoke-OpenPathRuntimeDependencyQueue {
+                param([string[]]$WhitelistedDomains = @(), [string[]]$BlockedSubdomains = @(), [string]$QueuePath = '')
+                $script:prewarmCalls += 'overlayUpdate'
+                # The invalid prewarm request must not reach policy state.
+                @(Get-ChildItem -Path $QueuePath -Filter '*.json' -ErrorAction SilentlyContinue).Count | Should -Be 1
+                return [PSCustomObject]@{ Changed = $false; Processed = 0; Rejected = 1; OverlayWriteMs = 0; QueuePath = $QueuePath }
+            }
+            function Initialize-OpenPathAcrylicHostRenderDryRun {
+                param([string[]]$WhitelistedDomains = @(), [string[]]$BlockedSubdomains = @())
+                $script:prewarmCalls += 'acrylic'
+                return [PSCustomObject]@{ Success = $true; ContentLength = 128; RuntimeDependencyDomains = 1 }
+            }
+            $script:capturedPrewarmLogs = @()
+            function Write-OpenPathLog {
+                param([string]$Message, [string]$Level = 'INFO')
+                $script:capturedPrewarmLogs += [string]$Message
+            }
+
+            try {
+                $metrics = Invoke-OpenPathRuntimeDependencyWorkerPrewarm -OpenPathRoot $prewarmRoot
+            }
+            finally {
+                foreach ($functionName in @(
+                        'Get-OpenPathWhitelistSectionsFromFile',
+                        'Initialize-OpenPathDnsFlushType',
+                        'Get-OpenPathRuntimeDependencyDomains',
+                        'Read-OpenPathRuntimeDependencyOverlay',
+                        'Invoke-OpenPathRuntimeDependencyQueue',
+                        'Initialize-OpenPathAcrylicHostRenderDryRun',
+                        'Write-OpenPathLog'
+                    )) {
+                    Remove-Item "Function:\$functionName" -ErrorAction SilentlyContinue
+                }
+            }
+
+            $script:prewarmCalls | Should -Contain 'dnsType'
+            $script:prewarmCalls | Should -Contain 'sections'
+            $script:prewarmCalls | Should -Contain 'policySets'
+            $script:prewarmCalls | Should -Contain 'overlayRead'
+            $script:prewarmCalls | Should -Contain 'overlayUpdate'
+            $script:prewarmCalls | Should -Contain 'acrylic'
+            $metrics.ready | Should -BeTrue
+            $metrics.totalMs | Should -BeGreaterOrEqual 0
+            $prewarmLog = @($script:capturedPrewarmLogs | Where-Object { $_ -match 'stage=prewarm' })
+            $prewarmLog.Count | Should -Be 1
+            $prewarmLog[0] | Should -Match 'stage=prewarm ms=\d+'
+        }
+
+        It "keeps the worker session prewarm in the startup script before the watch loop" {
+            $startupContent = Get-Content (Join-Path $PSScriptRoot ".." "scripts" "Start-RuntimeDependencyWorker.ps1") -Raw
+            $prewarmIndex = $startupContent.IndexOf('Invoke-OpenPathRuntimeDependencyWorkerPrewarm')
+            $loopIndex = $startupContent.IndexOf('Start-OpenPathRuntimeDependencyWorker -OpenPathRoot')
+            $prewarmIndex | Should -BeGreaterThan 0
+            $loopIndex | Should -BeGreaterThan $prewarmIndex
+        }
     }
 
     Context "Task registration and packaging" {

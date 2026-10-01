@@ -57,6 +57,52 @@ function Invoke-OpenPathPolicyStateLocked {
     }
 }
 
+function Initialize-OpenPathAcrylicHostRenderDryRun {
+    <#
+    .SYNOPSIS
+    Renders the Acrylic hosts content in dry-run mode without writing anything.
+    .DESCRIPTION
+    Phase 2D D3: the resident worker pre-warms the Acrylic model/render path at
+    startup so the first dependency batch does not pay the cold generation cost.
+    Reads the config, the runtime dependency overlay and the whitelist only.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][string[]]$WhitelistedDomains = @(),
+        [AllowEmptyCollection()][string[]]$BlockedSubdomains = @()
+    )
+
+    try {
+        $dnsSettings = Get-OpenPathDnsSettings
+        $captivePortalDomains = @()
+        try {
+            $openPathConfig = Get-OpenPathConfig
+            if ($openPathConfig.PSObject.Properties['captivePortalDomains']) {
+                $captivePortalDomains = @($openPathConfig.captivePortalDomains)
+            }
+        }
+        catch {
+            Write-Debug "OpenPath captive portal domains unavailable during dry run, using none: $_"
+        }
+
+        $runtimeDependencyDomains = Get-OpenPathRuntimeDependencyDomains -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains
+        $definition = New-AcrylicHostsDefinition -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -RuntimeDependencyDomains $runtimeDependencyDomains -CaptivePortalDomains $captivePortalDomains -DnsSettings $dnsSettings
+        $content = ConvertTo-AcrylicHostsContent -Definition $definition
+
+        return [PSCustomObject]@{
+            Success                  = $true
+            ContentLength            = ([string]$content).Length
+            RuntimeDependencyDomains = @($runtimeDependencyDomains).Count
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success = $false
+            Error   = [string]$_
+        }
+    }
+}
+
 function Update-AcrylicHost {
     [CmdletBinding(SupportsShouldProcess)]
     param(

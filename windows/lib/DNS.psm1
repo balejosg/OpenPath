@@ -37,6 +37,8 @@ Export-ModuleMember -Function @(
     'Update-OpenPathOriginalDnsSnapshotForCurrentNetwork',
     'Restart-AcrylicService',
     'Clear-OpenPathDnsClientCache',
+    'Initialize-OpenPathDnsFlushType',
+    'Initialize-OpenPathAcrylicHostRenderDryRun',
     'Start-AcrylicService',
     'Stop-AcrylicService',
     'Resolve-OpenPathDnsWithRetry',
