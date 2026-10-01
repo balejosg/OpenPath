@@ -2342,6 +2342,9 @@ Describe "Browser Module - Native Host" {
             $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-chatty-log-" + [Guid]::NewGuid().ToString("N"))
             $script:OpenPathRoot = $tempRoot
             try {
+                # The native host would create its storage dirs lazily; this
+                # test writes the whitelist mirror first, so create the root.
+                New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
                 . $nativeHostActionsPath
                 $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
                 $script:StatePath = Join-Path $tempRoot 'native-state.json'
