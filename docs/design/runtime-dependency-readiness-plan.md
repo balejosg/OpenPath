@@ -608,6 +608,84 @@ persistent budget (then repaired by the reload) instead of being released.
 Measured outcome (fill-in after the lab run): see
 `evidence/spa-runtime-deps-phase2c-<timestamp>/summary.md`.
 
+### Phase 2D: first-visit latency (2026-10-01)
+
+Phase 2D starts from a corrected reading of the 2C lab evidence. The audit
+changed three conclusions before any code was written:
+
+- The criterion "page complete at +15 s" was **not** met in 2C. At +15 s R1 and
+  R3 were blank and R2 was unstyled; the pages completed at +60 s, +30 s and
+  +30 s. R2 and R3 completed _because of_ the single automatic reload (+24.8 s
+  in R2). Only R4 (settled system, bbc.com, styled at +10 s without a reload)
+  and R5b met the intended behaviour. 2D evaluates "<=10 s, no reload" literally.
+- There was **no listener start race**. The unstyled first paint came from the
+  latency to `ready`, not from requests escaping the listeners: the 2C R2 CSS
+  (`styles-css-inlined-css-*.css`) was held from 21:10:33.338 and cancelled at
+  21:10:43.361 (10 s budget). The "unheld" `www.redditstatic.com` request was
+  the favicon (`/shreddit/assets/favicon/64x64.png`), which Firefox loads and
+  which is not interceptable.
+- 2C R4 never measured port survival: it was a **new Firefox process** (its
+  `MOZ_LOG` parent started at 21:22:59 while R3's had used another parent), so
+  the idle-port question stayed open. Firefox exempts an event page with active
+  native app ports from idle termination
+  (`toolkit/components/extensions/parent/ext-backgroundPage.js`,
+  `hasActiveNativeAppPorts` -> `nativeapp` idle reset), and
+  `extensions.background.idle.timeout` is capped at 5 minutes, so it cannot be
+  used as a keepalive. 2D measures the real behaviour in one Firefox process
+  across >=5 minutes of rest.
+
+Workstreams:
+
+- **D1 -- the transport must not self-destruct under load.** A request timeout no
+  longer disconnects the port. The only teardown paths are `onDisconnect` and a
+  failed liveness probe: a timed-out call only marks the port dead when the host
+  has been silent for >=15 s and a probe `ping` also times out. Per-action port
+  timeouts replace the old uniform 3 s default: enqueue >=10 s, checks and cheap
+  reads >=5 s, capability probe 10 s. While the port is `ready` or `connecting`,
+  runtime dependency batches never take the one-shot path; the one-shot path
+  remains only for hosts without capabilities and for the backoff window after a
+  real disconnect. A slow batch that fails after the enqueue was written stays
+  pending on the prober instead of spawning one-shot hosts.
+- **D2 -- the native host must start fast.** The startup path no longer imports
+  `RequestSetup.State.psm1`, `TaskRunner.ps1` or the three captive portal
+  support files; each is loaded on demand by the action that needs it (with
+  existing function overrides preserved, so test doubles survive the lazy load).
+  The hot path keeps only what ping, enqueue, batch check and the cheap reads
+  touch. The host writes one `stage=startup-profile` line per process with
+  `processToScriptMs`, per-file load times, `pingMs`, `firstEnqueueMs` and
+  `firstEnqueueAtMs`; targets are process->ping p95 <=1.5 s on a settled system
+  (<=3.5 s freshly installed or at boot) and first enqueue <=150 ms.
+- **D3 -- the worker starts warm and detects fast.** At startup the resident
+  worker pre-warms the DNS flush P/Invoke (`Initialize-OpenPathDnsFlushType`,
+  whose Add-Type compile cost 1.7-4 s in the 2C first flush), the whitelist and
+  policy sets, the overlay read and validation (through an isolated temp queue
+  with one invalid request) and the Acrylic content generation in dry-run mode
+  (`Initialize-OpenPathAcrylicHostRenderDryRun`, render only, no writes). It
+  logs one `stage=prewarm` line with per-stage milliseconds. Detection now logs
+  `queueFileAgeMs` (age of the oldest queue file when the batch is noticed) and
+  the idle sweep interval dropped from 1 s to 250 ms so a missed watcher event
+  cannot push detection past the 300 ms bound. The Acrylic service restart stays
+  and is reported separately in the apply metrics.
+- **D4 -- measure port survival in one Firefox process.** In the S2/S4 scenarios
+  the same browser idles >=5 minutes and then navigates to a new anchor; the
+  evidence correlates the host pid, the `Native host port disconnected` log line
+  and the message index. If the port dies, the closer is identified (extension,
+  host or Firefox) and fixed; if it survives it is documented (expected:
+  Firefox keeps the event page because a native app port is open).
+- **D5 -- documentation.** This section plus the `windows/TROUBLESHOOTING.md`
+  entries for `stage=startup-profile`, `stage=prewarm` and `queueFileAgeMs`.
+
+Corrections to the 2C report are recorded above; the 2C intermediate SHAs also
+had red CI runs (7fe6a47e: Pester shard 5/5 and E2E; 41cc1e6c: Linux
+student-policy `firefox_registration_missing` and APT contracts) before the
+final green `e54858a5`. The E2E `Windows Student Policy` job and `Release
+Installation Scripts` sign the same AMO version concurrently and one of them
+fails with a hard-failure; this recurs on every push that changes the XPI and
+is worked around by re-running the failed jobs (fix planned for Phase 3).
+
+Measured outcome (fill-in after the lab run): see
+`evidence/spa-runtime-deps-phase2d-<timestamp>/summary.md`.
+
 ## Verification
 
 Focused suites per package (no broad CI first):

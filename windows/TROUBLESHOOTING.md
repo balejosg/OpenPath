@@ -374,6 +374,59 @@ Get-ChildItem "C:\OpenPath\data\captive-portal-recovery-result" -ErrorAction Sil
     ForEach-Object { Get-Content $_.FullName | ConvertFrom-Json }
 ```
 
+### Runtime Dependency First-Visit Latency
+
+The browser extension learns page dependencies (CDN hosts) through the native
+host and the resident worker. Three log signals (Phase 2D) bound the first-visit
+latency; read them before touching timeouts:
+
+- **Native host startup profile** - the per-user native host log
+  (`%LOCALAPPDATA%\OpenPath\native-host.log`) contains one line per host process:
+
+  ```
+  stage=startup-profile processToScriptMs=... loadsMs=state:...,actions:... pingMs=... firstEnqueueMs=... firstEnqueueAtMs=...
+  ```
+
+  - `processToScriptMs`: powershell.exe start to script start (cold process cost).
+  - `loadsMs`: per-file dot-source/Import-Module times. Only the hot-path files
+    (state, protocol, actions, runtime dependency policy/queue/overlay,
+    redaction) should appear here; `RequestSetup`, `TaskRunner` and the captive
+    portal support files load on demand and must not show up.
+  - `pingMs`: process start to the first answered `ping` (target: <= 1.5 s on a
+    settled system, <= 3.5 s freshly installed or at boot).
+  - `firstEnqueueMs`: handler time of the first runtime dependency enqueue
+    (target <= 150 ms; it must look like the second one).
+
+- **Worker prewarm** - `openpath.log` contains:
+
+  ```
+  Runtime dependency worker prewarm stage=prewarm ms=... dnsFlushTypeMs=... sectionsMs=... policySetsMs=... overlayMs=... acrylicRenderMs=... ready=...
+  ```
+
+  It runs once at worker start. A large `dnsFlushTypeMs` means the Add-Type
+  compile moved back onto the first flush; a large `policySetsMs`/`overlayMs`
+  means the whitelist/protected sets or the overlay read are cold again.
+
+- **Queue detection age** - the worker logs the oldest queue file age when it
+  notices a batch:
+
+  ```
+  Runtime dependency worker detected 6 queue file(s) queueFileAgeMs=123
+  ```
+
+  `queueFileAgeMs` is measured from the queue file's last write to detection and
+  should stay within ~300 ms. A larger value means the FileSystemWatcher event
+  was missed (the loop falls back to its 250 ms sweep) or the worker process was
+  starved; check CPU load with the worker pid (`Get-Process -Id <pid>`).
+
+The native host port itself is persistent and does not break on a slow call: the
+extension only reconnects after a real disconnect or when a liveness `ping`
+times out with the host silent for 15 s. If dependency requests suddenly start
+paying the per-request one-shot host cost again, look for
+`Native host port disconnected` in the native host log and for the agent config
+switch `runtimeDependencyPersistentTransportDisabled` in
+`C:\OpenPath\data\config.json`.
+
 ### Watchdog or Integrity Fallback Triggered
 
 ```powershell
