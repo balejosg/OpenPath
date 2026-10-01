@@ -219,7 +219,9 @@ foreach ($nativeHostRuntimeDependencyCandidatePath in ($nativeHostRuntimeDepende
         $nativeHostRuntimeDependencyStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         . $nativeHostRuntimeDependencyCandidatePath
         $nativeHostRuntimeDependencyStopwatch.Stop()
-        $nativeHostRuntimeDependencyLeaf = (Split-Path $nativeHostRuntimeDependencyCandidatePath -LeafBase).Replace('RuntimeDependency.', '')
+        # Windows PowerShell 5.1 has no Split-Path -LeafBase; use the BCL helper
+        # so the native host (which runs under powershell.exe) never throws here.
+        $nativeHostRuntimeDependencyLeaf = [System.IO.Path]::GetFileNameWithoutExtension($nativeHostRuntimeDependencyCandidatePath).Replace('RuntimeDependency.', '')
         Add-NativeHostStartupProfileEntry -Name ('rd-' + $nativeHostRuntimeDependencyLeaf) -Ms $nativeHostRuntimeDependencyStopwatch.ElapsedMilliseconds
     }
 }

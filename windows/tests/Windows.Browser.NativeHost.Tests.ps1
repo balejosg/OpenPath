@@ -2677,7 +2677,11 @@ Describe "Phase 2D native host startup profile and hot path" {
 }
 `$report | ConvertTo-Json -Compress
 "@
-        $output = @(& pwsh -NoProfile -Command $childScript 2>&1)
+        # Prefer Windows PowerShell (the shell the native host actually runs
+        # under, which lacks PowerShell 7-only cmdlets) and fall back to pwsh on
+        # non-Windows development hosts.
+        $shellExe = if (Get-Command -Name 'powershell.exe' -ErrorAction SilentlyContinue) { 'powershell.exe' } else { 'pwsh' }
+        $output = @(& $shellExe -NoProfile -Command $childScript 2>&1)
         $jsonLine = $output | Where-Object { $_ -match '^\{' } | Select-Object -Last 1
         $report = $jsonLine | ConvertFrom-Json
 
@@ -2716,7 +2720,8 @@ Initialize-NativeHostCaptivePortalSupportFiles
 }
 `$report | ConvertTo-Json -Compress
 "@
-        $output = @(& pwsh -NoProfile -Command $childScript 2>&1)
+        $shellExe = if (Get-Command -Name 'powershell.exe' -ErrorAction SilentlyContinue) { 'powershell.exe' } else { 'pwsh' }
+        $output = @(& $shellExe -NoProfile -Command $childScript 2>&1)
         $jsonLine = $output | Where-Object { $_ -match '^\{' } | Select-Object -Last 1
         $report = $jsonLine | ConvertFrom-Json
 
