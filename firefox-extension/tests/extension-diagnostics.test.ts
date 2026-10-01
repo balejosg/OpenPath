@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 
+import type { ExtensionDiagnosticEvent } from '../src/lib/extension-diagnostics.js';
+
 import {
   configureExtensionDiagnostics,
   drainExtensionDiagnostics,
   getExtensionDiagnosticsSnapshot,
   onExtensionDiagnostic,
+  pendingExtensionDiagnostics,
+  prependExtensionDiagnostics,
   recordExtensionDiagnostic,
   resetExtensionDiagnosticsForTests,
 } from '../src/lib/extension-diagnostics.js';
@@ -63,6 +67,29 @@ await describe('extension diagnostics buffer (Phase 2E E1)', async () => {
     const drained = drainExtensionDiagnostics(10);
     assert.equal(drained.length, 3);
     assert.equal(drained[0]?.ms, 2);
+  });
+
+  await test('requeues failed batches at the front and reports the pending count', () => {
+    recordExtensionDiagnostic({ kind: 'hold', ts: 1 });
+    const drained = drainExtensionDiagnostics(10);
+    assert.equal(drained.length, 1);
+    assert.equal(pendingExtensionDiagnostics(), 0);
+
+    prependExtensionDiagnostics(drained);
+    assert.equal(pendingExtensionDiagnostics(), 1);
+    recordExtensionDiagnostic({ kind: 'transport', ts: 2 });
+    const drainedAgain = drainExtensionDiagnostics(10);
+    assert.equal(drainedAgain[0]?.ts, 1, 'the requeued event keeps its position at the front');
+    assert.equal(drainedAgain[1]?.ts, 2);
+
+    // Capacity stays bounded: the oldest requeued events are dropped.
+    configureExtensionDiagnostics({ maxEvents: 2 });
+    prependExtensionDiagnostics([
+      { ts: 10, kind: 'hold' },
+      { ts: 11, kind: 'hold' },
+      { ts: 12, kind: 'hold' },
+    ] as ExtensionDiagnosticEvent[]);
+    assert.equal(pendingExtensionDiagnostics(), 2);
   });
 
   await test('stops recording when disabled and notifies subscribers', () => {

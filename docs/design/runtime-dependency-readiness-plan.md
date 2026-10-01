@@ -750,3 +750,41 @@ Phase 2E adds three things on top of 2D, grouped in one XPI-affecting push:
 Evidence: `evidence/spa-runtime-deps-phase2e-20261001-1514/` (including the
 reusable `analyze-mozlog-2e.py` channel-matched MOZ_LOG analyzer and
 `e1-timeline.py`).
+
+## Phase 3A: the first-visit lane and what stays open
+
+Phase 3A turns the 2E lab work into a permanent CI lane
+([`docs/windows-first-visit-lab.md`](../windows-first-visit-lab.md)) with a
+site-agnostic fixture, a self-report verdict and per-wave metrics, and fixes the
+E1 diagnostics loop (the 2E host handler cast epoch-millisecond fields to
+`[int]`, which threw on every real batch).
+
+Design principle (user decision): the solution and the tests are
+**site-agnostic**. No domain list may be tied to a concrete site; everything the
+product allows is learned at runtime with the current generic rules. That is why
+the fixture uses random hosts per run and why no part of the lane may depend on
+knowing the site.
+
+Status after Phase 2E (verified on captures and MOZ_LOG):
+
+- class boot (S3): 3/3 complete with exactly one automatic reload; last
+  render-critical success at +24.2 / +22.6 / +22.7 s; styled captures at ~+30 s;
+  broken in every execution before `e0d73bb9`;
+- freshly installed (S1g): last success at +13.0 s;
+- settled system (S2): last success at +12.2 s - **the <=10 s objective is not
+  met**;
+- slow path (S5b): one reload, last success at +25.4 s;
+- measured costs: cold class-boot host 9-15 s to ping; settled host 1-3 s; one
+  worker iteration per dependency wave with an Acrylic restart, 0.9-3.4 s.
+
+What remains open for Phase 4 (measured, not inferred):
+
+- settled visits above 10 s (W/S2);
+- the 25 s/30 s budgets that the class-boot repair path needs;
+- automatic reload only covers script/stylesheet/font;
+- a 9-15 s cold host at class boot;
+- one Acrylic restart per dependency wave.
+
+Phase 3B keeps its own scope: real-site canary, the MOZ_LOG analyzer inside the
+repo, the strict Linux profile in CI, the `firefox_registration_missing` flake
+and hardening SP-006.

@@ -17,7 +17,10 @@ Describe 'Proxmox Windows lab controller' {
 
 function New-OpenPathLabTestTransport {
     return @{
-        EnsureLock            = { param($LockFile, $Owner, $TtlSeconds) $script:LabState.Calls.Add('EnsureLock'); $script:LabState.LockAvailable }
+        InvokeHostCommand     = { param($ArgumentList, $InputText) $script:LabState.Calls.Add('InvokeHostCommand:' + (@($ArgumentList)[0])); if ($script:LabState.HostCommandResponse) { $script:LabState.HostCommandResponse } else { '' } }
+        CopyFileToHost        = { param($LocalPath, $RemotePath) $script:LabState.Calls.Add('CopyFileToHost:' + (Split-Path -Leaf $LocalPath)); $true }
+        EnsureLock            = { param($LockFile, $Owner, $TtlSeconds, $WaitSeconds = 900) $script:LabState.Calls.Add('EnsureLock'); $script:LabState.LockAvailable }
+        UpdateLockHeartbeat   = { param($LockFile, $Owner) $script:LabState.Calls.Add('UpdateLockHeartbeat'); $true }
         ReleaseLock           = { param($LockFile, $Owner) $script:LabState.Calls.Add('ReleaseLock'); $true }
         GetVmStatus           = { param($Vmid) $script:LabState.Calls.Add("GetVmStatus:$Vmid"); 'stopped' }
         StopVm                = { param($Vmid) $script:LabState.Calls.Add("StopVm:$Vmid") }
@@ -172,7 +175,7 @@ function Write-OpenPathLabTestConfigFile {
         $config.mode | Should -Be 'transport-dry-run'
         $config.scenarios.PSObject.Properties['win11-pro-profileless-empty'].Value.vmid | Should -Be 107
         $transport = New-OpenPathProxmoxLabTransport -Config $config
-        foreach ($key in @('EnsureLock', 'ReleaseLock', 'GetVmStatus', 'StopVm', 'StartVm', 'RollbackVm', 'WaitGuestReady', 'GetGuestOsInfo', 'GetGuestBootId', 'RequestGuestReboot', 'WaitGuestRebooted', 'PublishArtifact', 'RemoveHostStaging', 'DownloadGuestArtifact', 'GetGuestFileSha256', 'RemoveGuestStaging', 'CaptureScreendump', 'InvokeGuestPowerShell')) {
+        foreach ($key in @('EnsureLock', 'UpdateLockHeartbeat', 'ReleaseLock', 'InvokeHostCommand', 'CopyFileToHost', 'GetVmStatus', 'StopVm', 'StartVm', 'RollbackVm', 'WaitGuestReady', 'GetGuestOsInfo', 'GetGuestBootId', 'RequestGuestReboot', 'WaitGuestRebooted', 'PublishArtifact', 'RemoveHostStaging', 'DownloadGuestArtifact', 'GetGuestFileSha256', 'RemoveGuestStaging', 'CaptureScreendump', 'InvokeGuestPowerShell')) {
             $transport.ContainsKey($key) | Should -BeTrue
         }
     }

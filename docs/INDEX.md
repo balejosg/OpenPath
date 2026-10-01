@@ -9,6 +9,8 @@
 
 - Windows strict application allowlist: [`docs/windows-strict-application-allowlist.md`](windows-strict-application-allowlist.md)
 - Windows desktop-survival controller (transport dry-run): [`docs/windows-desktop-survival-controller.md`](windows-desktop-survival-controller.md)
+- Windows first-visit lab lane (fixture, verdict, metrics, lab lock): [`docs/windows-first-visit-lab.md`](windows-first-visit-lab.md)
+- Firefox release signing (one signature per payload hash): [`docs/firefox-release-signing.md`](firefox-release-signing.md)
 
 - Repo overview: [`README.md`](../README.md)
 - LLM agent workflow: [`AGENTS.md`](../AGENTS.md)

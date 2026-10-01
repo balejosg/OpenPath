@@ -717,8 +717,10 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(await result, {});
     assert.deepEqual(harness.cancelledRuntimeDependencies, []);
     assert.equal(harness.releasedRuntimeDependencies.length, 1);
-    assert.equal(harness.releasedRuntimeDependencies[0]?.dependencyHost, 'www.redditstatic.com');
-    assert.equal(harness.releasedRuntimeDependencies[0]?.documentUrl, 'https://www.reddit.com/');
+    const released = harness.releasedRuntimeDependencies[0];
+    assert.ok(released);
+    assert.equal(released.dependencyHost, 'www.redditstatic.com');
+    assert.equal(released.documentUrl, 'https://www.reddit.com/');
   });
 
   void test('releases denied dependencies without waiting for the soft timeout', async () => {

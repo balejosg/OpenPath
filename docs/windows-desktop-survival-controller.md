@@ -104,6 +104,14 @@ owners, memory, non-informational AppLocker events from the four channels, and
 the watchdog log tail). The phase error carries the last per-attempt error and
 references both artifacts.
 
+Since Phase 3A the lock protocol is implemented once in
+`tests/e2e/ci/controllers/proxmox-lab-lock.sh`: `owner` + `created` +
+`heartbeat`, staleness decided **only** by the heartbeat age, a live lock is
+waited for instead of being stolen, and every replacement records the previous
+owner in `<lock_dir>.replacements.log`. Manual sessions renew their heartbeat
+with `proxmox-lab-lock.ps1`; see
+[`docs/windows-first-visit-lab.md`](windows-first-visit-lab.md#lab-lock-phase-3a-g3).
+
 A cancelled workflow run releases its lab lock through
 `proxmox-disposable-windows-release-lock.ps1`, which only releases lock owners
 that belong to the current run/attempt and never touches another run's lock.

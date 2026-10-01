@@ -74,6 +74,26 @@ interface SignFirefoxReleaseModule {
   deriveAmoVersionFromPayloadHash: (payloadHash: string) => string;
   findSignedXpiArtifact: (artifactsDir: string) => string;
   isAmoVersionAlreadyExists: (output: string) => boolean;
+  isAmoConflictOutput: (output: string) => boolean;
+  recoverSignedXpiFromAmo: (options: {
+    output: string;
+    apiKey: string;
+    apiSecret: string;
+    signingSourceDir: string;
+    effectiveVersion: string;
+    artifactsDir: string;
+    env?: NodeJS.ProcessEnv;
+    deadlineMs?: number;
+    nowImpl?: () => number;
+    stdout?: { write: (chunk: string) => unknown };
+    fetchImpl?: typeof fetch;
+  }) => Promise<{
+    signedXpiPath: string;
+    state: string;
+    addonId: string;
+    versionId?: string;
+    version?: string;
+  } | null>;
   parseAmoVersionEditUrl: (output: string) => {
     addonId: string;
     versionId: string;
@@ -271,9 +291,11 @@ const {
   deriveAmoVersionFromPayloadHash,
   findSignedXpiArtifact,
   isAmoVersionAlreadyExists,
+  isAmoConflictOutput,
   parseAmoVersionEditUrl,
   parseWebExtThrottleDelaySeconds,
   prepareSigningSourceDir,
+  recoverSignedXpiFromAmo,
   resolveAmoRecoveryTiming,
   resolveWebExtSignTiming,
   resolveAmoSigningFailureState,
@@ -1731,6 +1753,89 @@ void describe('Firefox release signing helpers', () => {
 `),
       true
     );
+  });
+
+  void test('isAmoConflictOutput treats a bare AMO Conflict as recoverable', () => {
+    // Phase 3A G4: two workflows signing the same payload hash can race; the
+    // loser sees a bare Conflict without the version detail.
+    assert.equal(isAmoConflictOutput('WebExtError: Submission failed (2): Conflict'), true);
+    assert.equal(isAmoConflictOutput('Version 2.0.0.777908115 already exists.'), true);
+    assert.equal(isAmoConflictOutput('HTTP 409 Conflict'), true);
+    assert.equal(
+      isAmoConflictOutput('WebExtError: Submission failed (2): Internal Server Error'),
+      false
+    );
+    assert.equal(isAmoConflictOutput(''), false);
+  });
+
+  void test('recoverSignedXpiFromAmo reuses the version another run signed (404 then signed)', async () => {
+    const artifactsDir = createTempDir('openpath-firefox-amo-conflict-');
+    const stdoutChunks: string[] = [];
+    let versionPolls = 0;
+    const recovery = await recoverSignedXpiFromAmo({
+      output: 'WebExtError: Submission failed (2): Conflict',
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      signingSourceDir: extensionRoot,
+      effectiveVersion: '2.0.123.456',
+      artifactsDir,
+      env: {
+        WEB_EXT_SIGN_RECOVERY_TIMEOUT_SECONDS: '30',
+        WEB_EXT_SIGN_RECOVERY_POLL_SECONDS: '0',
+      },
+      nowImpl: () => Date.parse('2026-05-03T05:00:00Z'),
+      stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+      fetchImpl: (input) => {
+        const requestUrl =
+          input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+        if (requestUrl.includes('/versions/')) {
+          versionPolls += 1;
+          if (versionPolls === 1) {
+            // The winning run has not finished submitting yet.
+            return Promise.resolve(new Response('{"detail":"Not found."}', { status: 404 }));
+          }
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                file: {
+                  status: 'public',
+                  url: 'https://addons.mozilla.org/firefox/downloads/file/6244849/signed.xpi',
+                },
+                version: '2.0.123.456',
+                id: '6244849',
+              }),
+              { status: 200 }
+            )
+          );
+        }
+        return Promise.resolve(
+          new Response(bufferToArrayBuffer(signedXpiFixtureBuffer()), { status: 200 })
+        );
+      },
+    });
+
+    assert.ok(recovery);
+    assert.equal(recovery.state, 'recovered-existing-version');
+    assert.equal(readFileSync(recovery.signedXpiPath).subarray(0, 2).toString('utf8'), 'PK');
+    assert.equal(versionPolls, 2);
+    assert.match(stdoutChunks.join(''), /AMO version already exists/);
+    assert.match(stdoutChunks.join(''), /fileStatus=missing/);
+  });
+
+  void test('recoverSignedXpiFromAmo ignores unrelated failures without touching AMO', async () => {
+    const recovery = await recoverSignedXpiFromAmo({
+      output: 'WebExtError: Submission failed (2): Internal Server Error',
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      signingSourceDir: extensionRoot,
+      effectiveVersion: '2.0.123.456',
+      artifactsDir: createTempDir('openpath-firefox-amo-unrelated-'),
+      env: {},
+      stdout: { write: () => undefined },
+      fetchImpl: () => Promise.reject(new Error('AMO must not be polled for unrelated failures')),
+    });
+
+    assert.equal(recovery, null);
   });
 
   void test('runWebExtSignWithRetry fails explicitly when the parent process timeout fires', () => {

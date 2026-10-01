@@ -368,6 +368,7 @@ $script:NativeHostExtensionDiagnosticAllowedFields = @(
     'committed', 'source'
 )
 $script:NativeHostExtensionDiagnosticWindow = $null
+$script:NativeHostExtensionDiagnosticFirstLogged = $false
 
 function ConvertTo-NativeHostExtensionDiagnosticEvent {
     <#
@@ -375,20 +376,24 @@ function ConvertTo-NativeHostExtensionDiagnosticEvent {
     Phase 2E E1 sanitizer: hosts, types, reason codes, ids and ms only. URLs,
     free text and unknown fields are dropped so a compromised or buggy caller
     cannot leak page data into the user's native-host.log.
+
+    Phase 3A: numeric fields keep their long/double range. The 2E version cast
+    every number to [int], which threw on the `ts` epoch-millisecond field
+    (> Int32 range) and made every real batch fail with success=false.
     #>
-    param([Parameter(Mandatory = $false)][object]$Event)
+    param([Parameter(Mandatory = $false)][object]$Candidate)
 
     $sanitized = [ordered]@{}
-    if ($null -eq $Event) { return $sanitized }
+    if ($null -eq $Candidate) { return $sanitized }
 
     foreach ($field in $script:NativeHostExtensionDiagnosticAllowedFields) {
         $value = $null
-        if ($Event -is [System.Collections.IDictionary]) {
-            if (-not $Event.Contains($field)) { continue }
-            $value = $Event[$field]
+        if ($Candidate -is [System.Collections.IDictionary]) {
+            if (-not $Candidate.Contains($field)) { continue }
+            $value = $Candidate[$field]
         }
         else {
-            $property = $Event.PSObject.Properties[$field]
+            $property = $Candidate.PSObject.Properties[$field]
             if ($null -eq $property) { continue }
             $value = $property.Value
         }
@@ -398,8 +403,12 @@ function ConvertTo-NativeHostExtensionDiagnosticEvent {
             $sanitized[$field] = [bool]$value
             continue
         }
-        if ($value -is [int] -or $value -is [long] -or $value -is [double] -or $value -is [decimal]) {
-            $sanitized[$field] = [int]$value
+        if ($value -is [int] -or $value -is [long] -or $value -is [int16] -or $value -is [byte]) {
+            $sanitized[$field] = [long]$value
+            continue
+        }
+        if ($value -is [double] -or $value -is [single] -or $value -is [decimal]) {
+            $sanitized[$field] = [math]::Round([double]$value, 3)
             continue
         }
         $text = ([string]$value).Trim()
@@ -453,14 +462,23 @@ function Invoke-NativeHostReportExtensionDiagnostics {
         }
 
         foreach ($event in ($events | Select-Object -First 50)) {
-            $sanitized = ConvertTo-NativeHostExtensionDiagnosticEvent -Event $event
-            if ($sanitized.Count -eq 0) { continue }
+            try {
+                $sanitized = ConvertTo-NativeHostExtensionDiagnosticEvent -Candidate $event
+            }
+            catch {
+                $dropped = $dropped + 1
+                continue
+            }
+            if ($sanitized.Count -eq 0) {
+                $dropped = $dropped + 1
+                continue
+            }
             $json = $sanitized | ConvertTo-Json -Compress -Depth 3
             Write-NativeHostLog ("stage=extension-diagnostic " + $json)
             $written = $written + 1
         }
         if ($events.Count -gt 50) {
-            $dropped = [int]$events.Count - 50
+            $dropped = [int]$dropped + ([int]$events.Count - 50)
         }
     }
     catch {
@@ -469,6 +487,17 @@ function Invoke-NativeHostReportExtensionDiagnostics {
             action = 'report-extension-diagnostics'
             error = "extension diagnostics failed: $($_.Exception.Message)"
         }
+    }
+
+    if (-not $script:NativeHostExtensionDiagnosticFirstLogged) {
+        # Phase 3A G0: one non-aggregated line per host process on the first
+        # report batch, so lab runs can prove the action arrived even when no
+        # per-event line survives sanitization.
+        $script:NativeHostExtensionDiagnosticFirstLogged = $true
+        Write-NativeHostLog (
+            "stage=extension-diagnostic-batch first=true received=$([int]$events.Count) " +
+            "written=$written dropped=$dropped pid=$PID"
+        )
     }
 
     return @{

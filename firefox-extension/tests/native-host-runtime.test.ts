@@ -1106,9 +1106,10 @@ void test('linux native host writes sanitized extension diagnostics and caps the
       ...process.env,
       XDG_DATA_HOME: runtimeDir,
     },
-    { action: 'report-extension-diagnostics', events }
+    { id: 42, action: 'report-extension-diagnostics', events }
   ) as {
     dropped?: number;
+    id?: number;
     success?: boolean;
     written?: number;
   };
@@ -1116,6 +1117,8 @@ void test('linux native host writes sanitized extension diagnostics and caps the
   assert.equal(response.success, true);
   assert.equal(response.written, 50);
   assert.equal(response.dropped, 10);
+  // The id echo is what makes the persistent-port batch correlate.
+  assert.equal(response.id, 42);
 
   const logContent = readFileSync(join(runtimeDir, 'openpath', 'native-host.log'), 'utf8');
   const lines = logContent

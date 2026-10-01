@@ -1221,6 +1221,11 @@ function Invoke-OpenPathDisposableWindowsController {
     if ([string]$payload.suiteKind -eq 'PolicyConverterContrast') {
         $payload.contrastHarness = 'tests/e2e/ci/run-windows-policy-converter-contrast.ps1'
     }
+    elseif ([string]$payload.suiteKind -eq 'FirstVisit') {
+        # Phase 3A: the first-visit lane stages its own guest harness; the
+        # desktop-survival harness is never part of this suite.
+        $payload.firstVisitHarness = 'tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1'
+    }
     else {
         $payload.desktopHarness = 'tests/e2e/ci/run-windows-offline-installer-exe.ps1'
     }

@@ -1,0 +1,145 @@
+# Windows first-visit lab lane
+
+Phase 3A adds a CI lane that captures and measures the **first visit to a
+generic multi-host page on Windows** in the three situations that matter in a
+classroom: a settled system, a hot session, and a class boot (logon + Firefox
+within a minute). It exists because no other lane exercises the runtime
+dependency learning path end to end, and because Phase 4 will be measured with
+it.
+
+The lane is **site-agnostic**: nothing in the repository lists Reddit, BBC or any
+other site. Every run generates random hosts and lets the product learn them
+with the generic rules.
+
+## What it runs
+
+| Scenario | Name                     | What happens                                                                  |
+| -------- | ------------------------ | ----------------------------------------------------------------------------- |
+| W        | `first-visit-settled`    | settled install; a fresh Firefox opens anchor 1                               |
+| W2       | `first-visit-hot`        | same Firefox stays open >=5 min; a new window opens anchor 2                  |
+| B        | `first-visit-class-boot` | install, warm-up + clean close, reboot, autologon, Firefox <=60 s after logon |
+| C        | `first-visit-control`    | like W but the dependency hosts are pre-whitelisted (the floor)               |
+
+W also runs the security checks (`first-visit-settled`/`first-visit-control`):
+the never-learnable host stays blocked, the unlisted host does not resolve, the
+whitelist never changes and the overlay contains exactly the learned hosts.
+
+### The fixture (generic, per run)
+
+`tests/e2e/ci/first-visit/fixture_server.py` serves, from the Proxmox host and
+routed by `Host` header, two anchors with independent dependency sets. Hostnames
+are `<role><n>-<token>.<ip>.sslip.io`, unique per run:
+
+- wave 1: blocking CSS (styles host), `<script src>` (core host), web font with
+  `font-display:block` (font host), image (image host);
+- wave 2: the core script injects a deferred script from the deferred host;
+- wave 3: the deferred script fetches JSON from the api host and paints it.
+
+The page self-reports to `POST /__report`: computed style, executed scripts,
+painted API, font/image load, navigation type, in-page reload counter and
+per-wave times from `navigationStart`. The server records every request and
+report as JSONL. The DNS fixture (`dns_fixture.py`) answers the `sslip.io`
+names locally (the lab upstream blocks them) and forwards everything else to
+the lab resolver, so a dependency resolves **only after the product learns it**.
+
+The served whitelist contains only the two anchors; the never-learnable host is
+listed under `## BLOCKED-SUBDOMAINS`. `tests/e2e/ci/first-visit/test_fixture.py`
+covers the plan, routing, report and log contracts, and
+`windows/tests/Windows.FirstVisitLane.Tests.ps1` proves the fixture-shaped hosts
+are learnable (and the never-learnable one is not) under
+`RuntimeDependency.Policy`.
+
+## Verdict
+
+The verdict comes from the **page self-report**, never from MOZ_LOG heuristics:
+
+- W and W2: all three waves complete within 15 s and **0 reloads**;
+- B: complete within 30 s and **at most 1 reload**;
+- a missing self-report is FAIL, never a pass;
+- if the DNS or the fixture server do not answer, the run is INFRA.
+
+Thresholds were fixed with data (observed maximum + margin, never above the
+caps above); `Get-OpenPathFirstVisitReportVerdict` takes them as parameters and
+records `fontLoaded`, `neverLearnableBlocked`, reloads and per-wave times.
+
+## Metrics
+
+`tests/e2e/ci/aggregate-windows-first-visit.ps1` writes
+`first-visit-summary.json` and a Markdown job-summary table with per-run rows and
+the baseline (median/max per scenario group, reload maximum). Each scenario
+artifact directory contains:
+
+- `metrics.json`: verdict, reasons, wave times, reloads and their E1 reasons,
+  host startup profile (`processToScriptMs`, `pingMs`, `firstEnqueueMs`), the
+  count of E1 diagnostic lines and hold outcomes;
+- `observe.json`: the correlated controller observation (visit delay for B,
+  security checks, fixture state);
+- `captures/console-<scenario>-t{005,010,015,020,030,060}.ppm` and
+  `console-<scenario>-blocked.ppm`;
+- `guest-logs/native-host.log` (with the E1 `stage=extension-diagnostic` lines)
+  and `guest-logs/openpath.log`;
+- `fixture/{plan.json,requests.jsonl,reports.jsonl,dns.jsonl}`.
+
+## How to run it
+
+```bash
+# Manual dispatch (template from a release-scripts run):
+gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
+  -f scenarios=settled,class-boot -f repetitions=1
+
+# Nightly: settled, hot, class-boot and control with repetitions.
+# After a push that touches firefox-extension/src/**, firefox-extension/native/**,
+# windows/lib/**, windows/scripts/** or the lane, it runs automatically once the
+# Release Installation Scripts workflow succeeds on main.
+```
+
+The lane serializes with the desktop-survival suite through the same lab lock
+(see below) and never signs in AMO: it consumes the `windows-offline-template`
+and `windows-personalized-exe` artifacts of the exact release-scripts run.
+
+Requirements on the self-hosted runner: the lab inventory
+(`OPENPATH_DESKTOP_LAB_CONFIG`, default
+`~/.config/openpath/desktop-survival-lab.json`) with an acceptance scenario whose
+`vmid`/`baselineSnapshot` point at the candidate Windows VM, and a lab
+controller (`OPENPATH_FIRST_VISIT_CONTROLLER`, falling back to
+`OPENPATH_DESKTOP_SURVIVAL_CONTROLLER` or the repo controller). Ports 80 (HTTP
+fixture) and 53/UDP (DNS fixture) must be free on the Proxmox host.
+
+## Lab lock (Phase 3A G3)
+
+The lock lives in the operator config (`lockFile`, e.g.
+`/run/openpath-desktop-survival.lock`) and is now implemented once in
+`tests/e2e/ci/controllers/proxmox-lab-lock.sh`:
+
+- `owner`, `created` and `heartbeat` files; the CI and the phase functions
+  refresh the heartbeat between guest steps;
+- a lock is **stale only when its heartbeat is older than the TTL** - an old
+  `created` with a live heartbeat is not stale;
+- a live lock is **waited for** (`lockWaitSeconds`, default 900) instead of
+  being stolen, so a CI run can no longer replace a live manual session;
+- every replacement appends the previous owner to
+  `<lock_dir>.replacements.log`.
+
+Manual sessions use `tests/e2e/ci/controllers/proxmox-lab-lock.ps1`
+(`-Action status|acquire|renew|release`) and can renew their heartbeat while
+investigating. `tests/lab_lock.bats` covers acquire/wait/renew/stale/replace.
+
+## Capture proof (obligatoria)
+
+The lane must go **red with the correct reason** against known broken builds and
+**green on the current SHA**. The evidence summary lists, per run: build SHA,
+scenario, verdict, reason and workflow run id. Any old template that cannot be
+installed by the lane is documented and substituted by another known-broken
+build (`c28bf26e` for B; `2342794d`/`0c38ed57` for W).
+
+## Debugging a red run
+
+1. Read the job summary: `verdict`, `reasons`, wave times and reloads.
+2. Read `metrics.json` + `fixture/last_report.json`: a wave flag that never
+   became true names the wave; `reloads > 0` means the product repaired the
+   visit (expected in B, a finding in W).
+3. Read `guest-logs/native-host.log`: `stage=extension-diagnostic` lines carry
+   the E1 decision reasons; `stage=startup-profile` carries the host startup
+   numbers.
+4. If the fixture never served requests, the run is INFRA, not a product
+   failure.

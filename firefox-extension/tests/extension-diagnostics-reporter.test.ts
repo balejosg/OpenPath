@@ -92,6 +92,105 @@ await describe('extension diagnostics reporter (Phase 2E E1)', async () => {
     assert.equal(pending.length, 0);
   });
 
+  await test('retries while the port is not ready and sends when it becomes capable', async () => {
+    const pending: Partial<ExtensionDiagnosticEvent>[] = [{ ts: 1, kind: 'hold' as const }];
+    const sent: unknown[] = [];
+    let capable = false;
+    const timers: { handler: () => void; at: number }[] = [];
+    let currentNow = 1_000_000;
+    const reporter = createExtensionDiagnosticsReporter({
+      drain: (max) => pending.splice(0, max) as ExtensionDiagnosticEvent[],
+      requeue: (events) => {
+        pending.unshift(...events);
+      },
+      pendingCount: () => pending.length,
+      send: (events) => {
+        sent.push(events);
+        return Promise.resolve({ success: true });
+      },
+      isCapable: () => capable,
+      intervalMs: 2_000,
+      now: () => currentNow,
+      setTimeoutFn: (handler, timeout) => {
+        const timer = { handler, at: currentNow + timeout };
+        timers.push(timer);
+        return timer as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeoutFn: () => undefined,
+    });
+
+    reporter.notify();
+    const fire = (): void => {
+      const timer = timers.shift();
+      if (!timer) {
+        return;
+      }
+      currentNow = timer.at;
+      timer.handler();
+    };
+
+    fire();
+    await Promise.resolve();
+    assert.equal(sent.length, 0, 'not capable yet: nothing is sent');
+    assert.equal(
+      timers.length,
+      1,
+      'the reporter reschedules itself instead of waiting for a new event'
+    );
+    assert.equal(timers[0]?.at, currentNow + 2_000);
+
+    capable = true;
+    fire();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(sent.length, 1);
+    assert.equal(pending.length, 0);
+  });
+
+  await test('requeues a batch the host rejected and retries once', async () => {
+    let pending: Partial<ExtensionDiagnosticEvent>[] = [{ ts: 1, kind: 'hold' as const }];
+    const responses: { success: boolean }[] = [{ success: false }, { success: true }];
+    const attempts: unknown[][] = [];
+    const timers: (() => void)[] = [];
+    const reporter = createExtensionDiagnosticsReporter({
+      drain: (max) => pending.splice(0, max) as ExtensionDiagnosticEvent[],
+      requeue: (events) => {
+        pending = [...(events as Partial<ExtensionDiagnosticEvent>[]), ...pending];
+      },
+      pendingCount: () => pending.length,
+      send: (events) => {
+        attempts.push(events);
+        return Promise.resolve(responses.shift() ?? { success: true });
+      },
+      isCapable: () => true,
+      intervalMs: 0,
+      setTimeoutFn: (handler) => {
+        timers.push(handler);
+        return {} as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeoutFn: () => undefined,
+    });
+
+    reporter.notify();
+    timers.shift()?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(attempts.length, 1);
+    assert.equal(reporter.getStats().failed, 1);
+    assert.equal(reporter.getStats().requeued, 1);
+    assert.equal(pending.length, 1, 'a rejected batch goes back to the buffer');
+    assert.equal(timers.length, 1, 'a retry is scheduled');
+
+    timers.shift()?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(attempts.length, 2);
+    assert.equal(pending.length, 0);
+    assert.equal(reporter.getStats().sent, 1);
+  });
+
   await test('counts failed batches without throwing', async () => {
     const pending: Partial<ExtensionDiagnosticEvent>[] = [{ ts: 1, kind: 'hold' as const }];
     const errors: unknown[] = [];

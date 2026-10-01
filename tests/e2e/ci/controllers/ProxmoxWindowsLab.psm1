@@ -23,11 +23,14 @@ $script:OpenPathLabBlockedErrorCodes = @(
 )
 
 $script:OpenPathLabRequiredTransportKeys = @(
-    'EnsureLock', 'ReleaseLock', 'GetVmStatus', 'StopVm', 'StartVm', 'RollbackVm',
+    'EnsureLock', 'UpdateLockHeartbeat', 'ReleaseLock', 'InvokeHostCommand', 'CopyFileToHost', 'GetVmStatus', 'StopVm', 'StartVm', 'RollbackVm',
     'WaitGuestReady', 'GetGuestOsInfo', 'GetGuestBootId', 'RequestGuestReboot',
     'WaitGuestRebooted', 'PublishArtifact', 'RemoveHostStaging', 'DownloadGuestArtifact',
     'GetGuestFileSha256', 'RemoveGuestStaging', 'CaptureScreendump', 'InvokeGuestPowerShell'
 )
+
+# Phase 3A first-visit lane (shares this module scope).
+. (Join-Path $PSScriptRoot 'ProxmoxFirstVisit.ps1')
 
 function Test-OpenPathLabBlockedErrorCode {
     param([Parameter(Mandatory = $true)][string]$Code)
@@ -673,6 +676,7 @@ function Wait-OpenPathLabAcceptanceSession {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $lastAttemptError = $null
     while ((Get-Date) -lt $deadline) {
+        Update-OpenPathLabActiveHeartbeat
         try {
             $harness = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths `
                 -Phase $Phase -Step $Step -Settings $Settings -HarnessGuestPath $HarnessGuestPath -TimeoutSeconds 300
@@ -706,7 +710,8 @@ function Invoke-OpenPathLabAcceptanceGuestSetup {
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
         [Parameter(Mandatory = $true)][int]$Vmid,
         [Parameter(Mandatory = $true)][object]$Paths,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+        [string]$HarnessSourcePath = ''
     )
     $specs = @(Get-OpenPathLabArtifactSpecs -Payload $Payload -GuestDir $Paths.GuestDir)
     $guestHashes = [ordered]@{}
@@ -723,7 +728,7 @@ function Invoke-OpenPathLabAcceptanceGuestSetup {
             }
             $guestHashes[(Split-Path -Leaf $spec.GuestPath)] = $guestHash.ToLowerInvariant()
         }
-        $harnessSource = Get-OpenPathLabAcceptanceHarnessSourcePath
+        $harnessSource = if ($PSBoundParameters.ContainsKey('HarnessSourcePath') -and $HarnessSourcePath) { $HarnessSourcePath } else { Get-OpenPathLabAcceptanceHarnessSourcePath }
         if (-not (Test-Path -LiteralPath $harnessSource -PathType Leaf)) { throw 'desktop-lab-harness-source-missing' }
         $harnessHash = (Get-FileHash -LiteralPath $harnessSource -Algorithm SHA256).Hash.ToLowerInvariant()
         $published = & $Transport.PublishArtifact $Paths.StagingDir $harnessSource
@@ -1057,7 +1062,15 @@ function Invoke-OpenPathProxmoxControllerPhase {
     foreach ($key in $script:OpenPathLabRequiredTransportKeys) {
         if (-not $Transport.Contains($key)) { throw 'desktop-lab-transport-invalid' }
     }
-    $scenario = Get-OpenPathLabScenario -Config $Config -ScenarioId $scenarioId
+    # Phase 3A: a suite may map its own scenario ids onto one lab inventory
+    # entry (vmid + baseline snapshot) without touching the operator config.
+    $labScenarioId = $scenarioId
+    $firstVisitPayload = Get-OpenPathLabField -InputObject $Payload -Name 'firstVisit'
+    if ($firstVisitPayload) {
+        $mapped = [string](Get-OpenPathLabField -InputObject $firstVisitPayload -Name 'labScenario')
+        if (-not [string]::IsNullOrWhiteSpace($mapped)) { $labScenarioId = $mapped }
+    }
+    $scenario = Get-OpenPathLabScenario -Config $Config -ScenarioId $labScenarioId
     $vmid = [int](Get-OpenPathLabField -InputObject $scenario -Name 'vmid')
     $snapshot = [string](Get-OpenPathLabField -InputObject $scenario -Name 'baselineSnapshot')
     $paths = Get-OpenPathLabPaths -Payload $Payload -Config $Config
@@ -1069,11 +1082,24 @@ function Invoke-OpenPathProxmoxControllerPhase {
     $restoreBaseline = $true
     $restoreBaselineValue = Get-OpenPathLabField -InputObject $Config -Name 'restoreBaseline'
     if ($null -ne $restoreBaselineValue) { $restoreBaseline = [bool]$restoreBaselineValue }
-    if (-not (& $Transport.EnsureLock $lockFile $lockOwner $timeoutSeconds)) { throw 'desktop-lab-lock-busy' }
+    $lockWaitSeconds = 900
+    $lockWaitValue = Get-OpenPathLabField -InputObject $Config -Name 'lockWaitSeconds'
+    if ($null -ne $lockWaitValue) { $lockWaitSeconds = [int]$lockWaitValue }
+    if (-not (& $Transport.EnsureLock $lockFile $lockOwner $timeoutSeconds $lockWaitSeconds)) { throw 'desktop-lab-lock-busy' }
+    $script:OpenPathLabActiveLock = @{ File = $lockFile; Owner = $lockOwner; Transport = $Transport }
     try {
         $mode = [string](Get-OpenPathLabField -InputObject $Config -Name 'mode')
         if ($mode -eq 'acceptance') {
             $acceptanceStatePath = Join-Path $artifactsRoot 'acceptance-state.json'
+            $suiteKind = [string](Get-OpenPathLabField -InputObject $Payload -Name 'suiteKind')
+            if ($suiteKind -eq 'FirstVisit') {
+                switch ($phase) {
+                    'prepare' { return Invoke-OpenPathFirstVisitPrepare -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Snapshot $snapshot -Paths $paths -StatePath $acceptanceStatePath -TimeoutSeconds $timeoutSeconds -RestoreBaseline $restoreBaseline }
+                    'observe' { return Invoke-OpenPathFirstVisitObserve -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Paths $paths -StatePath $acceptanceStatePath -TimeoutSeconds $timeoutSeconds }
+                    'cleanup' { return Invoke-OpenPathFirstVisitCleanup -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Snapshot $snapshot -Paths $paths -StatePath $acceptanceStatePath -TimeoutSeconds $timeoutSeconds -RestoreBaseline $restoreBaseline }
+                    default { throw 'first-visit-phase-invalid' }
+                }
+            }
             switch ($phase) {
                 'prepare' { return Invoke-OpenPathLabAcceptancePrepare -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Snapshot $snapshot -Paths $paths -StatePath $acceptanceStatePath -TimeoutSeconds $timeoutSeconds -RestoreBaseline $restoreBaseline }
                 'observe' { return Invoke-OpenPathLabAcceptanceObserve -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Paths $paths -StatePath $acceptanceStatePath -TimeoutSeconds $timeoutSeconds }
@@ -1091,8 +1117,18 @@ function Invoke-OpenPathProxmoxControllerPhase {
         }
     }
     finally {
+        $script:OpenPathLabActiveLock = $null
         try { & $Transport.ReleaseLock $lockFile $lockOwner | Out-Null } catch {}
     }
+}
+
+function Update-OpenPathLabActiveHeartbeat {
+    # Best-effort heartbeat refresh while a phase runs; never fails a phase.
+    if (-not $script:OpenPathLabActiveLock) { return }
+    try {
+        & $script:OpenPathLabActiveLock.Transport.UpdateLockHeartbeat $script:OpenPathLabActiveLock.File $script:OpenPathLabActiveLock.Owner | Out-Null
+    }
+    catch { }
 }
 
 function ConvertTo-OpenPathLabShellArgument {
@@ -1297,33 +1333,36 @@ function New-OpenPathProxmoxLabTransport {
     # helpers keep module session-state affinity, so closures can call them.
     $h = @{
         Ssh = { param($SshCommand, $SshHost, $ArgumentList, $InputText) Invoke-OpenPathLabSsh -SshCommand $SshCommand -SshHost $SshHost -ArgumentList $ArgumentList -InputText $InputText }
+        Scp = { param($ScpCommand, $SshHost, $LocalPath, $RemotePath) & $ScpCommand '-o' 'BatchMode=yes' '-q' $LocalPath "$SshHost`:$RemotePath" 2>&1 | Out-String }
         Qga = { param($SshCommand, $SshHost, $Vmid, $PowerShell, $TimeoutSeconds = 120, $Attempts = 4) Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $PowerShell -TimeoutSeconds $TimeoutSeconds -Attempts $Attempts }
         GuestOsInfo = { param($SshCommand, $SshHost, $Vmid) Get-OpenPathLabGuestOsInfo -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid }
         GuestBootId = { param($SshCommand, $SshHost, $Vmid) Get-OpenPathLabGuestBootId -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid }
     }
     $transport = @{}
+    $transport.InvokeHostCommand = {
+        param($ArgumentList, $InputText = '')
+        return (& $h.Ssh $lab.SshCommand $lab.SshHost -ArgumentList $ArgumentList -InputText $InputText)
+    }.GetNewClosure()
+    $transport.CopyFileToHost = {
+        param($LocalPath, $RemotePath)
+        return (& $h.Scp $lab.ScpCommand $lab.SshHost $LocalPath $RemotePath)
+    }.GetNewClosure()
+    # Single lock implementation, shared with the bats test and the manual
+    # utility: tests/e2e/ci/controllers/proxmox-lab-lock.sh (Phase 3A G3).
+    $lockScriptPath = Join-Path $PSScriptRoot 'proxmox-lab-lock.sh'
     $transport.EnsureLock = {
-        param($LockFile, $Owner, $TtlSeconds)
-        $script = @'
-set -u
-lock_dir="$1"
-owner="$2"
-ttl="$3"
-if [ -d "$lock_dir" ]; then
-  created=$(cat "$lock_dir/created" 2>/dev/null || echo 0)
-  now=$(date +%s)
-  if [ $((now - created)) -gt "$ttl" ]; then rm -rf "$lock_dir"; fi
-fi
-if mkdir "$lock_dir" 2>/dev/null; then
-  date +%s > "$lock_dir/created"
-  printf '%s' "$owner" > "$lock_dir/owner"
-  echo acquired
-else
-  echo busy
-fi
-'@
-        $output = & $h.Ssh $lab.SshCommand $lab.SshHost -ArgumentList @('bash', '-s', '--', $LockFile, $Owner, [string]$TtlSeconds) -InputText $script
+        param($LockFile, $Owner, $TtlSeconds, $WaitSeconds = 900)
+        $script = if (Test-Path -LiteralPath $lockScriptPath) { Get-Content -LiteralPath $lockScriptPath -Raw } else { '' }
+        if (-not $script) { throw 'desktop-lab-lock-script-missing' }
+        $output = & $h.Ssh $lab.SshCommand $lab.SshHost -ArgumentList @('bash', '-s', '--', 'acquire', $LockFile, $Owner, [string]$TtlSeconds, [string]$WaitSeconds) -InputText $script
         return $output.Trim() -eq 'acquired'
+    }.GetNewClosure()
+    $transport.UpdateLockHeartbeat = {
+        param($LockFile, $Owner)
+        $script = if (Test-Path -LiteralPath $lockScriptPath) { Get-Content -LiteralPath $lockScriptPath -Raw } else { '' }
+        if (-not $script) { return $false }
+        $output = & $h.Ssh $lab.SshCommand $lab.SshHost -ArgumentList @('bash', '-s', '--', 'renew', $LockFile, $Owner) -InputText $script
+        return $output.Trim() -eq 'renewed'
     }.GetNewClosure()
     $transport.ReleaseLock = {
         param($LockFile, $Owner)
@@ -1503,4 +1542,4 @@ test -s "$dump"
     return $transport
 }
 
-Export-ModuleMember -Function Read-OpenPathProxmoxLabConfig, Invoke-OpenPathProxmoxControllerPhase, New-OpenPathProxmoxLabTransport, Test-OpenPathLabBlockedErrorCode, Invoke-OpenPathProxmoxLabLockRelease, Invoke-OpenPathProxmoxLabStaleLockReclaim
+Export-ModuleMember -Function Read-OpenPathProxmoxLabConfig, Invoke-OpenPathProxmoxControllerPhase, New-OpenPathProxmoxLabTransport, Test-OpenPathLabBlockedErrorCode, Invoke-OpenPathProxmoxLabLockRelease, Invoke-OpenPathProxmoxLabStaleLockReclaim, Get-OpenPathFirstVisitReportVerdict, Get-OpenPathFirstVisitMetrics, Get-OpenPathFirstVisitHarnessSourcePath, Get-OpenPathFirstVisitSettings

@@ -47,6 +47,8 @@ import { createBlockedScreenConfirmer } from './blocked-screen-confirmer.js';
 import {
   drainExtensionDiagnostics,
   onExtensionDiagnostic,
+  pendingExtensionDiagnostics,
+  prependExtensionDiagnostics,
   recordExtensionDiagnostic,
 } from './extension-diagnostics.js';
 import { createExtensionDiagnosticsReporter } from './extension-diagnostics-reporter.js';
@@ -493,6 +495,8 @@ export function createBackgroundRuntime(
     });
     const diagnosticsReporter = createExtensionDiagnosticsReporter({
       drain: drainExtensionDiagnostics,
+      requeue: prependExtensionDiagnostics,
+      pendingCount: pendingExtensionDiagnostics,
       send: (events) => nativeMessagingClient.reportExtensionDiagnostics(events),
       isCapable: () => nativeMessagingClient.isExtensionDiagnosticsCapable(),
       intervalMs: EXTENSION_DIAGNOSTICS_INTERVAL_MS,

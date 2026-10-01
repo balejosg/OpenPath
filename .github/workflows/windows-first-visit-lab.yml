@@ -1,0 +1,209 @@
+name: Windows First Visit Lab
+
+# Phase 3A: the first-visit lane captures the broken/cold first visit that no
+# other CI lane exercises (generic multi-host fixture, three dependency waves,
+# self-report verdict) and measures what Phase 4 has to improve. It never signs
+# in AMO: it consumes the exact `windows-offline-template` artifact of a
+# release-scripts run.
+
+on:
+  workflow_run:
+    workflows: ['Release Installation Scripts']
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+    inputs:
+      template_run_id:
+        description: 'release-scripts run id that produced windows-offline-template'
+        required: false
+        type: string
+      template_sha:
+        description: 'commit SHA whose release-scripts run provides the template'
+        required: false
+        type: string
+      scenarios:
+        description: 'comma-separated scenarios (settled,hot,class-boot,control)'
+        required: false
+        default: 'settled,class-boot'
+        type: string
+      repetitions:
+        description: 'repetitions per scenario'
+        required: false
+        default: '1'
+        type: string
+      lab_scenario:
+        description: 'lab inventory scenario that provides the VM id and baseline snapshot'
+        required: false
+        default: 'win11-education-existing-empty'
+        type: string
+
+concurrency:
+  group: windows-first-visit-lab-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  first-visit:
+    name: Windows first visit lab
+    runs-on: [self-hosted, Linux, X64, proxmox, openpath]
+    timeout-minutes: 300
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Detect relevant changes
+        id: scope
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "${{ github.event_name }}" != 'workflow_run' ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=""
+          if git fetch --no-tags origin "$HEAD_SHA" >/dev/null 2>&1 && git rev-parse --verify "$HEAD_SHA^" >/dev/null 2>&1; then
+            files=$(git diff --name-only "$HEAD_SHA^" "$HEAD_SHA" | tr '\n' ' ')
+          fi
+          case "$files" in
+            *firefox-extension/src/*|*firefox-extension/native/*|*windows/lib/*|*windows/scripts/*|*tests/e2e/ci/first-visit/*|*run-windows-first-visit-suite.ps1*|*windows-first-visit-lab.yml*)
+              echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              printf 'run=false\n' >> "$GITHUB_OUTPUT"
+              echo "No first-visit-relevant change in ${HEAD_SHA:-unknown}; skipping the lab." ;;
+          esac
+
+      - name: Resolve template source
+        id: template
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RUN_ID: ${{ inputs.template_run_id }}
+          INPUT_SHA: ${{ inputs.template_sha }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          run_id="$INPUT_RUN_ID"
+          if [ -z "$run_id" ]; then
+            sha="$INPUT_SHA"; [ -z "$sha" ] && sha="$WORKFLOW_SHA"
+            if [ -n "$sha" ]; then
+              run_id=$(gh run list -R "$GITHUB_REPOSITORY" -w 'release-scripts.yml' -L 50 \
+                --json databaseId,headSha,conclusion \
+                --jq ".[] | select(.headSha == \"$sha\" and .conclusion == \"success\") | .databaseId" | head -1)
+            fi
+          fi
+          if [ -z "$run_id" ]; then
+            echo "::error::INFRA: no successful release-scripts run with windows-offline-template for the requested SHA."
+            exit 2
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Using release-scripts run $run_id"
+
+      - name: Download exact candidate artifacts
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id='${{ steps.template.outputs.run_id }}'
+          mkdir -p windows-offline-template-assets windows-personalized-exe
+          gh run download -R "$GITHUB_REPOSITORY" "$run_id" -n windows-offline-template -D windows-offline-template-assets
+          gh run download -R "$GITHUB_REPOSITORY" "$run_id" -n windows-personalized-exe -D windows-personalized-exe
+          ls -l windows-offline-template-assets windows-personalized-exe
+
+      - name: Reclaim lab lock from finished runs
+        if: steps.scope.outputs.run == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          & (Resolve-Path 'tests/e2e/ci/controllers/proxmox-disposable-windows-release-lock.ps1') `
+            -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') -ReclaimFinishedOwners
+
+      - name: Require lab controller
+        if: steps.scope.outputs.run == 'true'
+        shell: pwsh
+        env:
+          OPENPATH_FIRST_VISIT_CONTROLLER: ${{ secrets.OPENPATH_FIRST_VISIT_CONTROLLER }}
+          OPENPATH_DESKTOP_SURVIVAL_CONTROLLER: ${{ secrets.OPENPATH_DESKTOP_SURVIVAL_CONTROLLER }}
+        run: |
+          $controller = if ($env:OPENPATH_FIRST_VISIT_CONTROLLER) { $env:OPENPATH_FIRST_VISIT_CONTROLLER } else { $env:OPENPATH_DESKTOP_SURVIVAL_CONTROLLER }
+          if (-not $controller -or -not (Test-Path -LiteralPath $controller -PathType Leaf)) {
+            $fallback = Join-Path (Get-Location) 'tests/e2e/ci/controllers/proxmox-disposable-windows-controller.ps1'
+            if (-not (Test-Path -LiteralPath $fallback -PathType Leaf)) {
+              Write-Error 'BLOCKED_PLATFORM_VALIDATION: no lab controller is configured.'
+              exit 2
+            }
+          }
+
+      - name: Run first-visit suite
+        id: suite
+        if: steps.scope.outputs.run == 'true'
+        shell: pwsh
+        env:
+          OPENPATH_FIRST_VISIT_CONTROLLER: ${{ secrets.OPENPATH_FIRST_VISIT_CONTROLLER }}
+          OPENPATH_DESKTOP_SURVIVAL_CONTROLLER: ${{ secrets.OPENPATH_DESKTOP_SURVIVAL_CONTROLLER }}
+          OPENPATH_SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          OPENPATH_FIRST_VISIT_LAB_SCENARIO: ${{ inputs.lab_scenario || 'win11-education-existing-empty' }}
+        run: |
+          $controller = if ($env:OPENPATH_FIRST_VISIT_CONTROLLER) { $env:OPENPATH_FIRST_VISIT_CONTROLLER } else { $env:OPENPATH_DESKTOP_SURVIVAL_CONTROLLER }
+          if (-not $controller) { $controller = Join-Path (Get-Location) 'tests/e2e/ci/controllers/proxmox-disposable-windows-controller.ps1' }
+          $root = Join-Path $env:RUNNER_TEMP 'openpath-first-visit'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $template = (Resolve-Path 'windows-offline-template-assets/OpenPath-Windows-Setup-Template.exe').Path
+          $personalized = (Get-ChildItem 'windows-personalized-exe' -Filter '*.exe' | Select-Object -First 1).FullName
+          $scenarios = '${{ inputs.scenarios }}'
+          if (-not $scenarios) { $scenarios = 'settled,class-boot' }
+          $repetitions = [int]('${{ inputs.repetitions }}' -replace '^$', '1')
+          & (Resolve-Path 'tests/e2e/ci/run-windows-first-visit-suite.ps1') `
+            -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') `
+            -ArtifactsRoot $root -TemplatePath $template -PersonalizedExePath $personalized `
+            -ControllerCommand $controller -Scenarios ($scenarios -split ',') -Repetitions $repetitions
+          exit $LASTEXITCODE
+
+      - name: Aggregate results
+        if: always() && steps.scope.outputs.run == 'true'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'openpath-first-visit'
+          $summaryJson = Join-Path $root 'first-visit-summary.json'
+          $summaryMd = Join-Path $root 'first-visit-summary.md'
+          $exit = 0
+          try {
+            & (Resolve-Path 'tests/e2e/ci/aggregate-windows-first-visit.ps1') `
+              -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') `
+              -EvidenceRoot $root -SummaryJsonPath $summaryJson -SummaryMarkdownPath $summaryMd | Out-Null
+            $exit = $LASTEXITCODE
+          }
+          catch {
+            Write-Host "INFRA: first-visit aggregation could not run: $($_.Exception.Message)"
+            "## First-visit lane`n`nINFRA: aggregation failed: $($_.Exception.Message)" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          if (Test-Path -LiteralPath $summaryMd) { Get-Content -LiteralPath $summaryMd -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY }
+          exit $exit
+
+      - name: Release lab lock on cancellation
+        if: cancelled()
+        shell: pwsh
+        run: |
+          & (Resolve-Path 'tests/e2e/ci/controllers/proxmox-disposable-windows-release-lock.ps1') `
+            -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}')
+
+      - name: Upload first-visit evidence
+        if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-first-visit-evidence
+          path: ${{ runner.temp }}/openpath-first-visit
+          if-no-files-found: warn

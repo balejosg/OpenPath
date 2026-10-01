@@ -2324,10 +2324,12 @@ Describe "Browser Module - Native Host" {
             }
             try {
                 . $nativeHostActionsPath
+                $script:NativeHostExtensionDiagnosticFirstLogged = $false
 
                 $events = @()
                 for ($index = 0; $index -lt 60; $index++) {
                     $events += @{
+                        ts = 1790900000000 + $index
                         kind = 'hold'
                         dependencyHost = 'cdn.example'
                         anchorHost = 'https://evil.example/private?token=secret'
@@ -2341,23 +2343,154 @@ Describe "Browser Module - Native Host" {
                 $response.success | Should -BeTrue
                 $response.written | Should -Be 50
                 $response.dropped | Should -Be 10
-                $global:CapturedExtensionDiagnosticLines.Count | Should -Be 50
-                $first = $global:CapturedExtensionDiagnosticLines[0]
-                $first | Should -Match 'stage=extension-diagnostic \{'
-                $first | Should -Match '"kind":"hold"'
-                $first | Should -Match 'cdn\.example'
-                $first | Should -Match '"ms":12'
+                # Phase 3A G0: the first-receipt line proves the batch arrived.
+                $batchLines = @($global:CapturedExtensionDiagnosticLines | Where-Object { $_ -match 'stage=extension-diagnostic-batch' })
+                $batchLines.Count | Should -Be 1
+                $batchLines[0] | Should -Match 'first=true'
+                $batchLines[0] | Should -Match 'received=60'
+                $batchLines[0] | Should -Match 'written=50'
+                $batchLines[0] | Should -Match 'dropped=10'
+                $diagnosticLines = @($global:CapturedExtensionDiagnosticLines | Where-Object { $_ -match 'stage=extension-diagnostic \{' })
+                $diagnosticLines.Count | Should -Be 50
+                $first = $diagnosticLines[0]
                 $first | Should -Not -Match 'evil\.example'
                 $first | Should -Not -Match 'tracker\.example'
                 $first | Should -Not -Match 'unexpected'
                 $first | Should -Not -Match 'must-be-dropped'
+                # Phase 3A: epoch milliseconds exceed Int32 and must survive.
+                $first | Should -Match '"ts":1790900000000'
             }
             finally {
                 Remove-Variable -Name CapturedExtensionDiagnosticLines -Scope Global -ErrorAction SilentlyContinue
             }
         }
 
-        It "Picks up whitelist changes between messages of one persistent process" {            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+        It "Serves a realistic diagnostics batch through the real framed native-message loop" {
+            # Phase 3A G0: the 2E tests called the handler directly. This test
+            # spawns the real host process and speaks the native-messaging
+            # framing over stdin/stdout: ping, then a 50-event diagnostics batch.
+            $nativeHostScriptPath = Join-Path $PSScriptRoot ".." "scripts" "OpenPath-NativeHost.ps1"
+
+            $engines = [System.Collections.Generic.List[string]]::new()
+            if ($env:SystemRoot) {
+                $legacyEngine = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+                if (Test-Path -LiteralPath $legacyEngine) { $engines.Add($legacyEngine) }
+            }
+            $pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
+            if ($null -ne $pwshCommand) { $engines.Add($pwshCommand.Source) }
+            $engines.Count | Should -BeGreaterThan 0
+
+            foreach ($engine in $engines) {
+                $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-loop-" + [Guid]::NewGuid().ToString("N"))
+                New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+                $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+                $startInfo.FileName = $engine
+                $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$nativeHostScriptPath`""
+                $startInfo.UseShellExecute = $false
+                $startInfo.RedirectStandardInput = $true
+                $startInfo.RedirectStandardOutput = $true
+                $startInfo.RedirectStandardError = $true
+                $startInfo.EnvironmentVariables['LOCALAPPDATA'] = $tempRoot
+                $startInfo.EnvironmentVariables['TEMP'] = $tempRoot
+                $startInfo.EnvironmentVariables['TMP'] = $tempRoot
+                $process = [System.Diagnostics.Process]::Start($startInfo)
+
+                # A stuck host must fail the test instead of hanging the shard.
+                $watchdog = [System.Threading.Timer]::new(
+                    [System.Threading.TimerCallback] {
+                        param($state)
+                        try { $state.Kill() } catch { }
+                    },
+                    $process,
+                    90000,
+                    [System.Threading.Timeout]::Infinite
+                )
+
+                try {
+                    $writeFrame = {
+                        param([object]$Payload)
+                        $json = $Payload | ConvertTo-Json -Depth 6 -Compress
+                        $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                        $lengthBytes = [System.BitConverter]::GetBytes([int]$bytes.Length)
+                        $stdin = $process.StandardInput.BaseStream
+                        $stdin.Write($lengthBytes, 0, 4)
+                        $stdin.Write($bytes, 0, $bytes.Length)
+                        $stdin.Flush()
+                    }
+                    $readFrame = {
+                        $stdout = $process.StandardOutput.BaseStream
+                        $lengthBuffer = New-Object byte[] 4
+                        $read = 0
+                        while ($read -lt 4) {
+                            $chunk = $stdout.Read($lengthBuffer, $read, 4 - $read)
+                            if ($chunk -le 0) { return $null }
+                            $read += $chunk
+                        }
+                        $length = [System.BitConverter]::ToInt32($lengthBuffer, 0)
+                        $payload = New-Object byte[] $length
+                        $offset = 0
+                        while ($offset -lt $length) {
+                            $chunk = $stdout.Read($payload, $offset, $length - $offset)
+                            if ($chunk -le 0) { return $null }
+                            $offset += $chunk
+                        }
+                        return ([System.Text.Encoding]::UTF8.GetString($payload) | ConvertFrom-Json)
+                    }
+
+                    $events = @()
+                    for ($index = 0; $index -lt 50; $index++) {
+                        $events += @{
+                            ts = 1790900000000 + $index
+                            kind = 'hold'
+                            tabId = 4
+                            frameId = 0
+                            type = 'stylesheet'
+                            anchorHost = 'anchor.example'
+                            dependencyHost = ("dep-{0}.example" -f $index)
+                            transport = 'ready'
+                            outcome = 'ready'
+                            ms = 100 + $index
+                            reason = 'reloaded'
+                            unknownField = 'https://evil.example/private?token=secret'
+                        }
+                    }
+
+                    & $writeFrame @{ id = 7; action = 'ping' }
+                    $ping = & $readFrame
+                    & $writeFrame @{ id = 8; action = 'report-extension-diagnostics'; events = $events }
+                    $report = & $readFrame
+                    $process.StandardInput.Close()
+                    $process.WaitForExit(15000) | Out-Null
+
+                    $ping.id | Should -Be 7
+                    @($ping.capabilities) | Should -Contain 'extension-diagnostics'
+                    $report.id | Should -Be 8
+                    $report.success | Should -BeTrue
+                    $report.written | Should -Be 50
+                    $report.dropped | Should -Be 0
+
+                    $logPath = Join-Path $tempRoot 'OpenPath\native-host.log'
+                    (Test-Path -LiteralPath $logPath) | Should -BeTrue
+                    $lines = Get-Content -LiteralPath $logPath
+                    $diagnosticLines = @($lines | Where-Object { $_ -match 'stage=extension-diagnostic \{' })
+                    $diagnosticLines.Count | Should -Be 50
+                    $diagnosticLines[0] | Should -Match '"ts":1790900000000'
+                    $diagnosticLines[0] | Should -Match 'dep-0\.example'
+                    $diagnosticLines[0] | Should -Not -Match 'evil\.example'
+                    $batchLines = @($lines | Where-Object { $_ -match 'stage=extension-diagnostic-batch first=true received=50 written=50 dropped=0' })
+                    $batchLines.Count | Should -Be 1
+                }
+                finally {
+                    $watchdog.Dispose()
+                    if (-not $process.HasExited) { $process.Kill() }
+                    $process.Dispose()
+                    Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
+        It "Picks up whitelist changes between messages of one persistent process" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }

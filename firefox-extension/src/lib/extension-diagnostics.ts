@@ -168,6 +168,25 @@ export function drainExtensionDiagnostics(max: number): ExtensionDiagnosticEvent
   return drained;
 }
 
+/**
+ * Phase 3A: puts a failed batch back at the front of the buffer so a host-side
+ * failure does not silently drop diagnostics. Bounded by the same capacity.
+ */
+export function prependExtensionDiagnostics(incoming: ExtensionDiagnosticEvent[]): void {
+  if (incoming.length === 0) {
+    return;
+  }
+  events = [...incoming, ...events];
+  if (events.length > config.maxEvents) {
+    events = events.slice(0, config.maxEvents);
+  }
+}
+
+/** Number of buffered (not yet drained) events. */
+export function pendingExtensionDiagnostics(): number {
+  return events.length;
+}
+
 export function getExtensionDiagnosticsSnapshot(): ExtensionDiagnosticsSnapshot {
   return { enabled: config.enabled, recorded, dropped, pending: events.length };
 }

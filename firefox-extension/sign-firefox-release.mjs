@@ -234,6 +234,22 @@ export function isAmoVersionAlreadyExists(output) {
   return /Version(?:\s+[\dA-Za-z._-]+)?\s+already exists/i.test(output);
 }
 
+/**
+ * Phase 3A G4: a concurrent workflow signing the same payload hash can fail
+ * with a bare `Submission failed (2): Conflict` (HTTP 409) that does not embed
+ * the "Version ... already exists" detail. Both shapes are recoverable: poll
+ * AMO for the derived version and reuse the signed XPI instead of failing.
+ */
+export function isAmoConflictOutput(output) {
+  if (isAmoVersionAlreadyExists(output)) {
+    return true;
+  }
+  return (
+    /Submission failed\s*\(\d+\)\s*:\s*Conflict/i.test(output) ||
+    /\b409\b[^\n]{0,40}\bConflict\b/i.test(output)
+  );
+}
+
 export function resolveAmoSigningFailureState(status) {
   return status === 124 ? 'timeout' : 'hard-failure';
 }
@@ -296,7 +312,7 @@ function buildAmoAuthHeaders(options) {
 }
 
 async function fetchAmoJson(options) {
-  const { url, apiKey, apiSecret, fetchImpl = fetch } = options;
+  const { url, apiKey, apiSecret, fetchImpl = fetch, allowNotFound = false } = options;
   const response = await fetchImpl(url, {
     method: 'GET',
     headers: buildAmoAuthHeaders({ apiKey, apiSecret }),
@@ -305,6 +321,11 @@ async function fetchAmoJson(options) {
   const data = text ? JSON.parse(text) : {};
 
   if (!response.ok) {
+    if (allowNotFound && response.status === 404) {
+      // Phase 3A G4: a concurrent workflow may not have finished the AMO
+      // submission yet; the version is simply not visible. Keep polling.
+      return null;
+    }
     fail(`AMO request failed: ${response.status} ${response.statusText} ${text}`.trim());
   }
 
@@ -375,6 +396,9 @@ export async function waitForAmoSignedXpi(options) {
       apiKey,
       apiSecret,
       fetchImpl,
+      // Phase 3A G4: a concurrent signer may not have published the version
+      // yet; treat 404 as "missing" and keep polling until the deadline.
+      allowNotFound: true,
     });
     const fileStatus = detail?.file?.status ?? 'missing';
     const fileUrl = detail?.file?.url ?? '';
@@ -916,7 +940,7 @@ function createCaptureStream(target, chunks) {
   };
 }
 
-async function recoverSignedXpiFromAmo(options) {
+export async function recoverSignedXpiFromAmo(options) {
   const {
     output,
     apiKey,
@@ -928,9 +952,10 @@ async function recoverSignedXpiFromAmo(options) {
     deadlineMs,
     nowImpl = Date.now,
     stdout = process.stdout,
+    fetchImpl = fetch,
   } = options;
   const editUrl = parseAmoVersionEditUrl(output);
-  const versionAlreadyExists = isAmoVersionAlreadyExists(output);
+  const versionAlreadyExists = isAmoConflictOutput(output);
 
   if (!editUrl && !versionAlreadyExists) {
     return null;
@@ -961,6 +986,8 @@ async function recoverSignedXpiFromAmo(options) {
         artifactsDir,
         timeoutMs: recoveryTimeoutMs,
         pollIntervalMs: recoveryPollMs,
+        fetchImpl,
+        stdout,
       }),
       state: 'signed',
       addonId: editUrl.addonId,
@@ -982,6 +1009,8 @@ async function recoverSignedXpiFromAmo(options) {
       artifactsDir,
       timeoutMs: recoveryTimeoutMs,
       pollIntervalMs: recoveryPollMs,
+      fetchImpl,
+      stdout,
     }),
     state: 'recovered-existing-version',
     addonId,
