@@ -159,7 +159,7 @@ jobs:
       # Coverage upload
       - name: Upload coverage to Codecov
         if: inputs.run-coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           disable_search: true
           files: ${{ steps.lane.outputs.coverage_file }}
