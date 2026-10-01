@@ -160,6 +160,9 @@ function Get-NativeHostTaskRunner {
     .SYNOPSIS
     Returns a schtasks runner object used to trigger and wait on scheduled tasks.
     #>
+    if (-not (Get-Command -Name 'New-OpenPathSchtasksRunner' -ErrorAction SilentlyContinue)) {
+        Initialize-NativeHostTaskRunnerSupport
+    }
     return (New-OpenPathSchtasksRunner)
 }
 function Test-NativeWhitelistContainsDomains {
@@ -446,6 +449,7 @@ function Get-NativeHostApiUrl {
         [PSCustomObject]$State
     )
 
+    Initialize-NativeHostRequestSetupSupport
     $requestSetupState = Get-OpenPathRequestSetupState -Config $State
     return [string]$requestSetupState.RequestApiUrl
 }
@@ -459,6 +463,7 @@ function Get-NativeHostMachineToken {
         [PSCustomObject]$State
     )
 
+    Initialize-NativeHostRequestSetupSupport
     $requestSetupState = Get-OpenPathRequestSetupState -Config $State
     return [string]$requestSetupState.MachineToken
 }

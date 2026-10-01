@@ -18,6 +18,81 @@ catch {
     $script:NativeHostProcessStart = $null
 }
 
+# Phase 2D D2: the startup profile captures, once per process, the cost of the
+# process start, every dot-source/Import-Module on the hot path and the first
+# ping/first runtime dependency enqueue. It is written as a single
+# `stage=startup-profile` line so cold-start budgets are measurable.
+$script:NativeHostStartupProfile = [ordered]@{}
+$script:NativeHostStartupProfileWritten = $false
+$script:NativeHostStartupPingDone = $false
+$script:NativeHostStartupEnqueueDone = $false
+
+function Add-NativeHostStartupProfileEntry {
+    param([Parameter(Mandatory = $true)][string]$Name, [long]$Ms = 0)
+
+    if (-not $script:NativeHostStartupProfile) {
+        $script:NativeHostStartupProfile = [ordered]@{}
+    }
+    $script:NativeHostStartupProfile[$Name] = [long]$Ms
+}
+
+function Get-NativeHostProcessElapsedMs {
+    if (-not $script:NativeHostProcessStart) { return 0 }
+    try {
+        return [int]([DateTime]::UtcNow - $script:NativeHostProcessStart.ToUniversalTime()).TotalMilliseconds
+    }
+    catch {
+        return 0
+    }
+}
+
+function Write-NativeHostStartupProfile {
+    param()
+
+    if ($script:NativeHostStartupProfileWritten) { return }
+    $script:NativeHostStartupProfileWritten = $true
+
+    try {
+        if (-not (Get-Command -Name 'Write-NativeHostStageLog' -ErrorAction SilentlyContinue)) {
+            return
+        }
+        $loads = @()
+        foreach ($key in @($script:NativeHostStartupProfile.Keys)) {
+            if ($key -in @('process-to-script', 'ping', 'first-enqueue', 'first-enqueue-at')) { continue }
+            $loads += ('{0}:{1}' -f $key, $script:NativeHostStartupProfile[$key])
+        }
+        # The log field formatter caps field values at 240 characters; split the
+        # load list instead of silently truncating it.
+        $loadsText = ($loads -join ',')
+        $loadsPrimary = $loadsText
+        $loadsSecondary = ''
+        if ($loadsText.Length -gt 200) {
+            $cut = $loadsText.LastIndexOf(',', 199)
+            if ($cut -lt 1) { $cut = 200 }
+            $loadsPrimary = $loadsText.Substring(0, $cut)
+            $loadsSecondary = if ($cut + 1 -lt $loadsText.Length) { $loadsText.Substring($cut + 1) } else { '' }
+        }
+        $fieldValue = {
+            param([string]$Key)
+            if ($script:NativeHostStartupProfile.Contains($Key)) { return [long]$script:NativeHostStartupProfile[$Key] }
+            return -1
+        }
+        Write-NativeHostStageLog -Stage 'startup-profile' -Fields @{
+            processToScriptMs = (& $fieldValue 'process-to-script')
+            loadsMs           = $loadsPrimary
+            loads2Ms          = $loadsSecondary
+            pingMs            = (& $fieldValue 'ping')
+            firstEnqueueMs    = (& $fieldValue 'first-enqueue')
+            firstEnqueueAtMs  = (& $fieldValue 'first-enqueue-at')
+        }
+    }
+    catch {
+        # Profiling must never break protocol handling.
+    }
+}
+
+Add-NativeHostStartupProfileEntry -Name 'process-to-script' -Ms (Get-NativeHostProcessElapsedMs)
+
 function Resolve-OpenPathNativeHostLogPath {
     # resolves the per-user writable log path; the staged native directory is
     # read-only for the browser user, so logging there silently failed before.
@@ -83,9 +158,15 @@ $script:RuntimeDependencyTaskName = 'OpenPath-RuntimeDependencyApply'
 $script:MaxDomains = 50
 $script:MaxMessageBytes = 1MB
 
+$nativeHostStateStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $null = . (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.State.ps1')
+Add-NativeHostStartupProfileEntry -Name 'state' -Ms $nativeHostStateStopwatch.ElapsedMilliseconds
+$nativeHostProtocolStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $null = . (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.Protocol.ps1')
+Add-NativeHostStartupProfileEntry -Name 'protocol' -Ms $nativeHostProtocolStopwatch.ElapsedMilliseconds
+$nativeHostActionsStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $null = . (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.Actions.ps1')
+Add-NativeHostStartupProfileEntry -Name 'actions' -Ms $nativeHostActionsStopwatch.ElapsedMilliseconds
 
 function Write-NativeHostLog {
     param(
@@ -181,6 +262,30 @@ while ($true) {
         else {
             Write-NativeHostStageLog -Stage 'response-sent' -Fields @{ index = $script:NativeHostMessageCount; action = $messageAction; totalMs = [int]$messageStopwatch.ElapsedMilliseconds }
         }
+
+        # Phase 2D D2: startup milestones. The profile line is written once, at
+        # the first enqueue (the dependency path) or, when no dependency batch
+        # arrives, after the message budget above.
+        if (-not $script:NativeHostStartupProfileWritten) {
+            if ($messageAction -eq 'ping') {
+                if (-not $script:NativeHostStartupPingDone) {
+                    $script:NativeHostStartupPingDone = $true
+                    Add-NativeHostStartupProfileEntry -Name 'ping' -Ms (Get-NativeHostProcessElapsedMs)
+                }
+            }
+            elseif (
+                -not $script:NativeHostStartupEnqueueDone -and
+                $messageAction -in @('allow-local-runtime-dependency', 'allow-local-runtime-dependency-batch')
+            ) {
+                $script:NativeHostStartupEnqueueDone = $true
+                Add-NativeHostStartupProfileEntry -Name 'first-enqueue' -Ms $messageStopwatch.ElapsedMilliseconds
+                Add-NativeHostStartupProfileEntry -Name 'first-enqueue-at' -Ms (Get-NativeHostProcessElapsedMs)
+            }
+
+            if ($script:NativeHostStartupPingDone -and ($script:NativeHostStartupEnqueueDone -or [int]$script:NativeHostMessageCount -ge 10)) {
+                Write-NativeHostStartupProfile
+            }
+        }
     }
     catch {
         Write-NativeHostLog "Fatal protocol error: $_"
@@ -196,4 +301,5 @@ while ($true) {
     }
 }
 
+Write-NativeHostStartupProfile
 Write-NativeHostLog "Native host process exiting pid=$PID"

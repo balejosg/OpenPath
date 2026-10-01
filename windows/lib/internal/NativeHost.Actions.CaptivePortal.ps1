@@ -97,6 +97,7 @@ function Get-NativeHostCaptivePortalActiveMarker {
     (CaptivePortal.StateFiles.ps1). The active/expiry filtering and the
     Path/LastWriteTimeUtc annotation are native-host semantics and stay here.
     #>
+    Initialize-NativeHostCaptivePortalSupportFiles
     $markerPath = 'C:\OpenPath\data\captive-portal-active.json'
     if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
         $markerPath = Join-Path (Join-Path $script:OpenPathRoot 'data') 'captive-portal-active.json'
@@ -142,6 +143,7 @@ function Get-NativeHostCaptivePortalMarkerSummary {
         [string]$TriggerHost = ''
     )
 
+    Initialize-NativeHostCaptivePortalSupportFiles
     return (Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary `
             -Marker $Marker `
             -TriggerHost $TriggerHost `
@@ -161,6 +163,7 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
     #>
     param([int]$RecentSuccessSeconds = 30)
 
+    Initialize-NativeHostCaptivePortalSupportFiles
     $activeMarker = Get-NativeHostCaptivePortalActiveMarker
     if ($activeMarker -and $activeMarker.PSObject.Properties['LastWriteTimeUtc']) {
         $markerAgeSeconds = ([DateTime]::UtcNow - $activeMarker.LastWriteTimeUtc).TotalSeconds
@@ -284,6 +287,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     )
 
     Initialize-NativeHostCaptivePortalSupport
+    Initialize-NativeHostCaptivePortalSupportFiles
 
     $action = 'recover-captive-portal-navigation'
     $taskName = 'OpenPath-CaptivePortalRecovery'
@@ -547,6 +551,7 @@ function Get-NativeHostCaptivePortalObservation {
     .SYNOPSIS
     Reads the captive portal observation JSON file, returning null when absent or unparseable.
     #>
+    Initialize-NativeHostCaptivePortalSupportFiles
     $observationPath = 'C:\OpenPath\data\captive-portal-observation.json'
     if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
         $observationPath = Join-Path (Join-Path $script:OpenPathRoot 'data') 'captive-portal-observation.json'

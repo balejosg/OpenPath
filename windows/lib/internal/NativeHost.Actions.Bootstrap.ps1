@@ -26,7 +26,66 @@ function Import-NativeHostRequestSetupStateModule {
     throw 'RequestSetup.State.psm1 is required for native host request setup interpretation.'
 }
 
-Import-NativeHostRequestSetupStateModule
+function Initialize-NativeHostRequestSetupSupport {
+    <#
+    .SYNOPSIS
+    Loads the request setup module on demand (Phase 2D D2).
+    .DESCRIPTION
+    Only get-config, get-machine-token and the shared request-setup helpers need
+    this module; loading it during host startup taxed the hot path (ping, enqueue,
+    checks, cheap reads) with a module import it never uses.
+    #>
+    param()
+
+    if (Get-Command -Name 'Get-OpenPathRequestSetupState' -ErrorAction SilentlyContinue) {
+        return
+    }
+    Import-NativeHostRequestSetupStateModule
+}
+
+# Phase 2D D2: the startup profile lives in the host entry script. Standalone
+# loads (for example Pester dot-sourcing these support files) fall back to a
+# no-op so every loader can call the entry unconditionally.
+if (-not (Get-Command -Name 'Add-NativeHostStartupProfileEntry' -ErrorAction SilentlyContinue)) {
+    function Add-NativeHostStartupProfileEntry {
+        param([string]$Name, [long]$Ms = 0)
+    }
+}
+
+function Import-NativeHostSupportFileWithOverrides {
+    <#
+    .SYNOPSIS
+    Dot-sources a support file while preserving caller-provided function overrides.
+    .DESCRIPTION
+    Phase 2D lazy loading must never clobber a function that already exists (for
+    example a Pester double defined before the first action that needs the file).
+    Missing functions are loaded and promoted into script scope so they survive
+    the initializer call.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string[]]$PreserveFunctions = @()
+    )
+
+    $preserved = @{}
+    foreach ($name in @($PreserveFunctions)) {
+        $command = Get-Command -Name $name -CommandType Function -ErrorAction SilentlyContinue
+        if ($command) { $preserved[$name] = $command.ScriptBlock }
+    }
+
+    . $Path
+
+    foreach ($name in @($PreserveFunctions)) {
+        if ($preserved.ContainsKey($name)) {
+            Set-Item -Path "Function:script:$name" -Value $preserved[$name] -Force
+            continue
+        }
+        $command = Get-Command -Name $name -CommandType Function -ErrorAction SilentlyContinue
+        if ($command) {
+            Set-Item -Path "Function:script:$name" -Value $command.ScriptBlock -Force
+        }
+    }
+}
 
 $nativeHostRedactionCandidatePaths = @()
 if (Get-Variable -Name NativeRoot -Scope Script -ErrorAction SilentlyContinue) {
@@ -41,7 +100,10 @@ if ($PSScriptRoot) {
 
 foreach ($nativeHostRedactionCandidatePath in ($nativeHostRedactionCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
     if (Test-Path $nativeHostRedactionCandidatePath -ErrorAction SilentlyContinue) {
+        $nativeHostRedactionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         . $nativeHostRedactionCandidatePath
+        $nativeHostRedactionStopwatch.Stop()
+        Add-NativeHostStartupProfileEntry -Name 'redaction' -Ms $nativeHostRedactionStopwatch.ElapsedMilliseconds
         break
     }
 }
@@ -54,22 +116,45 @@ if (-not (Get-Variable -Name NativeHostPortalProbeCache -Scope Script -ErrorActi
     $script:NativeHostPortalProbeCache = @{}
 }
 
-$nativeHostTaskRunnerCandidatePaths = @()
-if ($PSScriptRoot) {
-    $nativeHostTaskRunnerCandidatePaths += (Join-Path $PSScriptRoot 'TaskRunner.ps1')
-}
-if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
-    $nativeHostTaskRunnerCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\TaskRunner.ps1')
-}
+function Initialize-NativeHostTaskRunnerSupport {
+    <#
+    .SYNOPSIS
+    Loads TaskRunner.ps1 on demand (Phase 2D D2).
+    .DESCRIPTION
+    The hot path only needs the task runner when it falls back to the scheduled
+    update task or nudges the resident worker; the common enqueue path talks to
+    the worker queue directly.
+    #>
+    param()
 
-foreach ($nativeHostTaskRunnerCandidatePath in ($nativeHostTaskRunnerCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
-    if (Test-Path $nativeHostTaskRunnerCandidatePath -ErrorAction SilentlyContinue) {
-        . $nativeHostTaskRunnerCandidatePath
-        break
+    if (Get-Command -Name 'New-OpenPathSchtasksRunner' -ErrorAction SilentlyContinue) {
+        return
     }
-}
 
-if (-not (Get-Command -Name 'Invoke-OpenPathScheduledTask' -ErrorAction SilentlyContinue)) {
+    $nativeHostTaskRunnerCandidatePaths = @()
+    if ($PSScriptRoot) {
+        $nativeHostTaskRunnerCandidatePaths += (Join-Path $PSScriptRoot 'TaskRunner.ps1')
+    }
+    if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+        $nativeHostTaskRunnerCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\TaskRunner.ps1')
+    }
+
+    foreach ($nativeHostTaskRunnerCandidatePath in ($nativeHostTaskRunnerCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-Path $nativeHostTaskRunnerCandidatePath -ErrorAction SilentlyContinue) {
+            Import-NativeHostSupportFileWithOverrides `
+                -Path $nativeHostTaskRunnerCandidatePath `
+                -PreserveFunctions @(
+                    'ConvertTo-OpenPathTaskResultHex',
+                    'Get-OpenPathScheduledTaskDiagnostics',
+                    'Add-OpenPathScheduledTaskDiagnostics',
+                    'New-OpenPathSchtasksRunner',
+                    'New-OpenPathFakeTaskRunner',
+                    'Invoke-OpenPathScheduledTask'
+                )
+            return
+        }
+    }
+
     throw 'TaskRunner.ps1 is required for native host scheduled task execution.'
 }
 
@@ -131,65 +216,89 @@ if ($PSScriptRoot) {
 
 foreach ($nativeHostRuntimeDependencyCandidatePath in ($nativeHostRuntimeDependencyCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
     if (Test-Path $nativeHostRuntimeDependencyCandidatePath -ErrorAction SilentlyContinue) {
+        $nativeHostRuntimeDependencyStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         . $nativeHostRuntimeDependencyCandidatePath
+        $nativeHostRuntimeDependencyStopwatch.Stop()
+        $nativeHostRuntimeDependencyLeaf = (Split-Path $nativeHostRuntimeDependencyCandidatePath -LeafBase).Replace('RuntimeDependency.', '')
+        Add-NativeHostStartupProfileEntry -Name ('rd-' + $nativeHostRuntimeDependencyLeaf) -Ms $nativeHostRuntimeDependencyStopwatch.ElapsedMilliseconds
     }
 }
 
-$nativeHostCaptivePortalQueueCandidatePaths = @()
-if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
-    $nativeHostCaptivePortalQueueCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\NativeHost.CaptivePortalRecoveryQueue.ps1')
-}
-if ($PSScriptRoot) {
-    $nativeHostCaptivePortalQueueCandidatePaths += (Join-Path $PSScriptRoot 'NativeHost.CaptivePortalRecoveryQueue.ps1')
-}
+function Initialize-NativeHostCaptivePortalSupportFiles {
+    <#
+    .SYNOPSIS
+    Loads the captive portal support files on demand (Phase 2D D2).
+    .DESCRIPTION
+    Only the captive portal recovery/observation actions need these files; the
+    hot path (ping, enqueue, dependency checks, cheap reads) never touches them.
+    Existing function overrides (for example Pester doubles) are preserved.
+    #>
+    param()
 
-foreach ($nativeHostCaptivePortalQueueCandidatePath in ($nativeHostCaptivePortalQueueCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
-    if (Test-Path $nativeHostCaptivePortalQueueCandidatePath -ErrorAction SilentlyContinue) {
-        . $nativeHostCaptivePortalQueueCandidatePath
-        break
+    $supportFiles = @(
+        @{
+            Path     = 'NativeHost.CaptivePortalRecoveryQueue.ps1'
+            Commands = @(
+                'Get-NativeHostCaptivePortalRecoveryQueuePath',
+                'Get-NativeHostCaptivePortalRecoveryResultPath',
+                'Get-NativeHostCaptivePortalRecoveryProgressPath',
+                'Get-NativeHostCaptivePortalRecoveryFileSnapshot',
+                'Get-NativeHostCaptivePortalRecoveryDiagnosticSnapshot',
+                'Add-NativeHostCaptivePortalRecoveryDiagnostics',
+                'Write-NativeHostCaptivePortalRecoveryRequest',
+                'Read-NativeHostCaptivePortalRecoveryResultEnvelope',
+                'Read-NativeHostCaptivePortalRecoveryResult',
+                'Get-NativeHostCaptivePortalRecoveryQueueClassification'
+            )
+            Required = 'Get-NativeHostCaptivePortalRecoveryQueueClassification'
+            Error    = 'NativeHost.CaptivePortalRecoveryQueue.ps1 is required for native host captive portal recovery queue handling.'
+        }
+        @{
+            Path     = 'CaptivePortal.RecoveryTransition.ps1'
+            Commands = @(
+                'Get-OpenPathCaptivePortalRecoveryTransitionStringList',
+                'Get-OpenPathCaptivePortalRecoveryTransitionProperty',
+                'Test-OpenPathCaptivePortalRecoveryTransitionConfiguredDomainsApplied',
+                'Get-OpenPathCaptivePortalRecoveryTransitionEffectiveHosts',
+                'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary',
+                'Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess'
+            )
+            Required = 'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary'
+            Error    = 'CaptivePortal.RecoveryTransition.ps1 is required for native host captive portal recovery transitions.'
+        }
+        @{
+            Path     = 'CaptivePortal.StateFiles.ps1'
+            Commands = @('Read-OpenPathCaptivePortalStateJson')
+            Required = 'Read-OpenPathCaptivePortalStateJson'
+            Error    = 'CaptivePortal.StateFiles.ps1 is required for native host captive portal state reads.'
+        }
+    )
+
+    foreach ($supportFile in $supportFiles) {
+        $missing = @($supportFile.Commands | Where-Object { -not (Get-Command -Name $_ -ErrorAction SilentlyContinue) })
+        if ($missing.Count -eq 0) {
+            continue
+        }
+
+        $candidatePaths = @()
+        if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+            $candidatePaths += (Join-Path $script:OpenPathRoot ('lib\internal\' + $supportFile.Path))
+        }
+        if ($PSScriptRoot) {
+            $candidatePaths += (Join-Path $PSScriptRoot $supportFile.Path)
+        }
+
+        foreach ($candidatePath in ($candidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+            if (Test-Path $candidatePath -ErrorAction SilentlyContinue) {
+                Import-NativeHostSupportFileWithOverrides -Path $candidatePath -PreserveFunctions $supportFile.Commands
+                break
+            }
+        }
+
+        if (-not (Get-Command -Name $supportFile.Required -ErrorAction SilentlyContinue)) {
+            throw $supportFile.Error
+        }
     }
-}
-
-if (-not (Get-Command -Name 'Get-NativeHostCaptivePortalRecoveryQueueClassification' -ErrorAction SilentlyContinue)) {
-    throw 'NativeHost.CaptivePortalRecoveryQueue.ps1 is required for native host captive portal recovery queue handling.'
-}
-
-$nativeHostRecoveryTransitionCandidatePaths = @()
-if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
-    $nativeHostRecoveryTransitionCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\CaptivePortal.RecoveryTransition.ps1')
-}
-if ($PSScriptRoot) {
-    $nativeHostRecoveryTransitionCandidatePaths += (Join-Path $PSScriptRoot 'CaptivePortal.RecoveryTransition.ps1')
-}
-
-foreach ($nativeHostRecoveryTransitionCandidatePath in ($nativeHostRecoveryTransitionCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
-    if (Test-Path $nativeHostRecoveryTransitionCandidatePath -ErrorAction SilentlyContinue) {
-        . $nativeHostRecoveryTransitionCandidatePath
-        break
-    }
-}
-
-if (-not (Get-Command -Name 'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary' -ErrorAction SilentlyContinue)) {
-    throw 'CaptivePortal.RecoveryTransition.ps1 is required for native host captive portal recovery transitions.'
-}
-
-$nativeHostCaptivePortalStateFilesCandidatePaths = @()
-if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
-    $nativeHostCaptivePortalStateFilesCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\CaptivePortal.StateFiles.ps1')
-}
-if ($PSScriptRoot) {
-    $nativeHostCaptivePortalStateFilesCandidatePaths += (Join-Path $PSScriptRoot 'CaptivePortal.StateFiles.ps1')
-}
-
-foreach ($nativeHostCaptivePortalStateFilesCandidatePath in ($nativeHostCaptivePortalStateFilesCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
-    if (Test-Path $nativeHostCaptivePortalStateFilesCandidatePath -ErrorAction SilentlyContinue) {
-        . $nativeHostCaptivePortalStateFilesCandidatePath
-        break
-    }
-}
-
-if (-not (Get-Command -Name 'Read-OpenPathCaptivePortalStateJson' -ErrorAction SilentlyContinue)) {
-    throw 'CaptivePortal.StateFiles.ps1 is required for native host captive portal state reads.'
 }
 
 if (-not (Get-Command -Name 'Test-OpenPathRuntimeDependencyCandidate' -ErrorAction SilentlyContinue)) {

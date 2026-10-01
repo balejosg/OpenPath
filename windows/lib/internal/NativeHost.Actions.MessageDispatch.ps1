@@ -94,6 +94,7 @@ function Invoke-NativeHostMessageAction {
         }
 
         'get-config' {
+            Initialize-NativeHostRequestSetupSupport
             $requestSetupState = Get-OpenPathRequestSetupState -Config $State
             $apiUrl = [string]$requestSetupState.RequestApiUrl
 

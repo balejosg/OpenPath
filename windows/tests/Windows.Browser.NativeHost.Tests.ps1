@@ -2445,11 +2445,23 @@ Describe "Browser Module - Native Host" {
                             requestType = 'script'
                         })
                 }
+                # Phase 2D D2: the first enqueue must not pay a lazy load the
+                # second one does not; measure both and report the pair.
+                $enqueueMs2 = & $measure {
+                    Handle-Message -Message ([PSCustomObject]@{
+                            action = 'allow-local-runtime-dependency'
+                            mode = 'enqueue'
+                            anchorHost = 'allowed.example'
+                            dependencyHost = 'cdn-two.example'
+                            requestType = 'script'
+                        })
+                }
 
-                Write-Host ("Native host hot-path latency (in-process): ping=$($pingMs)ms check=$($checkMs)ms enqueue=$($enqueueMs)ms")
+                Write-Host ("Native host hot-path latency (in-process): ping=$($pingMs)ms check=$($checkMs)ms enqueue=$($enqueueMs)ms enqueue2=$($enqueueMs2)ms")
                 $pingMs | Should -BeLessThan 500
                 $checkMs | Should -BeLessThan 500
                 $enqueueMs | Should -BeLessThan 500
+                $enqueueMs2 | Should -BeLessThan 500
             }
             finally {
                 if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
@@ -2623,5 +2635,97 @@ Describe "Browser Module - Native Host" {
                 $response.version | Should -Be 'policy-v2'
             }
         }
+    }
+}
+
+Describe "Phase 2D native host startup profile and hot path" {
+    It "Records a once-per-process startup profile in the native host log" {
+        $nativeHostScriptPath = Join-Path $PSScriptRoot ".." "scripts" "OpenPath-NativeHost.ps1"
+        $nativeHostContent = Get-Content $nativeHostScriptPath -Raw
+
+        Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
+            'function Add-NativeHostStartupProfileEntry',
+            'function Write-NativeHostStartupProfile',
+            'startup-profile',
+            'processToScriptMs',
+            "firstEnqueueMs",
+            'process-to-script'
+        )
+    }
+
+    It "Serves ping without loading request setup, TaskRunner or captive portal support files" {
+        $windowsRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+        $childScript = @"
+`$ErrorActionPreference = 'Stop'
+`$root = '$windowsRoot'
+`$script:OpenPathRoot = `$root
+`$script:MaxDomains = 50
+`$script:MaxMessageBytes = 1MB
+. (Join-Path `$root 'lib\internal\NativeHost.State.ps1')
+. (Join-Path `$root 'lib\internal\NativeHost.Protocol.ps1')
+. (Join-Path `$root 'lib\internal\NativeHost.Actions.ps1')
+`$sections = [PSCustomObject]@{ PolicyKnown = `$false; PolicyVersion = ''; Whitelist = @(); BlockedSubdomains = @(); BlockedPaths = @(); AllowedPaths = @() }
+`$response = Invoke-NativeHostMessageAction -Message ([PSCustomObject]@{ action = 'ping' }) -State ([PSCustomObject]@{}) -Sections `$sections -Action 'ping'
+`$report = [ordered]@{
+  ping = [bool]`$response.success
+  protocolVersion = [int]`$response.protocolVersion
+  requestSetup = [bool](Get-Command -Name 'Get-OpenPathRequestSetupState' -ErrorAction SilentlyContinue)
+  taskRunner = [bool](Get-Command -Name 'New-OpenPathSchtasksRunner' -ErrorAction SilentlyContinue)
+  captiveQueue = [bool](Get-Command -Name 'Get-NativeHostCaptivePortalRecoveryQueueClassification' -ErrorAction SilentlyContinue)
+  recoveryTransition = [bool](Get-Command -Name 'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary' -ErrorAction SilentlyContinue)
+  stateFiles = [bool](Get-Command -Name 'Read-OpenPathCaptivePortalStateJson' -ErrorAction SilentlyContinue)
+}
+`$report | ConvertTo-Json -Compress
+"@
+        $output = @(& pwsh -NoProfile -Command $childScript 2>&1)
+        $jsonLine = $output | Where-Object { $_ -match '^\{' } | Select-Object -Last 1
+        $report = $jsonLine | ConvertFrom-Json
+
+        $report.ping | Should -BeTrue
+        $report.protocolVersion | Should -Be 2
+        $report.requestSetup | Should -BeFalse
+        $report.taskRunner | Should -BeFalse
+        $report.captiveQueue | Should -BeFalse
+        $report.recoveryTransition | Should -BeFalse
+        $report.stateFiles | Should -BeFalse
+    }
+
+    It "Loads request setup, TaskRunner and captive portal support files on demand" {
+        $windowsRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+        $childScript = @"
+`$ErrorActionPreference = 'Stop'
+`$root = '$windowsRoot'
+`$script:OpenPathRoot = `$root
+`$script:MaxDomains = 50
+`$script:MaxMessageBytes = 1MB
+. (Join-Path `$root 'lib\internal\NativeHost.State.ps1')
+. (Join-Path `$root 'lib\internal\NativeHost.Protocol.ps1')
+. (Join-Path `$root 'lib\internal\NativeHost.Actions.ps1')
+Initialize-NativeHostRequestSetupSupport
+Initialize-NativeHostTaskRunnerSupport
+Initialize-NativeHostCaptivePortalSupportFiles
+`$runner = Get-NativeHostTaskRunner
+`$report = [ordered]@{
+  requestSetup = [bool](Get-Command -Name 'Get-OpenPathRequestSetupState' -ErrorAction SilentlyContinue)
+  taskRunner = [bool](Get-Command -Name 'New-OpenPathSchtasksRunner' -ErrorAction SilentlyContinue)
+  invokeTask = [bool](Get-Command -Name 'Invoke-OpenPathScheduledTask' -ErrorAction SilentlyContinue)
+  runner = [bool]`$runner
+  captiveQueue = [bool](Get-Command -Name 'Get-NativeHostCaptivePortalRecoveryQueueClassification' -ErrorAction SilentlyContinue)
+  recoveryTransition = [bool](Get-Command -Name 'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary' -ErrorAction SilentlyContinue)
+  stateFiles = [bool](Get-Command -Name 'Read-OpenPathCaptivePortalStateJson' -ErrorAction SilentlyContinue)
+}
+`$report | ConvertTo-Json -Compress
+"@
+        $output = @(& pwsh -NoProfile -Command $childScript 2>&1)
+        $jsonLine = $output | Where-Object { $_ -match '^\{' } | Select-Object -Last 1
+        $report = $jsonLine | ConvertFrom-Json
+
+        $report.requestSetup | Should -BeTrue
+        $report.taskRunner | Should -BeTrue
+        $report.invokeTask | Should -BeTrue
+        $report.runner | Should -BeTrue
+        $report.captiveQueue | Should -BeTrue
+        $report.recoveryTransition | Should -BeTrue
+        $report.stateFiles | Should -BeTrue
     }
 }
