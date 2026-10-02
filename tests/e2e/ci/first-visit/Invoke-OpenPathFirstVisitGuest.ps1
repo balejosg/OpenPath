@@ -625,10 +625,33 @@ switch ($Step) {
                     }
                     $profileIds[$profileDir] = $ids
                 }
+                $xpiSigned = $false
+                $xpiId = ''
+                try {
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+                    $zip = [IO.Compression.ZipFile]::OpenRead($labXpi)
+                    try {
+                        $xpiSigned = @($zip.Entries | Where-Object { $_.FullName -like 'META-INF/*.rsa' }).Count -gt 0
+                        $manifestEntry = @($zip.Entries | Where-Object { $_.FullName -eq 'manifest.json' })[0]
+                        if ($manifestEntry) {
+                            $reader = New-Object IO.StreamReader($manifestEntry.Open())
+                            $manifestText = $reader.ReadToEnd()
+                            $reader.Close()
+                            $manifestJson = $manifestText | ConvertFrom-Json
+                            $xpiId = [string]$manifestJson.browser_specific_settings.gecko.id
+                            if (-not $xpiId) { $xpiId = [string]$manifestJson.applications.gecko.id }
+                        }
+                    }
+                    finally { $zip.Dispose() }
+                }
+                catch { $xpiId = 'xpi-read-error' }
+                Write-Output ('CHECK-EXT diag xpiSigned=' + [string]$xpiSigned + ' xpiId=' + $xpiId)
                 $script:Body.extensionDiagnostics = [ordered]@{
                     profiles      = $profileDirs
                     profileIds    = $profileIds
                     xpiBytes      = $xpiBytes
+                    xpiSigned     = $xpiSigned
+                    xpiId         = $xpiId
                     firefoxOwners = $firefoxOwners
                 }
                 $script:Failures.Add('extension-not-installed-by-policy')
