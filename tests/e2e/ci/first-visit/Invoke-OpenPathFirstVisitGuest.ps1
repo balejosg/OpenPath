@@ -677,7 +677,7 @@ switch ($Step) {
             # The policy install happens shortly after Firefox starts: poll instead
             # of reading the profile once.
             $extension = [ordered]@{ found = $false }
-            $deadline = (Get-Date).AddSeconds(60)
+            $deadline = (Get-Date).AddSeconds(45)
             while ((Get-Date) -lt $deadline) {
                 $extension = Get-ExtensionState
                 if ($extension.found) { break }
@@ -690,7 +690,7 @@ switch ($Step) {
                 Close-FirefoxProcesses | Out-Null
                 $second = Start-InSessionVisit -Url 'about:blank' -Tag 'warmup2'
                 Write-Output ('CHECK-EXT second-launch=' + [string]$second.out)
-                $deadline2 = (Get-Date).AddSeconds(90)
+                $deadline2 = (Get-Date).AddSeconds(60)
                 while ((Get-Date) -lt $deadline2) {
                     $extension = Get-ExtensionState
                     if ($extension.found) { break }
@@ -709,8 +709,8 @@ switch ($Step) {
                 $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
                 $profileDirs = @(Get-ChildItem -LiteralPath $studentProfileRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
                 $xpiBytes = if (Test-Path -LiteralPath $labXpi) { [long](Get-Item -LiteralPath $labXpi).Length } else { -1 }
-                $firefoxOwners = @(Get-CimInstance Win32_Process -Filter "Name='firefox.exe'" -ErrorAction SilentlyContinue | ForEach-Object { try { [string]$_.GetOwner().User } catch { 'unknown' } })
-                Write-Output ('CHECK-EXT diag profiles=[' + ($profileDirs -join ',') + '] xpiBytes=' + [string]$xpiBytes + ' owners=[' + ($firefoxOwners -join ',') + ']')
+                $firefoxOwners = @('profile-detail-only')
+                Write-Output ('CHECK-EXT diag profiles=[' + ($profileDirs -join ',') + '] xpiBytes=' + [string]$xpiBytes)
                 foreach ($profileDir in $profileDirs) {
                     $extFile = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles\$profileDir\extensions.json"
                     $ids = @()

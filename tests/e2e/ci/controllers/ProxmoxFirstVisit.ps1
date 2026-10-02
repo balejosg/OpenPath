@@ -158,9 +158,26 @@ function Send-OpenPathFirstVisitStep {
     if ($PersonalizedGuestPath) { $arguments += '-PersonalizedExePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $PersonalizedGuestPath) }
     $arguments += '| Out-String'
     $script = ($arguments -join ' ') + "`nWrite-Output ('__HARNESS_EXIT__=' + [string]`$LASTEXITCODE)"
-    $output = & $Transport.InvokeGuestPowerShell $Vmid $script $TimeoutSeconds
-    $exitMatch = [regex]::Match([string]$output, '__HARNESS_EXIT__=(-?\d+)')
-    $exitCode = if ($exitMatch.Success) { [int]$exitMatch.Groups[1].Value } else { -999 }
+    # QGA hiccups are infra: retry once when the guest produced no marker.
+    $output = ''
+    $exitCode = -999
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        try { $output = & $Transport.InvokeGuestPowerShell $Vmid $script $TimeoutSeconds }
+        catch {
+            Update-OpenPathLabActiveHeartbeat
+            if ($attempt -ge 2) { throw }
+            Start-Sleep -Seconds 15
+            continue
+        }
+        $exitMatch = [regex]::Match([string]$output, '__HARNESS_EXIT__=(-?\d+)')
+        if ($exitMatch.Success) {
+            $exitCode = [int]$exitMatch.Groups[1].Value
+            break
+        }
+        if ($attempt -ge 2) { break }
+        Update-OpenPathLabActiveHeartbeat
+        Start-Sleep -Seconds 15
+    }
     $jsonText = [string]$output
     $marker = [regex]::Match($jsonText, '(?s)<<<GUEST_RESULT>>>\s*(\{.*?\})\s*<<<END_GUEST_RESULT>>>')
     if ($marker.Success) {
@@ -452,7 +469,7 @@ Write-Output 'autologon-on'
     Start-Sleep -Seconds $script:OpenPathFirstVisitRefreshSettleSeconds
     $warmSession = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
     $warmFirefox = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'wait-firefox' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 400
-    $extension = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'check-extension' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
+    $extension = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'check-extension' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
     $state = [ordered]@{
         phase               = 'prepared'
         scenarioId          = [string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId')
