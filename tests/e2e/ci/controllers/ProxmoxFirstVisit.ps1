@@ -7,6 +7,9 @@
 
 $script:OpenPathFirstVisitCaptureOffsets = @(5, 10, 15, 20, 30, 60)
 $script:OpenPathFirstVisitRefreshSettleSeconds = 30
+$script:OpenPathFirstVisitObserveSettleSeconds = 15
+$script:OpenPathFirstVisitHotWindowSeconds = 300
+$script:OpenPathFirstVisitHotSecondSettleSeconds = 20
 
 function Get-OpenPathFirstVisitHarnessSourcePath {
     return (Join-Path (Split-Path -Parent $PSScriptRoot) 'first-visit\Invoke-OpenPathFirstVisitGuest.ps1')
@@ -565,16 +568,16 @@ function Invoke-OpenPathFirstVisitObserve {
     }
     else {
         # The visit step launched the browser on the student's desktop directly.
-        Start-Sleep -Seconds 15
+        Start-Sleep -Seconds $script:OpenPathFirstVisitObserveSettleSeconds
     }
     $wait = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'wait-firefox' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 400
     $launchedAt = [string]$wait.body.state.launchedAt
     if ($scenario -eq 'first-visit-hot') {
         # Hot window: the same instance gets a second window on anchor 2 and the
         # final self-report is the anchor-2 document.
-        Start-Sleep -Seconds 300
+        Start-Sleep -Seconds $script:OpenPathFirstVisitHotWindowSeconds
         $second = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'second-window' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
-        Start-Sleep -Seconds 20
+        Start-Sleep -Seconds $script:OpenPathFirstVisitHotSecondSettleSeconds
     }
     $visitDelaySeconds = -1
     if ($logonAt -and $launchedAt) {

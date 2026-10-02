@@ -315,6 +315,9 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             & (Get-Module ProxmoxWindowsLab) {
                 $script:OpenPathFirstVisitCaptureOffsets = @(0)
                 $script:OpenPathFirstVisitRefreshSettleSeconds = 0
+                $script:OpenPathFirstVisitObserveSettleSeconds = 0
+                $script:OpenPathFirstVisitHotWindowSeconds = 0
+                $script:OpenPathFirstVisitHotSecondSettleSeconds = 0
             }
             $script:FirstVisitArtifacts = Join-Path $TestDrive ('first-visit-' + [guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $script:FirstVisitArtifacts -Force | Out-Null
