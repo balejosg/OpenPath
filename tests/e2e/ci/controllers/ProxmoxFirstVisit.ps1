@@ -396,6 +396,23 @@ Write-Output 'launcher-staged'
     Write-OpenPathFirstVisitGuestFixtureInfo -Transport $Transport -Vmid $Vmid -Settings $fixture.Settings -Plan $fixture.Plan
     $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
     $configure = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'configure' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
+    # Production-like requirement: the student is logged in interactively before
+    # any browser runs (the session launcher needs an active console session, and
+    # W/W2/B all assume a real student desktop).
+    & $Transport.InvokeGuestPowerShell $Vmid @"
+`$ErrorActionPreference = 'Continue'
+`$key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+Set-ItemProperty -Path `$key -Name 'AutoAdminLogon' -Value '1' -Type String
+Set-ItemProperty -Path `$key -Name 'DefaultUserName' -Value '$($settings.StudentUserName)' -Type String
+Set-ItemProperty -Path `$key -Name 'DefaultDomainName' -Value `$env:COMPUTERNAME -Type String
+Set-ItemProperty -Path `$key -Name 'DefaultPassword' -Value '$($settings.GuestSecret)' -Type String
+Write-Output 'autologon-on'
+"@ 120 | Out-Null
+    & $Transport.RequestGuestReboot $Vmid | Out-Null
+    $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootId $TimeoutSeconds)
+    if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-reboot-timeout' }
+    $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
+    $sessionUser = [string](Get-OpenPathLabField -InputObject $session.body.state -Name 'session')
     $warmup = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'warmup' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
     $state = [ordered]@{
         phase               = 'prepared'
@@ -410,6 +427,7 @@ Write-Output 'launcher-staged'
         plan                = $fixture.Plan
         install             = $install.body.state.install
         configured          = [bool]$configure.body.state.registered
+        sessionUser         = $sessionUser
         extension           = $warmup.body.state.extension
         warmupClose         = $warmup.body.state.closeAfterWarmup
     }
