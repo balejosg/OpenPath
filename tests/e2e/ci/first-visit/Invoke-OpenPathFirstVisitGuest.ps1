@@ -645,13 +645,16 @@ switch ($Step) {
                     finally { $zip.Dispose() }
                 }
                 catch { $xpiId = 'xpi-read-error' }
-                Write-Output ('CHECK-EXT diag xpiSigned=' + [string]$xpiSigned + ' xpiId=' + $xpiId)
+                $ffVersion = ''
+                try { $ffVersion = [string](Get-Item -LiteralPath (Get-FirefoxInstallPath)).VersionInfo.ProductVersion } catch { }
+                Write-Output ('CHECK-EXT diag xpiSigned=' + [string]$xpiSigned + ' xpiId=' + $xpiId + ' firefoxVersion=' + $ffVersion)
                 $script:Body.extensionDiagnostics = [ordered]@{
                     profiles      = $profileDirs
                     profileIds    = $profileIds
                     xpiBytes      = $xpiBytes
                     xpiSigned     = $xpiSigned
                     xpiId         = $xpiId
+                    firefoxVersion = $ffVersion
                     firefoxOwners = $firefoxOwners
                 }
                 $script:Failures.Add('extension-not-installed-by-policy')
