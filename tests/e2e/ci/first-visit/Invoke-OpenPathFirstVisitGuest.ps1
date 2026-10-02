@@ -342,7 +342,10 @@ function Complete-Step {
     }
     New-Dir (Split-Path -Parent $ResultPath)
     try { [IO.File]::WriteAllText($ResultPath, $json, [Text.UTF8Encoding]::new($false)) } catch { }
+    # Markers keep the result unambiguous even when earlier traces contain braces.
+    Write-Output '<<<GUEST_RESULT>>>'
     Write-Output $json
+    Write-Output '<<<END_GUEST_RESULT>>>'
     if ($Status -eq 'failed') { exit 1 }
     exit 0
 }
@@ -553,7 +556,7 @@ switch ($Step) {
         catch { $script:Failures.Add('lab-policy-registry-write-failed') }
         $regBack = ''
         try { $regBack = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings) -join "`n" } catch { }
-        Write-Output ('LAB-POLICY registry=' + $regBack)
+        Write-Output ('LAB-POLICY registry-has-install-url=' + [string]($regBack -like ('*' + $installUrl + '*')))
         $script:Body.labPolicyRegistryReadBack = $regBack
         if ($regBack -notlike ('*' + $installUrl + '*')) { $script:Failures.Add('lab-policy-registry-not-applied') }
 

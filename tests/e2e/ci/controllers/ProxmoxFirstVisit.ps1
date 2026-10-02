@@ -162,9 +162,16 @@ function Send-OpenPathFirstVisitStep {
     $exitMatch = [regex]::Match([string]$output, '__HARNESS_EXIT__=(-?\d+)')
     $exitCode = if ($exitMatch.Success) { [int]$exitMatch.Groups[1].Value } else { -999 }
     $jsonText = [string]$output
-    $start = $jsonText.IndexOf('{')
-    $end = $jsonText.LastIndexOf('}')
-    if ($start -lt 0 -or $end -le $start) {
+    $marker = [regex]::Match($jsonText, '(?s)<<<GUEST_RESULT>>>\s*(\{.*?\})\s*<<<END_GUEST_RESULT>>>')
+    if ($marker.Success) {
+        $jsonCandidate = $marker.Groups[1].Value
+    }
+    else {
+        $start = $jsonText.IndexOf('{')
+        $end = $jsonText.LastIndexOf('}')
+        $jsonCandidate = if ($start -ge 0 -and $end -gt $start) { $jsonText.Substring($start, $end - $start + 1) } else { '' }
+    }
+    if (-not $jsonCandidate) {
         # Archive the raw guest output so a missing result still explains itself.
         try {
             $rawPath = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.raw.txt"
@@ -173,10 +180,17 @@ function Send-OpenPathFirstVisitStep {
         catch { }
         throw "first-visit-guest-result-missing-$Phase-$Step"
     }
-    try { $harness = $jsonText.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop }
-    catch { throw "first-visit-guest-result-invalid-$Phase-$Step" }
+    try { $harness = $jsonCandidate | ConvertFrom-Json -ErrorAction Stop }
+    catch {
+        try {
+            $rawPath = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.raw.txt"
+            [IO.File]::WriteAllText($rawPath, ([string]$output).Substring(0, [math]::Min(6000, ([string]$output).Length)), [Text.UTF8Encoding]::new($false))
+        }
+        catch { }
+        throw "first-visit-guest-result-invalid-$Phase-$Step"
+    }
     $resultArchive = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.json"
-    try { [IO.File]::WriteAllText($resultArchive, $jsonText.Substring($start, $end - $start + 1), [Text.UTF8Encoding]::new($false)) } catch { }
+    try { [IO.File]::WriteAllText($resultArchive, $jsonCandidate, [Text.UTF8Encoding]::new($false)) } catch { }
     if ([string]$harness.status -ne 'passed' -or $exitCode -ne 0) {
         $failures = @($harness.failures) -join ','
         $bodyJson = ($harness.body | ConvertTo-Json -Depth 6 -Compress)
