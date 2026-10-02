@@ -161,8 +161,9 @@ function Send-OpenPathFirstVisitStep {
     # QGA hiccups are infra: retry once when the guest produced no marker.
     $output = ''
     $exitCode = -999
+    $attemptTimeout = [math]::Min($TimeoutSeconds, 600)
     for ($attempt = 1; $attempt -le 2; $attempt++) {
-        try { $output = & $Transport.InvokeGuestPowerShell $Vmid $script $TimeoutSeconds }
+        try { $output = & $Transport.InvokeGuestPowerShell $Vmid $script $attemptTimeout }
         catch {
             Update-OpenPathLabActiveHeartbeat
             if ($attempt -ge 2) { throw }
