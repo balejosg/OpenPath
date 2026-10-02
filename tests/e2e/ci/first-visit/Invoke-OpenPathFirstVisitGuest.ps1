@@ -328,9 +328,20 @@ function Complete-Step {
         endedAt   = [DateTime]::UtcNow.ToString('o')
         body      = [ordered]@{ state = $script:Body; session = [string]$script:Body.session }
     }
-    $json = $payload | ConvertTo-Json -Depth 12 -Compress
+    $json = ''
+    try { $json = $payload | ConvertTo-Json -Depth 12 -Compress }
+    catch {
+        Write-Output ('COMPLETE-STEP serialization-failed: ' + $_.Exception.Message)
+        $payload = [ordered]@{
+            status = $Status; step = $Step; phase = $Phase; scenario = $ScenarioId
+            failures = @($script:Failures); endedAt = [DateTime]::UtcNow.ToString('o')
+            body = [ordered]@{ state = [ordered]@{ note = 'body-unserializable' }; session = '' }
+        }
+        try { $json = $payload | ConvertTo-Json -Depth 6 -Compress }
+        catch { $json = '{"status":"' + $Status + '","step":"' + $Step + '","failures":["body-unserializable"],"body":{"state":{}}}' }
+    }
     New-Dir (Split-Path -Parent $ResultPath)
-    [IO.File]::WriteAllText($ResultPath, ($payload | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+    try { [IO.File]::WriteAllText($ResultPath, $json, [Text.UTF8Encoding]::new($false)) } catch { }
     Write-Output $json
     if ($Status -eq 'failed') { exit 1 }
     exit 0
@@ -429,6 +440,11 @@ switch ($Step) {
         if ($xpi.Count -gt 0) {
             $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
             Copy-Item -LiteralPath $xpi[0].FullName -Destination $labXpi -Force
+            $xpiHash = (Get-FileHash -LiteralPath $labXpi -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Output ('CONFIGURE xpi-source=' + $xpi[0].FullName + ' bytes=' + [string]$xpi[0].Length + ' sha256=' + $xpiHash)
+            Invoke-Cmd 'icacls.exe' @($labXpi, '/grant', '*S-1-5-32-545:R') | Out-Null
+            Invoke-Cmd 'icacls.exe' @('C:\OpenPathLab\first-visit', '/grant', '*S-1-5-32-545:(OI)(CI)RX') | Out-Null
+            $script:Body.xpiSha256 = $xpiHash
             $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
             $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
             if ($null -eq $entry) {
@@ -553,10 +569,29 @@ switch ($Step) {
             $script:Body.extension = $extension
             $script:Body.closeAfterWarmup = $closed
             if (-not $extension.found) {
+                # Slim, literal-path diagnostics: every value is also traced so a
+                # late crash still leaves the data in the raw output.
+                $studentProfileRoot = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles"
+                $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
+                $profileDirs = @(Get-ChildItem -LiteralPath $studentProfileRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+                $xpiBytes = if (Test-Path -LiteralPath $labXpi) { [long](Get-Item -LiteralPath $labXpi).Length } else { -1 }
+                $firefoxOwners = @(Get-CimInstance Win32_Process -Filter "Name='firefox.exe'" -ErrorAction SilentlyContinue | ForEach-Object { try { [string]$_.GetOwner().User } catch { 'unknown' } })
+                Write-Output ('CHECK-EXT diag profiles=[' + ($profileDirs -join ',') + '] xpiBytes=' + [string]$xpiBytes + ' owners=[' + ($firefoxOwners -join ',') + ']')
+                foreach ($profileDir in $profileDirs) {
+                    $extFile = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles\$profileDir\extensions.json"
+                    $ids = @()
+                    if (Test-Path -LiteralPath $extFile) {
+                        try { $ids = @((Get-Content -LiteralPath $extFile -Raw | ConvertFrom-Json).addons | ForEach-Object { [string]$_.id }) }
+                        catch { $ids = @('parse-error') }
+                    }
+                    Write-Output ('CHECK-EXT diag profile=' + $profileDir + ' ids=[' + ($ids -join ',') + ']')
+                }
+                $aclLines = @((Invoke-Cmd 'icacls.exe' @($labXpi)).out | Select-Object -First 3)
+                Write-Output ('CHECK-EXT diag acl=' + ($aclLines -join ' | '))
                 $script:Body.extensionDiagnostics = [ordered]@{
-                    profiles = @(Get-ChildItem 'C:\Users\*\AppData\Roaming\Mozilla\Firefox\Profiles' -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-                    policy = @(Get-Content 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Raw -ErrorAction SilentlyContinue)
-                    xpi = @(Get-ChildItem 'C:\OpenPathLab\first-visit' -Filter '*.xpi' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName + ' ' + $_.Length })
+                    profiles      = $profileDirs
+                    xpiBytes      = $xpiBytes
+                    firefoxOwners = $firefoxOwners
                 }
                 $script:Failures.Add('extension-not-installed-by-policy')
             }
