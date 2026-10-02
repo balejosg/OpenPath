@@ -508,18 +508,18 @@ switch ($Step) {
         Complete-Step
     }
     'lab-policy' {
-        # The agent reapplies its managed policy on boot and writes it to BOTH the
-        # machine registry and distribution/policies.json; Firefox gives the
-        # registry precedence, so the lab install_url must land in both. Firefox
-        # only installs policy extensions from a web URL, so the signed XPI is
-        # uploaded to the fixture and served from the whitelisted anchor 1 host,
-        # mirroring the managed API URL production uses.
+        # Phase 2E proved that Firefox installs the signed xpi from
+        # distribution/policies.json with a file:// url in this lab. The agent
+        # also writes the managed ExtensionSettings to the machine registry (and
+        # reapplies it), and Firefox gives the registry precedence, so the lab
+        # removes the registry entry and drives the install from the file. The
+        # fixture additionally serves the xpi on the anchor and the managed API
+        # path, so the install still works if the agent re-adds the registry
+        # before the browser starts.
         $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
-        $regPath = 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
         $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
-        $plan = Get-FixturePlan
-        $anchorHost = [string]$plan.anchors.a1.host
-        $installUrl = "http://$anchorHost/openpath-firefox-extension.xpi"
+        $labUrl = 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
+
         $fixtureBase = Get-FixtureBase
         $upload = ''
         try {
@@ -527,48 +527,20 @@ switch ($Step) {
             $upload = [string]$uploadResp.StatusCode
         }
         catch { $upload = 'upload-failed: ' + $_.Exception.Message }
-        Write-Output ('LAB-POLICY xpi-upload=' + $upload + ' install_url=' + $installUrl)
-        # The launcher builds the student environment from the registry, so a
-        # machine MOZ_LOG reaches the warm-up Firefox and records the addon
-        # manager's install decision.
-        $mozLog = 'timestamp,addons:5,sync:3,nsHttp:4'
-        $mozLogFile = Join-Path $script:VisitRoot 'moz\addons.log'
-        Invoke-Cmd 'reg.exe' @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', '/v', 'MOZ_LOG', '/t', 'REG_SZ', '/d', $mozLog, '/f') | Out-Null
-        Invoke-Cmd 'reg.exe' @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', '/v', 'MOZ_LOG_FILE', '/t', 'REG_SZ', '/d', $mozLogFile, '/f') | Out-Null
-        $script:Body.mozLogConfigured = $mozLog
+        Write-Output ('LAB-POLICY xpi-upload=' + $upload)
         $script:Body.labPolicyUpload = $upload
-        $script:Body.labPolicyInstallUrl = $installUrl
         if ($upload -notmatch '^2') { $script:Failures.Add('lab-policy-xpi-upload-failed') }
 
-        $entryValue = [pscustomobject]@{ installation_mode = 'force_installed'; install_url = $installUrl }
-
-        # 1) Registry policy (precedence over the file).
-        $settings = $null
+        $regRemoved = $false
         try {
-            $current = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings)
-            if ($current.Count -gt 0) { $settings = ($current -join "`n") | ConvertFrom-Json }
+            Invoke-Cmd 'reg.exe' @('delete', 'HKLM\SOFTWARE\Policies\Mozilla\Firefox', '/v', 'ExtensionSettings', '/f') | Out-Null
+            $regRemoved = ((Invoke-Cmd 'reg.exe' @('query', 'HKLM\SOFTWARE\Policies\Mozilla\Firefox', '/v', 'ExtensionSettings')).exit -ne 0)
         }
         catch { }
-        if ($null -eq $settings) { $settings = [pscustomobject]@{} }
-        if ($settings.PSObject.Properties['openpath-block-monitor@openpath']) {
-            $settings.PSObject.Properties['openpath-block-monitor@openpath'].Value = $entryValue
-        }
-        else {
-            $settings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue $entryValue -Force
-        }
-        $regValue = @($settings | ConvertTo-Json -Depth 10 -Compress)
-        try {
-            if (-not (Test-Path -LiteralPath $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-            New-ItemProperty -Path $regPath -Name 'ExtensionSettings' -Value $regValue -PropertyType MultiString -Force | Out-Null
-        }
-        catch { $script:Failures.Add('lab-policy-registry-write-failed') }
-        $regBack = ''
-        try { $regBack = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings) -join "`n" } catch { }
-        Write-Output ('LAB-POLICY registry-has-install-url=' + [string]($regBack -like ('*' + $installUrl + '*')))
-        $script:Body.labPolicyRegistryReadBack = $regBack
-        if ($regBack -notlike ('*' + $installUrl + '*')) { $script:Failures.Add('lab-policy-registry-not-applied') }
+        Write-Output ('LAB-POLICY registry-removed=' + [string]$regRemoved)
+        $script:Body.labPolicyRegistryRemoved = $regRemoved
+        if (-not $regRemoved) { $script:Failures.Add('lab-policy-registry-not-removed') }
 
-        # 2) distribution/policies.json (kept in sync).
         $rewritten = $false
         if (Test-Path -LiteralPath $policyPath) {
             $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
@@ -577,7 +549,7 @@ switch ($Step) {
                 $policy.policies.ExtensionSettings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue ([pscustomobject]@{ installation_mode = 'force_installed' }) -Force
                 $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
             }
-            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue $installUrl -Force
+            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue $labUrl -Force
             [IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
             $rewritten = $true
         }
@@ -587,7 +559,16 @@ switch ($Step) {
         Write-Output ('LAB-POLICY file rewritten=' + [string]$rewritten + ' install_url=' + $readBack)
         $script:Body.labPolicyRewritten = $rewritten
         $script:Body.labPolicyReadBack = $readBack
-        if ($readBack -ne $installUrl) { $script:Failures.Add('lab-policy-not-applied') }
+        if ($readBack -ne $labUrl) { $script:Failures.Add('lab-policy-not-applied') }
+
+        # The launcher builds the student environment from the registry, so a
+        # machine MOZ_LOG reaches the warm-up Firefox and records the addon
+        # manager's install decision.
+        $mozLog = 'timestamp,addons:5,sync:3,nsHttp:4'
+        $mozLogFile = Join-Path $script:VisitRoot 'moz\addons.log'
+        Invoke-Cmd 'reg.exe' @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', '/v', 'MOZ_LOG', '/t', 'REG_SZ', '/d', $mozLog, '/f') | Out-Null
+        Invoke-Cmd 'reg.exe' @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', '/v', 'MOZ_LOG_FILE', '/t', 'REG_SZ', '/d', $mozLogFile, '/f') | Out-Null
+        $script:Body.mozLogConfigured = $mozLog
         Complete-Step
     }
     'warmup' {
