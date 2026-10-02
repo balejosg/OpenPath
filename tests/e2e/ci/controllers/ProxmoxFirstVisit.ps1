@@ -423,6 +423,13 @@ Write-Output 'autologon-on'
     $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
     $sessionUser = [string](Get-OpenPathLabField -InputObject $session.body.state -Name 'session')
     $warmup = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'warmup' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
+    # The warm-up arms about:blank and cycles the session; wait for the new logon
+    # and the browser, then verify the policy-installed extension and close it
+    # cleanly before any visit.
+    Start-Sleep -Seconds $script:OpenPathFirstVisitRefreshSettleSeconds
+    $warmSession = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
+    $warmFirefox = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'wait-firefox' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 400
+    $extension = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'check-extension' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
     $state = [ordered]@{
         phase               = 'prepared'
         scenarioId          = [string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId')
@@ -438,8 +445,10 @@ Write-Output 'autologon-on'
         configured          = [bool]$configure.body.state.registered
         passwordReset       = ($passwordReset -match 'done')
         sessionUser         = $sessionUser
-        extension           = $warmup.body.state.extension
-        warmupClose         = $warmup.body.state.closeAfterWarmup
+        warmupSession       = [bool](Get-OpenPathLabField -InputObject $warmSession.body.state -Name 'session')
+        warmupFirefox       = @(Get-OpenPathLabField -InputObject $warmFirefox.body.state -Name 'firefox')
+        extension            = $extension.body.state.extension
+        warmupClose         = $extension.body.state.closeAfterWarmup
     }
     Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
     $body = [ordered]@{ state = $state }

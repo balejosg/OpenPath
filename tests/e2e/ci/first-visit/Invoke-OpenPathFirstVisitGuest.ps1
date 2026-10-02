@@ -172,23 +172,6 @@ function Get-ExtensionState {
     return [ordered]@{ found = $false }
 }
 
-function Write-CleanFirefoxCmd {
-    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Tag)
-    $firefox = Get-FirefoxInstallPath
-    if (-not $firefox) { throw 'firefox.exe not found' }
-    New-Dir 'C:\OpenPathLab\logs'
-    New-Dir 'C:\OpenPathLab\moz'
-    $cmdPath = "C:\OpenPathLab\first-visit\ff-$Tag.cmd"
-    $body = @"
-@echo off
-set MOZ_LOG=timestamp,rotate:300,nsHostResolver:5,nsHttp:4
-set MOZ_LOG_FILE=C:\OpenPathLab\moz\$Tag.log
-"$firefox" -new-window "$Url" >> C:\OpenPathLab\logs\firefox-$Tag.log 2>&1
-"@
-    [IO.File]::WriteAllText($cmdPath, $body, [Text.UTF8Encoding]::new($false))
-    return $cmdPath
-}
-
 function Enable-BrowserConsoleVisibility {
     # Lab-only: make the background console observable in the Firefox stdout
     # capture (never applied to a product profile by the lane itself).
@@ -444,6 +427,19 @@ switch ($Step) {
         $script:Body.anchor = $anchorKey
         $script:Body.anchorUrl = $url
         $script:Body.arm = [ordered]@{ cmd = $cmdPath; refresh = $refresh; mode = $refreshMode }
+        Complete-Step
+    }
+    'check-extension' {
+        # Warm-up verification: the policy must have installed and activated the
+        # extension, the console prefs are applied for the visits and the warm-up
+        # browser is closed cleanly (recording `forced`, the class-boot contract).
+        Enable-BrowserConsoleVisibility
+        $extension = Get-ExtensionState
+        $closed = Close-FirefoxProcesses
+        $script:Body.extension = $extension
+        $script:Body.closeAfterWarmup = $closed
+        if (-not $extension.found) { $script:Failures.Add('extension-not-installed-by-policy') }
+        elseif (-not $extension.active) { $script:Failures.Add('extension-installed-but-inactive') }
         Complete-Step
     }
     'wait-firefox' {
