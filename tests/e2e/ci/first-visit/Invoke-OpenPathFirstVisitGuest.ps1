@@ -316,6 +316,54 @@ function Get-LaunchDiagnostics {
     }
 }
 
+function Set-LabFirefoxPolicy {
+    # Phase 2E proved the signed xpi installs from a file:// url in this lab. The
+    # agent also writes (and reapplies) the managed ExtensionSettings in the
+    # machine registry, and Firefox gives the registry precedence, so both
+    # places are pointed at the staged xpi; the caller invokes this right before
+    # a browser start so the agent cannot win the race.
+    param([Parameter(Mandatory = $true)][string]$LabUrl)
+    $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
+    $regPath = 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
+    $fileOk = $false
+    $regOk = $false
+    if (Test-Path -LiteralPath $policyPath) {
+        try {
+            $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+            $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
+            if ($null -eq $entry) {
+                $policy.policies.ExtensionSettings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue ([pscustomobject]@{ installation_mode = 'force_installed' }) -Force
+                $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
+            }
+            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue $LabUrl -Force
+            [IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+            $readBack = [string]((Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json).policies.ExtensionSettings.'openpath-block-monitor@openpath'.install_url)
+            $fileOk = ($readBack -eq $LabUrl)
+        }
+        catch { }
+    }
+    try {
+        $settings = $null
+        $current = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings)
+        if ($current.Count -gt 0) { $settings = ($current -join "`n") | ConvertFrom-Json }
+        if ($null -eq $settings) { $settings = [pscustomobject]@{} }
+        $entryValue = [pscustomobject]@{ installation_mode = 'force_installed'; install_url = $LabUrl }
+        if ($settings.PSObject.Properties['openpath-block-monitor@openpath']) {
+            $settings.PSObject.Properties['openpath-block-monitor@openpath'].Value = $entryValue
+        }
+        else {
+            $settings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue $entryValue -Force
+        }
+        $regValue = @($settings | ConvertTo-Json -Depth 10 -Compress)
+        if (-not (Test-Path -LiteralPath $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+        New-ItemProperty -Path $regPath -Name 'ExtensionSettings' -Value $regValue -PropertyType MultiString -Force | Out-Null
+        $regBack = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings) -join "`n"
+        $regOk = ($regBack -like ('*' + $LabUrl + '*'))
+    }
+    catch { }
+    return [ordered]@{ fileOk = $fileOk; registryOk = $regOk; url = $LabUrl }
+}
+
 function Complete-Step {
     param([string]$Status = 'passed')
     if ($script:Failures.Count -gt 0) { $Status = 'failed' }
@@ -574,6 +622,10 @@ switch ($Step) {
     'warmup' {
         $closed = Close-FirefoxProcesses
         $script:Body.closeBeforeWarmup = $closed
+        # Reassert the file:// policy right before the browser starts: the agent
+        # reapplies the managed registry policy on a timer and would otherwise
+        # win the race.
+        $script:Body.warmupPolicy = Set-LabFirefoxPolicy -LabUrl 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
         $launch = Start-InSessionVisit -Url 'about:blank' -Tag 'warmup'
         $script:Body.launchOut = $launch.out
         $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
@@ -595,6 +647,7 @@ switch ($Step) {
             $script:Body.arm = [ordered]@{ mode = 'reboot'; cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'reboot') }
         }
         else {
+            $script:Body.visitPolicy = Set-LabFirefoxPolicy -LabUrl 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
             $launch = Start-InSessionVisit -Url $url -Tag 'visit'
             $script:Body.launchOut = $launch.out
             $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
@@ -701,6 +754,7 @@ switch ($Step) {
                 catch { $xpiId = 'xpi-read-error' }
                 $ffVersion = ''
                 try { $ffVersion = [string](Get-Item -LiteralPath (Get-FirefoxInstallPath)).VersionInfo.ProductVersion } catch { }
+                $guestClock = [DateTime]::UtcNow.ToString('o')
                 Write-Output ('CHECK-EXT diag xpiSigned=' + [string]$xpiSigned + ' xpiId=' + $xpiId + ' firefoxVersion=' + $ffVersion)
                 $profileDetail = [ordered]@{}
                 foreach ($profileDir in $profileDirs) {
@@ -739,6 +793,7 @@ switch ($Step) {
                     xpiSigned     = $xpiSigned
                     xpiId         = $xpiId
                     firefoxVersion = $ffVersion
+                    guestClock    = $guestClock
                     firefoxOwners = $firefoxOwners
                 }
                 $script:Failures.Add('extension-not-installed-by-policy')
