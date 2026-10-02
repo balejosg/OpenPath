@@ -695,6 +695,14 @@ switch ($Step) {
         # Warm-up verification: the policy must have installed and activated the
         # extension before any measured visit. The step stays short (a single
         # poll) so a guest hiccup can never eat the phase timeout.
+        #
+        # Phase 3A lab finding (documented in the evidence summary): with the
+        # managed policy verified in both the registry and policies.json, the
+        # fixture serving the AMO-signed xpi (anchor + managed api path), the xpi
+        # staged in the profile and in distribution/extensions, this image still
+        # leaves the add-on out of extensions.json (the Phase 2E runs installed
+        # the same way from file://, so the lane reports the reason instead of
+        # guessing and stays informative).
         try {
             Write-Output 'CHECK-EXT stage=start'
             Enable-BrowserConsoleVisibility
