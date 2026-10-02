@@ -243,8 +243,10 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                             'prepare/install'   = '{"status":"passed","body":{"state":{"install":{"ready":true}},"session":""}}'
                             'prepare/configure' = '{"status":"passed","body":{"state":{"registered":true},"session":""}}'
                             'prepare/warmup'    = '{"status":"passed","body":{"state":{"extension":{"found":true,"active":true},"closeAfterWarmup":{"forced":false}},"session":""}}'
+                            'prepare/session'   = '{"status":"passed","body":{"state":{"session":"alumno","sessionLogonAt":"2026-10-01T19:59:00.0000000Z"},"session":"alumno"}}'
                             'observe/session'   = '{"status":"passed","body":{"state":{"session":"alumno","sessionLogonAt":"2026-10-01T20:00:00.0000000Z"},"session":"alumno"}}'
-                            'observe/visit'     = '{"status":"passed","body":{"state":{"launchedAt":"2026-10-01T20:00:30.0000000Z","firefox":[{"pid":3,"created":"2026-10-01T20:00:30.0000000Z"}]},"session":""}}'
+                            'observe/visit'     = '{"status":"passed","body":{"state":{"arm":{"mode":"logoff","refresh":"logoff-1"}},"session":""}}'
+                            'observe/wait-firefox' = '{"status":"passed","body":{"state":{"launchedAt":"2026-10-01T20:00:30.0000000Z","firefox":[{"pid":3,"created":"2026-10-01T20:00:30.0000000Z"}],"firefoxLog":[]},"session":""}}'
                             'observe/collect'   = '{"status":"passed","body":{"state":{"collect":{"diagnosticSample":["stage=extension-diagnostic note=reloaded"],"startupProfiles":["stage=startup-profile processToScriptMs=6341 pingMs=2210 firstEnqueueMs=120"]}},"session":""}}'
                             'observe/security'  = '{"status":"passed","body":{"state":{"overlay":{"unexpected":[],"missing":[]}},"session":""}}'
                             'cleanup/cleanup'   = '{"status":"passed","body":{"state":{"clean":{"rootGone":true}},"session":""}}'
@@ -307,7 +309,10 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
         BeforeEach {
             # The capture offsets live in the module scope; inject a single
             # immediate capture so the dispatch tests never sleep for screendumps.
-            & (Get-Module ProxmoxWindowsLab) { $script:OpenPathFirstVisitCaptureOffsets = @(0) }
+            & (Get-Module ProxmoxWindowsLab) {
+                $script:OpenPathFirstVisitCaptureOffsets = @(0)
+                $script:OpenPathFirstVisitRefreshSettleSeconds = 0
+            }
             $script:FirstVisitArtifacts = Join-Path $TestDrive ('first-visit-' + [guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $script:FirstVisitArtifacts -Force | Out-Null
             $script:FirstVisitTemplate = Join-Path $script:FirstVisitArtifacts 'template.exe'

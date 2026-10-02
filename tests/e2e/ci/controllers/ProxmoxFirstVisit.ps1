@@ -6,6 +6,7 @@
 # tests/e2e/ci/first-visit/fixture_server.py and fetched at runtime.
 
 $script:OpenPathFirstVisitCaptureOffsets = @(5, 10, 15, 20, 30, 60)
+$script:OpenPathFirstVisitRefreshSettleSeconds = 30
 
 function Get-OpenPathFirstVisitHarnessSourcePath {
     return (Join-Path (Split-Path -Parent $PSScriptRoot) 'first-visit\Invoke-OpenPathFirstVisitGuest.ps1')
@@ -239,7 +240,8 @@ function Get-OpenPathFirstVisitReportVerdict {
         [int]$SettledWaveThresholdMs = 15000,
         [int]$ClassBootWaveThresholdMs = 30000,
         [int]$MaxReloadsSettled = 0,
-        [int]$MaxReloadsClassBoot = 1
+        [int]$MaxReloadsClassBoot = 1,
+        [int]$RepairReloads = -1
     )
     $result = [ordered]@{
         scenario = $Scenario
@@ -280,6 +282,7 @@ function Get-OpenPathFirstVisitReportVerdict {
     }
     $result.reloads = [int](Get-OpenPathLabField -InputObject $Report -Name 'loads') - 1
     if ($result.reloads -lt 0) { $result.reloads = 0 }
+    if ($RepairReloads -ge 0) { $result.reloads = $RepairReloads }
     if ($result.reloads -gt $maxReloads) { $result.reasons += 'too-many-reloads' }
     $result.fontLoaded = [bool](Get-OpenPathLabField -InputObject $waves -Name 'fontLoaded')
     $result.neverLearnableBlocked = [bool](Get-OpenPathLabField -InputObject $waves -Name 'blockedCssFailed')
@@ -348,6 +351,7 @@ function Get-OpenPathFirstVisitMetrics {
         waves          = if ($Verdict) { $Verdict.waves } else { $null }
         waveTimesMs    = if ($Verdict) { $Verdict.timesMs } else { $null }
         reloads        = if ($Verdict) { $Verdict.reloads } else { -1 }
+        repairReloads  = if ($Verdict) { $Verdict.reloads } else { -1 }
         fontLoaded     = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'fontLoaded')
         neverLearnableBlocked = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'neverLearnableBlocked')
         reloadReasons  = $reloadReasons
@@ -487,42 +491,50 @@ function Invoke-OpenPathFirstVisitObserve {
         throw 'first-visit-requires-acceptance-lab-config'
     }
     $harnessGuestPath = [string]$state.harnessGuestPath
-    $captureDir = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'captures'
+    $artifactsRoot = [string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')
+    $captureDir = Join-Path $artifactsRoot 'captures'
     New-Item -ItemType Directory -Path $captureDir -Force | Out-Null
-    $visitDelaySeconds = -1
-    $logonAt = ''
+    $evidenceDir = Join-Path $artifactsRoot 'guest-logs'
+    New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
+
+    # 1) Arm the visit (wrapper + Run key) and refresh the session: logoff for
+    #    settled/hot/control (the persistent host process stays warm), reboot for
+    #    class-boot (Firefox starts within the class-boot window at logon).
+    $arm = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'visit' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
+    $refreshMode = [string](Get-OpenPathLabField -InputObject $arm.body.state.arm -Name 'mode')
     if ($scenario -eq 'first-visit-class-boot') {
-        # Class boot: warm-up already ran at prepare; reboot, log in by
-        # autologon and open Firefox within the class-boot window.
-        $autologon = [ordered]@{ enabled = $false }
-        & $Transport.InvokeGuestPowerShell $Vmid @"
-`$ErrorActionPreference = 'Continue'
-`$key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-Set-ItemProperty -Path `$key -Name 'AutoAdminLogon' -Value '1' -Type String
-Set-ItemProperty -Path `$key -Name 'DefaultUserName' -Value '$($settings.StudentUserName)' -Type String
-Set-ItemProperty -Path `$key -Name 'DefaultDomainName' -Value `$env:COMPUTERNAME -Type String
-Set-ItemProperty -Path `$key -Name 'DefaultPassword' -Value '$($settings.GuestSecret)' -Type String
-Write-Output 'autologon-on'
-"@ 120 | Out-Null
-        $previousBoot = [string]$state.bootIdLatest
-        & $Transport.RequestGuestReboot $Vmid | Out-Null
-        $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $previousBoot $TimeoutSeconds)
+        $bootBefore = [string]$state.bootIdLatest
+        $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootBefore $TimeoutSeconds)
         if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-reboot-timeout' }
-        $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'observe' -Step 'session' -TimeoutSeconds 420
-        $logonAt = [string]$session.body.state.sessionLogonAt
-        $visit = Invoke-OpenPathFirstVisitVisit -Payload $Payload -Config $Config -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -HarnessGuestPath $harnessGuestPath -Scenario $scenario -CaptureDir $captureDir -TimeoutSeconds 900
-        if ($logonAt) {
-            $visitDelaySeconds = [int](([datetime]$visit.body.state.launchedAt) - ([datetime]$logonAt)).TotalSeconds
-        }
     }
     else {
-        $visit = Invoke-OpenPathFirstVisitVisit -Payload $Payload -Config $Config -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -HarnessGuestPath $harnessGuestPath -Scenario $scenario -CaptureDir $captureDir -TimeoutSeconds 900
+        Start-Sleep -Seconds $script:OpenPathFirstVisitRefreshSettleSeconds
     }
-    # The verdict comes from the page self-report (never from MOZ_LOG).
+    $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'observe' -Step 'session' -TimeoutSeconds 420
+    $logonAt = [string]$session.body.state.sessionLogonAt
+    $wait = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'wait-firefox' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 400
+    $launchedAt = [string]$wait.body.state.launchedAt
+    $visitDelaySeconds = -1
+    if ($logonAt -and $launchedAt) {
+        try { $visitDelaySeconds = [int](([datetime]$launchedAt) - ([datetime]$logonAt)).TotalSeconds } catch { }
+    }
+
+    # 2) Console screendumps at the fixed offsets.
+    $startedAt = Get-Date
+    foreach ($offset in @($script:OpenPathFirstVisitCaptureOffsets)) {
+        $remaining = ($startedAt.AddSeconds($offset) - (Get-Date)).TotalSeconds
+        if ($remaining -gt 0) { Start-Sleep -Seconds ([int][math]::Ceiling($remaining)) }
+        $capture = Join-Path $captureDir ("console-$scenario-t{0:d3}.ppm" -f $offset)
+        try { & $Transport.CaptureScreendump $Vmid $capture | Out-Null } catch { Write-Warning "screendump t$offset failed: $($_.Exception.Message)" }
+    }
+
+    # 3) The verdict comes from the page self-report (never from MOZ_LOG); the
+    #    repair-reload count is computed from the report sequence.
     $fixtureUrl = [string]$state.fixtureUrl
+    $staging = "$([string](Get-OpenPathLabField -InputObject $Config -Name 'hostStagingRoot'))/$([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId'))".Replace('//', '/')
     $report = $null
-    $stateTextForObserve = ''
-    $deadline = (Get-Date).AddSeconds(90)
+    $fixtureState = $null
+    $deadline = (Get-Date).AddSeconds(120)
     while ((Get-Date) -lt $deadline) {
         $stateTextForObserve = (& $Transport.InvokeHostCommand @('curl', '-s', '--max-time', '10', "$fixtureUrl/state.json") '').Trim()
         if ($stateTextForObserve.StartsWith('{')) {
@@ -531,17 +543,23 @@ Write-Output 'autologon-on'
         }
         Start-Sleep -Seconds 5
     }
-    $evidenceDir = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'guest-logs'
-    New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
-    $fixtureState = $null
-    if ($stateTextForObserve) {
-        try { $fixtureState = $stateTextForObserve | ConvertFrom-Json } catch { }
+    $repairReloads = -1
+    $reportsText = (& $Transport.InvokeHostCommand @('bash', '-lc', "test -f $staging/state/reports.jsonl && cat $staging/state/reports.jsonl || true") '').Trim()
+    if ($reportsText) {
+        $seen = @{}
+        $reloadCount = 0
+        foreach ($line in @($reportsText -split "`n")) {
+            if (-not $line.Trim().StartsWith('{')) { continue }
+            try { $entry = $line | ConvertFrom-Json } catch { continue }
+            $origin = [string](Get-OpenPathLabField -InputObject $entry -Name 'timeOrigin')
+            if (-not $origin -or $seen.ContainsKey($origin)) { continue }
+            $seen[$origin] = $true
+            if ([string](Get-OpenPathLabField -InputObject $entry -Name 'navigationType') -eq 'reload') { $reloadCount += 1 }
+        }
+        $repairReloads = $reloadCount
     }
     $browserRequests = if ($fixtureState) { [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'browserRequests') } else { 0 }
     if ($browserRequests -le 0) {
-        # Only the plan/state curls and the whitelist bootstrap reached the
-        # fixture: the browser never fetched page content. That is an
-        # infrastructure outage, never a product failure.
         throw 'first-visit-fixture-served-no-requests'
     }
     $collect = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'collect' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
@@ -552,28 +570,33 @@ Write-Output 'autologon-on'
     $security = $null
     if ($scenario -in @('first-visit-settled', 'first-visit-control')) {
         $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
+        Start-Sleep -Seconds 30
         $blockedCapture = Join-Path $captureDir "console-$scenario-blocked.ppm"
         try { & $Transport.CaptureScreendump $Vmid $blockedCapture | Out-Null } catch { Write-Warning 'blocked screendump failed' }
     }
     $plan = $state.plan
-    $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario
+    $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario -RepairReloads $repairReloads
     $workerStateJson = [string](Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'workerState')
     $metricsFixture = if ($fixtureState) {
-        [pscustomobject]@{ requests = [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests'); workerStateJson = $workerStateJson }
+        [pscustomobject]@{ requests = [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests'); browserRequests = $browserRequests; workerStateJson = $workerStateJson }
     }
-    else { [pscustomobject]@{ requests = 0; workerStateJson = $workerStateJson } }
+    else { [pscustomobject]@{ requests = 0; browserRequests = 0; workerStateJson = $workerStateJson } }
     $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines @($collect.body.state.collect.diagnosticSample) -StartupProfiles @($collect.body.state.collect.startupProfiles) -FixtureState $metricsFixture -Verdict $verdict -LogLines @(Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'openpathTail')
-    $metricsPath = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'metrics.json'
+    $metricsPath = Join-Path $artifactsRoot 'metrics.json'
     [IO.File]::WriteAllText($metricsPath, ($metrics | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
     $studentUser = [string]$settings.StudentUserName
     Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath "C:\Users\$studentUser\AppData\Local\OpenPath\native-host.log" -LocalPath (Join-Path $evidenceDir 'native-host.log') | Out-Null
     Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath 'C:\OpenPath\logs\openpath.log' -LocalPath (Join-Path $evidenceDir 'openpath.log') | Out-Null
     $body = [ordered]@{
-        state           = [ordered]@{
+        state = [ordered]@{
             scenario          = $scenario
+            refreshMode       = $refreshMode
             visitDelaySeconds = $visitDelaySeconds
             logonAt           = $logonAt
-            visit             = $visit.body.state
+            launchedAt        = $launchedAt
+            repairReloads     = $repairReloads
+            firefox           = @(Get-OpenPathLabField -InputObject $wait.body.state -Name 'firefox')
+            firefoxLog        = @(Get-OpenPathLabField -InputObject $wait.body.state -Name 'firefoxLog')
             report            = $report
             verdict           = $verdict
             metrics           = $metrics

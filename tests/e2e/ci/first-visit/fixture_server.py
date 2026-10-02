@@ -138,6 +138,16 @@ window.__firstVisit = {{
 (function () {{
   var fv = window.__firstVisit;
   fv.marks.start = performance.now();
+  // Hot-session scenario: the same page navigates to the second anchor after
+  // the hot window, keeping the Firefox instance and the host process.
+  try {{
+    var params = new URLSearchParams(location.search);
+    var hot = params.get('hot');
+    var after = parseInt(params.get('after') || '0', 10);
+    if (hot && after > 0) {{
+      setTimeout(function () {{ location.href = 'http://' + hot + '/?from=hot'; }}, after);
+    }}
+  }} catch (e) {{}}
   try {{
     fv.loads = (parseInt(sessionStorage.getItem('firstVisitLoads') || '0', 10) || 0) + 1;
     sessionStorage.setItem('firstVisitLoads', String(fv.loads));
