@@ -49,6 +49,20 @@ covers the plan, routing, report and log contracts, and
 are learnable (and the never-learnable one is not) under
 `RuntimeDependency.Policy`.
 
+### Managed extension install in the lab
+
+Production points `ExtensionSettings.install_url` at the managed API, and the
+agent writes that policy to **both** `distribution/policies.json` and the
+machine registry (`HKLM\SOFTWARE\Policies\Mozilla\Firefox`, `REG_MULTI_SZ`).
+Firefox gives the registry precedence and the agent reapplies it, so the lane's
+`lab-policy` step removes the registry entry (verified), rewrites the file policy
+to the locally staged signed XPI exactly like the Phase 2E lab proved, and
+uploads the same XPI to the fixture, which serves it on the anchors and on the
+managed `/api/extensions/firefox/openpath.xpi` path as a fallback if the registry
+reappears before the browser starts. The warm-up verifies the add-on is present
+in `extensions.json` (one extra browser start completes a staged install) before
+any measured visit.
+
 ## Verdict
 
 The verdict comes from the **page self-report**, never from MOZ_LOG heuristics:
