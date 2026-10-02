@@ -528,6 +528,14 @@ switch ($Step) {
         }
         catch { $upload = 'upload-failed: ' + $_.Exception.Message }
         Write-Output ('LAB-POLICY xpi-upload=' + $upload + ' install_url=' + $installUrl)
+        # The launcher builds the student environment from the registry, so a
+        # machine MOZ_LOG reaches the warm-up Firefox and records the addon
+        # manager's install decision.
+        $mozLog = 'timestamp,addons:5,sync:3,nsHttp:4'
+        $mozLogFile = Join-Path $script:VisitRoot 'moz\addons.log'
+        Invoke-Cmd 'reg.exe' @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', '/v', 'MOZ_LOG', '/t', 'REG_SZ', '/d', $mozLog, '/f') | Out-Null
+        Invoke-Cmd 'reg.exe' @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', '/v', 'MOZ_LOG_FILE', '/t', 'REG_SZ', '/d', $mozLogFile, '/f') | Out-Null
+        $script:Body.mozLogConfigured = $mozLog
         $script:Body.labPolicyUpload = $upload
         $script:Body.labPolicyInstallUrl = $installUrl
         if ($upload -notmatch '^2') { $script:Failures.Add('lab-policy-xpi-upload-failed') }
@@ -642,6 +650,20 @@ switch ($Step) {
                 Start-Sleep -Seconds 5
             }
             Write-Output ('CHECK-EXT stage=poll-done found=' + [string]$extension.found)
+            if (-not $extension.found) {
+                # A policy install can be staged during the first start; one more
+                # start with the browser closed completes it.
+                Close-FirefoxProcesses | Out-Null
+                $second = Start-InSessionVisit -Url 'about:blank' -Tag 'warmup2'
+                Write-Output ('CHECK-EXT second-launch=' + [string]$second.out)
+                $deadline2 = (Get-Date).AddSeconds(90)
+                while ((Get-Date) -lt $deadline2) {
+                    $extension = Get-ExtensionState
+                    if ($extension.found) { break }
+                    Start-Sleep -Seconds 5
+                }
+                Write-Output ('CHECK-EXT stage=second-poll-done found=' + [string]$extension.found)
+            }
             $closed = Close-FirefoxProcesses
             Write-Output 'CHECK-EXT stage=closed'
             $script:Body.extension = $extension
@@ -699,9 +721,22 @@ switch ($Step) {
                 $ffVersion = ''
                 try { $ffVersion = [string](Get-Item -LiteralPath (Get-FirefoxInstallPath)).VersionInfo.ProductVersion } catch { }
                 Write-Output ('CHECK-EXT diag xpiSigned=' + [string]$xpiSigned + ' xpiId=' + $xpiId + ' firefoxVersion=' + $ffVersion)
+                $profileDetail = [ordered]@{}
+                foreach ($profileDir in $profileDirs) {
+                    $profRoot = Join-Path $studentProfileRoot $profileDir
+                    $extDir = Join-Path $profRoot 'extensions'
+                    $extFiles = @()
+                    if (Test-Path -LiteralPath $extDir) {
+                        $extFiles = @(Get-ChildItem -LiteralPath $extDir -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ':' + [string]$_.Length })
+                    }
+                    $jsonPath = Join-Path $profRoot 'extensions.json'
+                    $jsonBytes = if (Test-Path -LiteralPath $jsonPath) { [long](Get-Item -LiteralPath $jsonPath).Length } else { -1 }
+                    $profileDetail[$profileDir] = [ordered]@{ extFiles = $extFiles; extensionsJsonBytes = $jsonBytes }
+                }
                 $script:Body.extensionDiagnostics = [ordered]@{
                     profiles      = $profileDirs
                     profileIds    = $profileIds
+                    profileDetail = $profileDetail
                     xpiBytes      = $xpiBytes
                     xpiSigned     = $xpiSigned
                     xpiId         = $xpiId
@@ -757,6 +792,11 @@ switch ($Step) {
         Complete-Step
     }
     'collect' {
+        $addonsLog = @()
+        $addonsPath = Join-Path $script:VisitRoot 'moz\addons.log'
+        if (Test-Path -LiteralPath $addonsPath) {
+            $addonsLog = @(Get-Content -LiteralPath $addonsPath -Tail 80 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'addon|Addon|install|xpi|policy' } | Select-Object -First 30)
+        }
         $profile = Get-ExtensionState
         $nativeHost = Get-LogTail -Path (Get-NativeHostLogPath) -Tail 600
         $diagnostics = @($nativeHost | Where-Object { $_ -match 'stage=extension-diagnostic' })
@@ -767,13 +807,17 @@ switch ($Step) {
             $workerState = Get-Content -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json" -Raw
         }
         $mozExtract = @()
-        $mozFiles = @(Get-ChildItem 'C:\OpenPathLab\moz' -Filter '*.log*' -ErrorAction SilentlyContinue)
+        $mozFiles = @()
+        foreach ($mozDir in @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz'))) {
+            $mozFiles += @(Get-ChildItem -LiteralPath $mozDir -Filter '*.log*' -ErrorAction SilentlyContinue)
+        }
         foreach ($mozFile in $mozFiles) {
             $mozExtract += @(Select-String -LiteralPath $mozFile.FullName -Pattern 'nsHostResolver|nsHttp' -ErrorAction SilentlyContinue |
                     Select-Object -First 400 | ForEach-Object { $_.Line })
         }
         $script:Body.collect = [ordered]@{
             extension            = $profile
+            addonsLog            = @($addonsLog | Select-Object -First 30)
             mozExtract           = @($mozExtract | Select-Object -First 600)
             diagnosticLines      = $diagnostics.Count
             diagnosticSample     = @($diagnostics | Select-Object -First 12)
