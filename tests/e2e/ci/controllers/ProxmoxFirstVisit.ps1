@@ -131,6 +131,68 @@ function Stop-OpenPathFirstVisitFixture {
     }
 }
 
+function Get-OpenPathFirstVisitCapabilityArgument {
+    <#
+    .SYNOPSIS
+    Comma-joined live-signal capability list for the guest harness.
+    #>
+    [CmdletBinding()]
+    param(
+        [bool]$NativeHostLog = $false,
+        [bool]$BackgroundStart = $false,
+        [bool]$DiagnosticBatch = $false
+    )
+    $keys = @()
+    if ($NativeHostLog) { $keys += 'native-host-log' }
+    if ($BackgroundStart) { $keys += 'background-start' }
+    if ($DiagnosticBatch) { $keys += 'diagnostic-batch' }
+    return ($keys -join ',')
+}
+
+function Get-OpenPathFirstVisitBuildCapabilities {
+    <#
+    .SYNOPSIS
+    Live signals the template build can emit (Phase 3A.2 K1).
+    .DESCRIPTION
+    The warm-up verdict only fails on a missing live signal when the build
+    actually supports it. The thresholds are historical facts of this lane; an
+    unknown SHA (or missing git) fails open and only the state signal applies.
+    #>
+    [CmdletBinding()]
+    param([string]$SourceSha = '')
+    if ([string]::IsNullOrWhiteSpace($SourceSha)) {
+        return [pscustomobject]@{ nativeHostLog = $false; backgroundStart = $false; diagnosticBatch = $false; CapabilityArgument = '' }
+    }
+    $nativeHostLog = $false
+    $backgroundStart = $false
+    $diagnosticBatch = $false
+    try {
+        $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+        $thresholds = [ordered]@{
+            nativeHostLog   = '196664c4'
+            backgroundStart = 'c28bf26e'
+            diagnosticBatch = '7fe4d310'
+        }
+        foreach ($name in @($thresholds.Keys)) {
+            & git -C $repoRoot merge-base --is-ancestor $thresholds[$name] $SourceSha 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                switch ($name) {
+                    'nativeHostLog' { $nativeHostLog = $true }
+                    'backgroundStart' { $backgroundStart = $true }
+                    'diagnosticBatch' { $diagnosticBatch = $true }
+                }
+            }
+        }
+    }
+    catch { }
+    return [pscustomobject]@{
+        nativeHostLog      = $nativeHostLog
+        backgroundStart    = $backgroundStart
+        diagnosticBatch    = $diagnosticBatch
+        CapabilityArgument = Get-OpenPathFirstVisitCapabilityArgument -NativeHostLog $nativeHostLog -BackgroundStart $backgroundStart -DiagnosticBatch $diagnosticBatch
+    }
+}
+
 function Send-OpenPathFirstVisitStep {
     param(
         [Parameter(Mandatory = $true)][object]$Payload,
@@ -142,6 +204,8 @@ function Send-OpenPathFirstVisitStep {
         [Parameter(Mandatory = $true)][string]$Step,
         [Parameter(Mandatory = $true)][string]$HarnessGuestPath,
         [string]$PersonalizedGuestPath = '',
+        [string]$Capabilities = '',
+        [string]$FixtureBaselineJson = '',
         [int]$TimeoutSeconds = 900
     )
     Update-OpenPathLabActiveHeartbeat
@@ -159,6 +223,8 @@ function Send-OpenPathFirstVisitStep {
         '-StatePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $statePath)
     )
     if ($PersonalizedGuestPath) { $arguments += '-PersonalizedExePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $PersonalizedGuestPath) }
+    if ($Capabilities) { $arguments += '-Capabilities ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $Capabilities) }
+    if ($FixtureBaselineJson) { $arguments += '-FixtureBaselineJson ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $FixtureBaselineJson) }
     $arguments += '| Out-String'
     $script = ($arguments -join ' ') + "`nWrite-Output ('__HARNESS_EXIT__=' + [string]`$LASTEXITCODE)"
     # QGA hiccups are infra: retry once when the guest produced no marker.
@@ -338,6 +404,11 @@ function Get-OpenPathFirstVisitMetrics {
     <#
     .SYNOPSIS
     Builds the per-run metrics JSON from the collected evidence.
+    .DESCRIPTION
+    Every timing segment stays on a single clock: page waves come from the
+    in-page self-report (performance.now), warm-up fetch deltas from the fixture
+    clock, and host-side segments from the native host's own startup-profile
+    lines. Phase 3A.2 K5 baseline source.
     #>
     [CmdletBinding()]
     param(
@@ -348,7 +419,9 @@ function Get-OpenPathFirstVisitMetrics {
         [Parameter(Mandatory = $true)][string[]]$StartupProfiles,
         [Parameter(Mandatory = $true)][AllowNull()][object]$FixtureState,
         [Parameter(Mandatory = $true)][AllowNull()][object]$Verdict,
-        [string[]]$LogLines = @()
+        [string[]]$LogLines = @(),
+        [AllowNull()][object]$Diagnostics = $null,
+        [AllowNull()][object]$PrepareState = $null
     )
     $hostProfile = @()
     foreach ($line in $StartupProfiles) {
@@ -380,6 +453,37 @@ function Get-OpenPathFirstVisitMetrics {
         }
         catch { }
     }
+    $xpiFetchDelaySeconds = -1
+    $verificationStatus = ''
+    $hostStarted = $false
+    if ($PrepareState) {
+        $xpiFetch = Get-OpenPathLabField -InputObject $PrepareState -Name 'xpiFetch'
+        if ($xpiFetch) {
+            $delay = Get-OpenPathLabField -InputObject $xpiFetch -Name 'delaySeconds'
+            if ($null -ne $delay) { $xpiFetchDelaySeconds = [double]$delay }
+        }
+        $verification = Get-OpenPathLabField -InputObject $PrepareState -Name 'verification'
+        if ($verification) { $verificationStatus = [string](Get-OpenPathLabField -InputObject $verification -Name 'status') }
+        $liveSignals = Get-OpenPathLabField -InputObject $PrepareState -Name 'liveSignals'
+        if ($liveSignals) { $hostStarted = [bool](Get-OpenPathLabField -InputObject $liveSignals -Name 'hostStarted') }
+    }
+    $diagnosticKinds = [ordered]@{
+        lines           = @($DiagnosticLines).Count
+        transport       = @($DiagnosticLines | Where-Object { $_ -match 'kind":"transport' }).Count
+        hold            = @($DiagnosticLines | Where-Object { $_ -match 'kind":"hold"' }).Count
+        holdOutcome     = $holdOutcomes.Count
+        reloadDecision  = $decisions.Count
+        reloadReasons   = $reloadReasons
+        backgroundStart = @($DiagnosticLines | Where-Object { $_ -match '"kind":"background-start"' }).Count
+    }
+    if ($Diagnostics) {
+        $lines = Get-OpenPathLabField -InputObject $Diagnostics -Name 'lines'
+        if ($null -ne $lines) { $diagnosticKinds.lines = [int]$lines }
+        $backgroundStart = Get-OpenPathLabField -InputObject $Diagnostics -Name 'backgroundStart'
+        if ($null -ne $backgroundStart) { $diagnosticKinds.backgroundStart = [bool]$backgroundStart }
+        $diagnosticKinds.batchFirst = [bool](Get-OpenPathLabField -InputObject $Diagnostics -Name 'batchFirst')
+        $diagnosticKinds.hostStarted = [bool](Get-OpenPathLabField -InputObject $Diagnostics -Name 'hostStarted')
+    }
     return [ordered]@{
         schemaVersion  = 1
         scenario       = $Scenario
@@ -398,12 +502,18 @@ function Get-OpenPathFirstVisitMetrics {
         fontLoaded     = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'fontLoaded')
         neverLearnableBlocked = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'neverLearnableBlocked')
         reloadReasons  = $reloadReasons
-        diagnosticLines = $DiagnosticLines.Count
+        diagnosticLines = @($DiagnosticLines).Count
         holdOutcomes   = $holdOutcomes.Count
+        diagnostics    = $diagnosticKinds
         hostProfile    = $hostProfile
         workerApplyMs  = $workerApplyMs
         overlayStamps  = $overlayStamps
         acrylicLines   = $acrylicLines
+        warmup         = [ordered]@{
+            xpiFetchDelaySeconds = $xpiFetchDelaySeconds
+            verificationStatus   = $verificationStatus
+            hostStarted          = $hostStarted
+        }
         fixture        = if ($FixtureState) { [ordered]@{ requests = [int]$FixtureState.requests } } else { $null }
     }
 }
@@ -465,15 +575,54 @@ Write-Output 'autologon-on'
     if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-reboot-timeout' }
     $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
     $sessionUser = [string](Get-OpenPathLabField -InputObject $session.body.state -Name 'session')
-    $labPolicy = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'lab-policy' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 180
+    $sourceSha = [string](Get-OpenPathLabField -InputObject $Payload -Name 'sourceCommitSha')
+    $capabilities = Get-OpenPathFirstVisitBuildCapabilities -SourceSha $sourceSha
+    # Stage the installed template xpi on the fixture (lab-only) and let the
+    # warm-up run on the agent's own managed policy, no harness rewrite.
+    $stage = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'stage-xpi' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
     $warmup = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'warmup' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
-    # The warm-up arms about:blank and cycles the session; wait for the new logon
-    # and the browser, then verify the policy-installed extension and close it
-    # cleanly before any visit.
+    # The warm-up arms about:blank through the logon path (Run key + wrapper);
+    # wait for the new boot, the logon and the browser, then verify the
+    # policy-installed extension and close it cleanly before any visit.
+    $warmupArm = Get-OpenPathLabField -InputObject $warmup.body.state -Name 'arm'
+    $warmupRebooted = $false
+    if ($warmupArm -and ([string](Get-OpenPathLabField -InputObject $warmupArm -Name 'mode') -eq 'reboot')) {
+        $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootId $TimeoutSeconds)
+        if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-warmup-reboot-timeout' }
+        $warmupRebooted = $true
+    }
     Start-Sleep -Seconds $script:OpenPathFirstVisitRefreshSettleSeconds
     $warmSession = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
     $warmFirefox = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'wait-firefox' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 400
-    $extension = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'check-extension' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
+    # One fixture clock for the fetch check (count from before the logon) and
+    # for the delay (from the moment the browser was first seen).
+    $warmupFixtureJson = ''
+    try {
+        $baseline = [ordered]@{
+            xpiCount  = [int](Get-OpenPathLabField -InputObject $warmup.body.state -Name 'fixtureBeforeLaunch' | ForEach-Object { $_.xpiCount })
+            serverNow = [double](Get-OpenPathLabField -InputObject $warmFirefox.body.state -Name 'firefoxSeenFixtureClock')
+        }
+        $warmupFixtureJson = ($baseline | ConvertTo-Json -Compress)
+    }
+    catch { }
+    $warmVerify = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'verify-warmup' -HarnessGuestPath $setup.HarnessGuestPath -Capabilities ([string]$capabilities.CapabilityArgument) -FixtureBaselineJson $warmupFixtureJson -TimeoutSeconds 900
+    # The fixture must serve exactly the template's AMO-signed xpi on the
+    # managed API path; record every sha and fail loudly on a mismatch.
+    $xpiServedSha = ''
+    try {
+        $xpiServedSha = (& $Transport.InvokeHostCommand @('bash', '-lc', "curl -s --max-time 30 '$(($firstVisit.FixtureUrl).TrimEnd('/'))/api/extensions/firefox/openpath.xpi' | sha256sum | cut -d' ' -f1") '').Trim()
+    }
+    catch { }
+    $firstVisitPayload = Get-OpenPathLabField -InputObject $Payload -Name 'firstVisit'
+    $templateXpiSha = ''
+    if ($firstVisitPayload) { $templateXpiSha = [string](Get-OpenPathLabField -InputObject $firstVisitPayload -Name 'templateXpiSha256') }
+    $installedXpiSha = [string](Get-OpenPathLabField -InputObject $stage.body.state.xpi -Name 'sha256')
+    if ($templateXpiSha -and $installedXpiSha -and ($installedXpiSha -ne $templateXpiSha)) {
+        throw "first-visit-xpi-installed-sha-mismatch installed=$installedXpiSha template=$templateXpiSha"
+    }
+    if ($templateXpiSha -and $xpiServedSha -and ($xpiServedSha -ne $templateXpiSha)) {
+        throw "first-visit-xpi-served-sha-mismatch served=$xpiServedSha template=$templateXpiSha"
+    }
     $state = [ordered]@{
         phase               = 'prepared'
         scenarioId          = [string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId')
@@ -489,11 +638,22 @@ Write-Output 'autologon-on'
         configured          = [bool]$configure.body.state.registered
         passwordReset       = ($passwordReset -match 'done')
         sessionUser         = $sessionUser
-        labPolicy           = [string](Get-OpenPathLabField -InputObject $labPolicy.body.state -Name 'labPolicyReadBack')
+        capabilities        = $capabilities
+        xpi                 = $stage.body.state.xpi
+        xpiUpload           = [string]$stage.body.state.xpiUpload
+        xpiServedSha256     = $xpiServedSha
+        xpiTemplateSha256   = $templateXpiSha
+        firefoxPolicy       = $configure.body.state.firefoxPolicy
+        warmupFixture       = $warmup.body.state.fixtureBeforeLaunch
+        warmupRebooted      = $warmupRebooted
         warmupSession       = [bool](Get-OpenPathLabField -InputObject $warmSession.body.state -Name 'session')
         warmupFirefox       = @(Get-OpenPathLabField -InputObject $warmFirefox.body.state -Name 'firefox')
-        extension            = $extension.body.state.extension
-        warmupClose         = $extension.body.state.closeAfterWarmup
+        verification        = $warmVerify.body.state.warmupVerification
+        liveSignals         = $warmVerify.body.state.liveSignals
+        xpiFetch            = $warmVerify.body.state.xpiFetch
+        hostDiagnostics     = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'hostDiagnostics'
+        extension           = $warmVerify.body.state.extension
+        warmupClose         = $warmVerify.body.state.closeAfterWarmup
     }
     Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
     $body = [ordered]@{ state = $state }
@@ -646,7 +806,11 @@ function Invoke-OpenPathFirstVisitObserve {
         [pscustomobject]@{ requests = [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests'); browserRequests = $browserRequests; workerStateJson = $workerStateJson }
     }
     else { [pscustomobject]@{ requests = 0; browserRequests = 0; workerStateJson = $workerStateJson } }
-    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines @($collect.body.state.collect.diagnosticSample) -StartupProfiles @($collect.body.state.collect.startupProfiles) -FixtureState $metricsFixture -Verdict $verdict -LogLines @(Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'openpathTail')
+    $collectState = $collect.body.state.collect
+    $collectDiagnostics = Get-OpenPathLabField -InputObject $collectState -Name 'diagnostics'
+    $diagnosticLines = @(Get-OpenPathLabField -InputObject $collectDiagnostics -Name 'all')
+    if ($null -eq $collectDiagnostics) { $diagnosticLines = @() }
+    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles @($collectState.startupProfiles) -FixtureState $metricsFixture -Verdict $verdict -LogLines @(Get-OpenPathLabField -InputObject $collectState -Name 'openpathTail') -Diagnostics $collectDiagnostics -PrepareState $state
     $metricsPath = Join-Path $artifactsRoot 'metrics.json'
     [IO.File]::WriteAllText($metricsPath, ($metrics | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
     $studentUser = [string]$settings.StudentUserName

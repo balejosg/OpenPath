@@ -18,7 +18,16 @@ param(
     [string]$Secret = '',
     [string]$StatePath = '',
     [string]$TemplatePath = '',
-    [string]$PersonalizedExePath = ''
+    [string]$PersonalizedExePath = '',
+    # Phase 3A.2 K1: the live signals the build under test can emit
+    # (native-host-log, background-start, diagnostic-batch). The controller
+    # derives them from the template source SHA; the warm-up verification only
+    # fails on a missing signal when the build actually supports it.
+    [string]$Capabilities = '',
+    # The controller passes the fixture clock captured just before the warm-up
+    # launch (guest steps are separate processes, so step-local state does not
+    # survive).
+    [string]$FixtureBaselineJson = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -58,9 +67,128 @@ function Get-FixturePlan {
 }
 
 function Get-NativeHostLogPath {
-    $base = $env:LOCALAPPDATA
-    if (-not $base) { $base = 'C:\Users\Public' }
+    param([string]$UserName = '')
+    # The harness runs as SYSTEM, so %LOCALAPPDATA% is the system profile: the
+    # native host runs in the student's session and logs to the student profile.
+    if (-not $UserName) { $UserName = $StudentUserName }
+    $base = "C:\Users\$UserName\AppData\Local"
     return (Join-Path (Join-Path $base 'OpenPath') 'native-host.log')
+}
+
+function Get-FixtureClock {
+    # Reads the fixture state on the fixture's own clock, so warm-up deltas
+    # (xpi fetch vs launch mark) never mix the guest clock with the host clock.
+    param([string]$FixtureBase = '')
+    if (-not $FixtureBase) { $FixtureBase = Get-FixtureBase }
+    try {
+        $state = (Invoke-WebRequest -UseBasicParsing -Uri "$($FixtureBase.TrimEnd('/'))/state.json" -TimeoutSec 15 -ErrorAction Stop).Content | ConvertFrom-Json
+        $xpi = $state.xpi
+        return [ordered]@{
+            serverNow       = [double]$state.serverNow
+            xpiCount        = [int]$xpi.count
+            xpiLastFetchedAt = [double]$xpi.lastFetchedAt
+            xpiLastPath     = [string]$xpi.lastPath
+        }
+    }
+    catch {
+        return [ordered]@{ serverNow = 0.0; xpiCount = -1; xpiLastFetchedAt = 0.0; xpiLastPath = ''; error = $_.Exception.Message }
+    }
+}
+
+function Get-XpiManifestVersion {
+    param([Parameter(Mandatory = $true)][string]$XpiPath)
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $zip = [IO.Compression.ZipFile]::OpenRead($XpiPath)
+        try {
+            $entry = $zip.GetEntry('manifest.json')
+            if (-not $entry) { return '' }
+            $reader = New-Object IO.StreamReader($entry.Open())
+            try { $manifest = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+            return [string]$manifest.version
+        }
+        finally { $zip.Dispose() }
+    }
+    catch { return '' }
+}
+
+function Get-WarmupLiveSignals {
+    # Pure parser for the student's native-host.log tail (Phase 3A.2 K1).
+    param([AllowNull()][string[]]$Lines = @())
+    $hostLines = @($Lines | Where-Object { $_ -match 'initialization completed' })
+    $pids = @($hostLines | ForEach-Object { if ($_ -match 'pid=(\d+)') { [string]$Matches[1] } } | Select-Object -Unique)
+    $diagnostics = @($Lines | Where-Object { $_ -match 'stage=extension-diagnostic ' })
+    $background = @($diagnostics | Where-Object { $_ -match '"kind":"background-start"' })
+    $batch = @($Lines | Where-Object { $_ -match 'stage=extension-diagnostic-batch first=true' })
+    return [ordered]@{
+        hostStarted          = ($hostLines.Count -gt 0)
+        hostPids             = $pids
+        diagnosticLines      = $diagnostics.Count
+        backgroundStart      = ($background.Count -gt 0)
+        diagnosticBatchFirst = ($batch.Count -gt 0)
+    }
+}
+
+function Get-ExtensionEntryFromJson {
+    # Pure parser for extensions.json. Never used while Firefox is running:
+    # Firefox only flushes the add-on registry on shutdown, so a read against a
+    # live browser is a false negative (Phase 3A.2 correction 1).
+    param([AllowNull()][string]$JsonText)
+    if (-not $JsonText) { return [ordered]@{ parsed = $false; found = $false } }
+    try { $json = $JsonText | ConvertFrom-Json -ErrorAction Stop }
+    catch { return [ordered]@{ parsed = $false; found = $false } }
+    foreach ($addon in @($json.addons)) {
+        if ([string]$addon.id -eq 'openpath-block-monitor@openpath') {
+            $telemetry = ''
+            try { $telemetry = ($addon.installTelemetryInfo | ConvertTo-Json -Compress -Depth 4) } catch { }
+            return [ordered]@{
+                parsed               = $true
+                found                = $true
+                id                   = [string]$addon.id
+                version              = [string]$addon.version
+                active               = [bool]$addon.active
+                userDisabled         = [bool]$addon.userDisabled
+                appDisabled          = [bool]$addon.appDisabled
+                location             = [string]$addon.location
+                signedState          = [int]$addon.signedState
+                installTelemetryInfo = $telemetry
+            }
+        }
+    }
+    return [ordered]@{ parsed = $true; found = $false; addonCount = @($json.addons).Count }
+}
+
+function Get-WarmupVerificationVerdict {
+    # Pure verdict for the warm-up verification (Phase 3A.2 K1). The state
+    # signal is only evaluated after Firefox closed; the live signals are gated
+    # by what the build under test can emit.
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Live,
+        [AllowNull()][object]$State,
+        [bool]$XpiFetched = $false,
+        [bool]$RequireHostStart = $false,
+        [bool]$RequireBackgroundStart = $false,
+        [bool]$RequireDiagnosticBatch = $false,
+        [string]$ExpectedVersion = ''
+    )
+    $reasons = New-Object System.Collections.Generic.List[string]
+    if (-not $XpiFetched) { $reasons.Add('xpi-not-fetched') }
+    if ($RequireHostStart -and -not ($Live -and [bool]$Live.hostStarted)) { $reasons.Add('host-not-started') }
+    if ($RequireBackgroundStart -and -not ($Live -and [bool]$Live.backgroundStart)) { $reasons.Add('background-start-missing') }
+    if ($RequireDiagnosticBatch -and -not ($Live -and [bool]$Live.diagnosticBatchFirst)) { $reasons.Add('extension-diagnostic-batch-missing') }
+    if ($State -and [bool]$State.found) {
+        if (-not ([bool]$State.active -and -not [bool]$State.userDisabled -and -not [bool]$State.appDisabled)) {
+            $reasons.Add('extension-registered-inactive')
+        }
+        elseif ($ExpectedVersion -and [string]$State.version -and ([string]$State.version -ne $ExpectedVersion)) {
+            $reasons.Add("extension-version-mismatch:$([string]$State.version)-expected-$ExpectedVersion")
+        }
+    }
+    elseif ($XpiFetched) { $reasons.Add('xpi-fetched-not-registered') }
+    else { $reasons.Add('extension-not-registered') }
+    $status = if ($reasons.Count -eq 0) { 'passed' } else { 'failed' }
+    return [ordered]@{ status = $status; reasons = @($reasons) }
 }
 
 function Get-FirefoxProcesses {
@@ -190,8 +318,6 @@ function Write-CleanFirefoxCmd {
     $body = @"
 @echo off
 echo launch %DATE% %TIME% user=%USERNAME% tag=$Tag >> "$root\logs\launch.log"
-set MOZ_LOG=timestamp,rotate:300,nsHostResolver:5,nsHttp:4
-set MOZ_LOG_FILE=$root\moz\$Tag.log
 "$firefox" -new-window "$Url" >> "$root\logs\firefox-$Tag.log" 2>&1
 echo exit %ERRORLEVEL% >> "$root\logs\launch.log"
 "@
@@ -210,22 +336,73 @@ function Wait-FirefoxProcess {
     return @()
 }
 
-function Get-ExtensionState {
-    $profiles = @(Get-ChildItem 'C:\Users\*\AppData\Roaming\Mozilla\Firefox\Profiles' -Directory -ErrorAction SilentlyContinue)
-    foreach ($profile in $profiles) {
-        $extensions = Join-Path $profile.FullName 'extensions.json'
-        if (-not (Test-Path -LiteralPath $extensions)) { continue }
+function Get-NativeHostDiagnostics {
+    # Evidence for host-not-started, safe subset only (file/registry reads).
+    # WMI, Get-WinEvent and Get-AppLockerPolicy hung the guest or broke JSON
+    # serialization in Phase 3A.2 K0b/K0c, so they are deliberately absent.
+    $out = [ordered]@{}
+    $logPath = Get-NativeHostLogPath
+    $out.nativeLog = [ordered]@{
+        path   = $logPath
+        exists = (Test-Path -LiteralPath $logPath)
+        bytes  = if (Test-Path -LiteralPath $logPath) { (Get-Item -LiteralPath $logPath).Length } else { 0 }
+        tail   = @(Get-LogTail -Path $logPath -Tail 6)
+    }
+    $manifestPath = ''
+    foreach ($hive in @('HKLM:', 'HKCU:')) {
         try {
-            $json = Get-Content -LiteralPath $extensions -Raw | ConvertFrom-Json
-            foreach ($addon in @($json.addons)) {
-                if ([string]$addon.id -eq 'openpath-block-monitor@openpath') {
-                    return [ordered]@{ found = $true; profile = $profile.Name; version = [string]$addon.version; active = [bool]$addon.active }
-                }
+            $key = "$hive\SOFTWARE\Mozilla\NativeMessagingHosts\whitelist_native_host"
+            if (Test-Path $key) {
+                $value = (Get-ItemProperty -Path $key -ErrorAction Stop).'(default)'
+                if ($value) { $manifestPath = [string]$value; break }
             }
         }
         catch { }
     }
-    return [ordered]@{ found = $false }
+    $out.manifestPath = $manifestPath
+    $out.manifestExists = if ($manifestPath) { [bool](Test-Path -LiteralPath $manifestPath) } else { $false }
+    $out.manifest = ''
+    if ($out.manifestExists) {
+        try { $out.manifest = (Get-Content -LiteralPath $manifestPath -Raw).Trim() } catch { }
+    }
+    $out.wrapperExists = $false
+    $out.wrapperHead = @()
+    if ($out.manifest) {
+        try {
+            $parsed = $out.manifest | ConvertFrom-Json
+            if ($parsed.path) {
+                $out.wrapperExists = [bool](Test-Path -LiteralPath ([string]$parsed.path))
+                if ($out.wrapperExists) { $out.wrapperHead = @(Get-Content -LiteralPath ([string]$parsed.path) -TotalCount 4 -ErrorAction SilentlyContinue) }
+            }
+        }
+        catch { }
+    }
+    $out.launchLogTail = @(Get-LogTail -Path (Join-Path $script:VisitRoot 'logs\launch.log') -Tail 12)
+    $out.firefoxLogTail = @(Get-LogTail -Path (Join-Path $script:VisitRoot 'logs\firefox-warmup.log') -Tail 20)
+    return $out
+}
+
+function Get-ProfileExtensionState {
+    # State signal for the warm-up verification: only call this after Firefox
+    # closed (Firefox flushes extensions.json on shutdown).
+    $studentProfileRoot = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles"
+    $fallback = [ordered]@{ parsed = $false; found = $false }
+    foreach ($profile in @(Get-ChildItem -LiteralPath $studentProfileRoot -Directory -ErrorAction SilentlyContinue)) {
+        $extensions = Join-Path $profile.FullName 'extensions.json'
+        if (-not (Test-Path -LiteralPath $extensions)) { continue }
+        $entry = Get-ExtensionEntryFromJson -JsonText (Get-Content -LiteralPath $extensions -Raw -ErrorAction SilentlyContinue)
+        if ($entry.found) {
+            $entry['profile'] = $profile.Name
+            $entry['extensionsJsonBytes'] = (Get-Item -LiteralPath $extensions).Length
+            return $entry
+        }
+        if (-not $fallback.parsed -and $entry.parsed) {
+            $fallback = $entry
+            $fallback['profile'] = $profile.Name
+            $fallback['extensionsJsonBytes'] = (Get-Item -LiteralPath $extensions).Length
+        }
+    }
+    return $fallback
 }
 
 function Enable-BrowserConsoleVisibility {
@@ -246,10 +423,19 @@ function Enable-BrowserConsoleVisibility {
 function Get-LogTail {
     param([string]$Path, [int]$Tail = 300, [string[]]$Patterns = @())
     if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    # Bounded read: a runaway native-host log must never turn a log read into a
+    # whole-file scan inside the guest (Phase 3A.2 K0e).
+    $lines = @(Get-Content -LiteralPath $Path -Tail 2000 -ErrorAction SilentlyContinue)
     if ($Patterns.Count -gt 0) {
-        return @(Select-String -LiteralPath $Path -Pattern $Patterns | Select-Object -Last $Tail | ForEach-Object { $_.Line })
+        $matched = @()
+        foreach ($line in $lines) {
+            foreach ($pattern in $Patterns) {
+                if ($line -match $pattern) { $matched += $line; break }
+            }
+        }
+        return @($matched | Select-Object -Last $Tail)
     }
-    return @(Get-Content -LiteralPath $Path -Tail $Tail -ErrorAction SilentlyContinue)
+    return @($lines | Select-Object -Last $Tail)
 }
 
 function Resolve-Probe {
@@ -302,11 +488,14 @@ function Start-InSessionVisit {
         if (Test-Path -LiteralPath $legacy) { Copy-Item -LiteralPath $legacy -Destination $launcher -Force }
     }
     if (-not (Test-Path -LiteralPath $launcher)) { throw "session launcher missing at $launcher" }
-    $target = '"' + $firefox + '" -new-window "' + $Url + '"'
+    # Phase 2E proved this launch shape on the same image: a cmd wrapper (stdout
+    # captured, launch/exit markers) started through the session launcher.
+    $cmdPath = Write-CleanFirefoxCmd -Url $Url -Tag $Tag
+    $target = '"C:\Windows\System32\cmd.exe" /c "' + $cmdPath + '"'
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target))
     $out = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher -CommandLineBase64 $b64 2>&1 | Out-String).Trim()
     Start-Sleep -Seconds 12
-    return [ordered]@{ mode = 'session-launcher'; out = $out; firefox = @(Get-FirefoxProcesses); tag = $Tag }
+    return [ordered]@{ mode = 'session-launcher-cmd'; out = $out; firefox = @(Get-FirefoxProcesses); tag = $Tag; cmd = $cmdPath }
 }
 
 function Get-LaunchDiagnostics {
@@ -318,70 +507,6 @@ function Get-LaunchDiagnostics {
         appLocker = @(Get-WinEvent -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -MaxEvents 4 -ErrorAction SilentlyContinue | ForEach-Object { $_.TimeCreated.ToString('o') + ' ' + (($_.Message -split "`n")[0]) })
         codeIntegrity = @(Get-WinEvent -LogName 'Microsoft-Windows-CodeIntegrity/Operational' -MaxEvents 4 -ErrorAction SilentlyContinue | ForEach-Object { $_.TimeCreated.ToString('o') + ' ' + (($_.Message -split "`n")[0]) })
     }
-}
-
-function Set-LabFirefoxPolicy {
-    # Phase 2E proved the signed xpi installs from a file:// url in this lab. The
-    # agent also writes (and reapplies) the managed ExtensionSettings in the
-    # machine registry, and Firefox gives the registry precedence, so both
-    # places are pointed at the staged xpi; the caller invokes this right before
-    # a browser start so the agent cannot win the race.
-    param([Parameter(Mandatory = $true)][string]$LabUrl)
-    $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
-    $regPath = 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
-    $fileOk = $false
-    $regOk = $false
-    if (Test-Path -LiteralPath $policyPath) {
-        try {
-            $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
-            $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
-            if ($null -eq $entry) {
-                $policy.policies.ExtensionSettings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue ([pscustomobject]@{ installation_mode = 'force_installed' }) -Force
-                $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
-            }
-            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue $LabUrl -Force
-            [IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
-            $readBack = [string]((Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json).policies.ExtensionSettings.'openpath-block-monitor@openpath'.install_url)
-            $fileOk = ($readBack -eq $LabUrl)
-        }
-        catch { }
-    }
-    try {
-        $settings = $null
-        try {
-            $current = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings)
-            if ($current.Count -gt 0) { $settings = ($current -join "`n") | ConvertFrom-Json }
-        }
-        catch { }
-        if ($null -eq $settings) { $settings = [pscustomobject]@{} }
-        $entryValue = [pscustomobject]@{ installation_mode = 'force_installed'; install_url = $LabUrl }
-        if ($settings.PSObject.Properties['openpath-block-monitor@openpath']) {
-            $settings.PSObject.Properties['openpath-block-monitor@openpath'].Value = $entryValue
-        }
-        else {
-            $settings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue $entryValue -Force
-        }
-        $regValue = @($settings | ConvertTo-Json -Depth 10 -Compress)
-        if (-not (Test-Path -LiteralPath $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-        New-ItemProperty -Path $regPath -Name 'ExtensionSettings' -Value $regValue -PropertyType MultiString -Force | Out-Null
-        $regBack = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings) -join "`n"
-        $regOk = ($regBack -like ('*' + $LabUrl + '*'))
-    }
-    catch { }
-    return [ordered]@{ fileOk = $fileOk; registryOk = $regOk; url = $LabUrl }
-}
-
-function Install-DistributedExtension {
-    # Firefox auto-installs signed xpis found in the installation's
-    # distribution/extensions directory at startup (no url, no policy fetch), so
-    # the lab keeps this alongside the managed policy as the deterministic
-    # install path on this image.
-    param([Parameter(Mandatory = $true)][string]$XpiPath)
-    $distDir = Join-Path ${env:ProgramFiles} 'Mozilla Firefox\distribution\extensions'
-    New-Dir $distDir
-    $target = Join-Path $distDir 'openpath-block-monitor@openpath.xpi'
-    Copy-Item -LiteralPath $XpiPath -Destination $target -Force
-    return $target
 }
 
 function Complete-Step {
@@ -503,9 +628,11 @@ switch ($Step) {
         }
         $script:Body.firefoxPolicyForce = $managed
         if (-not $managed) { $script:Failures.Add('firefox-policy-not-force-installed') }
-        # Lab-only: production points install_url at the managed API. The lab
-        # fixture does not serve extension bytes, so the policy is pointed at the
-        # locally staged signed XPI (the Phase 2E lab proved file:// installs).
+        # Lab-only staging for the fixture: copy the exact XPI the template
+        # installer placed in the guest so the fixture can serve it on the
+        # managed API path. The harness never rewrites the browser policy: the
+        # registry entry, policies.json and distribution/ stay exactly as the
+        # product wrote them (Phase 3A.2 K1).
         $xpi = @(Get-ChildItem -Path "$OpenPathRoot\browser-extension" -Recurse -Filter '*openpath*.xpi' -ErrorAction SilentlyContinue |
                 Sort-Object Length -Descending | Select-Object -First 1)
         if ($xpi.Count -gt 0) {
@@ -516,20 +643,32 @@ switch ($Step) {
             Invoke-Cmd 'icacls.exe' @($labXpi, '/grant', '*S-1-5-32-545:R') | Out-Null
             Invoke-Cmd 'icacls.exe' @('C:\OpenPathLab\first-visit', '/grant', '*S-1-5-32-545:(OI)(CI)RX') | Out-Null
             $script:Body.xpiSha256 = $xpiHash
-            $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
-            $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
-            if ($null -eq $entry) {
-                $policy.policies.ExtensionSettings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue ([pscustomobject]@{ installation_mode = 'force_installed' }) -Force
-                $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
-            }
-            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi' -Force
-            [IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
             $script:Body.xpiStaged = $labXpi
-            $script:Body.policyInstallUrl = 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
         }
         else {
             $script:Failures.Add('firefox-release-xpi-missing')
         }
+        # Read-only record of the policy the product wrote: Firefox gives the
+        # machine registry precedence over policies.json, and both are the
+        # agent's business, never the harness'.
+        $policySnapshot = [ordered]@{ installationMode = ''; fileInstallUrl = ''; registryInstallUrl = '' }
+        try {
+            $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+            $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
+            $policySnapshot.installationMode = [string]$entry.installation_mode
+            $policySnapshot.fileInstallUrl = [string]$entry.install_url
+        }
+        catch { }
+        try {
+            $current = @((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox' -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings)
+            if ($current.Count -gt 0) {
+                $settings = ($current -join "`n") | ConvertFrom-Json
+                $entry = $settings.'openpath-block-monitor@openpath'
+                if ($entry) { $policySnapshot.registryInstallUrl = [string]$entry.install_url }
+            }
+        }
+        catch { }
+        $script:Body.firefoxPolicy = $policySnapshot
         Start-Sleep -Seconds 20
         $plan = Get-FixturePlan
         $script:Body.plan = [ordered]@{
@@ -575,19 +714,24 @@ switch ($Step) {
         if (-not $script:Body.interactive) { $script:Failures.Add('student-session-not-interactive') }
         Complete-Step
     }
-    'lab-policy' {
-        # Phase 2E proved that Firefox installs the signed xpi from
-        # distribution/policies.json with a file:// url in this lab. The agent
-        # also writes the managed ExtensionSettings to the machine registry (and
-        # reapplies it), and Firefox gives the registry precedence, so the lab
-        # removes the registry entry and drives the install from the file. The
-        # fixture additionally serves the xpi on the anchor and the managed API
-        # path, so the install still works if the agent re-adds the registry
-        # before the browser starts.
-        $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
+    'stage-xpi' {
+        # Lab staging only: upload the exact signed XPI the template installer
+        # left in the guest to the fixture, which serves it on the managed API
+        # path the production agent policy points Firefox at. The harness never
+        # touches the browser policy (no registry delete, no policies.json
+        # rewrite, no distribution/extensions copy) — Phase 3A.2 K1.
         $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
-        $labUrl = 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
-
+        if (-not (Test-Path -LiteralPath $labXpi)) {
+            $script:Failures.Add('template-xpi-missing')
+            Complete-Step
+        }
+        $xpiSha = (Get-FileHash -LiteralPath $labXpi -Algorithm SHA256).Hash.ToLowerInvariant()
+        $script:Body.xpi = [ordered]@{
+            path    = $labXpi
+            bytes   = (Get-Item -LiteralPath $labXpi).Length
+            sha256  = $xpiSha
+            version = Get-XpiManifestVersion -XpiPath $labXpi
+        }
         $fixtureBase = Get-FixtureBase
         $upload = ''
         try {
@@ -595,64 +739,27 @@ switch ($Step) {
             $upload = [string]$uploadResp.StatusCode
         }
         catch { $upload = 'upload-failed: ' + $_.Exception.Message }
-        Write-Output ('LAB-POLICY xpi-upload=' + $upload)
-        $script:Body.labPolicyUpload = $upload
-        if ($upload -notmatch '^2') { $script:Failures.Add('lab-policy-xpi-upload-failed') }
-
-        $regRemoved = $false
-        try {
-            Invoke-Cmd 'reg.exe' @('delete', 'HKLM\SOFTWARE\Policies\Mozilla\Firefox', '/v', 'ExtensionSettings', '/f') | Out-Null
-            $regRemoved = ((Invoke-Cmd 'reg.exe' @('query', 'HKLM\SOFTWARE\Policies\Mozilla\Firefox', '/v', 'ExtensionSettings')).exit -ne 0)
-        }
-        catch { }
-        Write-Output ('LAB-POLICY registry-removed=' + [string]$regRemoved)
-        $script:Body.labPolicyRegistryRemoved = $regRemoved
-        $script:Body.distExtension = Install-DistributedExtension -XpiPath $labXpi
-        if (-not $regRemoved) { $script:Failures.Add('lab-policy-registry-not-removed') }
-
-        $rewritten = $false
-        if (Test-Path -LiteralPath $policyPath) {
-            $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
-            $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
-            if ($null -eq $entry) {
-                $policy.policies.ExtensionSettings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue ([pscustomobject]@{ installation_mode = 'force_installed' }) -Force
-                $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
-            }
-            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue $labUrl -Force
-            [IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
-            $rewritten = $true
-        }
-        else { $script:Failures.Add('lab-policy-missing') }
-        $readBack = ''
-        try { $readBack = [string]((Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json).policies.ExtensionSettings.'openpath-block-monitor@openpath'.install_url) } catch { }
-        Write-Output ('LAB-POLICY file rewritten=' + [string]$rewritten + ' install_url=' + $readBack)
-        $script:Body.labPolicyRewritten = $rewritten
-        $script:Body.labPolicyReadBack = $readBack
-        if ($readBack -ne $labUrl) { $script:Failures.Add('lab-policy-not-applied') }
-
-        # The launcher builds the student environment from the registry, so a
-        # machine MOZ_LOG reaches the warm-up Firefox and records the addon
-        # manager's install decision.
-        $mozLog = 'timestamp,addons:5,sync:3,nsHttp:4'
-        $mozLogFile = Join-Path $script:VisitRoot 'moz\addons.log'
-        Invoke-Cmd 'reg.exe' @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', '/v', 'MOZ_LOG', '/t', 'REG_SZ', '/d', $mozLog, '/f') | Out-Null
-        Invoke-Cmd 'reg.exe' @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', '/v', 'MOZ_LOG_FILE', '/t', 'REG_SZ', '/d', $mozLogFile, '/f') | Out-Null
-        $script:Body.mozLogConfigured = $mozLog
+        Write-Output ('STAGE-XPI sha256=' + $xpiSha + ' version=' + [string]$script:Body.xpi.version + ' upload=' + $upload)
+        $script:Body.xpiUpload = $upload
+        if ($upload -notmatch '^2') { $script:Failures.Add('xpi-upload-failed') }
         Complete-Step
     }
     'warmup' {
         $closed = Close-FirefoxProcesses
         $script:Body.closeBeforeWarmup = $closed
-        # Reassert the lab policy right before the browser starts (the agent
-        # reapplies the managed registry policy on a timer and would otherwise
-        # win the race) and stage the signed xpi in distribution/extensions so
-        # Firefox installs it deterministically at this startup.
-        $fixtureBase = Get-FixtureBase
-        $script:Body.warmupPolicy = Set-LabFirefoxPolicy -LabUrl ($fixtureBase.TrimEnd('/') + '/api/extensions/firefox/openpath.xpi')
-        $script:Body.distExtension = Install-DistributedExtension -XpiPath 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
-        $launch = Start-InSessionVisit -Url 'about:blank' -Tag 'warmup'
-        $script:Body.launchOut = $launch.out
-        $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
+        # The policy is the agent's; the fixture already serves the managed API
+        # path. Record the fixture clock before the launch window so the later
+        # xpi-fetch check uses one clock (the fixture's).
+        $script:Body.fixtureBeforeLaunch = Get-FixtureClock
+        # Phase 2E proved this launch shape on this image: the browser starts at
+        # logon from the cmd wrapper (Run key) and the extension's native host
+        # starts with it. The direct in-session launch does not (Phase 3A.2
+        # K0b/K0c/K0d), so the warm-up arms the same logon path the class-boot
+        # visit uses.
+        $cmdPath = Write-CleanFirefoxCmd -Url 'about:blank' -Tag 'warmup'
+        Clear-VisitRunKey | Out-Null
+        Set-VisitRunKey -CmdPath $cmdPath
+        $script:Body.arm = [ordered]@{ mode = 'reboot'; cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'reboot') }
         Complete-Step
     }
     'visit' {
@@ -671,8 +778,6 @@ switch ($Step) {
             $script:Body.arm = [ordered]@{ mode = 'reboot'; cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'reboot') }
         }
         else {
-            $script:Body.visitPolicy = Set-LabFirefoxPolicy -LabUrl ((Get-FixtureBase).TrimEnd('/') + '/api/extensions/firefox/openpath.xpi')
-            $script:Body.distExtension = Install-DistributedExtension -XpiPath 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
             $launch = Start-InSessionVisit -Url $url -Tag 'visit'
             $script:Body.launchOut = $launch.out
             $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
@@ -691,66 +796,93 @@ switch ($Step) {
         $script:Body.secondLaunch = $launch
         Complete-Step
     }
-    'check-extension' {
-        # Warm-up verification: the policy must have installed and activated the
-        # extension before any measured visit. The step stays short (a single
-        # poll) so a guest hiccup can never eat the phase timeout.
-        #
-        # Phase 3A lab finding (documented in the evidence summary): with the
-        # managed policy verified in both the registry and policies.json, the
-        # fixture serving the AMO-signed xpi (anchor + managed api path), the xpi
-        # staged in the profile and in distribution/extensions, this image still
-        # leaves the add-on out of extensions.json (the Phase 2E runs installed
-        # the same way from file://, so the lane reports the reason instead of
-        # guessing and stays informative).
+    'verify-warmup' {
+        # Warm-up verification (Phase 3A.2 K1): the managed policy must have
+        # installed and activated the extension before any measured visit.
+        #   live  (Firefox open): the extension launches the per-user native
+        #         host; supported builds also emit background-start and the
+        #         diagnostic batch line.
+        #   state (after an orderly close): the add-on entry in extensions.json.
+        # extensions.json is never read while Firefox runs: Firefox only flushes
+        # the add-on registry on shutdown, so a live read is a false negative
+        # (Phase 3A.2 correction 1).
         try {
-            Write-Output 'CHECK-EXT stage=start'
-            Enable-BrowserConsoleVisibility
-            Write-Output 'CHECK-EXT stage=console-prefs'
-            $extension = [ordered]@{ found = $false }
-            $deadline = (Get-Date).AddSeconds(45)
-            while ((Get-Date) -lt $deadline) {
-                $extension = Get-ExtensionState
-                if ($extension.found) { break }
+            Write-Output 'VERIFY-WARMUP stage=start'
+            $fixtureBase = Get-FixtureBase
+            $fixtureBefore = $null
+            if ($FixtureBaselineJson) {
+                try { $fixtureBefore = $FixtureBaselineJson | ConvertFrom-Json } catch { $fixtureBefore = $null }
+            }
+            if (-not $fixtureBefore) { $fixtureBefore = $script:Body.fixtureBeforeLaunch }
+            $xpiBaseCount = if ($fixtureBefore) { [int]$fixtureBefore.xpiCount } else { -1 }
+            $nativeLog = Get-NativeHostLogPath
+            $live = $null
+            $xpiFetched = $false
+            $clock = $null
+            $deadline = (Get-Date).AddSeconds(60)
+            while ($true) {
+                $live = Get-WarmupLiveSignals -Lines @(Get-LogTail -Path $nativeLog -Tail 600)
+                $clock = Get-FixtureClock -FixtureBase $fixtureBase
+                if ($xpiBaseCount -ge 0 -and [int]$clock.xpiCount -gt $xpiBaseCount) { $xpiFetched = $true }
+                if ($live.hostStarted -and ($xpiFetched -or $xpiBaseCount -lt 0)) { break }
+                if ((Get-Date) -ge $deadline) { break }
                 Start-Sleep -Seconds 5
             }
-            Write-Output ('CHECK-EXT stage=poll-done found=' + [string]$extension.found)
-            $script:Body.extension = $extension
-            if (-not $extension.found) {
-                $studentProfileRoot = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles"
-                $profileDirs = @(Get-ChildItem -LiteralPath $studentProfileRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-                $profileDetail = [ordered]@{}
-                foreach ($profileDir in $profileDirs) {
-                    $extDir = Join-Path $studentProfileRoot "$profileDir\extensions"
-                    $extFiles = @()
-                    if (Test-Path -LiteralPath $extDir) {
-                        $extFiles = @(Get-ChildItem -LiteralPath $extDir -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ':' + [string]$_.Length })
-                    }
-                    $profileDetail[$profileDir] = [ordered]@{ extFiles = $extFiles }
-                }
-                $distDir = Join-Path ${env:ProgramFiles} 'Mozilla Firefox\distribution\extensions'
-                $distFiles = @()
-                if (Test-Path -LiteralPath $distDir) {
-                    $distFiles = @(Get-ChildItem -LiteralPath $distDir -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ':' + [string]$_.Length })
-                }
-                $script:Body.extensionDiagnostics = [ordered]@{
-                    profiles        = $profileDirs
-                    profileDetail   = $profileDetail
-                    distributionDir = $distFiles
-                    guestClock      = [DateTime]::UtcNow.ToString('o')
-                }
-                $script:Failures.Add('extension-not-installed-by-policy')
+            $xpiFetchDelaySeconds = -1
+            if ($xpiFetched -and $fixtureBefore -and [double]$fixtureBefore.serverNow -gt 0 -and [double]$clock.xpiLastFetchedAt -gt 0) {
+                $xpiFetchDelaySeconds = [math]::Round([double]$clock.xpiLastFetchedAt - [double]$fixtureBefore.serverNow, 2)
             }
-            elseif (-not $extension.active) { $script:Failures.Add('extension-installed-but-inactive') }
+            # K0 observation (removed from the final harness): what the add-on
+            # registry says while Firefox is still open.
+            $script:Body.staleStateWhileOpen = Get-ProfileExtensionState
+            if (-not $live.hostStarted) { $script:Body.hostDiagnostics = Get-NativeHostDiagnostics }
+            Write-Output ('VERIFY-WARMUP stage=live hostStarted=' + [string]$live.hostStarted + ' xpiFetched=' + [string]$xpiFetched + ' fetchDelay=' + [string]$xpiFetchDelaySeconds)
+            $script:Body.liveSignals = $live
+            $script:Body.xpiFetch = [ordered]@{ fetched = $xpiFetched; delaySeconds = $xpiFetchDelaySeconds; baseCount = $xpiBaseCount; count = [int]$clock.xpiCount }
+            # Orderly close before the state signal: taskkill /T first, forced
+            # /F only when needed (recorded so the contract can assert it).
+            $before = @(Get-FirefoxProcesses)
+            $gracefulExit = -1
+            $forced = $false
+            $remaining = @()
+            if ($before.Count -gt 0) {
+                $gracefulExit = (Invoke-Cmd 'taskkill.exe' @('/IM', 'firefox.exe', '/T')).exit
+                Start-Sleep -Seconds 10
+                $remaining = @(Get-FirefoxProcesses)
+                if ($remaining.Count -gt 0) {
+                    $forced = $true
+                    Invoke-Cmd 'taskkill.exe' @('/IM', 'firefox.exe', '/F') | Out-Null
+                    Start-Sleep -Seconds 5
+                    $remaining = @(Get-FirefoxProcesses)
+                }
+            }
+            $script:Body.closeAfterWarmup = [ordered]@{ present = ($before.Count -gt 0); gracefulExit = $gracefulExit; forced = $forced; remaining = $remaining.Count }
+            Start-Sleep -Seconds 3
+            $state = Get-ProfileExtensionState
+            $script:Body.extension = $state
+            $expectedVersion = ''
+            if ($script:Body.xpi) { $expectedVersion = [string]$script:Body.xpi.version }
+            $verdict = Get-WarmupVerificationVerdict -Live $live -State $state -XpiFetched $xpiFetched `
+                -RequireHostStart:([bool]($Capabilities -match 'native-host-log')) `
+                -RequireBackgroundStart:([bool]($Capabilities -match 'background-start')) `
+                -RequireDiagnosticBatch:([bool]($Capabilities -match 'diagnostic-batch')) `
+                -ExpectedVersion $expectedVersion
+            $script:Body.warmupVerification = $verdict
+            Write-Output ('VERIFY-WARMUP stage=verdict status=' + [string]$verdict.status + ' reasons=' + (@($verdict.reasons) -join ','))
+            foreach ($reason in @($verdict.reasons)) { $script:Failures.Add($reason) }
+            # Lab-only console prefs so the visit browser's console lands in the
+            # captured stdout (never policy).
+            Enable-BrowserConsoleVisibility
         }
         catch {
-            Write-Output ('CHECK-EXT stage=exception ' + $_.Exception.Message)
-            $script:Failures.Add('check-extension-exception')
+            Write-Output ('VERIFY-WARMUP stage=exception ' + $_.Exception.Message)
+            $script:Failures.Add('verify-warmup-exception')
         }
         Complete-Step
     }
     'wait-firefox' {
         $firefox = @(Wait-FirefoxProcess -TimeoutSeconds 150)
+        if ($firefox.Count -gt 0) { $script:Body.firefoxSeenFixtureClock = (Get-FixtureClock).serverNow }
         $logs = @()
         foreach ($file in @(Get-ChildItem (Join-Path $script:VisitRoot 'logs') -Filter 'firefox-*.log*' -ErrorAction SilentlyContinue)) {
             $logs += @(Get-Content -LiteralPath $file.FullName -Tail 12 -ErrorAction SilentlyContinue)
@@ -793,9 +925,17 @@ switch ($Step) {
         if (Test-Path -LiteralPath $addonsPath) {
             $addonsLog = @(Get-Content -LiteralPath $addonsPath -Tail 80 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'addon|Addon|install|xpi|policy' } | Select-Object -First 30)
         }
-        $profile = Get-ExtensionState
-        $nativeHost = Get-LogTail -Path (Get-NativeHostLogPath) -Tail 600
-        $diagnostics = @($nativeHost | Where-Object { $_ -match 'stage=extension-diagnostic' })
+        # No extensions.json read here: the authoritative warm-up state signal
+        # already ran after an orderly close. Reading it with Firefox open is a
+        # false negative (Phase 3A.2 K1).
+        $nativeHost = Get-LogTail -Path (Get-NativeHostLogPath) -Tail 1500
+        $diagnostics = @($nativeHost | Where-Object { $_ -match 'stage=extension-diagnostic ' })
+        $liveCollect = Get-WarmupLiveSignals -Lines $nativeHost
+        $reloadReasons = @()
+        foreach ($line in @($diagnostics | Where-Object { $_ -match 'kind":"reload-decision' })) {
+            $match = [regex]::Match($line, '"reason":"([^"]+)"')
+            if ($match.Success) { $reloadReasons += $match.Groups[1].Value }
+        }
         $profiles = @($nativeHost | Where-Object { $_ -match 'stage=startup-profile' })
         $openpath = Get-LogTail -Path "$OpenPathRoot\logs\openpath.log" -Tail 300
         $workerState = ''
@@ -812,12 +952,22 @@ switch ($Step) {
                     Select-Object -First 400 | ForEach-Object { $_.Line })
         }
         $script:Body.collect = [ordered]@{
-            extension            = $profile
+            diagnostics          = [ordered]@{
+                lines                = $diagnostics.Count
+                hostStarted          = $liveCollect.hostStarted
+                backgroundStart      = $liveCollect.backgroundStart
+                batchFirst           = $liveCollect.diagnosticBatchFirst
+                transportTransitions = @($diagnostics | Where-Object { $_ -match 'kind":"transport' }).Count
+                holdOutcomes         = @($diagnostics | Where-Object { $_ -match 'kind":"hold-outcome' }).Count
+                reloadDecisions      = @($diagnostics | Where-Object { $_ -match 'kind":"reload-decision' }).Count
+                reloadReasons        = $reloadReasons
+                all                  = @($diagnostics | Select-Object -First 1000)
+            }
             addonsLog            = @($addonsLog | Select-Object -First 30)
             mozExtract           = @($mozExtract | Select-Object -First 600)
             diagnosticLines      = $diagnostics.Count
-            diagnosticSample     = @($diagnostics | Select-Object -First 12)
-            startupProfiles      = @($profiles | Select-Object -Last 4)
+            diagnosticSample     = @($diagnostics | Select-Object -First 40)
+            startupProfiles      = @($profiles | Select-Object -Last 8)
             nativeHostTail       = @($nativeHost | Select-Object -Last 120)
             openpathTail         = @($openpath | Select-Object -Last 80)
             workerState          = $workerState

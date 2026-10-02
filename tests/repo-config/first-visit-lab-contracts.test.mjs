@@ -31,7 +31,22 @@ describe('first-visit lane contract', () => {
     assert.match(workflow, /concurrency:/u);
     assert.match(workflow, /actions\/checkout@v6/u);
     assert.match(workflow, /fetch-depth: 0/u);
-    assert.match(workflow, /running the lane \(fail-open\)/u);
+    // Phase 3A.2 K2: the range resolver and the per-trigger plan replace the
+    // last-commit-only diff and the gh CLI dependency.
+    assert.match(workflow, /Resolve-FirstVisitScope\.ps1/u);
+    assert.match(workflow, /FirstVisitLanePlan\.psm1/u);
+    assert.match(workflow, /steps\.plan\.outputs\.scenarios/u);
+    assert.match(workflow, /steps\.template\.outputs\.template_sha/u);
+    assert.match(workflow, /archive_download_url/u);
+    assert.doesNotMatch(workflow, /gh run /u);
+    assert.doesNotMatch(workflow, /gh workflow/u);
+    const planModule = read('tests/e2e/ci/first-visit/FirstVisitLanePlan.psm1');
+    assert.match(planModule, /fail-open/u);
+    assert.match(planModule, /'settled,class-boot'; repetitions = 1; source = 'workflow_run'/u);
+    assert.match(
+      planModule,
+      /'settled,hot,class-boot,control'; repetitions = 2; source = 'schedule'/u
+    );
     assert.match(workflow, /actions\/upload-artifact@v7/u);
   });
 
@@ -73,5 +88,29 @@ describe('first-visit lane contract', () => {
     const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
     assert.match(harness, /Get-FixturePlan/u);
     assert.doesNotMatch(harness, /reddit|bbc|youtube/iu);
+  });
+
+  test('the guest harness never rewrites the browser policy', () => {
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.doesNotMatch(harness, /Set-LabFirefoxPolicy/u);
+    assert.doesNotMatch(harness, /Install-DistributedExtension/u);
+    assert.doesNotMatch(harness, /reg\.exe.*ExtensionSettings/u);
+    assert.doesNotMatch(harness, /distribution\\extensions/u);
+    assert.doesNotMatch(harness, /file:\/\//u);
+    // The verification only uses live signals and the post-close registry read.
+    assert.match(harness, /Get-WarmupVerificationVerdict/u);
+    assert.match(harness, /xpi-fetched-not-registered/u);
+    assert.match(harness, /extension-registered-inactive/u);
+    assert.match(harness, /host-not-started/u);
+  });
+
+  test('the warm-up verification renders the warm-up baseline from arguments', () => {
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.match(harness, /\$FixtureBaselineJson/u);
+    const controller = read('tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1');
+    assert.match(controller, /-FixtureBaselineJson/u);
+    assert.match(controller, /verify-warmup/u);
+    assert.match(controller, /Get-OpenPathFirstVisitBuildCapabilities/u);
+    assert.match(controller, /templateXpiSha256/u);
   });
 });

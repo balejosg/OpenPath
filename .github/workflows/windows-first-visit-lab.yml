@@ -66,68 +66,89 @@ jobs:
 
       - name: Detect relevant changes
         id: scope
-        shell: bash
+        shell: pwsh
         env:
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if [ "${{ github.event_name }}" != 'workflow_run' ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          files=""
-          if git fetch --no-tags origin "$HEAD_SHA" >/dev/null 2>&1 && git rev-parse --verify "$HEAD_SHA^" >/dev/null 2>&1; then
-            files=$(git diff --name-only "$HEAD_SHA^" "$HEAD_SHA" | tr '\n' ' ')
-          fi
-          case "$files" in
-            *firefox-extension/src/*|*firefox-extension/native/*|*windows/lib/*|*windows/scripts/*|*tests/e2e/ci/first-visit/*|*run-windows-first-visit-suite.ps1*|*windows-first-visit-lab.yml*)
-              echo "run=true" >> "$GITHUB_OUTPUT" ;;
-            '')
-              # Fail open: an undeterminable diff must never silently skip the
-              # lane that captures the broken first visit.
-              echo "run=true" >> "$GITHUB_OUTPUT"
-              echo "Changed-path detection could not compute a diff for ${HEAD_SHA:-unknown}; running the lane (fail-open)." ;;
-            *)
-              printf 'run=false\n' >> "$GITHUB_OUTPUT"
-              echo "No first-visit-relevant change in ${HEAD_SHA:-unknown}; skipping the lab." ;;
-          esac
+          & (Resolve-Path 'tests/e2e/ci/first-visit/Resolve-FirstVisitScope.ps1') -RepoRoot (Get-Location).Path
+
+      - name: Resolve lane plan
+        id: plan
+        shell: pwsh
+        env:
+          REQUESTED_SCENARIOS: ${{ inputs.scenarios }}
+          REQUESTED_REPETITIONS: ${{ inputs.repetitions }}
+        run: |
+          Import-Module (Resolve-Path 'tests/e2e/ci/first-visit/FirstVisitLanePlan.psm1') -Force
+          $plan = Get-OpenPathFirstVisitScenarioPlan -EventName "${{ github.event_name }}" -RequestedScenarios $env:REQUESTED_SCENARIOS -RequestedRepetitions $env:REQUESTED_REPETITIONS
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "scenarios=$($plan.scenarios)"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "repetitions=$($plan.repetitions)"
+          Write-Host "first-visit plan: scenarios=$($plan.scenarios) repetitions=$($plan.repetitions) source=$($plan.source)"
 
       - name: Resolve template source
         id: template
         if: steps.scope.outputs.run == 'true'
-        shell: bash
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_RUN_ID: ${{ inputs.template_run_id }}
           INPUT_SHA: ${{ inputs.template_sha }}
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          run_id="$INPUT_RUN_ID"
-          if [ -z "$run_id" ]; then
-            sha="$INPUT_SHA"; [ -z "$sha" ] && sha="$WORKFLOW_SHA"
-            if [ -n "$sha" ]; then
-              run_id=$(gh run list -R "$GITHUB_REPOSITORY" -w 'release-scripts.yml' -L 50 \
-                --json databaseId,headSha,conclusion \
-                --jq ".[] | select(.headSha == \"$sha\" and .conclusion == \"success\") | .databaseId" | head -1)
-            fi
-          fi
-          if [ -z "$run_id" ]; then
-            echo "::error::INFRA: no successful release-scripts run with windows-offline-template for the requested SHA."
+          $runId = $env:INPUT_RUN_ID
+          $templateSha = ''
+          if (-not $runId) {
+            $sha = $env:INPUT_SHA
+            if (-not $sha) { $sha = $env:WORKFLOW_SHA }
+            if ($sha) {
+              $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+              $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/workflows/release-scripts.yml/runs?head_sha=$sha&status=success&per_page=5"
+              try {
+                $runs = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+                $runId = @($runs.workflow_runs | Select-Object -First 1).database_id
+                $templateSha = [string]$sha
+              }
+              catch { Write-Host "template lookup failed for $sha: $($_.Exception.Message)" }
+            }
+          }
+          if (-not $runId) {
+            Write-Error 'INFRA: no successful release-scripts run with windows-offline-template for the requested SHA.'
             exit 2
-          fi
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "Using release-scripts run $run_id"
+          }
+          # The live-signal capabilities must be derived from the template's own
+          # SHA, not from the checkout: a red build cannot emit signals it never
+          # shipped (Phase 3A.2 K1 gating).
+          if (-not $templateSha) {
+            try {
+              $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+              $run = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$runId" -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+              $templateSha = [string]$run.head_sha
+            }
+            catch { Write-Host "template sha lookup failed for run ${runId}: $($_.Exception.Message)" }
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "run_id=$runId"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "template_sha=$templateSha"
+          Write-Host "Using release-scripts run $runId (template sha $templateSha)"
 
       - name: Download exact candidate artifacts
         if: steps.scope.outputs.run == 'true'
-        shell: bash
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          run_id='${{ steps.template.outputs.run_id }}'
-          mkdir -p windows-offline-template-assets windows-personalized-exe
-          gh run download -R "$GITHUB_REPOSITORY" "$run_id" -n windows-offline-template -D windows-offline-template-assets
-          gh run download -R "$GITHUB_REPOSITORY" "$run_id" -n windows-personalized-exe -D windows-personalized-exe
-          ls -l windows-offline-template-assets windows-personalized-exe
+          $runId = '${{ steps.template.outputs.run_id }}'
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $artifacts = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$runId/artifacts?per_page=100" -Headers $headers -TimeoutSec 60
+          foreach ($name in @('windows-offline-template', 'windows-personalized-exe')) {
+            $artifact = @($artifacts.artifacts | Where-Object { $_.name -eq $name }) | Select-Object -First 1
+            if (-not $artifact) { Write-Error "INFRA: artifact $name missing in run $runId"; exit 2 }
+            $zip = Join-Path $env:RUNNER_TEMP "$name.zip"
+            Invoke-WebRequest -Uri $artifact.archive_download_url -Headers $headers -OutFile $zip -TimeoutSec 300
+            $dir = if ($name -eq 'windows-offline-template') { 'windows-offline-template-assets' } else { 'windows-personalized-exe' }
+            Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
+          }
+          Get-ChildItem windows-offline-template-assets, windows-personalized-exe | Select-Object Name, Length
 
       - name: Reclaim lab lock from finished runs
         if: steps.scope.outputs.run == 'true'
@@ -161,7 +182,7 @@ jobs:
         env:
           OPENPATH_FIRST_VISIT_CONTROLLER: ${{ secrets.OPENPATH_FIRST_VISIT_CONTROLLER }}
           OPENPATH_DESKTOP_SURVIVAL_CONTROLLER: ${{ secrets.OPENPATH_DESKTOP_SURVIVAL_CONTROLLER }}
-          OPENPATH_SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          OPENPATH_SOURCE_SHA: ${{ steps.template.outputs.template_sha }}
           OPENPATH_FIRST_VISIT_LAB_SCENARIO: ${{ inputs.lab_scenario || 'win11-education-existing-empty' }}
         run: |
           $controller = if ($env:OPENPATH_FIRST_VISIT_CONTROLLER) { $env:OPENPATH_FIRST_VISIT_CONTROLLER } else { $env:OPENPATH_DESKTOP_SURVIVAL_CONTROLLER }
@@ -170,9 +191,9 @@ jobs:
           New-Item -ItemType Directory -Path $root -Force | Out-Null
           $template = (Resolve-Path 'windows-offline-template-assets/OpenPath-Windows-Setup-Template.exe').Path
           $personalized = (Get-ChildItem 'windows-personalized-exe' -Filter '*.exe' | Select-Object -First 1).FullName
-          $scenarios = '${{ inputs.scenarios }}'
+          $scenarios = '${{ steps.plan.outputs.scenarios }}'
           if (-not $scenarios) { $scenarios = 'settled,class-boot' }
-          $repetitions = [int]('${{ inputs.repetitions }}' -replace '^$', '1')
+          $repetitions = [int]('${{ steps.plan.outputs.repetitions }}' -replace '^$', '1')
           & (Resolve-Path 'tests/e2e/ci/run-windows-first-visit-suite.ps1') `
             -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') `
             -ArtifactsRoot $root -TemplatePath $template -PersonalizedExePath $personalized `

@@ -49,19 +49,49 @@ covers the plan, routing, report and log contracts, and
 are learnable (and the never-learnable one is not) under
 `RuntimeDependency.Policy`.
 
-### Managed extension install in the lab
+### Managed extension install in the lab (Phase 3A.2 correction)
 
-Production points `ExtensionSettings.install_url` at the managed API, and the
-agent writes that policy to **both** `distribution/policies.json` and the
-machine registry (`HKLM\SOFTWARE\Policies\Mozilla\Firefox`, `REG_MULTI_SZ`).
-Firefox gives the registry precedence and the agent reapplies it, so the lane's
-`lab-policy` step removes the registry entry (verified), rewrites the file policy
-to the locally staged signed XPI exactly like the Phase 2E lab proved, and
-uploads the same XPI to the fixture, which serves it on the anchors and on the
-managed `/api/extensions/firefox/openpath.xpi` path as a fallback if the registry
-reappears before the browser starts. The warm-up verifies the add-on is present
-in `extensions.json` (one extra browser start completes a staged install) before
-any measured visit.
+Production points `ExtensionSettings.install_url` at the managed API
+(`<apiUrl>/api/extensions/firefox/openpath.xpi`) and the agent writes that policy
+to both `distribution/policies.json` and the machine registry
+(`HKLM\SOFTWARE\Policies\Mozilla\Firefox`, `REG_MULTI_SZ`). The lane **never
+rewrites that policy**: the registry entry, the file and
+`distribution/extensions/` stay exactly as the product wrote them.
+
+The only lab-specific staging is the XPI bytes: the harness copies the signed
+XPI the template installer left in `C:\OpenPath\browser-extension\` and uploads
+it to the fixture (`POST /xpi`); the fixture serves it **only** on the managed
+`/api/extensions/firefox/openpath.xpi` path. The controller records the
+installed and served sha256 and fails the run when either differs from the
+template's `payload-manifest.json` digest.
+
+Phase 3A concluded there was a "Firefox does not register the extension" lab
+blocker. That was wrong: the verification read `extensions.json` **while Firefox
+was still running**, and Firefox only flushes the add-on registry on shutdown,
+so the read was a false negative. The one real defect was that the fixture did
+not serve the managed XPI path at all (`GET /api/extensions/firefox/openpath.xpi
+404`), fixed in `d0ccdb6c`.
+
+The warm-up verification therefore never reads `extensions.json` with Firefox
+open:
+
+- live signal (browser running): `initialization completed` in the student's
+  `%LOCALAPPDATA%\OpenPath\native-host.log`, plus `background-start` and the
+  `stage=extension-diagnostic-batch first=...` line on builds that emit them
+  (the controller derives the build's capabilities from the template source SHA
+  and an unknown SHA fails open to the state signal alone);
+- state signal (after an orderly close: `taskkill /T`, then `/F` only if needed):
+  the add-on entry with `active=true`, `userDisabled=false`, `appDisabled=false`,
+  its version, `location`, `signedState` and `installTelemetryInfo`.
+
+Explicit failures: `xpi-not-fetched`, `host-not-started`,
+`xpi-fetched-not-registered`, `extension-registered-inactive`,
+`extension-version-mismatch`.
+
+Known fixture difference: the fixture does not emulate
+`/api/machines/client-config` or `/trpc/healthReports.submit` (both 404). It is
+inert for this lane (client-config only syncs `captivePortalDomains` into the
+runtime dependency worker), but it is a documented difference from production.
 
 ## Verdict
 
@@ -85,7 +115,11 @@ artifact directory contains:
 
 - `metrics.json`: verdict, reasons, wave times, reloads and their E1 reasons,
   host startup profile (`processToScriptMs`, `pingMs`, `firstEnqueueMs`), the
-  count of E1 diagnostic lines and hold outcomes;
+  E1 diagnostics per kind (transport transitions, holds with their outcomes,
+  reload decisions with each reason, background-start), the warm-up XPI fetch
+  delay and the worker apply time. Every segment stays on a single clock: page
+  waves from the in-page self-report, the fetch delay from the fixture clock and
+  host segments from the native host's own lines;
 - `observe.json`: the correlated controller observation (visit delay for B,
   security checks, fixture state);
 - `captures/console-<scenario>-t{005,010,015,020,030,060}.ppm` and
@@ -101,10 +135,14 @@ artifact directory contains:
 gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
   -f scenarios=settled,class-boot -f repetitions=1
 
-# Nightly: settled, hot, class-boot and control with repetitions.
-# After a push that touches firefox-extension/src/**, firefox-extension/native/**,
-# windows/lib/**, windows/scripts/** or the lane, it runs automatically once the
-# Release Installation Scripts workflow succeeds on main.
+# Automatic triggers (Phase 3A.2 K2):
+# - after a successful Release Installation Scripts run on main, when the push
+#   range (head_sha against the newest comparable base) touches
+#   firefox-extension/src/**, firefox-extension/native/**, windows/lib/**,
+#   windows/scripts/**, tests/e2e/ci/first-visit/** or the lane itself
+#   (an undeterminable range fails open): W and B, one repetition each;
+# - nightly (02:17): settled, hot, class-boot and control with two repetitions;
+# - dispatch: exactly the scenarios/repetitions requested.
 ```
 
 The lane serializes with the desktop-survival suite through the same lab lock

@@ -263,6 +263,11 @@ class FixtureState:
         self.browser_requests = 0
         self.last_report = None
         self.started_at = time.time()
+        # Phase 3A.2: the warm-up verification reads the managed-extension fetch
+        # from here (one host clock) instead of inferring it from the browser.
+        self.xpi_fetches = 0
+        self.xpi_last_fetched_at = 0.0
+        self.xpi_last_path = ""
         state_dir.mkdir(parents=True, exist_ok=True)
         self.requests_path = state_dir / "requests.jsonl"
         self.reports_path = state_dir / "reports.jsonl"
@@ -278,6 +283,10 @@ class FixtureState:
                 # Only a browser fetching page content counts here: the lane's
                 # plan/state curls and the agent's whitelist bootstrap do not.
                 self.browser_requests += 1
+            if note.startswith("xpi-served"):
+                self.xpi_fetches += 1
+                self.xpi_last_fetched_at = float(entry.get("ts") or 0.0)
+                self.xpi_last_path = str(entry.get("path") or "")
             with self.requests_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry) + "\n")
 
@@ -334,16 +343,16 @@ class FixtureHandler(BaseHTTPRequestHandler):
         host = self._host_name()
         plan = self.state.plan
 
-        if path in ("/openpath-firefox-extension.xpi", "/api/extensions/firefox/openpath.xpi"):
-            # Firefox only installs policy extensions from a web URL, so the
-            # guest uploads its signed XPI (POST /xpi) and the fixture serves it
-            # both on the anchors and on the managed API path the agent policy
-            # points at (defence in depth against a policy reapply).
+        if path == "/api/extensions/firefox/openpath.xpi":
+            # The managed API path the production agent policy points Firefox
+            # at. The fixture serves the exact signed XPI of the template (the
+            # guest stages the installed copy via POST /xpi); no other path
+            # serves extension bytes.
             target = self.state.state_dir / "openpath-firefox-extension.xpi"
             if target.exists():
                 body = target.read_bytes()
                 self._send(200, body, "application/x-xpinstall")
-                self._finish(200, path, "bytes=" + str(len(body)))
+                self._finish(200, path, "xpi-served bytes=" + str(len(body)))
                 return
             self._send(404, b"xpi not staged", "text/plain")
             self._finish(404, path)
@@ -361,10 +370,16 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "runId": plan["runId"],
+                    "serverNow": time.time(),
                     "requests": self.state.requests,
                     "browserRequests": self.state.browser_requests,
                     "lastReport": self.state.last_report,
                     "whitelistSha256": self.state.whitelist_sha256,
+                    "xpi": {
+                        "count": self.state.xpi_fetches,
+                        "lastFetchedAt": self.state.xpi_last_fetched_at,
+                        "lastPath": self.state.xpi_last_path,
+                    },
                 },
             )
             self._finish(200, path)

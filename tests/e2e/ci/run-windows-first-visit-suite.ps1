@@ -38,6 +38,18 @@ $env:OPENPATH_SUITE_KIND = 'FirstVisit'
 $env:OPENPATH_POLICY_CONVERTER_MODE = ''
 $failed = $false
 $blocked = $false
+# The template artifact ships the payload manifest with the exact signed xpi
+# digest the fixture must serve on the managed API path (Phase 3A.2 K1).
+$templateXpiSha = ''
+try {
+    $manifestPath = Join-Path (Split-Path -Parent $TemplatePath) 'payload-manifest.json'
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $xpiEntry = @($manifest.payloads | Where-Object { [string]$_.path -like '*openpath-firefox-extension.xpi' }) | Select-Object -First 1
+        if ($xpiEntry) { $templateXpiSha = [string]$xpiEntry.sha256 }
+    }
+}
+catch { $templateXpiSha = '' }
 foreach ($repetition in 1..$Repetitions) {
     foreach ($scenario in $Scenarios) {
         $scenarioId = "first-visit-$scenario-r$repetition"
@@ -47,7 +59,7 @@ foreach ($repetition in 1..$Repetitions) {
         $labScenario = if ($env:OPENPATH_FIRST_VISIT_LAB_SCENARIO) { [string]$env:OPENPATH_FIRST_VISIT_LAB_SCENARIO } else { 'win11-education-existing-empty' }
         $payload = [ordered]@{
             schemaVersion = 2
-            firstVisit    = [ordered]@{ scenario = "first-visit-$scenario"; repetition = $repetition; labScenario = $labScenario }
+            firstVisit    = [ordered]@{ scenario = "first-visit-$scenario"; repetition = $repetition; labScenario = $labScenario; templateXpiSha256 = $templateXpiSha }
         }
         [IO.File]::WriteAllText($payloadPath, ($payload | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         $scenarioFailed = $false

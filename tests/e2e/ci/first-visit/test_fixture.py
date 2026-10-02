@@ -140,7 +140,9 @@ class FixtureServerTests(unittest.TestCase):
     def test_signed_xpi_upload_and_serve(self) -> None:
         anchor_host = self.plan["anchors"]["a1"]["host"]
         status, _ = self.fetch(anchor_host, "/openpath-firefox-extension.xpi")
-        self.assertEqual(status, 404, "the xpi route must 404 until the guest uploads it")
+        self.assertEqual(status, 404, "extension bytes are only served on the managed API path")
+        status, _ = self.fetch("whatever.example", "/api/extensions/firefox/openpath.xpi")
+        self.assertEqual(status, 404, "the managed xpi route must 404 until the guest uploads it")
         payload = b"PK\x03\x04" + bytes(range(64))
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/xpi",
@@ -154,12 +156,15 @@ class FixtureServerTests(unittest.TestCase):
             body = json.loads(response.read())
         self.assertEqual(body["bytes"], len(payload))
         self.assertEqual(body["sha256"], hashlib.sha256(payload).hexdigest())
-        status, served = self.fetch(anchor_host, "/openpath-firefox-extension.xpi")
-        self.assertEqual(status, 200)
-        self.assertEqual(served, payload)
         status, served = self.fetch("whatever.example", "/api/extensions/firefox/openpath.xpi")
-        self.assertEqual(status, 200, "the managed API path must serve the same staged xpi")
+        self.assertEqual(status, 200, "the managed API path must serve the staged xpi")
         self.assertEqual(served, payload)
+        status, state = self.fetch("whatever.example", "/state.json")
+        self.assertEqual(status, 200)
+        parsed = json.loads(state)
+        self.assertGreaterEqual(parsed["xpi"]["count"], 1, "the xpi fetch is recorded for the warm-up verification")
+        self.assertEqual(parsed["xpi"]["lastPath"], "/api/extensions/firefox/openpath.xpi")
+        self.assertGreater(parsed["serverNow"], 0, "state.json carries the fixture clock for one-clock deltas")
 
     def test_reports_and_request_log_are_recorded(self) -> None:
         anchor = self.plan["anchors"]["a1"]["host"]
