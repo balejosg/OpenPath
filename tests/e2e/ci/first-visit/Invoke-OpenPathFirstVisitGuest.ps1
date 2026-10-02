@@ -505,11 +505,26 @@ switch ($Step) {
         # extension, the console prefs are applied for the visits and the warm-up
         # browser is closed cleanly (recording `forced`, the class-boot contract).
         Enable-BrowserConsoleVisibility
-        $extension = Get-ExtensionState
+        # The policy install happens shortly after Firefox starts: poll instead of
+        # reading the profile once.
+        $extension = [ordered]@{ found = $false }
+        $deadline = (Get-Date).AddSeconds(90)
+        while ((Get-Date) -lt $deadline) {
+            $extension = Get-ExtensionState
+            if ($extension.found) { break }
+            Start-Sleep -Seconds 5
+        }
         $closed = Close-FirefoxProcesses
         $script:Body.extension = $extension
         $script:Body.closeAfterWarmup = $closed
-        if (-not $extension.found) { $script:Failures.Add('extension-not-installed-by-policy') }
+        if (-not $extension.found) {
+            $script:Body.extensionDiagnostics = [ordered]@{
+                profiles = @(Get-ChildItem 'C:\Users\*\AppData\Roaming\Mozilla\Firefox\Profiles' -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+                policy = @(Get-Content 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Raw -ErrorAction SilentlyContinue)
+                xpi = @(Get-ChildItem 'C:\OpenPathLab\first-visit' -Filter '*.xpi' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName + ' ' + $_.Length })
+            }
+            $script:Failures.Add('extension-not-installed-by-policy')
+        }
         elseif (-not $extension.active) { $script:Failures.Add('extension-installed-but-inactive') }
         Complete-Step
     }

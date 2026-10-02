@@ -164,7 +164,15 @@ function Send-OpenPathFirstVisitStep {
     $jsonText = [string]$output
     $start = $jsonText.IndexOf('{')
     $end = $jsonText.LastIndexOf('}')
-    if ($start -lt 0 -or $end -le $start) { throw "first-visit-guest-result-missing-$Phase-$Step" }
+    if ($start -lt 0 -or $end -le $start) {
+        # Archive the raw guest output so a missing result still explains itself.
+        try {
+            $rawPath = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.raw.txt"
+            [IO.File]::WriteAllText($rawPath, ([string]$output).Substring(0, [math]::Min(6000, ([string]$output).Length)), [Text.UTF8Encoding]::new($false))
+        }
+        catch { }
+        throw "first-visit-guest-result-missing-$Phase-$Step"
+    }
     try { $harness = $jsonText.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop }
     catch { throw "first-visit-guest-result-invalid-$Phase-$Step" }
     $resultArchive = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.json"
