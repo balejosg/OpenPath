@@ -157,6 +157,9 @@ class FixtureServerTests(unittest.TestCase):
         status, served = self.fetch(anchor_host, "/openpath-firefox-extension.xpi")
         self.assertEqual(status, 200)
         self.assertEqual(served, payload)
+        status, served = self.fetch("whatever.example", "/api/extensions/firefox/openpath.xpi")
+        self.assertEqual(status, 200, "the managed API path must serve the same staged xpi")
+        self.assertEqual(served, payload)
 
     def test_reports_and_request_log_are_recorded(self) -> None:
         anchor = self.plan["anchors"]["a1"]["host"]

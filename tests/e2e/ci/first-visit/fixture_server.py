@@ -334,9 +334,11 @@ class FixtureHandler(BaseHTTPRequestHandler):
         host = self._host_name()
         plan = self.state.plan
 
-        if path == "/openpath-firefox-extension.xpi":
+        if path in ("/openpath-firefox-extension.xpi", "/api/extensions/firefox/openpath.xpi"):
             # Firefox only installs policy extensions from a web URL, so the
-            # guest uploads its signed XPI (POST /xpi) and the anchors serve it.
+            # guest uploads its signed XPI (POST /xpi) and the fixture serves it
+            # both on the anchors and on the managed API path the agent policy
+            # points at (defence in depth against a policy reapply).
             target = self.state.state_dir / "openpath-firefox-extension.xpi"
             if target.exists():
                 body = target.read_bytes()

@@ -505,13 +505,14 @@ switch ($Step) {
         Complete-Step
     }
     'lab-policy' {
-        # The agent reapplies its managed policy on boot, so the lab rewrite runs
-        # after the session-setup reboot and is verified right before the warm-up
-        # browser starts. Firefox only installs policy extensions from a web URL
-        # (file:// installs never landed), so the signed XPI is uploaded to the
-        # fixture and served from the whitelisted anchor 1 host, mirroring how
-        # production points install_url at the managed API.
+        # The agent reapplies its managed policy on boot and writes it to BOTH the
+        # machine registry and distribution/policies.json; Firefox gives the
+        # registry precedence, so the lab install_url must land in both. Firefox
+        # only installs policy extensions from a web URL, so the signed XPI is
+        # uploaded to the fixture and served from the whitelisted anchor 1 host,
+        # mirroring the managed API URL production uses.
         $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
+        $regPath = 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
         $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
         $plan = Get-FixturePlan
         $anchorHost = [string]$plan.anchors.a1.host
@@ -527,6 +528,36 @@ switch ($Step) {
         $script:Body.labPolicyUpload = $upload
         $script:Body.labPolicyInstallUrl = $installUrl
         if ($upload -notmatch '^2') { $script:Failures.Add('lab-policy-xpi-upload-failed') }
+
+        $entryValue = [pscustomobject]@{ installation_mode = 'force_installed'; install_url = $installUrl }
+
+        # 1) Registry policy (precedence over the file).
+        $settings = $null
+        try {
+            $current = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings)
+            if ($current.Count -gt 0) { $settings = ($current -join "`n") | ConvertFrom-Json }
+        }
+        catch { }
+        if ($null -eq $settings) { $settings = [pscustomobject]@{} }
+        if ($settings.PSObject.Properties['openpath-block-monitor@openpath']) {
+            $settings.PSObject.Properties['openpath-block-monitor@openpath'].Value = $entryValue
+        }
+        else {
+            $settings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue $entryValue -Force
+        }
+        $regValue = @($settings | ConvertTo-Json -Depth 10 -Compress)
+        try {
+            if (-not (Test-Path -LiteralPath $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+            New-ItemProperty -Path $regPath -Name 'ExtensionSettings' -Value $regValue -PropertyType MultiString -Force | Out-Null
+        }
+        catch { $script:Failures.Add('lab-policy-registry-write-failed') }
+        $regBack = ''
+        try { $regBack = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings) -join "`n" } catch { }
+        Write-Output ('LAB-POLICY registry=' + $regBack)
+        $script:Body.labPolicyRegistryReadBack = $regBack
+        if ($regBack -notlike ('*' + $installUrl + '*')) { $script:Failures.Add('lab-policy-registry-not-applied') }
+
+        # 2) distribution/policies.json (kept in sync).
         $rewritten = $false
         if (Test-Path -LiteralPath $policyPath) {
             $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
@@ -542,7 +573,7 @@ switch ($Step) {
         else { $script:Failures.Add('lab-policy-missing') }
         $readBack = ''
         try { $readBack = [string]((Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json).policies.ExtensionSettings.'openpath-block-monitor@openpath'.install_url) } catch { }
-        Write-Output ('LAB-POLICY rewritten=' + [string]$rewritten + ' install_url=' + $readBack)
+        Write-Output ('LAB-POLICY file rewritten=' + [string]$rewritten + ' install_url=' + $readBack)
         $script:Body.labPolicyRewritten = $rewritten
         $script:Body.labPolicyReadBack = $readBack
         if ($readBack -ne $installUrl) { $script:Failures.Add('lab-policy-not-applied') }
