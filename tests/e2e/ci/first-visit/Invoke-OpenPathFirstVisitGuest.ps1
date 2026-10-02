@@ -733,10 +733,27 @@ switch ($Step) {
                     $jsonBytes = if (Test-Path -LiteralPath $jsonPath) { [long](Get-Item -LiteralPath $jsonPath).Length } else { -1 }
                     $profileDetail[$profileDir] = [ordered]@{ extFiles = $extFiles; extensionsJsonBytes = $jsonBytes }
                 }
+                $addonsLog = @()
+                $addonsPath = Join-Path $script:VisitRoot 'moz\addons.log'
+                if (Test-Path -LiteralPath $addonsPath) {
+                    $addonsLog = @(Get-Content -LiteralPath $addonsPath -Tail 400 -ErrorAction SilentlyContinue |
+                            Where-Object { $_ -match 'Addon|addon|xpi|install|Install|signatur|Signatur|policy|Policy|verify|Verify|blocked|rejected' } |
+                            Select-Object -Last 40)
+                }
+                $extensionsJsonHead = ''
+                foreach ($profileDir in $profileDirs) {
+                    $jsonPath = Join-Path $studentProfileRoot "$profileDir\extensions.json"
+                    if (Test-Path -LiteralPath $jsonPath) {
+                        try { $extensionsJsonHead = (Get-Content -LiteralPath $jsonPath -Raw -ErrorAction Stop).Substring(0, [math]::Min(1500, (Get-Item -LiteralPath $jsonPath).Length)) } catch { }
+                        if ($extensionsJsonHead -match 'openpath') { break }
+                    }
+                }
                 $script:Body.extensionDiagnostics = [ordered]@{
                     profiles      = $profileDirs
                     profileIds    = $profileIds
                     profileDetail = $profileDetail
+                    addonsLog     = $addonsLog
+                    extensionsJsonHead = $extensionsJsonHead
                     xpiBytes      = $xpiBytes
                     xpiSigned     = $xpiSigned
                     xpiId         = $xpiId
