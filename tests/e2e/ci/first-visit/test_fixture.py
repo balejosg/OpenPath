@@ -9,6 +9,7 @@ port and the DNS assertions only exercise the pure packet helpers.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import pathlib
 import socket
@@ -135,6 +136,27 @@ class FixtureServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["runId"], "unit-run")
         status, _ = self.fetch(self.plan["anchors"]["a1"]["host"], "/w/t/whitelist.txt")
         self.assertEqual(status, 200)
+
+    def test_signed_xpi_upload_and_serve(self) -> None:
+        anchor_host = self.plan["anchors"]["a1"]["host"]
+        status, _ = self.fetch(anchor_host, "/openpath-firefox-extension.xpi")
+        self.assertEqual(status, 404, "the xpi route must 404 until the guest uploads it")
+        payload = b"PK\x03\x04" + bytes(range(64))
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/xpi",
+            data=payload,
+            method="POST",
+        )
+        request.add_header("Host", anchor_host)
+        request.add_header("Content-Type", "application/x-xpinstall")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.assertEqual(response.status, 200)
+            body = json.loads(response.read())
+        self.assertEqual(body["bytes"], len(payload))
+        self.assertEqual(body["sha256"], hashlib.sha256(payload).hexdigest())
+        status, served = self.fetch(anchor_host, "/openpath-firefox-extension.xpi")
+        self.assertEqual(status, 200)
+        self.assertEqual(served, payload)
 
     def test_reports_and_request_log_are_recorded(self) -> None:
         anchor = self.plan["anchors"]["a1"]["host"]

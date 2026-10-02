@@ -505,11 +505,28 @@ switch ($Step) {
         Complete-Step
     }
     'lab-policy' {
-        # The agent reapplies its managed policy (managed API install_url) on
-        # boot, so the lab rewrite runs after the session-setup reboot and is
-        # verified right before the warm-up browser starts.
+        # The agent reapplies its managed policy on boot, so the lab rewrite runs
+        # after the session-setup reboot and is verified right before the warm-up
+        # browser starts. Firefox only installs policy extensions from a web URL
+        # (file:// installs never landed), so the signed XPI is uploaded to the
+        # fixture and served from the whitelisted anchor 1 host, mirroring how
+        # production points install_url at the managed API.
         $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
-        $labUrl = 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
+        $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
+        $plan = Get-FixturePlan
+        $anchorHost = [string]$plan.anchors.a1.host
+        $installUrl = "http://$anchorHost/openpath-firefox-extension.xpi"
+        $fixtureBase = Get-FixtureBase
+        $upload = ''
+        try {
+            $uploadResp = Invoke-WebRequest -UseBasicParsing -Uri "$fixtureBase/xpi" -Method Post -InFile $labXpi -ContentType 'application/x-xpinstall' -TimeoutSec 120
+            $upload = [string]$uploadResp.StatusCode
+        }
+        catch { $upload = 'upload-failed: ' + $_.Exception.Message }
+        Write-Output ('LAB-POLICY xpi-upload=' + $upload + ' install_url=' + $installUrl)
+        $script:Body.labPolicyUpload = $upload
+        $script:Body.labPolicyInstallUrl = $installUrl
+        if ($upload -notmatch '^2') { $script:Failures.Add('lab-policy-xpi-upload-failed') }
         $rewritten = $false
         if (Test-Path -LiteralPath $policyPath) {
             $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
@@ -518,7 +535,7 @@ switch ($Step) {
                 $policy.policies.ExtensionSettings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue ([pscustomobject]@{ installation_mode = 'force_installed' }) -Force
                 $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
             }
-            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue $labUrl -Force
+            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue $installUrl -Force
             [IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
             $rewritten = $true
         }
@@ -528,7 +545,7 @@ switch ($Step) {
         Write-Output ('LAB-POLICY rewritten=' + [string]$rewritten + ' install_url=' + $readBack)
         $script:Body.labPolicyRewritten = $rewritten
         $script:Body.labPolicyReadBack = $readBack
-        if ($readBack -ne $labUrl) { $script:Failures.Add('lab-policy-not-applied') }
+        if ($readBack -ne $installUrl) { $script:Failures.Add('lab-policy-not-applied') }
         Complete-Step
     }
     'warmup' {

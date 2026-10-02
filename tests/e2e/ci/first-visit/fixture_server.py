@@ -334,6 +334,18 @@ class FixtureHandler(BaseHTTPRequestHandler):
         host = self._host_name()
         plan = self.state.plan
 
+        if path == "/openpath-firefox-extension.xpi":
+            # Firefox only installs policy extensions from a web URL, so the
+            # guest uploads its signed XPI (POST /xpi) and the anchors serve it.
+            target = self.state.state_dir / "openpath-firefox-extension.xpi"
+            if target.exists():
+                body = target.read_bytes()
+                self._send(200, body, "application/x-xpinstall")
+                self._finish(200, path, "bytes=" + str(len(body)))
+                return
+            self._send(404, b"xpi not staged", "text/plain")
+            self._finish(404, path)
+            return
         if path == "/__ping":
             self._json(200, {"ok": True, "runId": plan["runId"], "host": host})
             self._finish(200, path)
@@ -436,6 +448,17 @@ class FixtureHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
+        if path == "/xpi":
+            if not body:
+                self._send(400, b"empty xpi", "text/plain")
+                self._finish(400, path)
+                return
+            target = self.state.state_dir / "openpath-firefox-extension.xpi"
+            target.write_bytes(body)
+            digest = hashlib.sha256(body).hexdigest()
+            self._json(200, {"ok": True, "bytes": len(body), "sha256": digest})
+            self._finish(200, path, "bytes=" + str(len(body)) + " sha256=" + digest)
+            return
         if path != "/__report":
             self._send(404, b"fixture: unknown post", "text/plain")
             self._finish(404, path)
