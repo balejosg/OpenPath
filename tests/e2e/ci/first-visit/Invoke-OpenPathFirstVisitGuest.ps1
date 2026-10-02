@@ -64,8 +64,12 @@ function Get-NativeHostLogPath {
 }
 
 function Get-FirefoxProcesses {
-    return @(Get-CimInstance Win32_Process -Filter "Name='firefox.exe'" -ErrorAction SilentlyContinue |
-            ForEach-Object { [ordered]@{ pid = $_.ProcessId; created = ([datetime]$_.CreationDate).ToString('o') } })
+    return @(Get-Process -Name 'firefox' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $created = ''
+                try { $created = $_.StartTime.ToUniversalTime().ToString('o') } catch { }
+                [ordered]@{ pid = $_.Id; created = $created }
+            })
 }
 
 function Invoke-Cmd {
@@ -689,14 +693,12 @@ switch ($Step) {
     }
     'check-extension' {
         # Warm-up verification: the policy must have installed and activated the
-        # extension, the console prefs are applied for the visits and the warm-up
-        # browser is closed cleanly (recording `forced`, the class-boot contract).
+        # extension before any measured visit. The step stays short (a single
+        # poll) so a guest hiccup can never eat the phase timeout.
         try {
             Write-Output 'CHECK-EXT stage=start'
             Enable-BrowserConsoleVisibility
             Write-Output 'CHECK-EXT stage=console-prefs'
-            # The policy install happens shortly after Firefox starts: poll instead
-            # of reading the profile once.
             $extension = [ordered]@{ found = $false }
             $deadline = (Get-Date).AddSeconds(45)
             while ((Get-Date) -lt $deadline) {
@@ -705,131 +707,29 @@ switch ($Step) {
                 Start-Sleep -Seconds 5
             }
             Write-Output ('CHECK-EXT stage=poll-done found=' + [string]$extension.found)
-            if (-not $extension.found) {
-                # A policy install can be staged during the first start; one more
-                # start with the browser closed completes it.
-                Close-FirefoxProcesses | Out-Null
-                $second = Start-InSessionVisit -Url 'about:blank' -Tag 'warmup2'
-                Write-Output ('CHECK-EXT second-launch=' + [string]$second.out)
-                $deadline2 = (Get-Date).AddSeconds(60)
-                while ((Get-Date) -lt $deadline2) {
-                    $extension = Get-ExtensionState
-                    if ($extension.found) { break }
-                    Start-Sleep -Seconds 5
-                }
-                Write-Output ('CHECK-EXT stage=second-poll-done found=' + [string]$extension.found)
-            }
-            $closed = Close-FirefoxProcesses
-            Write-Output 'CHECK-EXT stage=closed'
             $script:Body.extension = $extension
-            $script:Body.closeAfterWarmup = $closed
             if (-not $extension.found) {
-                # Slim, literal-path diagnostics: every value is also traced so a
-                # late crash still leaves the data in the raw output.
                 $studentProfileRoot = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles"
-                $labXpi = 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
                 $profileDirs = @(Get-ChildItem -LiteralPath $studentProfileRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-                $xpiBytes = if (Test-Path -LiteralPath $labXpi) { [long](Get-Item -LiteralPath $labXpi).Length } else { -1 }
-                $firefoxOwners = @('profile-detail-only')
-                Write-Output ('CHECK-EXT diag profiles=[' + ($profileDirs -join ',') + '] xpiBytes=' + [string]$xpiBytes)
-                foreach ($profileDir in $profileDirs) {
-                    $extFile = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles\$profileDir\extensions.json"
-                    $ids = @()
-                    if (Test-Path -LiteralPath $extFile) {
-                        try { $ids = @((Get-Content -LiteralPath $extFile -Raw | ConvertFrom-Json).addons | ForEach-Object { [string]$_.id }) }
-                        catch { $ids = @('parse-error') }
-                    }
-                    Write-Output ('CHECK-EXT diag profile=' + $profileDir + ' ids=[' + ($ids -join ',') + ']')
-                }
-                $aclLines = @((Invoke-Cmd 'icacls.exe' @($labXpi)).out | Select-Object -First 3)
-                Write-Output ('CHECK-EXT diag acl=' + ($aclLines -join ' | '))
-                $profileIds = [ordered]@{}
-                foreach ($profileDir in $profileDirs) {
-                    $extFile = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles\$profileDir\extensions.json"
-                    $ids = @()
-                    if (Test-Path -LiteralPath $extFile) {
-                        try { $ids = @((Get-Content -LiteralPath $extFile -Raw | ConvertFrom-Json).addons | ForEach-Object { [string]$_.id }) }
-                        catch { $ids = @('parse-error') }
-                    }
-                    $profileIds[$profileDir] = $ids
-                }
-                $xpiSigned = $false
-                $xpiId = ''
-                try {
-                    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-                    $zip = [IO.Compression.ZipFile]::OpenRead($labXpi)
-                    try {
-                        $xpiSigned = @($zip.Entries | Where-Object { $_.FullName -like 'META-INF/*.rsa' }).Count -gt 0
-                        $manifestEntry = @($zip.Entries | Where-Object { $_.FullName -eq 'manifest.json' })[0]
-                        if ($manifestEntry) {
-                            $reader = New-Object IO.StreamReader($manifestEntry.Open())
-                            $manifestText = $reader.ReadToEnd()
-                            $reader.Close()
-                            $manifestJson = $manifestText | ConvertFrom-Json
-                            $xpiId = [string]$manifestJson.browser_specific_settings.gecko.id
-                            if (-not $xpiId) { $xpiId = [string]$manifestJson.applications.gecko.id }
-                        }
-                    }
-                    finally { $zip.Dispose() }
-                }
-                catch { $xpiId = 'xpi-read-error' }
-                $ffVersion = ''
-                try { $ffVersion = [string](Get-Item -LiteralPath (Get-FirefoxInstallPath)).VersionInfo.ProductVersion } catch { }
-                $guestClock = [DateTime]::UtcNow.ToString('o')
-                Write-Output ('CHECK-EXT diag xpiSigned=' + [string]$xpiSigned + ' xpiId=' + $xpiId + ' firefoxVersion=' + $ffVersion)
                 $profileDetail = [ordered]@{}
                 foreach ($profileDir in $profileDirs) {
-                    $profRoot = Join-Path $studentProfileRoot $profileDir
-                    $extDir = Join-Path $profRoot 'extensions'
+                    $extDir = Join-Path $studentProfileRoot "$profileDir\extensions"
                     $extFiles = @()
                     if (Test-Path -LiteralPath $extDir) {
                         $extFiles = @(Get-ChildItem -LiteralPath $extDir -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ':' + [string]$_.Length })
                     }
-                    $jsonPath = Join-Path $profRoot 'extensions.json'
-                    $jsonBytes = if (Test-Path -LiteralPath $jsonPath) { [long](Get-Item -LiteralPath $jsonPath).Length } else { -1 }
-                    $profileDetail[$profileDir] = [ordered]@{ extFiles = $extFiles; extensionsJsonBytes = $jsonBytes }
+                    $profileDetail[$profileDir] = [ordered]@{ extFiles = $extFiles }
                 }
-                $addonsLog = @()
-                $addonsPath = Join-Path $script:VisitRoot 'moz\addons.log'
-                if (Test-Path -LiteralPath $addonsPath) {
-                    $addonsLog = @(Get-Content -LiteralPath $addonsPath -Tail 400 -ErrorAction SilentlyContinue |
-                            Where-Object { $_ -match 'Addon|addon|xpi|install|Install|signatur|Signatur|policy|Policy|verify|Verify|blocked|rejected' } |
-                            Select-Object -Last 40)
-                }
-                $extensionsJsonHead = ''
-                foreach ($profileDir in $profileDirs) {
-                    $jsonPath = Join-Path $studentProfileRoot "$profileDir\extensions.json"
-                    if (Test-Path -LiteralPath $jsonPath) {
-                        try { $extensionsJsonHead = (Get-Content -LiteralPath $jsonPath -Raw -ErrorAction Stop).Substring(0, [math]::Min(1500, (Get-Item -LiteralPath $jsonPath).Length)) } catch { }
-                        if ($extensionsJsonHead -match 'openpath') { break }
-                    }
-                }
-                $policySnapshot = ''
-                try { $policySnapshot = (Get-Content 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Raw -ErrorAction Stop) } catch { }
-                $regSnapshot = ''
-                try { $regSnapshot = @((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox' -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings) -join ' ' } catch { }
-                $prefsExtensionLines = @()
-                foreach ($profileDir in $profileDirs) {
-                    $prefsPath = Join-Path $studentProfileRoot "$profileDir\prefs.js"
-                    if (Test-Path -LiteralPath $prefsPath) {
-                        $prefsExtensionLines += @(Select-String -LiteralPath $prefsPath -Pattern 'extensions\.' -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { $_.Line })
-                    }
+                $distDir = Join-Path ${env:ProgramFiles} 'Mozilla Firefox\distribution\extensions'
+                $distFiles = @()
+                if (Test-Path -LiteralPath $distDir) {
+                    $distFiles = @(Get-ChildItem -LiteralPath $distDir -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ':' + [string]$_.Length })
                 }
                 $script:Body.extensionDiagnostics = [ordered]@{
-                    profiles      = $profileDirs
-                    profileIds    = $profileIds
-                    profileDetail = $profileDetail
-                    policySnapshot = $policySnapshot
-                    registrySnapshot = $regSnapshot
-                    prefsExtensionLines = @($prefsExtensionLines | Select-Object -First 25)
-                    addonsLog     = $addonsLog
-                    extensionsJsonHead = $extensionsJsonHead
-                    xpiBytes      = $xpiBytes
-                    xpiSigned     = $xpiSigned
-                    xpiId         = $xpiId
-                    firefoxVersion = $ffVersion
-                    guestClock    = $guestClock
-                    firefoxOwners = $firefoxOwners
+                    profiles        = $profileDirs
+                    profileDetail   = $profileDetail
+                    distributionDir = $distFiles
+                    guestClock      = [DateTime]::UtcNow.ToString('o')
                 }
                 $script:Failures.Add('extension-not-installed-by-policy')
             }
