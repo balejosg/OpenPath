@@ -68,6 +68,36 @@ function Get-FirefoxProcesses {
             ForEach-Object { [ordered]@{ pid = $_.ProcessId; created = ([datetime]$_.CreationDate).ToString('o') } })
 }
 
+function Invoke-Cmd {
+    # Small native-command wrapper: returns the exit code and the output lines.
+    param([Parameter(Mandatory = $true)][string]$File, [string[]]$Arguments = @())
+    try {
+        $out = & $File @Arguments 2>&1 | Out-String
+        return [ordered]@{ exit = $LASTEXITCODE; out = @($out -split "`r?`n" | Where-Object { $_ -ne '' }) }
+    }
+    catch {
+        return [ordered]@{ exit = -1; out = @($_.Exception.Message) }
+    }
+}
+
+function Close-FirefoxProcesses {
+    # Graceful close first, then forced; records whether force was needed so the
+    # class-boot contract can assert a clean close.
+    $before = @(Get-FirefoxProcesses)
+    if ($before.Count -eq 0) { return [ordered]@{ present = $false; forced = $false; remaining = 0 } }
+    $gracefulExit = (Invoke-Cmd 'taskkill.exe' @('/IM', 'firefox.exe')).exit
+    Start-Sleep -Seconds 8
+    $remaining = @(Get-FirefoxProcesses)
+    $forced = $false
+    if ($remaining.Count -gt 0) {
+        $forced = $true
+        Invoke-Cmd 'taskkill.exe' @('/IM', 'firefox.exe', '/F') | Out-Null
+        Start-Sleep -Seconds 5
+        $remaining = @(Get-FirefoxProcesses)
+    }
+    return [ordered]@{ present = $true; gracefulExit = $gracefulExit; forced = $forced; remaining = $remaining.Count }
+}
+
 function Get-FirefoxInstallPath {
     foreach ($candidate in @(
             (Join-Path $env:ProgramFiles 'Mozilla Firefox\firefox.exe'),
@@ -504,28 +534,38 @@ switch ($Step) {
         # Warm-up verification: the policy must have installed and activated the
         # extension, the console prefs are applied for the visits and the warm-up
         # browser is closed cleanly (recording `forced`, the class-boot contract).
-        Enable-BrowserConsoleVisibility
-        # The policy install happens shortly after Firefox starts: poll instead of
-        # reading the profile once.
-        $extension = [ordered]@{ found = $false }
-        $deadline = (Get-Date).AddSeconds(90)
-        while ((Get-Date) -lt $deadline) {
-            $extension = Get-ExtensionState
-            if ($extension.found) { break }
-            Start-Sleep -Seconds 5
-        }
-        $closed = Close-FirefoxProcesses
-        $script:Body.extension = $extension
-        $script:Body.closeAfterWarmup = $closed
-        if (-not $extension.found) {
-            $script:Body.extensionDiagnostics = [ordered]@{
-                profiles = @(Get-ChildItem 'C:\Users\*\AppData\Roaming\Mozilla\Firefox\Profiles' -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-                policy = @(Get-Content 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Raw -ErrorAction SilentlyContinue)
-                xpi = @(Get-ChildItem 'C:\OpenPathLab\first-visit' -Filter '*.xpi' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName + ' ' + $_.Length })
+        try {
+            Write-Output 'CHECK-EXT stage=start'
+            Enable-BrowserConsoleVisibility
+            Write-Output 'CHECK-EXT stage=console-prefs'
+            # The policy install happens shortly after Firefox starts: poll instead
+            # of reading the profile once.
+            $extension = [ordered]@{ found = $false }
+            $deadline = (Get-Date).AddSeconds(60)
+            while ((Get-Date) -lt $deadline) {
+                $extension = Get-ExtensionState
+                if ($extension.found) { break }
+                Start-Sleep -Seconds 5
             }
-            $script:Failures.Add('extension-not-installed-by-policy')
+            Write-Output ('CHECK-EXT stage=poll-done found=' + [string]$extension.found)
+            $closed = Close-FirefoxProcesses
+            Write-Output 'CHECK-EXT stage=closed'
+            $script:Body.extension = $extension
+            $script:Body.closeAfterWarmup = $closed
+            if (-not $extension.found) {
+                $script:Body.extensionDiagnostics = [ordered]@{
+                    profiles = @(Get-ChildItem 'C:\Users\*\AppData\Roaming\Mozilla\Firefox\Profiles' -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+                    policy = @(Get-Content 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Raw -ErrorAction SilentlyContinue)
+                    xpi = @(Get-ChildItem 'C:\OpenPathLab\first-visit' -Filter '*.xpi' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName + ' ' + $_.Length })
+                }
+                $script:Failures.Add('extension-not-installed-by-policy')
+            }
+            elseif (-not $extension.active) { $script:Failures.Add('extension-installed-but-inactive') }
         }
-        elseif (-not $extension.active) { $script:Failures.Add('extension-installed-but-inactive') }
+        catch {
+            Write-Output ('CHECK-EXT stage=exception ' + $_.Exception.Message)
+            $script:Failures.Add('check-extension-exception')
+        }
         Complete-Step
     }
     'wait-firefox' {
