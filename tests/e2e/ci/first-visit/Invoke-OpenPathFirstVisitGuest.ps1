@@ -344,8 +344,11 @@ function Set-LabFirefoxPolicy {
     }
     try {
         $settings = $null
-        $current = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings)
-        if ($current.Count -gt 0) { $settings = ($current -join "`n") | ConvertFrom-Json }
+        try {
+            $current = @((Get-ItemProperty -Path $regPath -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings)
+            if ($current.Count -gt 0) { $settings = ($current -join "`n") | ConvertFrom-Json }
+        }
+        catch { }
         if ($null -eq $settings) { $settings = [pscustomobject]@{} }
         $entryValue = [pscustomobject]@{ installation_mode = 'force_installed'; install_url = $LabUrl }
         if ($settings.PSObject.Properties['openpath-block-monitor@openpath']) {
@@ -362,6 +365,19 @@ function Set-LabFirefoxPolicy {
     }
     catch { }
     return [ordered]@{ fileOk = $fileOk; registryOk = $regOk; url = $LabUrl }
+}
+
+function Install-DistributedExtension {
+    # Firefox auto-installs signed xpis found in the installation's
+    # distribution/extensions directory at startup (no url, no policy fetch), so
+    # the lab keeps this alongside the managed policy as the deterministic
+    # install path on this image.
+    param([Parameter(Mandatory = $true)][string]$XpiPath)
+    $distDir = Join-Path ${env:ProgramFiles} 'Mozilla Firefox\distribution\extensions'
+    New-Dir $distDir
+    $target = Join-Path $distDir 'openpath-block-monitor@openpath.xpi'
+    Copy-Item -LiteralPath $XpiPath -Destination $target -Force
+    return $target
 }
 
 function Complete-Step {
@@ -587,6 +603,7 @@ switch ($Step) {
         catch { }
         Write-Output ('LAB-POLICY registry-removed=' + [string]$regRemoved)
         $script:Body.labPolicyRegistryRemoved = $regRemoved
+        $script:Body.distExtension = Install-DistributedExtension -XpiPath $labXpi
         if (-not $regRemoved) { $script:Failures.Add('lab-policy-registry-not-removed') }
 
         $rewritten = $false
@@ -622,10 +639,13 @@ switch ($Step) {
     'warmup' {
         $closed = Close-FirefoxProcesses
         $script:Body.closeBeforeWarmup = $closed
-        # Reassert the file:// policy right before the browser starts: the agent
+        # Reassert the lab policy right before the browser starts (the agent
         # reapplies the managed registry policy on a timer and would otherwise
-        # win the race.
-        $script:Body.warmupPolicy = Set-LabFirefoxPolicy -LabUrl 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
+        # win the race) and stage the signed xpi in distribution/extensions so
+        # Firefox installs it deterministically at this startup.
+        $fixtureBase = Get-FixtureBase
+        $script:Body.warmupPolicy = Set-LabFirefoxPolicy -LabUrl ($fixtureBase.TrimEnd('/') + '/api/extensions/firefox/openpath.xpi')
+        $script:Body.distExtension = Install-DistributedExtension -XpiPath 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
         $launch = Start-InSessionVisit -Url 'about:blank' -Tag 'warmup'
         $script:Body.launchOut = $launch.out
         $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
@@ -647,7 +667,8 @@ switch ($Step) {
             $script:Body.arm = [ordered]@{ mode = 'reboot'; cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'reboot') }
         }
         else {
-            $script:Body.visitPolicy = Set-LabFirefoxPolicy -LabUrl 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
+            $script:Body.visitPolicy = Set-LabFirefoxPolicy -LabUrl ((Get-FixtureBase).TrimEnd('/') + '/api/extensions/firefox/openpath.xpi')
+            $script:Body.distExtension = Install-DistributedExtension -XpiPath 'C:\OpenPathLab\first-visit\openpath-firefox-extension.xpi'
             $launch = Start-InSessionVisit -Url $url -Tag 'visit'
             $script:Body.launchOut = $launch.out
             $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
