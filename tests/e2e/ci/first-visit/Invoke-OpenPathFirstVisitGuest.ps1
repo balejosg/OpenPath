@@ -377,8 +377,8 @@ function Get-NativeHostDiagnostics {
         }
         catch { }
     }
-    $out.launchLogTail = @(Get-LogTail -Path (Join-Path $script:VisitRoot 'logs\launch.log') -Tail 12)
-    $out.firefoxLogTail = @(Get-LogTail -Path (Join-Path $script:VisitRoot 'logs\firefox-warmup.log') -Tail 20)
+    $out.launchLogTail = @(Get-FileTailSafe -Path (Join-Path $script:VisitRoot 'logs\launch.log') -Lines 12)
+    $out.firefoxLogTail = @(Get-FileTailSafe -Path (Join-Path $script:VisitRoot 'logs\firefox-warmup.log') -Lines 20)
     return $out
 }
 
@@ -420,12 +420,31 @@ function Enable-BrowserConsoleVisibility {
     }
 }
 
+function Get-FileTailSafe {
+    # Tail for files another process may have open for append (the cmd wrapper's
+    # stdout redirection blocks a plain Get-Content in this lab, Phase 3A.2
+    # K0e/red-b). Requests ReadWrite sharing: if the writer denies reads the
+    # open fails fast instead of hanging the harness.
+    param([Parameter(Mandatory = $true)][string]$Path, [int]$Lines = 12, [int]$MaxBytes = 2097152)
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    try {
+        $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            if ($stream.Length -gt $MaxBytes) { $stream.Seek($stream.Length - $MaxBytes, [IO.SeekOrigin]::Begin) | Out-Null }
+            $reader = New-Object IO.StreamReader($stream)
+            $content = $reader.ReadToEnd()
+            return @($content -split "`r?`n" | Where-Object { $_ -ne '' } | Select-Object -Last $Lines)
+        }
+        finally { $stream.Dispose() }
+    }
+    catch { return @() }
+}
+
 function Get-LogTail {
     param([string]$Path, [int]$Tail = 300, [string[]]$Patterns = @())
-    if (-not (Test-Path -LiteralPath $Path)) { return @() }
-    # Bounded read: a runaway native-host log must never turn a log read into a
-    # whole-file scan inside the guest (Phase 3A.2 K0e).
-    $lines = @(Get-Content -LiteralPath $Path -Tail 2000 -ErrorAction SilentlyContinue)
+    # Bounded, share-friendly read: a runaway or append-locked log must never
+    # stall the harness inside the guest (Phase 3A.2 K0e/red-b).
+    $lines = @(Get-FileTailSafe -Path $Path -Lines 2000)
     if ($Patterns.Count -gt 0) {
         $matched = @()
         foreach ($line in $lines) {
@@ -885,7 +904,7 @@ switch ($Step) {
         if ($firefox.Count -gt 0) { $script:Body.firefoxSeenFixtureClock = (Get-FixtureClock).serverNow }
         $logs = @()
         foreach ($file in @(Get-ChildItem (Join-Path $script:VisitRoot 'logs') -Filter 'firefox-*.log*' -ErrorAction SilentlyContinue)) {
-            $logs += @(Get-Content -LiteralPath $file.FullName -Tail 12 -ErrorAction SilentlyContinue)
+            $logs += @(Get-FileTailSafe -Path $file.FullName -Lines 12)
         }
         if ($firefox.Count -eq 0) { $script:Body.launchDiagnostics = Get-LaunchDiagnostics }
         $script:Body.firefox = $firefox
