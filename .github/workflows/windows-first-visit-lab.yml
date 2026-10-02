@@ -60,6 +60,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # The changed-path detection diffs HEAD against its parent; a shallow
+          # clone would silently skip the lane (Phase 3A finding).
+          fetch-depth: 0
 
       - name: Detect relevant changes
         id: scope
@@ -78,6 +81,11 @@ jobs:
           case "$files" in
             *firefox-extension/src/*|*firefox-extension/native/*|*windows/lib/*|*windows/scripts/*|*tests/e2e/ci/first-visit/*|*run-windows-first-visit-suite.ps1*|*windows-first-visit-lab.yml*)
               echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            '')
+              # Fail open: an undeterminable diff must never silently skip the
+              # lane that captures the broken first visit.
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "Changed-path detection could not compute a diff for ${HEAD_SHA:-unknown}; running the lane (fail-open)." ;;
             *)
               printf 'run=false\n' >> "$GITHUB_OUTPUT"
               echo "No first-visit-relevant change in ${HEAD_SHA:-unknown}; skipping the lab." ;;

@@ -30,6 +30,8 @@ describe('first-visit lane contract', () => {
     assert.match(workflow, /lab_scenario:/u);
     assert.match(workflow, /concurrency:/u);
     assert.match(workflow, /actions\/checkout@v6/u);
+    assert.match(workflow, /fetch-depth: 0/u);
+    assert.match(workflow, /running the lane \(fail-open\)/u);
     assert.match(workflow, /actions\/upload-artifact@v7/u);
   });
 
