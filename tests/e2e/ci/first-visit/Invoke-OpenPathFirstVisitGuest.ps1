@@ -78,16 +78,27 @@ function Get-FirefoxInstallPath {
 }
 
 function Invoke-SessionLaunch {
-    param([Parameter(Mandatory = $true)][string]$CommandLine, [string]$Tag = 'visit')
-    $launcher = Join-Path 'C:\OpenPathLab\first-visit' 'student-session-launch.ps1'
-    if (-not (Test-Path -LiteralPath $launcher)) { throw "session launcher missing at $launcher" }
-    $wrapper = Join-Path 'C:\OpenPathLab\first-visit' "launch-$Tag.cmd"
-    $body = "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$launcher`" -CommandLine `"$CommandLine`" >> C:\OpenPathLab\logs\launch-$Tag.log 2>&1`r`n"
-    [IO.File]::WriteAllText($wrapper, $body, [Text.UTF8Encoding]::new($false))
-    Invoke-Cmd 'schtasks.exe' @('/Delete', '/TN', 'OpenPathFirstVisitLaunch', '/F') | Out-Null
-    $create = Invoke-Cmd 'schtasks.exe' @('/Create', '/TN', 'OpenPathFirstVisitLaunch', '/TR', "cmd.exe /c $wrapper", '/SC', 'ONCE', '/ST', '00:00', '/RU', 'SYSTEM', '/RL', 'HIGHEST', '/F')
-    $run = Invoke-Cmd 'schtasks.exe' @('/Run', '/TN', 'OpenPathFirstVisitLaunch')
-    return [ordered]@{ created = $create.exit; ran = $run.exit; wrapper = $wrapper }
+    # Runs the wrapper in the student's interactive desktop through a scheduled
+    # task owned by the student (/IT). CreateProcessAsUser needs an exact console
+    # token; the interactive task is what the Phase 2E controller proved works.
+    param([Parameter(Mandatory = $true)][string]$CmdPath, [string]$Tag = 'visit')
+    if (-not (Test-Path -LiteralPath $CmdPath)) { throw "launch wrapper missing at $CmdPath" }
+    Invoke-Cmd 'schtasks.exe' @('/Delete', '/TN', 'OpenPathFirstVisitFirefox', '/F') | Out-Null
+    $create = Invoke-Cmd 'schtasks.exe' @('/Create', '/TN', 'OpenPathFirstVisitFirefox', '/TR', "cmd.exe /c $CmdPath", '/SC', 'ONCE', '/ST', '00:00', '/RU', $StudentUserName, '/RP', $Secret, '/IT', '/F')
+    $run = Invoke-Cmd 'schtasks.exe' @('/Run', '/TN', 'OpenPathFirstVisitFirefox')
+    Start-Sleep -Seconds 8
+    $query = Invoke-Cmd 'schtasks.exe' @('/Query', '/TN', 'OpenPathFirstVisitFirefox', '/V', '/FO', 'LIST')
+    $log = @()
+    foreach ($file in @(Get-ChildItem 'C:\OpenPathLab\logs' -Filter "firefox-$Tag.log*" -ErrorAction SilentlyContinue)) {
+        $log += @(Get-Content -LiteralPath $file.FullName -Tail 15 -ErrorAction SilentlyContinue)
+    }
+    return [ordered]@{
+        created  = $create.exit
+        ran      = $run.exit
+        taskOut  = @($create.out | Select-Object -First 3)
+        query    = @(@($query.out) | Where-Object { $_ -match 'Result|Status|Run As|Task To Run' } | Select-Object -First 6)
+        firefoxLog = @($log | Select-Object -First 20)
+    }
 }
 
 function Invoke-Cmd {
@@ -147,7 +158,7 @@ function Write-CleanFirefoxCmd {
 @echo off
 set MOZ_LOG=timestamp,rotate:300,nsHostResolver:5,nsHttp:4
 set MOZ_LOG_FILE=C:\OpenPathLab\moz\$Tag.log
-"$firefox" -new-window "$Url"
+"$firefox" -new-window "$Url" >> C:\OpenPathLab\logs\firefox-$Tag.log 2>&1
 "@
     [IO.File]::WriteAllText($cmdPath, $body, [Text.UTF8Encoding]::new($false))
     return $cmdPath
@@ -384,7 +395,7 @@ switch ($Step) {
         $closed = Close-FirefoxProcesses
         $script:Body.closeBeforeWarmup = $closed
         $cmdPath = Write-CleanFirefoxCmd -Url 'about:blank' -Tag 'warmup'
-        $launch = Invoke-SessionLaunch -CommandLine "cmd.exe /c $cmdPath" -Tag 'warmup'
+        $launch = Invoke-SessionLaunch -CmdPath $cmdPath -Tag 'warmup'
         $script:Body.launch = $launch
         Start-Sleep -Seconds 15
         # The first launch creates the profile; console visibility is a lab-only
@@ -413,7 +424,7 @@ switch ($Step) {
         if ($ScenarioId -eq 'first-visit-hot') {
             if ($existing.Count -eq 0) {
                 $cmdPath = Write-CleanFirefoxCmd -Url ("http://" + [string]$plan.anchors.a1.host + "/") -Tag 'hot-open'
-                $launch = Invoke-SessionLaunch -CommandLine "cmd.exe /c $cmdPath" -Tag 'hot-open'
+                $launch = Invoke-SessionLaunch -CmdPath $cmdPath -Tag 'hot-open'
                 $deadline = (Get-Date).AddSeconds(120)
                 while ((Get-Date) -lt $deadline -and @(Get-FirefoxProcesses).Count -eq 0) { Start-Sleep -Seconds 3 }
                 $script:Body.hotWaitSeconds = 300
@@ -422,14 +433,14 @@ switch ($Step) {
             # Same Firefox instance: a new window navigates to the second anchor
             # while the persistent native port stays on the same host process.
             $cmdPath = Write-CleanFirefoxCmd -Url ("http://" + [string]$plan.anchors.a2.host + "/") -Tag 'hot'
-            $launch = Invoke-SessionLaunch -CommandLine "cmd.exe /c $cmdPath" -Tag 'hot'
+            $launch = Invoke-SessionLaunch -CmdPath $cmdPath -Tag 'hot'
             Start-Sleep -Seconds $waitSeconds
             $script:Body.anchor = 'a2'
             $script:Body.anchorUrl = "http://" + [string]$plan.anchors.a2.host + "/"
         }
         else {
             $cmdPath = Write-CleanFirefoxCmd -Url ("http://" + [string]$plan.anchors.a1.host + "/") -Tag 'visit'
-            $launch = Invoke-SessionLaunch -CommandLine "cmd.exe /c $cmdPath" -Tag 'visit'
+            $launch = Invoke-SessionLaunch -CmdPath $cmdPath -Tag 'visit'
             $deadline = (Get-Date).AddSeconds(120)
             while ((Get-Date) -lt $deadline -and @(Get-FirefoxProcesses).Count -eq 0) { Start-Sleep -Seconds 2 }
             Start-Sleep -Seconds $waitSeconds
@@ -497,7 +508,7 @@ switch ($Step) {
         # Blocked-screen navigation to an unlisted host in a new window; the host
         # side captures the console screendump while it is open.
         $cmdPath = Write-CleanFirefoxCmd -Url ("http://" + [string]$plan.unlisted + "/") -Tag 'blocked'
-        $script:Body.blockedLaunch = Invoke-SessionLaunch -CommandLine "cmd.exe /c $cmdPath" -Tag 'blocked'
+        $script:Body.blockedLaunch = Invoke-SessionLaunch -CmdPath $cmdPath -Tag 'blocked'
         Start-Sleep -Seconds 12
         Complete-Step
     }
