@@ -398,16 +398,21 @@ Write-Output 'launcher-staged'
     $configure = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'configure' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
     # Production-like requirement: the student is logged in interactively before
     # any browser runs (the session launcher needs an active console session, and
-    # W/W2/B all assume a real student desktop).
-    & $Transport.InvokeGuestPowerShell $Vmid @"
+    # W/W2/B all assume a real student desktop). The guest secret must match the
+    # account before the autologon can succeed.
+    $passwordReset = (& $Transport.InvokeGuestPowerShell $Vmid "net user $($settings.StudentUserName) '$($settings.GuestSecret)' /y; Write-Output done" 120 | Out-String).Trim()
+    $autologonScript = @"
 `$ErrorActionPreference = 'Continue'
 `$key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 Set-ItemProperty -Path `$key -Name 'AutoAdminLogon' -Value '1' -Type String
 Set-ItemProperty -Path `$key -Name 'DefaultUserName' -Value '$($settings.StudentUserName)' -Type String
 Set-ItemProperty -Path `$key -Name 'DefaultDomainName' -Value `$env:COMPUTERNAME -Type String
 Set-ItemProperty -Path `$key -Name 'DefaultPassword' -Value '$($settings.GuestSecret)' -Type String
+Remove-ItemProperty -Path `$key -Name 'AutoLogonCount' -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path `$key -Name 'AutoLogonSID' -ErrorAction SilentlyContinue
 Write-Output 'autologon-on'
-"@ 120 | Out-Null
+"@
+    & $Transport.InvokeGuestPowerShell $Vmid $autologonScript 120 | Out-Null
     & $Transport.RequestGuestReboot $Vmid | Out-Null
     $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootId $TimeoutSeconds)
     if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-reboot-timeout' }
@@ -427,6 +432,7 @@ Write-Output 'autologon-on'
         plan                = $fixture.Plan
         install             = $install.body.state.install
         configured          = [bool]$configure.body.state.registered
+        passwordReset       = ($passwordReset -match 'done')
         sessionUser         = $sessionUser
         extension           = $warmup.body.state.extension
         warmupClose         = $warmup.body.state.closeAfterWarmup
