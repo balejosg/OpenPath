@@ -783,10 +783,24 @@ switch ($Step) {
                         if ($extensionsJsonHead -match 'openpath') { break }
                     }
                 }
+                $policySnapshot = ''
+                try { $policySnapshot = (Get-Content 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Raw -ErrorAction Stop) } catch { }
+                $regSnapshot = ''
+                try { $regSnapshot = @((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox' -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings) -join ' ' } catch { }
+                $prefsExtensionLines = @()
+                foreach ($profileDir in $profileDirs) {
+                    $prefsPath = Join-Path $studentProfileRoot "$profileDir\prefs.js"
+                    if (Test-Path -LiteralPath $prefsPath) {
+                        $prefsExtensionLines += @(Select-String -LiteralPath $prefsPath -Pattern 'extensions\.' -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { $_.Line })
+                    }
+                }
                 $script:Body.extensionDiagnostics = [ordered]@{
                     profiles      = $profileDirs
                     profileIds    = $profileIds
                     profileDetail = $profileDetail
+                    policySnapshot = $policySnapshot
+                    registrySnapshot = $regSnapshot
+                    prefsExtensionLines = @($prefsExtensionLines | Select-Object -First 25)
                     addonsLog     = $addonsLog
                     extensionsJsonHead = $extensionsJsonHead
                     xpiBytes      = $xpiBytes
