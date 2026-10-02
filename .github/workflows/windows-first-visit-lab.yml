@@ -109,7 +109,7 @@ jobs:
                 $runId = @($runs.workflow_runs | Select-Object -First 1).database_id
                 $templateSha = [string]$sha
               }
-              catch { Write-Host "template lookup failed for $sha: $($_.Exception.Message)" }
+              catch { Write-Host "template lookup failed for ${sha}: $($_.Exception.Message)" }
             }
           }
           if (-not $runId) {

@@ -556,6 +556,31 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             (Get-OpenPathFirstVisitScopeDecision -EventName 'workflow_dispatch' -HeadSha '' -Candidates @()).run | Should -BeTrue
         }
 
+        It 'Keeps every PowerShell workflow run block parseable' {
+            $workflowPath = Join-Path $PSScriptRoot '..\..\.github\workflows\windows-first-visit-lab.yml'
+            $lines = Get-Content -LiteralPath $workflowPath
+            $blocks = @()
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -notmatch '^\s+run:\s*\|\s*$') { continue }
+                $indent = $lines[$i].Length - $lines[$i].TrimStart().Length
+                $start = $i + 1
+                $end = $start
+                while ($end -lt $lines.Count -and ($lines[$end].Trim() -eq '' -or ($lines[$end].Length - $lines[$end].TrimStart().Length) -gt $indent)) { $end++ }
+                $block = ($lines[$start..($end - 1)] -join "`n")
+                if ($block -match 'Invoke-RestMethod|Import-Module|\$env:') { $blocks += $block }
+                $i = $end
+            }
+            $blocks.Count | Should -BeGreaterThan 0
+            foreach ($block in $blocks) {
+                # GitHub expressions are replaced before PowerShell sees the text.
+                $sanitized = [regex]::Replace($block, '\$\{\{[^}]*\}\}', 'placeholder')
+                $tokens = $null
+                $errors = $null
+                [void][System.Management.Automation.Language.Parser]::ParseInput($sanitized, [ref]$tokens, [ref]$errors)
+                @($errors).Count | Should -Be 0 -Because (@($errors | ForEach-Object { $_.Message }) -join '; ')
+            }
+        }
+
         It 'Keeps the lane workflow free of the gh CLI and wired to the range resolver' {
             $workflow = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\.github\workflows\windows-first-visit-lab.yml') -Raw
             $workflow | Should -Not -Match 'gh run '
