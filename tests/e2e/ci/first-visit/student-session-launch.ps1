@@ -4,9 +4,17 @@
 # and the extension actually apply.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$CommandLine,
+    [string]$CommandLine = '',
+    # Base64 (UTF-8) command line: avoids every nested-quoting failure when the
+    # caller builds a line with quoted paths.
+    [string]$CommandLineBase64 = '',
     [string]$WorkingDirectory = 'C:\Users\Public'
 )
+
+if (-not $CommandLine -and $CommandLineBase64) {
+    $CommandLine = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CommandLineBase64))
+}
+if (-not $CommandLine) { throw 'command-line-missing' }
 
 $ErrorActionPreference = 'Stop'
 $source = @'

@@ -25,7 +25,7 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 $OpenPathRoot = 'C:\OpenPath'
 $LabRoot = 'C:\OpenPathLab'
-$script:VisitRoot = 'C:\Users\Public\OpenPathFirstVisit'
+$script:VisitRoot = 'C:\OpenPath\lab\first-visit'
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:Body = [ordered]@{}
 
@@ -100,15 +100,32 @@ function Clear-VisitRunKey {
 }
 
 function Get-ConsoleSessionId {
-    $out = (Invoke-Cmd 'quser.exe' @()).out
-    foreach ($line in @($out)) {
-        if ($line -match '^\s*' + [regex]::Escape($StudentUserName) + '\s+(\d+)') { return $Matches[1] }
+    # The explorer process gives the interactive session id without parsing any
+    # localized quser/qwinsta text.
+    try {
+        $explorer = @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop | Select-Object -First 1)
+        if ($explorer.Count -gt 0) { return [string]$explorer[0].SessionId }
+    }
+    catch { }
+    $quser = (Invoke-Cmd 'quser.exe' @()).out
+    foreach ($line in @($quser)) {
+        if ($line -match [regex]::Escape($StudentUserName)) {
+            foreach ($part in @($line.Trim() -split '\s+')) {
+                if ($part -match '^\d+$') { return $part }
+            }
+        }
     }
     $winsta = (Invoke-Cmd 'qwinsta.exe' @()).out
     foreach ($line in @($winsta)) {
         if ($line -match '^\s*console\s+(\d+)') { return $Matches[1] }
     }
     return ''
+}
+
+function Get-SessionDiagnostics {
+    $quser = @((Invoke-Cmd 'quser.exe' @()).out | Select-Object -First 6)
+    $winsta = @((Invoke-Cmd 'qwinsta.exe' @()).out | Select-Object -First 6)
+    return [ordered]@{ quser = $quser; qwinsta = $winsta }
 }
 
 function Start-VisitRefresh {
@@ -121,7 +138,10 @@ function Start-VisitRefresh {
         return 'reboot-requested'
     }
     $sessionId = Get-ConsoleSessionId
-    if (-not $sessionId) { return 'no-console-session' }
+    if (-not $sessionId) {
+        $script:Body.sessionDiagnostics = Get-SessionDiagnostics
+        return 'no-console-session'
+    }
     Invoke-Cmd 'logoff.exe' @($sessionId) | Out-Null
     return "logoff-$sessionId"
 }
@@ -135,9 +155,11 @@ function Write-CleanFirefoxCmd {
     $cmdPath = Join-Path $root ("ff-$Tag.cmd")
     $body = @"
 @echo off
+echo launch %DATE% %TIME% user=%USERNAME% tag=$Tag >> "$root\logs\launch.log"
 set MOZ_LOG=timestamp,rotate:300,nsHostResolver:5,nsHttp:4
 set MOZ_LOG_FILE=$root\moz\$Tag.log
 "$firefox" -new-window "$Url" >> "$root\logs\firefox-$Tag.log" 2>&1
+echo exit %ERRORLEVEL% >> "$root\logs\launch.log"
 "@
     [IO.File]::WriteAllText($cmdPath, $body, [Text.UTF8Encoding]::new($false))
     return $cmdPath
@@ -224,6 +246,43 @@ function Get-OverlayHosts {
     }
     catch {
         return @()
+    }
+}
+
+function Start-InSessionVisit {
+    # Launches the managed browser on the student's desktop through the
+    # CreateProcessAsUser helper with firefox.exe as the target (the AppControl
+    # boundary blocks cmd/powershell from user paths; the managed browser is
+    # allowed). The command line travels base64-encoded so quoting can never
+    # break it.
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [string]$Tag = 'visit'
+    )
+    $firefox = Get-FirefoxInstallPath
+    if (-not $firefox) { throw 'firefox.exe not found' }
+    Initialize-VisitRoot | Out-Null
+    $launcher = Join-Path $script:VisitRoot 'student-session-launch.ps1'
+    if (-not (Test-Path -LiteralPath $launcher)) {
+        $legacy = 'C:\OpenPathLab\first-visit\student-session-launch.ps1'
+        if (Test-Path -LiteralPath $legacy) { Copy-Item -LiteralPath $legacy -Destination $launcher -Force }
+    }
+    if (-not (Test-Path -LiteralPath $launcher)) { throw "session launcher missing at $launcher" }
+    $target = '"' + $firefox + '" -new-window "' + $Url + '"'
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target))
+    $out = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher -CommandLineBase64 $b64 2>&1 | Out-String).Trim()
+    Start-Sleep -Seconds 12
+    return [ordered]@{ mode = 'session-launcher'; out = $out; firefox = @(Get-FirefoxProcesses); tag = $Tag }
+}
+
+function Get-LaunchDiagnostics {
+    return [ordered]@{
+        session = [string](Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+        runKey = @((Invoke-Cmd 'reg.exe' @('query', 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', '/v', 'OpenPathFirstVisit')).out | Select-Object -First 4)
+        root = @(Get-ChildItem $script:VisitRoot -Recurse -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { $_.FullName + ' ' + $_.Length })
+        launchOut = @($script:Body.launchOut)
+        appLocker = @(Get-WinEvent -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -MaxEvents 4 -ErrorAction SilentlyContinue | ForEach-Object { $_.TimeCreated.ToString('o') + ' ' + (($_.Message -split "`n")[0]) })
+        codeIntegrity = @(Get-WinEvent -LogName 'Microsoft-Windows-CodeIntegrity/Operational' -MaxEvents 4 -ErrorAction SilentlyContinue | ForEach-Object { $_.TimeCreated.ToString('o') + ' ' + (($_.Message -split "`n")[0]) })
     }
 }
 
@@ -402,31 +461,43 @@ switch ($Step) {
     'warmup' {
         $closed = Close-FirefoxProcesses
         $script:Body.closeBeforeWarmup = $closed
-        $cmdPath = Write-CleanFirefoxCmd -Url 'about:blank' -Tag 'warmup'
-        Clear-VisitRunKey | Out-Null
-        Set-VisitRunKey -CmdPath $cmdPath
-        $script:Body.arm = [ordered]@{ cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'logoff') }
+        $launch = Start-InSessionVisit -Url 'about:blank' -Tag 'warmup'
+        $script:Body.launchOut = $launch.out
+        $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
         Complete-Step
     }
     'visit' {
         $plan = Get-FixturePlan
-        $anchorKey = if ($ScenarioId -eq 'first-visit-hot') { 'a1' } else { 'a1' }
-        $anchorHost = [string]$plan.anchors.$anchorKey.host
+        $anchorHost = [string]$plan.anchors.a1.host
         $url = "http://$anchorHost/"
-        if ($ScenarioId -eq 'first-visit-hot') {
-            # The same page navigates to anchor 2 after the hot window, keeping
-            # the Firefox instance and the persistent host process.
-            $hotHost = [string]$plan.anchors.a2.host
-            $url = "http://$anchorHost/?hot=$hotHost&after=300000"
-        }
-        $refreshMode = if ($ScenarioId -eq 'first-visit-class-boot') { 'reboot' } else { 'logoff' }
-        $cmdPath = Write-CleanFirefoxCmd -Url $url -Tag 'visit'
-        Clear-VisitRunKey | Out-Null
-        Set-VisitRunKey -CmdPath $cmdPath
-        $refresh = Start-VisitRefresh -Mode $refreshMode
-        $script:Body.anchor = $anchorKey
+        $script:Body.anchor = 'a1'
         $script:Body.anchorUrl = $url
-        $script:Body.arm = [ordered]@{ cmd = $cmdPath; refresh = $refresh; mode = $refreshMode }
+        if ($ScenarioId -eq 'first-visit-class-boot') {
+            # Class boot: arm the wrapper for the next logon (the run key is what
+            # starts the browser in this lab) and reboot; the host waits for the
+            # new logon and measures the class-boot window.
+            $cmdPath = Write-CleanFirefoxCmd -Url $url -Tag 'visit'
+            Clear-VisitRunKey | Out-Null
+            Set-VisitRunKey -CmdPath $cmdPath
+            $script:Body.arm = [ordered]@{ mode = 'reboot'; cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'reboot') }
+        }
+        else {
+            $launch = Start-InSessionVisit -Url $url -Tag 'visit'
+            $script:Body.launchOut = $launch.out
+            $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
+        }
+        Complete-Step
+    }
+    'second-window' {
+        # Hot scenario: the same Firefox instance and host process get a second
+        # window on anchor 2 after the hot window.
+        $plan = Get-FixturePlan
+        $url = "http://" + [string]$plan.anchors.a2.host + "/"
+        $launch = Start-InSessionVisit -Url $url -Tag 'hot-second'
+        $script:Body.anchor = 'a2'
+        $script:Body.anchorUrl = $url
+        $script:Body.launchOut = $launch.out
+        $script:Body.secondLaunch = $launch
         Complete-Step
     }
     'check-extension' {
@@ -448,6 +519,7 @@ switch ($Step) {
         foreach ($file in @(Get-ChildItem (Join-Path $script:VisitRoot 'logs') -Filter 'firefox-*.log*' -ErrorAction SilentlyContinue)) {
             $logs += @(Get-Content -LiteralPath $file.FullName -Tail 12 -ErrorAction SilentlyContinue)
         }
+        if ($firefox.Count -eq 0) { $script:Body.launchDiagnostics = Get-LaunchDiagnostics }
         $script:Body.firefox = $firefox
         $script:Body.launchedAt = if ($firefox.Count -gt 0) { $firefox[0].created } else { '' }
         $script:Body.firefoxLog = @($logs | Select-Object -First 16)
@@ -473,12 +545,10 @@ switch ($Step) {
         $whitelistMirror = ''
         try { $whitelistMirror = (Get-Content -LiteralPath "$OpenPathRoot\data\whitelist.txt" -Raw) } catch { }
         $script:Body.whitelistSha256 = if ($whitelistMirror) { (Get-FileHash -LiteralPath "$OpenPathRoot\data\whitelist.txt" -Algorithm SHA256).Hash.ToLowerInvariant() } else { '' }
-        # Blocked-screen navigation in the student's desktop: arm the unlisted
-        # host and refresh the session; the host captures the screendump.
-        $cmdPath = Write-CleanFirefoxCmd -Url ("http://" + [string]$plan.unlisted + "/") -Tag 'blocked'
-        Clear-VisitRunKey | Out-Null
-        Set-VisitRunKey -CmdPath $cmdPath
-        $script:Body.blockedArm = [ordered]@{ cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'logoff') }
+        # Blocked-screen navigation in the student's desktop (same session).
+        $launch = Start-InSessionVisit -Url ("http://" + [string]$plan.unlisted + "/") -Tag 'blocked'
+        $script:Body.blockedLaunch = $launch
+        Start-Sleep -Seconds 12
         Complete-Step
     }
     'collect' {
@@ -511,31 +581,6 @@ switch ($Step) {
             firefoxProcesses     = @(Get-FirefoxProcesses)
         }
         $script:Body.session = $script:Body.session
-        Complete-Step
-    }
-    'security' {
-        $plan = Get-FixturePlan
-        $overlayHosts = @(Get-OverlayHosts)
-        $script:Body.overlayHosts = $overlayHosts
-        $expected = @($plan.controlDependencies | Where-Object { $_ -ne $plan.neverLearnable })
-        $unexpectedOverlay = @($overlayHosts | Where-Object { $expected -notcontains $_ })
-        $missing = @($expected | Where-Object { $overlayHosts -notcontains $_ })
-        $script:Body.overlay = [ordered]@{ unexpected = $unexpectedOverlay; missing = $missing }
-        if ($unexpectedOverlay.Count -gt 0) { $script:Failures.Add('overlay-has-unexpected-hosts') }
-        if ($overlayHosts -contains [string]$plan.neverLearnable) { $script:Failures.Add('never-learnable-host-in-overlay') }
-        $never = Resolve-Probe -HostName ([string]$plan.neverLearnable)
-        $unlisted = Resolve-Probe -HostName ([string]$plan.unlisted)
-        $script:Body.securityDns = [ordered]@{ neverLearnable = $never; unlisted = $unlisted }
-        if ($never.resolves) { $script:Failures.Add('never-learnable-host-resolves') }
-        if ($unlisted.resolves) { $script:Failures.Add('unlisted-host-resolves') }
-        $whitelistMirror = ''
-        try { $whitelistMirror = (Get-Content -LiteralPath "$OpenPathRoot\data\whitelist.txt" -Raw) } catch { }
-        $script:Body.whitelistSha256 = if ($whitelistMirror) { (Get-FileHash -LiteralPath "$OpenPathRoot\data\whitelist.txt" -Algorithm SHA256).Hash.ToLowerInvariant() } else { '' }
-        # Blocked-screen navigation to an unlisted host in a new window; the host
-        # side captures the console screendump while it is open.
-        $cmdPath = Write-CleanFirefoxCmd -Url ("http://" + [string]$plan.unlisted + "/") -Tag 'blocked'
-        $script:Body.blockedLaunch = Invoke-SessionLaunch -CmdPath $cmdPath -Tag 'blocked'
-        Start-Sleep -Seconds 12
         Complete-Step
     }
     'cleanup' {

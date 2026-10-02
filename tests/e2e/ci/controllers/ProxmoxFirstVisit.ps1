@@ -511,18 +511,29 @@ function Invoke-OpenPathFirstVisitObserve {
     #    class-boot (Firefox starts within the class-boot window at logon).
     $arm = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'visit' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
     $refreshMode = [string](Get-OpenPathLabField -InputObject $arm.body.state.arm -Name 'mode')
+    $logonAt = ''
     if ($scenario -eq 'first-visit-class-boot') {
+        # The visit step armed the run-key wrapper and requested the reboot; wait
+        # for the new boot, the real logon and the browser it starts.
         $bootBefore = [string]$state.bootIdLatest
         $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootBefore $TimeoutSeconds)
         if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-reboot-timeout' }
+        $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'observe' -Step 'session' -TimeoutSeconds 420
+        $logonAt = [string]$session.body.state.sessionLogonAt
     }
     else {
-        Start-Sleep -Seconds $script:OpenPathFirstVisitRefreshSettleSeconds
+        # The visit step launched the browser on the student's desktop directly.
+        Start-Sleep -Seconds 15
     }
-    $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'observe' -Step 'session' -TimeoutSeconds 420
-    $logonAt = [string]$session.body.state.sessionLogonAt
     $wait = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'wait-firefox' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 400
     $launchedAt = [string]$wait.body.state.launchedAt
+    if ($scenario -eq 'first-visit-hot') {
+        # Hot window: the same instance gets a second window on anchor 2 and the
+        # final self-report is the anchor-2 document.
+        Start-Sleep -Seconds 300
+        $second = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'second-window' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
+        Start-Sleep -Seconds 20
+    }
     $visitDelaySeconds = -1
     if ($logonAt -and $launchedAt) {
         try { $visitDelaySeconds = [int](([datetime]$launchedAt) - ([datetime]$logonAt)).TotalSeconds } catch { }
@@ -579,7 +590,7 @@ function Invoke-OpenPathFirstVisitObserve {
     $security = $null
     if ($scenario -in @('first-visit-settled', 'first-visit-control')) {
         $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
-        Start-Sleep -Seconds 30
+        Start-Sleep -Seconds 20
         $blockedCapture = Join-Path $captureDir "console-$scenario-blocked.ppm"
         try { & $Transport.CaptureScreendump $Vmid $blockedCapture | Out-Null } catch { Write-Warning 'blocked screendump failed' }
     }

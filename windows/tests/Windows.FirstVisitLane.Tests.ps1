@@ -247,7 +247,7 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                             'prepare/wait-firefox' = '{"status":"passed","body":{"state":{"firefox":[{"pid":2,"created":"2026-10-01T19:59:20.0000000Z"}]},"session":""}}'
                             'prepare/check-extension' = '{"status":"passed","body":{"state":{"extension":{"found":true,"active":true},"closeAfterWarmup":{"forced":false}},"session":""}}'
                             'observe/session'   = '{"status":"passed","body":{"state":{"session":"alumno","sessionLogonAt":"2026-10-01T20:00:00.0000000Z"},"session":"alumno"}}'
-                            'observe/visit'     = '{"status":"passed","body":{"state":{"arm":{"mode":"logoff","refresh":"logoff-1"}},"session":""}}'
+                            'observe/visit'     = '{"status":"passed","body":{"state":{"arm":{"mode":"in-session"},"anchor":"a1"},"session":""}}'
                             'observe/wait-firefox' = '{"status":"passed","body":{"state":{"launchedAt":"2026-10-01T20:00:30.0000000Z","firefox":[{"pid":3,"created":"2026-10-01T20:00:30.0000000Z"}],"firefoxLog":[]},"session":""}}'
                             'observe/collect'   = '{"status":"passed","body":{"state":{"collect":{"diagnosticSample":["stage=extension-diagnostic note=reloaded"],"startupProfiles":["stage=startup-profile processToScriptMs=6341 pingMs=2210 firstEnqueueMs=120"]}},"session":""}}'
                             'observe/security'  = '{"status":"passed","body":{"state":{"overlay":{"unexpected":[],"missing":[]}},"session":""}}'
