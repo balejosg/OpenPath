@@ -430,6 +430,7 @@ Write-Output 'autologon-on'
     if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-reboot-timeout' }
     $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
     $sessionUser = [string](Get-OpenPathLabField -InputObject $session.body.state -Name 'session')
+    $labPolicy = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'lab-policy' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 180
     $warmup = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'warmup' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
     # The warm-up arms about:blank and cycles the session; wait for the new logon
     # and the browser, then verify the policy-installed extension and close it
@@ -453,6 +454,7 @@ Write-Output 'autologon-on'
         configured          = [bool]$configure.body.state.registered
         passwordReset       = ($passwordReset -match 'done')
         sessionUser         = $sessionUser
+        labPolicy           = [string](Get-OpenPathLabField -InputObject $labPolicy.body.state -Name 'labPolicyReadBack')
         warmupSession       = [bool](Get-OpenPathLabField -InputObject $warmSession.body.state -Name 'session')
         warmupFirefox       = @(Get-OpenPathLabField -InputObject $warmFirefox.body.state -Name 'firefox')
         extension            = $extension.body.state.extension

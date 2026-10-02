@@ -244,6 +244,7 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                             'prepare/configure' = '{"status":"passed","body":{"state":{"registered":true},"session":""}}'
                             'prepare/warmup'    = '{"status":"passed","body":{"state":{"extension":{"found":true,"active":true},"closeAfterWarmup":{"forced":false}},"session":""}}'
                             'prepare/session'   = '{"status":"passed","body":{"state":{"session":"alumno","sessionLogonAt":"2026-10-01T19:59:00.0000000Z"},"session":"alumno"}}'
+                            'prepare/lab-policy' = '{"status":"passed","body":{"state":{"labPolicyRewritten":true,"labPolicyReadBack":"file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi"},"session":""}}'
                             'prepare/wait-firefox' = '{"status":"passed","body":{"state":{"firefox":[{"pid":2,"created":"2026-10-01T19:59:20.0000000Z"}]},"session":""}}'
                             'prepare/check-extension' = '{"status":"passed","body":{"state":{"extension":{"found":true,"active":true},"closeAfterWarmup":{"forced":false}},"session":""}}'
                             'observe/session'   = '{"status":"passed","body":{"state":{"session":"alumno","sessionLogonAt":"2026-10-01T20:00:00.0000000Z"},"session":"alumno"}}'

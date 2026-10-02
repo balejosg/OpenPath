@@ -504,6 +504,33 @@ switch ($Step) {
         if (-not $script:Body.interactive) { $script:Failures.Add('student-session-not-interactive') }
         Complete-Step
     }
+    'lab-policy' {
+        # The agent reapplies its managed policy (managed API install_url) on
+        # boot, so the lab rewrite runs after the session-setup reboot and is
+        # verified right before the warm-up browser starts.
+        $policyPath = 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
+        $labUrl = 'file:///C:/OpenPathLab/first-visit/openpath-firefox-extension.xpi'
+        $rewritten = $false
+        if (Test-Path -LiteralPath $policyPath) {
+            $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+            $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
+            if ($null -eq $entry) {
+                $policy.policies.ExtensionSettings | Add-Member -NotePropertyName 'openpath-block-monitor@openpath' -NotePropertyValue ([pscustomobject]@{ installation_mode = 'force_installed' }) -Force
+                $entry = $policy.policies.ExtensionSettings.'openpath-block-monitor@openpath'
+            }
+            $entry | Add-Member -NotePropertyName install_url -NotePropertyValue $labUrl -Force
+            [IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+            $rewritten = $true
+        }
+        else { $script:Failures.Add('lab-policy-missing') }
+        $readBack = ''
+        try { $readBack = [string]((Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json).policies.ExtensionSettings.'openpath-block-monitor@openpath'.install_url) } catch { }
+        Write-Output ('LAB-POLICY rewritten=' + [string]$rewritten + ' install_url=' + $readBack)
+        $script:Body.labPolicyRewritten = $rewritten
+        $script:Body.labPolicyReadBack = $readBack
+        if ($readBack -ne $labUrl) { $script:Failures.Add('lab-policy-not-applied') }
+        Complete-Step
+    }
     'warmup' {
         $closed = Close-FirefoxProcesses
         $script:Body.closeBeforeWarmup = $closed
@@ -588,8 +615,19 @@ switch ($Step) {
                 }
                 $aclLines = @((Invoke-Cmd 'icacls.exe' @($labXpi)).out | Select-Object -First 3)
                 Write-Output ('CHECK-EXT diag acl=' + ($aclLines -join ' | '))
+                $profileIds = [ordered]@{}
+                foreach ($profileDir in $profileDirs) {
+                    $extFile = "C:\Users\$StudentUserName\AppData\Roaming\Mozilla\Firefox\Profiles\$profileDir\extensions.json"
+                    $ids = @()
+                    if (Test-Path -LiteralPath $extFile) {
+                        try { $ids = @((Get-Content -LiteralPath $extFile -Raw | ConvertFrom-Json).addons | ForEach-Object { [string]$_.id }) }
+                        catch { $ids = @('parse-error') }
+                    }
+                    $profileIds[$profileDir] = $ids
+                }
                 $script:Body.extensionDiagnostics = [ordered]@{
                     profiles      = $profileDirs
+                    profileIds    = $profileIds
                     xpiBytes      = $xpiBytes
                     firefoxOwners = $firefoxOwners
                 }
