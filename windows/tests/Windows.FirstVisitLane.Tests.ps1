@@ -888,6 +888,13 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             $controller = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\controllers\ProxmoxFirstVisit.ps1') -Raw
             $controller | Should -Match 'FirstVisitWarmup\.psm1'
             $controller | Should -Match 'FirstVisitResult\.psm1'
+            # The modules are staged through the artifact transport next to the
+            # harness; a single encoded command with both module texts exceeded
+            # the QGA command size and failed every prepare (Phase 3A.3).
+            $controller | Should -Match 'DownloadGuestArtifact \$Vmid \$url \$guestModulePath'
+            $controller | Should -Match '\$Paths\.GuestDir\.TrimEnd'
+            $controller | Should -Not -Match 'warmupModuleLiteral'
+            $controller | Should -Not -Match 'resultModuleLiteral'
             $controller | Should -Match 'Read-OpenPathFirstVisitGuestText'
             $controller | Should -Match 'first-visit-precondition-failed'
             $controller | Should -Match 'Get-FirstVisitHostSignalsVerdict'

@@ -611,19 +611,31 @@ function Invoke-OpenPathFirstVisitPrepare {
     $bootId = [string](& $Transport.GetGuestBootId $Vmid)
     if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-guest-not-ready' }
     $setup = Invoke-OpenPathLabAcceptanceGuestSetup -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -TimeoutSeconds $TimeoutSeconds -HarnessSourcePath (Get-OpenPathFirstVisitHarnessSourcePath)
-    # The session launcher and the shared verdict/result modules the harness
-    # dot-sources from its own directory (Phase 3A.3 L2/L3).
+    # The session launcher is small enough for one guest command. The two
+    # shared modules are staged through the artifact transport, next to the
+    # harness the harness dot-sources them from: embedding both module texts in
+    # a single encoded command exceeded the QGA command size and made every
+    # prepare fail with desktop-lab-guest-query-failed (Phase 3A.3).
     $launcherText = Get-Content -LiteralPath (Get-OpenPathFirstVisitLauncherSourcePath) -Raw
     $launcherLiteral = ConvertTo-OpenPathLabPowerShellLiteral -Value $launcherText
-    $warmupModuleLiteral = ConvertTo-OpenPathLabPowerShellLiteral -Value (Get-Content -LiteralPath (Join-Path (Get-OpenPathFirstVisitFixturesRoot) 'FirstVisitWarmup.psm1') -Raw)
-    $resultModuleLiteral = ConvertTo-OpenPathLabPowerShellLiteral -Value (Get-Content -LiteralPath (Join-Path (Get-OpenPathFirstVisitFixturesRoot) 'FirstVisitResult.psm1') -Raw)
     & $Transport.InvokeGuestPowerShell $Vmid @"
 New-Item -ItemType Directory -Path 'C:\OpenPathLab\first-visit' -Force | Out-Null
 [IO.File]::WriteAllText('C:\OpenPathLab\first-visit\student-session-launch.ps1', $launcherLiteral, [Text.UTF8Encoding]::new(`$false))
-[IO.File]::WriteAllText('C:\OpenPathLab\first-visit\FirstVisitWarmup.psm1', $warmupModuleLiteral, [Text.UTF8Encoding]::new(`$false))
-[IO.File]::WriteAllText('C:\OpenPathLab\first-visit\FirstVisitResult.psm1', $resultModuleLiteral, [Text.UTF8Encoding]::new(`$false))
-Write-Output 'guest-helpers-staged'
+Write-Output 'launcher-staged'
 "@ 120 | Out-Null
+    foreach ($moduleName in @('FirstVisitWarmup.psm1', 'FirstVisitResult.psm1')) {
+        $localModule = Join-Path (Get-OpenPathFirstVisitFixturesRoot) $moduleName
+        if (-not (Test-Path -LiteralPath $localModule -PathType Leaf)) { throw "first-visit-helper-missing-$moduleName" }
+        $published = & $Transport.PublishArtifact $Paths.StagingDir $localModule
+        $url = [string](Get-OpenPathLabField -InputObject $published -Name 'url')
+        if ([string]::IsNullOrWhiteSpace($url)) { throw "first-visit-helper-publish-failed-$moduleName" }
+        $guestModulePath = $Paths.GuestDir.TrimEnd('\') + '\' + $moduleName
+        & $Transport.DownloadGuestArtifact $Vmid $url $guestModulePath | Out-Null
+        $guestHash = [string](& $Transport.GetGuestFileSha256 $Vmid $guestModulePath)
+        $localHash = (Get-FileHash -LiteralPath $localModule -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($guestHash -and ($guestHash.ToLowerInvariant() -ne $localHash)) { throw "first-visit-helper-hash-mismatch-$moduleName" }
+    }
+    try { & $Transport.RemoveHostStaging $Paths.StagingDir | Out-Null } catch { }
     $fixture = Start-OpenPathFirstVisitFixture -Config $Config -Transport $Transport -RunId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId')) -ArtifactsRoot ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot'))
     Write-OpenPathFirstVisitGuestFixtureInfo -Transport $Transport -Vmid $Vmid -Settings $fixture.Settings -Plan $fixture.Plan
     $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
