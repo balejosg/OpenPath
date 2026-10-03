@@ -410,6 +410,35 @@
       "nodes": ["node_modules/brace-expansion"],
       "fixAvailable": true
     },
+    "braces": {
+      "name": "braces",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1240992,
+          "name": "braces",
+          "dependency": "braces",
+          "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+          "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+          "severity": "high",
+          "cwe": ["CWE-674"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=3.0.3"
+        }
+      ],
+      "effects": ["micromatch"],
+      "range": "*",
+      "nodes": ["node_modules/braces"],
+      "fixAvailable": {
+        "name": "patch-package",
+        "version": "6.0.7",
+        "isSemVerMajor": true
+      }
+    },
     "browserslist": {
       "name": "browserslist",
       "severity": "high",
@@ -511,6 +540,20 @@
       "range": "*",
       "nodes": ["node_modules/extract-zip"],
       "fixAvailable": true
+    },
+    "fast-glob": {
+      "name": "fast-glob",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["micromatch"],
+      "effects": ["globby"],
+      "range": "*",
+      "nodes": ["node_modules/fast-glob"],
+      "fixAvailable": {
+        "name": "secretlint",
+        "version": "13.0.7",
+        "isSemVerMajor": true
+      }
     },
     "fast-uri": {
       "name": "fast-uri",
@@ -645,6 +688,20 @@
       "nodes": ["node_modules/find-chrome-bin"],
       "fixAvailable": true
     },
+    "find-yarn-workspace-root": {
+      "name": "find-yarn-workspace-root",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["micromatch"],
+      "effects": ["patch-package"],
+      "range": "*",
+      "nodes": ["node_modules/find-yarn-workspace-root"],
+      "fixAvailable": {
+        "name": "patch-package",
+        "version": "6.0.7",
+        "isSemVerMajor": true
+      }
+    },
     "firefox-profile": {
       "name": "firefox-profile",
       "severity": "high",
@@ -682,6 +739,20 @@
       "range": ">=5.0.0",
       "nodes": ["node_modules/get-uri"],
       "fixAvailable": true
+    },
+    "globby": {
+      "name": "globby",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["fast-glob"],
+      "effects": ["secretlint"],
+      "range": ">=8.0.0",
+      "nodes": ["node_modules/globby"],
+      "fixAvailable": {
+        "name": "secretlint",
+        "version": "13.0.7",
+        "isSemVerMajor": true
+      }
     },
     "image-size": {
       "name": "image-size",
@@ -874,6 +945,30 @@
       "nodes": ["node_modules/js-yaml"],
       "fixAvailable": true
     },
+    "lint-staged": {
+      "name": "lint-staged",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["micromatch"],
+      "effects": [],
+      "range": "7.0.0 - 16.3.4",
+      "nodes": ["node_modules/lint-staged"],
+      "fixAvailable": true
+    },
+    "micromatch": {
+      "name": "micromatch",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["braces"],
+      "effects": ["fast-glob", "find-yarn-workspace-root", "lint-staged"],
+      "range": ">=0.2.0",
+      "nodes": ["node_modules/micromatch"],
+      "fixAvailable": {
+        "name": "patch-package",
+        "version": "6.0.7",
+        "isSemVerMajor": true
+      }
+    },
     "nanoid": {
       "name": "nanoid",
       "severity": "high",
@@ -1012,6 +1107,20 @@
       "nodes": ["node_modules/pac-proxy-agent"],
       "fixAvailable": true
     },
+    "patch-package": {
+      "name": "patch-package",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["find-yarn-workspace-root"],
+      "effects": [],
+      "range": ">=6.1.0-0",
+      "nodes": ["node_modules/patch-package"],
+      "fixAvailable": {
+        "name": "patch-package",
+        "version": "6.0.7",
+        "isSemVerMajor": true
+      }
+    },
     "postcss": {
       "name": "postcss",
       "severity": "high",
@@ -1109,6 +1218,20 @@
       "range": "2.2.5 - 6.15.3",
       "nodes": ["node_modules/qs"],
       "fixAvailable": true
+    },
+    "secretlint": {
+      "name": "secretlint",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["globby"],
+      "effects": [],
+      "range": "<=12.3.1",
+      "nodes": ["node_modules/secretlint"],
+      "fixAvailable": {
+        "name": "secretlint",
+        "version": "13.0.7",
+        "isSemVerMajor": true
+      }
     },
     "shell-quote": {
       "name": "shell-quote",
@@ -1407,9 +1530,9 @@
       "info": 0,
       "low": 1,
       "moderate": 6,
-      "high": 29,
+      "high": 37,
       "critical": 0,
-      "total": 36
+      "total": 44
     },
     "dependencies": {
       "prod": 273,

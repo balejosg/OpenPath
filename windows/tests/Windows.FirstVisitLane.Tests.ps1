@@ -757,9 +757,22 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             (Get-OpenPathFirstVisitBuildCapabilities -SourceSha 'sha-old' -IsAncestor $beforeFix).CapabilityArgument | Should -Be 'native-host-log'
         }
 
-        It 'Matches the historical templates against the real repository history' -Skip:(-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        It 'Matches the historical templates against the real repository history' {
             # c28bf26e predates the sanitizer fix: its E1 events never reached
             # the log, so requiring background-start produced a false reason.
+            # The CI checkout is shallow, so the ancestry only proves anything
+            # when the full history is present (the lane itself checks out with
+            # fetch-depth 0).
+            if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+                Set-ItResult -Skipped -Because 'git is unavailable'
+                return
+            }
+            $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+            $shallow = & git -C $repoRoot rev-parse --is-shallow-repository 2>$null | Select-Object -First 1
+            if ("$shallow".Trim() -eq 'true') {
+                Set-ItResult -Skipped -Because 'the checkout is shallow'
+                return
+            }
             (Get-OpenPathFirstVisitBuildCapabilities -SourceSha 'c28bf26e').CapabilityArgument | Should -Be 'native-host-log'
             (Get-OpenPathFirstVisitBuildCapabilities -SourceSha '2342794d').CapabilityArgument | Should -Be ''
             $latest = Get-OpenPathFirstVisitBuildCapabilities -SourceSha '36f3a00c'
