@@ -37,7 +37,10 @@ function ConvertTo-OpenPathRuntimeVersion {
 }
 
 function Test-OpenPathRuntimePathUnder {
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Root)
+    # Provisioned packages can report an empty InstallLocation: allow the empty
+    # string through binding so the in-body guard below can classify it as
+    # not-under-root instead of failing the whole runtime inventory (K6).
+    param([AllowEmptyString()][Parameter(Mandatory = $true)][string]$Path, [AllowEmptyString()][Parameter(Mandatory = $true)][string]$Root)
     if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
     if ($Path -match '^(\\\\|//)' -or $Path -match '(^|[\\/])\.\.([\\/]|$)') { return $false }
     $fullPath = $Path.Replace('/', '\').TrimEnd('\')

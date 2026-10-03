@@ -25,6 +25,24 @@ Describe 'Windows runtime baseline discovery' {
         (Test-OpenPathWindowsRuntimeBaseline -Baseline $baseline) | Should -BeTrue
     }
 
+    It 'tolerates packages without an install location instead of failing parameter binding' {
+        # A provisioned AppX package can report an empty InstallLocation. The
+        # mandatory -Path binding rejected it before the in-body guard could
+        # run, and the strict runtime inventory then failed as
+        # appcontrol_windows_runtime_inventory_failed (Phase 3A.3 K6).
+        $emptyPathResult = & (Get-Module AppControl.WindowsRuntime) { Test-OpenPathRuntimePathUnder -Path '' -Root 'C:\Windows\SystemApps' }
+        $emptyPathResult | Should -BeFalse
+        $emptyRootResult = & (Get-Module AppControl.WindowsRuntime) { Test-OpenPathRuntimePathUnder -Path 'C:\Windows\SystemApps\Shell' -Root '' }
+        $emptyRootResult | Should -BeFalse
+
+        $root = [pscustomobject]@{ Name = 'ShellExperienceHost'; PublisherId = 'Microsoft'; Version = '1.0.0.0'; InstallLocation = 'C:\Windows\SystemApps\ShellExperienceHost_1'; Dependencies = @(); AppLockerIdentity = $script:identity }
+        $noLocation = [pscustomobject]@{ Name = 'Provisioned.Stub'; PublisherId = 'Microsoft'; Version = '1.0.0.0'; InstallLocation = ''; Dependencies = @(); AppLockerIdentity = [pscustomobject]@{ AppX = $true; Publisher = [pscustomobject]@{ PublisherName = 'CN=Microsoft Stub'; ProductName = 'Provisioned.Stub'; BinaryName = 'stub.dll' } } }
+        $baseline = Get-OpenPathWindowsRuntimeBaseline -PackageInventory @($root, $noLocation) -OsIdentity $script:osClient -WindowsRoot 'C:\Windows' -AppLockerIdentityResolver { param($package) $package.AppLockerIdentity }
+        $baseline.Status | Should -Be 'passed'
+        @($baseline.Packages | ForEach-Object Name) | Should -Not -Contain 'Provisioned.Stub'
+        (Test-OpenPathWindowsRuntimeBaseline -Baseline $baseline) | Should -BeTrue
+    }
+
     It 'rejects server and inventory failures instead of treating an empty list as a client baseline' {
         $server = Get-OpenPathWindowsRuntimeBaseline -PackageInventory @() -OsIdentity ([pscustomobject]@{ ProductType = 'server'; Edition = 'Server'; Build = '1'; Architecture = 'x64' }) -WindowsRoot 'C:\Windows'
         (Test-OpenPathWindowsRuntimeBaseline -Baseline $server) | Should -BeFalse
