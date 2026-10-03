@@ -97,11 +97,52 @@ describe('first-visit lane contract', () => {
     assert.doesNotMatch(harness, /reg\.exe.*ExtensionSettings/u);
     assert.doesNotMatch(harness, /distribution\\extensions/u);
     assert.doesNotMatch(harness, /file:\/\//u);
-    // The verification only uses live signals and the post-close registry read.
-    assert.match(harness, /Get-WarmupVerificationVerdict/u);
-    assert.match(harness, /xpi-fetched-not-registered/u);
-    assert.match(harness, /extension-registered-inactive/u);
-    assert.match(harness, /host-not-started/u);
+    // Phase 3A.3: the verification verdicts live in a tested module. Lane
+    // preconditions (INFRA) are separate from the product host signals.
+    assert.match(harness, /Get-FirstVisitPreconditionVerdict/u);
+    assert.match(harness, /FirstVisitWarmup\.psm1/u);
+    assert.match(harness, /FirstVisitResult\.psm1/u);
+    const warmup = read('tests/e2e/ci/first-visit/FirstVisitWarmup.psm1');
+    assert.match(warmup, /xpi-fetched-not-registered/u);
+    assert.match(warmup, /extension-registered-inactive/u);
+    assert.match(warmup, /native-host-blocked-by-appcontrol/u);
+    assert.match(warmup, /native-host-not-started/u);
+  });
+
+  test('the lane resolves its template from tested code and never cancels a pending run', () => {
+    const workflow = read(workflowPath);
+    assert.match(workflow, /FirstVisitTemplateSource\.psm1/u);
+    assert.match(workflow, /Get-FirstVisitTemplateSourcePlan/u);
+    assert.match(workflow, /Resolve-FirstVisitTemplateRun/u);
+    // The REST API returns `id`; `database_id` is null and caused every
+    // workflow_run resolution to fail in Phase 3A.2.
+    assert.doesNotMatch(workflow, /database_id/u);
+    assert.doesNotMatch(workflow, /FirstVisitLanePlan[^\n]*runs\?/u);
+    // A shared concurrency group cancels the oldest pending run (observed
+    // three times); the group is per run and the lock serializes the lab.
+    assert.match(workflow, /group: windows-first-visit-lab-\$\{\{ github\.run_id \}\}/u);
+    assert.doesNotMatch(workflow, /group: windows-first-visit-lab-\$\{\{ github\.ref \}\}/u);
+    const template = read('tests/e2e/ci/first-visit/FirstVisitTemplateSource.psm1');
+    assert.match(template, /function Resolve-FirstVisitTemplateRun/u);
+    // Strip comments (line and block): the module documents the past bug by name.
+    const templateCode = template.replace(/<#[\s\S]*?#>/gu, '').replace(/^\s*#.*$/gmu, '');
+    assert.doesNotMatch(templateCode, /database_id/u);
+    assert.match(templateCode, /Get-FirstVisitTemplateField -InputObject \$RunEntry -Name 'id'/u);
+    assert.match(template, /first-visit-template-not-found/u);
+  });
+
+  test('no guest step can lose its result', () => {
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.match(harness, /function Save-PartialResult/u);
+    assert.match(harness, /ConvertTo-FirstVisitResultJson/u);
+    assert.match(harness, /function Get-StepResultPayload/u);
+    const result = read('tests/e2e/ci/first-visit/FirstVisitResult.psm1');
+    assert.match(result, /function Resolve-FirstVisitGuestResult/u);
+    assert.match(result, /result-file/u);
+    const controller = read('tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1');
+    assert.match(controller, /Read-OpenPathFirstVisitGuestText/u);
+    assert.match(controller, /Resolve-FirstVisitGuestResult/u);
+    assert.match(controller, /first-visit-precondition-failed/u);
   });
 
   test('the warm-up verification renders the warm-up baseline from arguments', () => {

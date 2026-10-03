@@ -44,7 +44,6 @@ function Format-FirstVisitMeasure {
 
 $attemptRoot = Join-Path (Join-Path $EvidenceRoot $RunId) ([string]$RunAttempt)
 if (-not (Test-Path -LiteralPath $attemptRoot -PathType Container)) { throw 'first-visit-evidence-root-missing' }
-$infraPattern = 'controller-timeout|guest-query-failed|guest-not-ready|guest-result-missing|guest-result-invalid|fixture-unavailable|fixture-plan|dns-fixture|lock-busy|lock|reboot-timeout|host-unreachable|desktop-lab-guest'
 $rows = @()
 foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | Sort-Object Name)) {
     $metricsPath = Join-Path $scenarioDir.FullName 'metrics.json'
@@ -61,6 +60,8 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
         waveTimesMs = $null
         visitDelaySeconds = -1
         warmup      = $null
+        productReasons = @()
+        appControlBlocked = $false
         hostProfile = @()
         diagnostics = $null
         workerApplyMs = -1
@@ -87,13 +88,19 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
         $row.workerApplyMs = [int](Get-FirstVisitProperty -InputObject $metrics -Name 'workerApplyMs' -Default -1)
         $row.overlayStamps = [int](Get-FirstVisitProperty -InputObject $metrics -Name 'overlayStamps' -Default 0)
         $row.acrylicLines = [int](Get-FirstVisitProperty -InputObject $metrics -Name 'acrylicLines' -Default 0)
-        $row.category = if ($row.verdict -eq 'passed') { 'PASS' } else { 'PRODUCT' }
+        $row.productReasons = @(Get-FirstVisitProperty -InputObject $row.warmup -Name 'productReasons' -Default @())
+        $hostSignals = Get-FirstVisitProperty -InputObject $row.warmup -Name 'hostSignals'
+        if ($hostSignals) { $row.appControlBlocked = [bool](Get-FirstVisitProperty -InputObject $hostSignals -Name 'blockedByAppControl') }
+        # A measured visit is a product verdict; explicit warm-up product
+        # reasons (native host blocked/not started) make it PRODUCT even when
+        # the page waves happened to load.
+        $row.category = if ($row.verdict -eq 'passed' -and $row.productReasons.Count -eq 0) { 'PASS' } else { 'PRODUCT' }
     }
-    elseif ($row.error -match $infraPattern) {
+    elseif ($row.error) {
+        # Without a verdict the run is INFRA with the demonstrated cause:
+        # preconditions, timeouts, lost results and lab transport failures are
+        # never green by design (Phase 3A.3 policy).
         $row.category = 'INFRA'
-    }
-    elseif ($row.error -match 'first-visit-guest-step-failed|first-visit-guest-step') {
-        $row.category = 'PRODUCT'
     }
     if (Test-Path -LiteralPath $observePath) {
         try {
@@ -134,8 +141,9 @@ foreach ($group in @($rows | Group-Object { ($_.scenario -replace '-r\d+$', '') 
             if ($null -ne $processMs -and [double]$processMs -gt 0) { $hostProcessToScript += [double]$processMs }
         }
         if ($entry.warmup) {
-            $fetchDelay = [double](Get-FirstVisitProperty -InputObject $entry.warmup -Name 'xpiFetchDelaySeconds' -Default -1)
-            if ($fetchDelay -ge 0) { $warmupFetch += $fetchDelay }
+            $fetchDelay = Get-FirstVisitProperty -InputObject $entry.warmup -Name 'xpiFetchAfterArmSeconds'
+            if ($null -eq $fetchDelay) { $fetchDelay = Get-FirstVisitProperty -InputObject $entry.warmup -Name 'xpiFetchDelaySeconds' }
+            if ($null -ne $fetchDelay -and [double]$fetchDelay -ge 0) { $warmupFetch += [double]$fetchDelay }
         }
         if ($entry.reloads -ge 0) { $reloads += [int]$entry.reloads }
         foreach ($reason in @(Get-FirstVisitProperty -InputObject $entry.diagnostics -Name 'reloadReasons' -Default @())) {
@@ -154,7 +162,7 @@ foreach ($group in @($rows | Group-Object { ($_.scenario -replace '-r\d+$', '') 
             wave2 = Measure-FirstVisitNumbers -Values @($waveValues.wave2)
             wave3 = Measure-FirstVisitNumbers -Values @($waveValues.wave3)
         }
-        warmupFetchDelaySeconds = Measure-FirstVisitNumbers -Values @($warmupFetch)
+        warmupXpiFetchAfterArmSeconds = Measure-FirstVisitNumbers -Values @($warmupFetch)
         hostPingMs = Measure-FirstVisitNumbers -Values @($hostPing)
         hostProcessToScriptMs = Measure-FirstVisitNumbers -Values @($hostProcessToScript)
         reloadsMax = if ($reloads.Count -gt 0) { ($reloads | Measure-Object -Maximum).Maximum } else { $null }
@@ -170,7 +178,7 @@ $summary = [ordered]@{
     scenarios     = $rows
     baselines     = $baselines
 }
-$statusOverall = if (@($rows | Where-Object { $_.verdict -ne 'passed' }).Count -gt 0) { 'failed' } else { 'passed' }
+$statusOverall = if (@($rows | Where-Object { $_.verdict -ne 'passed' -or @($_.productReasons).Count -gt 0 }).Count -gt 0) { 'failed' } else { 'passed' }
 $summary.status = $statusOverall
 
 if ($SummaryJsonPath) { [IO.File]::WriteAllText($SummaryJsonPath, ($summary | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false)) }
@@ -179,12 +187,12 @@ $lines = @(
     '',
     "Run: $RunId attempt $RunAttempt - overall: $statusOverall",
     '',
-    '| scenario | verdict | category | reasons | reloads | wave1 ms | visit delay s |',
-    '| --- | --- | --- | --- | --- | --- | --- |'
+    '| scenario | verdict | category | reasons | product reasons | reloads | wave1 ms | visit delay s |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |'
 )
 foreach ($row in $rows) {
     $wave1 = if ($row.waveTimesMs) { [string]$row.waveTimesMs.wave1 } else { '' }
-    $lines += "| $($row.scenario) | $($row.verdict) | $($row.category) | $(@($row.reasons) -join ',') | $($row.reloads) | $wave1 | $($row.visitDelaySeconds) |"
+    $lines += "| $($row.scenario) | $($row.verdict) | $($row.category) | $(@($row.reasons) -join ',') | $(@($row.productReasons) -join ',') | $($row.reloads) | $wave1 | $($row.visitDelaySeconds) |"
 }
 $lines += ''
 $lines += '## Baselines (median / max, one clock per segment)'
@@ -193,7 +201,7 @@ $lines += '| scenario | runs | passed | failed | wave1 | wave2 | wave3 | xpi fet
 $lines += '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
 foreach ($name in ($baselines.Keys | Sort-Object)) {
     $baseline = $baselines[$name]
-    $lines += "| $name | $($baseline.runs) | $($baseline.passed) | $($baseline.failed) | $(Format-FirstVisitMeasure $baseline.waves.wave1) | $(Format-FirstVisitMeasure $baseline.waves.wave2) | $(Format-FirstVisitMeasure $baseline.waves.wave3) | $(Format-FirstVisitMeasure $baseline.warmupFetchDelaySeconds) | $(Format-FirstVisitMeasure $baseline.hostPingMs) | $(Format-FirstVisitMeasure $baseline.hostProcessToScriptMs) | $($baseline.reloadsMax) |"
+    $lines += "| $name | $($baseline.runs) | $($baseline.passed) | $($baseline.failed) | $(Format-FirstVisitMeasure $baseline.waves.wave1) | $(Format-FirstVisitMeasure $baseline.waves.wave2) | $(Format-FirstVisitMeasure $baseline.waves.wave3) | $(Format-FirstVisitMeasure $baseline.warmupXpiFetchAfterArmSeconds) | $(Format-FirstVisitMeasure $baseline.hostPingMs) | $(Format-FirstVisitMeasure $baseline.hostProcessToScriptMs) | $($baseline.reloadsMax) |"
 }
 $lines += ''
 $lines += '## Reload decisions (E1 reasons)'

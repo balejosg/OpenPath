@@ -40,7 +40,11 @@ on:
         type: string
 
 concurrency:
-  group: windows-first-visit-lab-${{ github.ref }}
+  # Unique per run: with a shared group GitHub keeps only one pending run and
+  # cancels the older one when a new lane run is created (observed three times
+  # in Phase 3A.2: 37068692262, 37073942340, 37074231254). The runner and the
+  # heartbeat lab lock serialize the runs instead.
+  group: windows-first-visit-lab-${{ github.run_id }}
   cancel-in-progress: false
 
 permissions:
@@ -92,44 +96,27 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_RUN_ID: ${{ inputs.template_run_id }}
           INPUT_SHA: ${{ inputs.template_sha }}
-          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          $runId = $env:INPUT_RUN_ID
-          $templateSha = ''
-          if (-not $runId) {
-            $sha = $env:INPUT_SHA
-            if (-not $sha) { $sha = $env:WORKFLOW_SHA }
-            if ($sha) {
-              $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
-              $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/workflows/release-scripts.yml/runs?head_sha=$sha&status=success&per_page=5"
-              try {
-                $runs = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 60 -ErrorAction Stop
-                $runId = @($runs.workflow_runs | Select-Object -First 1).database_id
-                $templateSha = [string]$sha
-              }
-              catch { Write-Host "template lookup failed for ${sha}: $($_.Exception.Message)" }
-            }
+          Import-Module (Resolve-Path 'tests/e2e/ci/first-visit/FirstVisitTemplateSource.psm1') -Force
+          $plan = Get-FirstVisitTemplateSourcePlan -EventName $env:EVENT_NAME -InputRunId $env:INPUT_RUN_ID -InputSha $env:INPUT_SHA -WorkflowRunId $env:WORKFLOW_RUN_ID -WorkflowRunHeadSha $env:WORKFLOW_RUN_HEAD_SHA
+          try {
+            $resolved = Resolve-FirstVisitTemplateRun -Plan $plan
           }
-          if (-not $runId) {
-            Write-Error 'INFRA: no successful release-scripts run with windows-offline-template for the requested SHA.'
+          catch {
+            Write-Error "INFRA: no successful release-scripts run with windows-offline-template ($($_.Exception.Message))."
             exit 2
           }
           # The live-signal capabilities must be derived from the template's own
           # SHA, not from the checkout: a red build cannot emit signals it never
           # shipped (Phase 3A.2 K1 gating).
-          if (-not $templateSha) {
-            try {
-              $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
-              $run = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$runId" -Headers $headers -TimeoutSec 60 -ErrorAction Stop
-              $templateSha = [string]$run.head_sha
-            }
-            catch { Write-Host "template sha lookup failed for run ${runId}: $($_.Exception.Message)" }
-          }
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "run_id=$runId"
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "template_sha=$templateSha"
-          Write-Host "Using release-scripts run $runId (template sha $templateSha)"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "run_id=$($resolved.runId)"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "template_sha=$($resolved.templateSha)"
+          Write-Host "Using release-scripts run $($resolved.runId) (template sha $($resolved.templateSha), mode $($resolved.mode))"
 
       - name: Download exact candidate artifacts
         if: steps.scope.outputs.run == 'true'

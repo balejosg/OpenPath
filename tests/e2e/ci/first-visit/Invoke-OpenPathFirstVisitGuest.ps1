@@ -32,6 +32,19 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
+# Phase 3A.3: the controller stages these modules next to the harness. The
+# verdict and result-serialization contracts live there so the lane tests can
+# execute them without a VM.
+$script:WarmupModuleLoaded = $false
+$warmupModulePath = Join-Path $PSScriptRoot 'FirstVisitWarmup.psm1'
+if (Test-Path -LiteralPath $warmupModulePath) {
+    try { . $warmupModulePath; $script:WarmupModuleLoaded = $true } catch { }
+}
+$script:ResultModuleLoaded = $false
+$resultModulePath = Join-Path $PSScriptRoot 'FirstVisitResult.psm1'
+if (Test-Path -LiteralPath $resultModulePath) {
+    try { . $resultModulePath; $script:ResultModuleLoaded = $true } catch { }
+}
 $OpenPathRoot = 'C:\OpenPath'
 $LabRoot = 'C:\OpenPathLab'
 $script:VisitRoot = 'C:\OpenPath\lab\first-visit'
@@ -156,39 +169,6 @@ function Get-ExtensionEntryFromJson {
         }
     }
     return [ordered]@{ parsed = $true; found = $false; addonCount = @($json.addons).Count }
-}
-
-function Get-WarmupVerificationVerdict {
-    # Pure verdict for the warm-up verification (Phase 3A.2 K1). The state
-    # signal is only evaluated after Firefox closed; the live signals are gated
-    # by what the build under test can emit.
-    [CmdletBinding()]
-    param(
-        [AllowNull()][object]$Live,
-        [AllowNull()][object]$State,
-        [bool]$XpiFetched = $false,
-        [bool]$RequireHostStart = $false,
-        [bool]$RequireBackgroundStart = $false,
-        [bool]$RequireDiagnosticBatch = $false,
-        [string]$ExpectedVersion = ''
-    )
-    $reasons = New-Object System.Collections.Generic.List[string]
-    if (-not $XpiFetched) { $reasons.Add('xpi-not-fetched') }
-    if ($RequireHostStart -and -not ($Live -and [bool]$Live.hostStarted)) { $reasons.Add('host-not-started') }
-    if ($RequireBackgroundStart -and -not ($Live -and [bool]$Live.backgroundStart)) { $reasons.Add('background-start-missing') }
-    if ($RequireDiagnosticBatch -and -not ($Live -and [bool]$Live.diagnosticBatchFirst)) { $reasons.Add('extension-diagnostic-batch-missing') }
-    if ($State -and [bool]$State.found) {
-        if (-not ([bool]$State.active -and -not [bool]$State.userDisabled -and -not [bool]$State.appDisabled)) {
-            $reasons.Add('extension-registered-inactive')
-        }
-        elseif ($ExpectedVersion -and [string]$State.version -and ([string]$State.version -ne $ExpectedVersion)) {
-            $reasons.Add("extension-version-mismatch:$([string]$State.version)-expected-$ExpectedVersion")
-        }
-    }
-    elseif ($XpiFetched) { $reasons.Add('xpi-fetched-not-registered') }
-    else { $reasons.Add('extension-not-registered') }
-    $status = if ($reasons.Count -eq 0) { 'passed' } else { 'failed' }
-    return [ordered]@{ status = $status; reasons = @($reasons) }
 }
 
 function Get-FirefoxProcesses {
@@ -336,52 +316,6 @@ function Wait-FirefoxProcess {
     return @()
 }
 
-function Get-NativeHostDiagnostics {
-    # Evidence for host-not-started, safe subset only (file/registry reads).
-    # WMI, Get-WinEvent and Get-AppLockerPolicy hung the guest or broke JSON
-    # serialization in Phase 3A.2 K0b/K0c, so they are deliberately absent.
-    $out = [ordered]@{}
-    $logPath = Get-NativeHostLogPath
-    $out.nativeLog = [ordered]@{
-        path   = $logPath
-        exists = (Test-Path -LiteralPath $logPath)
-        bytes  = if (Test-Path -LiteralPath $logPath) { (Get-Item -LiteralPath $logPath).Length } else { 0 }
-        tail   = @(Get-LogTail -Path $logPath -Tail 6)
-    }
-    $manifestPath = ''
-    foreach ($hive in @('HKLM:', 'HKCU:')) {
-        try {
-            $key = "$hive\SOFTWARE\Mozilla\NativeMessagingHosts\whitelist_native_host"
-            if (Test-Path $key) {
-                $value = (Get-ItemProperty -Path $key -ErrorAction Stop).'(default)'
-                if ($value) { $manifestPath = [string]$value; break }
-            }
-        }
-        catch { }
-    }
-    $out.manifestPath = $manifestPath
-    $out.manifestExists = if ($manifestPath) { [bool](Test-Path -LiteralPath $manifestPath) } else { $false }
-    $out.manifest = ''
-    if ($out.manifestExists) {
-        try { $out.manifest = (Get-Content -LiteralPath $manifestPath -Raw).Trim() } catch { }
-    }
-    $out.wrapperExists = $false
-    $out.wrapperHead = @()
-    if ($out.manifest) {
-        try {
-            $parsed = $out.manifest | ConvertFrom-Json
-            if ($parsed.path) {
-                $out.wrapperExists = [bool](Test-Path -LiteralPath ([string]$parsed.path))
-                if ($out.wrapperExists) { $out.wrapperHead = @(Get-Content -LiteralPath ([string]$parsed.path) -TotalCount 4 -ErrorAction SilentlyContinue) }
-            }
-        }
-        catch { }
-    }
-    $out.launchLogTail = @(Get-FileTailSafe -Path (Join-Path $script:VisitRoot 'logs\launch.log') -Lines 12)
-    $out.firefoxLogTail = @(Get-FileTailSafe -Path (Join-Path $script:VisitRoot 'logs\firefox-warmup.log') -Lines 20)
-    return $out
-}
-
 function Get-ProfileExtensionState {
     # State signal for the warm-up verification: only call this after Firefox
     # closed (Firefox flushes extensions.json on shutdown).
@@ -518,20 +452,22 @@ function Start-InSessionVisit {
 }
 
 function Get-LaunchDiagnostics {
+    # Safe subset only: WMI, event-log queries and the AppLocker policy cmdlet
+    # hung or broke serialization in the guest during Phase 3A.2. AppLocker
+    # events are collected by the separate host-events step (short timeout).
+    $session = @((Invoke-Cmd 'quser.exe' @()).out | Select-Object -First 4)
     return [ordered]@{
-        session = [string](Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
-        runKey = @((Invoke-Cmd 'reg.exe' @('query', 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', '/v', 'OpenPathFirstVisit')).out | Select-Object -First 4)
-        root = @(Get-ChildItem $script:VisitRoot -Recurse -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { $_.FullName + ' ' + $_.Length })
+        session  = @($session)
+        runKey   = @((Invoke-Cmd 'reg.exe' @('query', 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', '/v', 'OpenPathFirstVisit')).out | Select-Object -First 4)
+        root     = @(Get-ChildItem $script:VisitRoot -Recurse -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { $_.FullName + ' ' + $_.Length })
         launchOut = @($script:Body.launchOut)
-        appLocker = @(Get-WinEvent -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -MaxEvents 4 -ErrorAction SilentlyContinue | ForEach-Object { $_.TimeCreated.ToString('o') + ' ' + (($_.Message -split "`n")[0]) })
-        codeIntegrity = @(Get-WinEvent -LogName 'Microsoft-Windows-CodeIntegrity/Operational' -MaxEvents 4 -ErrorAction SilentlyContinue | ForEach-Object { $_.TimeCreated.ToString('o') + ' ' + (($_.Message -split "`n")[0]) })
+        nativeLog = @(Get-LogTail -Path (Get-NativeHostLogPath) -Tail 6)
     }
 }
 
-function Complete-Step {
+function Get-StepResultPayload {
     param([string]$Status = 'passed')
-    if ($script:Failures.Count -gt 0) { $Status = 'failed' }
-    $payload = [ordered]@{
+    return [ordered]@{
         status    = $Status
         step      = $Step
         phase     = $Phase
@@ -540,17 +476,39 @@ function Complete-Step {
         endedAt   = [DateTime]::UtcNow.ToString('o')
         body      = [ordered]@{ state = $script:Body; session = [string]$script:Body.session }
     }
-    $json = ''
-    try { $json = $payload | ConvertTo-Json -Depth 12 -Compress }
-    catch {
-        Write-Output ('COMPLETE-STEP serialization-failed: ' + $_.Exception.Message)
-        $payload = [ordered]@{
-            status = $Status; step = $Step; phase = $Phase; scenario = $ScenarioId
-            failures = @($script:Failures); endedAt = [DateTime]::UtcNow.ToString('o')
-            body = [ordered]@{ state = [ordered]@{ note = 'body-unserializable' }; session = '' }
+}
+
+function Save-PartialResult {
+    # Written before close/diagnostic operations that could hang or be killed:
+    # the controller can always recover the milestone the step reached.
+    try {
+        $payload = Get-StepResultPayload
+        $payload.status = 'partial'
+        $payload.savedAt = [DateTime]::UtcNow.ToString('o')
+        $json = ''
+        if ($script:ResultModuleLoaded) { $json = ConvertTo-FirstVisitResultJson -Payload $payload }
+        if (-not $json) { try { $json = $payload | ConvertTo-Json -Depth 12 -Compress } catch { $json = '' } }
+        if ($json) {
+            New-Dir (Split-Path -Parent $ResultPath)
+            [IO.File]::WriteAllText("$ResultPath.partial.json", $json, [Text.UTF8Encoding]::new($false))
         }
-        try { $json = $payload | ConvertTo-Json -Depth 6 -Compress }
-        catch { $json = '{"status":"' + $Status + '","step":"' + $Step + '","failures":["body-unserializable"],"body":{"state":{}}}' }
+    }
+    catch { }
+}
+
+function Complete-Step {
+    param([string]$Status = 'passed')
+    if ($script:Failures.Count -gt 0) { $Status = 'failed' }
+    $payload = Get-StepResultPayload -Status $Status
+    $json = ''
+    if ($script:ResultModuleLoaded) {
+        try { $json = ConvertTo-FirstVisitResultJson -Payload $payload } catch { $json = '' }
+    }
+    if (-not $json) {
+        try { $json = $payload | ConvertTo-Json -Depth 12 -Compress } catch { $json = '' }
+    }
+    if (-not $json) {
+        $json = '{"status":"' + $Status + '","step":"' + $Step + '","failures":["result-serialization-failed"],"body":{"state":{}}}'
     }
     New-Dir (Split-Path -Parent $ResultPath)
     try { [IO.File]::WriteAllText($ResultPath, $json, [Text.UTF8Encoding]::new($false)) } catch { }
@@ -565,6 +523,7 @@ function Complete-Step {
 New-Dir 'C:\OpenPathLab\logs'
 New-Dir 'C:\OpenPathLab\first-visit'
 
+try {
 switch ($Step) {
     'install' {
         if (-not (Test-Path -LiteralPath $PersonalizedExePath)) { $script:Failures.Add('personalized-exe-missing') }
@@ -778,6 +737,7 @@ switch ($Step) {
         $cmdPath = Write-CleanFirefoxCmd -Url 'about:blank' -Tag 'warmup'
         Clear-VisitRunKey | Out-Null
         Set-VisitRunKey -CmdPath $cmdPath
+        $script:Body.armedAt = [DateTime]::UtcNow.ToString('o')
         $script:Body.arm = [ordered]@{ mode = 'reboot'; cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'reboot') }
         Complete-Step
     }
@@ -847,17 +807,20 @@ switch ($Step) {
                 if ((Get-Date) -ge $deadline) { break }
                 Start-Sleep -Seconds 5
             }
-            $xpiFetchDelaySeconds = -1
+            # Named reference: seconds from the warm-up arm mark (fixture clock,
+            # captured before the logon cycle) to the managed XPI fetch (same
+            # fixture clock). Comparing the fetch against "Firefox was seen"
+            # produced negative deltas in Phase 3A.2 red-b r1.
+            $xpiFetchAfterArmSeconds = -1
             if ($xpiFetched -and $fixtureBefore -and [double]$fixtureBefore.serverNow -gt 0 -and [double]$clock.xpiLastFetchedAt -gt 0) {
-                $xpiFetchDelaySeconds = [math]::Round([double]$clock.xpiLastFetchedAt - [double]$fixtureBefore.serverNow, 2)
+                $xpiFetchAfterArmSeconds = [math]::Round([double]$clock.xpiLastFetchedAt - [double]$fixtureBefore.serverNow, 2)
             }
-            # K0 observation (removed from the final harness): what the add-on
-            # registry says while Firefox is still open.
-            $script:Body.staleStateWhileOpen = Get-ProfileExtensionState
-            if (-not $live.hostStarted) { $script:Body.hostDiagnostics = Get-NativeHostDiagnostics }
-            Write-Output ('VERIFY-WARMUP stage=live hostStarted=' + [string]$live.hostStarted + ' xpiFetched=' + [string]$xpiFetched + ' fetchDelay=' + [string]$xpiFetchDelaySeconds)
+            Write-Output ('VERIFY-WARMUP stage=live hostStarted=' + [string]$live.hostStarted + ' xpiFetched=' + [string]$xpiFetched + ' fetchAfterArm=' + [string]$xpiFetchAfterArmSeconds)
             $script:Body.liveSignals = $live
-            $script:Body.xpiFetch = [ordered]@{ fetched = $xpiFetched; delaySeconds = $xpiFetchDelaySeconds; baseCount = $xpiBaseCount; count = [int]$clock.xpiCount }
+            $script:Body.xpiFetch = [ordered]@{ fetched = $xpiFetched; afterArmSeconds = $xpiFetchAfterArmSeconds; baseCount = $xpiBaseCount; count = [int]$clock.xpiCount }
+            # The close/state read may be interrupted; the milestone so far is
+            # already on disk (Phase 3A.3 L3).
+            Save-PartialResult
             # Orderly close before the state signal: taskkill /T first, forced
             # /F only when needed (recorded so the contract can assert it).
             $before = @(Get-FirefoxProcesses)
@@ -881,14 +844,25 @@ switch ($Step) {
             $script:Body.extension = $state
             $expectedVersion = ''
             if ($script:Body.xpi) { $expectedVersion = [string]$script:Body.xpi.version }
-            $verdict = Get-WarmupVerificationVerdict -Live $live -State $state -XpiFetched $xpiFetched `
-                -RequireHostStart:([bool]($Capabilities -match 'native-host-log')) `
-                -RequireBackgroundStart:([bool]($Capabilities -match 'background-start')) `
-                -RequireDiagnosticBatch:([bool]($Capabilities -match 'diagnostic-batch')) `
-                -ExpectedVersion $expectedVersion
-            $script:Body.warmupVerification = $verdict
-            Write-Output ('VERIFY-WARMUP stage=verdict status=' + [string]$verdict.status + ' reasons=' + (@($verdict.reasons) -join ','))
-            foreach ($reason in @($verdict.reasons)) { $script:Failures.Add($reason) }
+            # Preconditions are the lane's (INFRA when failed, decided by the
+            # controller). Host signals are product evidence only: the visit
+            # always runs and the self-report gives the verdict.
+            if ($script:WarmupModuleLoaded) {
+                $preconditions = Get-FirstVisitPreconditionVerdict -XpiFetched $xpiFetched -ExtensionState $state -ExpectedVersion $expectedVersion
+                $hostVerdict = Get-FirstVisitHostSignalsVerdict -Live $live -Events $null -Capabilities $Capabilities -StudentUserName $StudentUserName
+                $script:Body.hostSignals = $hostVerdict.signals
+            }
+            else {
+                $preconditions = [ordered]@{ status = 'failed'; reasons = @('warmup-module-missing') }
+                $script:Failures.Add('warmup-module-missing')
+            }
+            $script:Body.preconditions = $preconditions
+            $script:Body.warmupVerification = [ordered]@{
+                status       = [string]$preconditions.status
+                reasons      = @($preconditions.reasons)
+                hostMeasured = [bool]$script:Body.hostSignals
+            }
+            Write-Output ('VERIFY-WARMUP stage=verdict preconditions=' + [string]$preconditions.status + ' reasons=' + (@($preconditions.reasons) -join ',') + ' hostStarted=' + [string]$live.hostStarted)
             # Lab-only console prefs so the visit browser's console lands in the
             # captured stdout (never policy).
             Enable-BrowserConsoleVisibility
@@ -997,6 +971,81 @@ switch ($Step) {
         $script:Body.session = $script:Body.session
         Complete-Step
     }
+    'host-signals' {
+        # Product evidence after the warm-up logon: what the native host did.
+        # File/registry/native-command reads only; the controller runs this with
+        # a short timeout and never lets its failure abort the run.
+        Save-PartialResult
+        $nativeLog = Get-NativeHostLogPath
+        $lines = @(Get-LogTail -Path $nativeLog -Tail 1200)
+        $live = Get-WarmupLiveSignals -Lines $lines
+        $initLine = @($lines | Where-Object { $_ -match 'initialization completed' } | Select-Object -First 1)
+        $appControl = [ordered]@{}
+        try {
+            $cfg = Get-Content -LiteralPath "$OpenPathRoot\data\config.json" -Raw -ErrorAction Stop | ConvertFrom-Json
+            $appControl = [ordered]@{
+                enableNonAdminAppControl = $cfg.enableNonAdminAppControl
+                nonAdminAppControlMode   = $cfg.nonAdminAppControlMode
+                appControlProfile        = $cfg.appControlProfile
+                appControlCommitState    = $cfg.appControlCommitState
+            }
+        }
+        catch { $appControl = [ordered]@{ error = $_.Exception.Message } }
+        $group = @((Invoke-Cmd 'net.exe' @('localgroup', 'OpenPath-Restricted')).out | Select-Object -First 30)
+        $manifestPath = ''
+        foreach ($hive in @('HKLM:', 'HKCU:')) {
+            try {
+                $key = "$hive\SOFTWARE\Mozilla\NativeMessagingHosts\whitelist_native_host"
+                if (Test-Path $key) {
+                    $value = (Get-ItemProperty -Path $key -ErrorAction Stop).'(default)'
+                    if ($value) { $manifestPath = [string]$value; break }
+                }
+            }
+            catch { }
+        }
+        $wrapperPath = ''
+        if ($manifestPath -and (Test-Path -LiteralPath $manifestPath)) {
+            try { $wrapperPath = [string](Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).path } catch { }
+        }
+        $script:Body.hostSignals = [ordered]@{
+            at                   = [DateTime]::UtcNow.ToString('o')
+            hostStarted          = $live.hostStarted
+            hostPids             = $live.hostPids
+            firstInitLine        = [string]($initLine | Select-Object -First 1)
+            diagnosticLines      = $live.diagnosticLines
+            backgroundStart      = $live.backgroundStart
+            diagnosticBatchFirst = $live.diagnosticBatchFirst
+            nativeLogPath        = $nativeLog
+            nativeLogExists      = (Test-Path -LiteralPath $nativeLog)
+            nativeLogBytes       = if (Test-Path -LiteralPath $nativeLog) { (Get-Item -LiteralPath $nativeLog).Length } else { 0 }
+            appControl           = $appControl
+            restrictedGroup      = $group
+            manifestPath         = $manifestPath
+            wrapperPath          = $wrapperPath
+        }
+        Complete-Step
+    }
+    'host-events' {
+        # AppLocker events, deliberately a separate short call: this is the only
+        # evidence available for builds without the per-user native host log.
+        Save-PartialResult
+        $events = [ordered]@{ at = [DateTime]::UtcNow.ToString('o') }
+        foreach ($pair in @(
+                @{ Key = 'events8004'; Log = 'Microsoft-Windows-AppLocker/EXE and DLL'; Id = 8004 },
+                @{ Key = 'events8007'; Log = 'Microsoft-Windows-AppLocker/MSI and Script'; Id = 8007 }
+            )) {
+            $result = Invoke-Cmd 'wevtutil.exe' @('qe', $pair.Log, "/q:*[System[(EventID=$($pair.Id))]]", '/c:40', '/rd:true', '/f:text')
+            $list = New-Object System.Collections.Generic.List[string]
+            foreach ($line in @($result.out)) {
+                $list.Add([string]$line) | Out-Null
+                if ($list.Count -ge 400) { break }
+            }
+            $events[$pair.Key] = @($list)
+            $events["exit$($pair.Id)"] = $result.exit
+        }
+        $script:Body.hostEvents = $events
+        Complete-Step
+    }
     'cleanup' {
         if (Test-Path -LiteralPath "$OpenPathRoot\Uninstall-OpenPath.ps1") {
             $uninstall = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\OpenPath\Uninstall-OpenPath.ps1') -RedirectStandardOutput 'C:\OpenPathLab\logs\uninstall.out.log' -RedirectStandardError 'C:\OpenPathLab\logs\uninstall.err.log' -PassThru -Wait -WindowStyle Hidden
@@ -1016,4 +1065,10 @@ switch ($Step) {
         $script:Failures.Add("unknown-step: $Step")
         Complete-Step
     }
+}
+}
+catch {
+    $script:Failures.Add("harness-exception: $($_.Exception.Message)")
+    $script:Body.harnessException = $_.Exception.ToString()
+    Complete-Step
 }

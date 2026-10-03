@@ -5,6 +5,10 @@
 # fixture plan (anchors, dependency hosts, blocked host) is generated per run by
 # tests/e2e/ci/first-visit/fixture_server.py and fetched at runtime.
 
+# Phase 3A.3: verdict and result contracts shared with the guest harness.
+Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitResult.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitWarmup.psm1') -Force
+
 $script:OpenPathFirstVisitCaptureOffsets = @(5, 10, 15, 20, 30, 60)
 $script:OpenPathFirstVisitRefreshSettleSeconds = 30
 $script:OpenPathFirstVisitObserveSettleSeconds = 15
@@ -159,7 +163,11 @@ function Get-OpenPathFirstVisitBuildCapabilities {
     unknown SHA (or missing git) fails open and only the state signal applies.
     #>
     [CmdletBinding()]
-    param([string]$SourceSha = '')
+    param(
+        [string]$SourceSha = '',
+        # Test seam: the contract tests inject a deterministic ancestry probe.
+        [scriptblock]$IsAncestor = $null
+    )
     if ([string]::IsNullOrWhiteSpace($SourceSha)) {
         return [pscustomobject]@{ nativeHostLog = $false; backgroundStart = $false; diagnosticBatch = $false; CapabilityArgument = '' }
     }
@@ -167,15 +175,29 @@ function Get-OpenPathFirstVisitBuildCapabilities {
     $backgroundStart = $false
     $diagnosticBatch = $false
     try {
-        $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
         $thresholds = [ordered]@{
             nativeHostLog   = '196664c4'
-            backgroundStart = 'c28bf26e'
+            # Both E1 signals require the diagnostics sanitizer ([int]$ts ->
+            # [long], 7fe4d310): before it, extension diagnostics never reached
+            # the log, so requiring them produced false 'background-start-missing'
+            # reasons on c28bf26e-style templates (Phase 3A.3 correction 5).
+            backgroundStart = '7fe4d310'
             diagnosticBatch = '7fe4d310'
         }
+        $probe = $IsAncestor
+        if (-not $probe) {
+            $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+            $repoRootResolved = $repoRoot
+            $probe = {
+                param($Base, $Head)
+                & git -C $repoRootResolved merge-base --is-ancestor $Base $Head 2>$null | Out-Null
+                return ($LASTEXITCODE -eq 0)
+            }.GetNewClosure()
+        }
         foreach ($name in @($thresholds.Keys)) {
-            & git -C $repoRoot merge-base --is-ancestor $thresholds[$name] $SourceSha 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+            $ancestor = $false
+            try { $ancestor = [bool](& $probe $thresholds[$name] $SourceSha) } catch { $ancestor = $false }
+            if ($ancestor) {
                 switch ($name) {
                     'nativeHostLog' { $nativeHostLog = $true }
                     'backgroundStart' { $backgroundStart = $true }
@@ -193,6 +215,27 @@ function Get-OpenPathFirstVisitBuildCapabilities {
     }
 }
 
+function Read-OpenPathFirstVisitGuestText {
+    # Best-effort text read of one guest file; never throws. Used to recover a
+    # result the stdout pipeline lost.
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][string]$GuestPath,
+        [int]$TimeoutSeconds = 120
+    )
+    $literal = ConvertTo-OpenPathLabPowerShellLiteral -Value $GuestPath
+    $script = "if (Test-Path -LiteralPath $literal) { [IO.File]::ReadAllText($literal) } else { Write-Output 'MISSING' }"
+    try {
+        $text = (& $Transport.InvokeGuestPowerShell $Vmid $script $TimeoutSeconds | Out-String)
+    }
+    catch { return '' }
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+    $trimmed = $text.Trim()
+    if ($trimmed -eq 'MISSING') { return '' }
+    return $trimmed
+}
+
 function Send-OpenPathFirstVisitStep {
     param(
         [Parameter(Mandatory = $true)][object]$Payload,
@@ -206,7 +249,13 @@ function Send-OpenPathFirstVisitStep {
         [string]$PersonalizedGuestPath = '',
         [string]$Capabilities = '',
         [string]$FixtureBaselineJson = '',
-        [int]$TimeoutSeconds = 900
+        [int]$TimeoutSeconds = 900,
+        # Read-only steps may be re-run once after a transport error; steps with
+        # side effects (install, warm-up, visit) never are.
+        [switch]$AllowRetry,
+        # Best-effort steps (host signals/events) return a failed harness instead
+        # of throwing, so partial evidence still reaches the caller.
+        [switch]$AllowFailed
     )
     Update-OpenPathLabActiveHeartbeat
     $resultPath = $Paths.GuestDir.TrimEnd('\') + "\result-$Phase-$Step.json"
@@ -227,58 +276,67 @@ function Send-OpenPathFirstVisitStep {
     if ($FixtureBaselineJson) { $arguments += '-FixtureBaselineJson ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $FixtureBaselineJson) }
     $arguments += '| Out-String'
     $script = ($arguments -join ' ') + "`nWrite-Output ('__HARNESS_EXIT__=' + [string]`$LASTEXITCODE)"
-    # QGA hiccups are infra: retry once when the guest produced no marker.
-    $output = ''
-    $exitCode = -999
     $attemptTimeout = [math]::Min($TimeoutSeconds, 600)
-    for ($attempt = 1; $attempt -le 2; $attempt++) {
+    $maxAttempts = if ($AllowRetry) { 2 } else { 1 }
+    $output = ''
+    $fileText = ''
+    $exitCode = -999
+    $exitKnown = $false
+    $artifactsRoot = [string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         try { $output = & $Transport.InvokeGuestPowerShell $Vmid $script $attemptTimeout }
-        catch {
-            Update-OpenPathLabActiveHeartbeat
-            if ($attempt -ge 2) { throw }
-            Start-Sleep -Seconds 15
-            continue
-        }
+        catch { $output = '' }
         $exitMatch = [regex]::Match([string]$output, '__HARNESS_EXIT__=(-?\d+)')
         if ($exitMatch.Success) {
             $exitCode = [int]$exitMatch.Groups[1].Value
-            break
+            $exitKnown = $true
         }
-        if ($attempt -ge 2) { break }
+        if (Get-FirstVisitResultFromOutput -Output ([string]$output)) { break }
+        # Phase 3A.3 L3: the harness writes the result file before printing it.
+        # A written result means the step ran, so it must never be re-executed
+        # (a doubled install or a re-polled wait-firefox was the 3A.2 failure).
+        $fileText = Read-OpenPathFirstVisitGuestText -Transport $Transport -Vmid $Vmid -GuestPath $resultPath -TimeoutSeconds 120
+        if (-not $fileText) {
+            $fileText = Read-OpenPathFirstVisitGuestText -Transport $Transport -Vmid $Vmid -GuestPath ($resultPath + '.partial.json') -TimeoutSeconds 120
+        }
+        if ($fileText) { break }
+        if ($attempt -ge $maxAttempts) { break }
         Update-OpenPathLabActiveHeartbeat
         Start-Sleep -Seconds 15
     }
-    $jsonText = [string]$output
-    $marker = [regex]::Match($jsonText, '(?s)<<<GUEST_RESULT>>>\s*(\{.*?\})\s*<<<END_GUEST_RESULT>>>')
-    if ($marker.Success) {
-        $jsonCandidate = $marker.Groups[1].Value
-    }
-    else {
-        $start = $jsonText.IndexOf('{')
-        $end = $jsonText.LastIndexOf('}')
-        $jsonCandidate = if ($start -ge 0 -and $end -gt $start) { $jsonText.Substring($start, $end - $start + 1) } else { '' }
-    }
-    if (-not $jsonCandidate) {
+    $resolved = Resolve-FirstVisitGuestResult -Output ([string]$output) -FileText $fileText
+    if (-not $resolved.json) {
         # Archive the raw guest output so a missing result still explains itself.
         try {
-            $rawPath = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.raw.txt"
+            $rawPath = Join-Path $artifactsRoot "guest-$Phase-$Step.raw.txt"
             [IO.File]::WriteAllText($rawPath, ([string]$output).Substring(0, [math]::Min(6000, ([string]$output).Length)), [Text.UTF8Encoding]::new($false))
         }
         catch { }
         throw "first-visit-guest-result-missing-$Phase-$Step"
     }
-    try { $harness = $jsonCandidate | ConvertFrom-Json -ErrorAction Stop }
+    try { $harness = $resolved.json | ConvertFrom-Json -ErrorAction Stop }
     catch {
         try {
-            $rawPath = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.raw.txt"
+            $rawPath = Join-Path $artifactsRoot "guest-$Phase-$Step.raw.txt"
             [IO.File]::WriteAllText($rawPath, ([string]$output).Substring(0, [math]::Min(6000, ([string]$output).Length)), [Text.UTF8Encoding]::new($false))
         }
         catch { }
         throw "first-visit-guest-result-invalid-$Phase-$Step"
     }
-    $resultArchive = Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) "guest-$Phase-$Step.json"
-    try { [IO.File]::WriteAllText($resultArchive, $jsonCandidate, [Text.UTF8Encoding]::new($false)) } catch { }
-    if ([string]$harness.status -ne 'passed' -or $exitCode -ne 0) {
+    $resultArchive = Join-Path $artifactsRoot "guest-$Phase-$Step.json"
+    try { [IO.File]::WriteAllText($resultArchive, $resolved.json, [Text.UTF8Encoding]::new($false)) } catch { }
+    try { [IO.File]::WriteAllText((Join-Path $artifactsRoot "guest-$Phase-$Step.result-source.txt"), ([string]$resolved.source + " stdoutValid=$($resolved.stdoutValid) fileValid=$($resolved.fileValid)"), [Text.UTF8Encoding]::new($false)) } catch { }
+    if ($resolved.source -eq 'result-file' -and [string]$harness.status -eq 'partial') {
+        # A partial write means the step was interrupted at a milestone: the
+        # evidence is useful, the step is not a pass.
+        $harness.status = 'failed'
+        $harness.failures = @($harness.failures) + @('step-interrupted')
+    }
+    # When the result came from the file, the exit marker may be missing or
+    # belong to a killed stdout: the file is the harness' own write and wins.
+    $exitMismatch = ($resolved.source -ne 'result-file') -and $exitKnown -and $exitCode -ne 0
+    if ([string]$harness.status -ne 'passed' -or $exitMismatch) {
+        if ($AllowFailed) { return $harness }
         $failures = @($harness.failures) -join ','
         $bodyJson = ($harness.body | ConvertTo-Json -Depth 6 -Compress)
         throw "first-visit-guest-step-failed-$Phase-$Step-$failures body=$bodyJson"
@@ -453,19 +511,28 @@ function Get-OpenPathFirstVisitMetrics {
         }
         catch { }
     }
-    $xpiFetchDelaySeconds = -1
+    $xpiFetchAfterArmSeconds = -1
     $verificationStatus = ''
     $hostStarted = $false
+    $productReasons = @()
+    $hostSignalsMetrics = $null
+    $appControlEvidence = @()
     if ($PrepareState) {
         $xpiFetch = Get-OpenPathLabField -InputObject $PrepareState -Name 'xpiFetch'
         if ($xpiFetch) {
-            $delay = Get-OpenPathLabField -InputObject $xpiFetch -Name 'delaySeconds'
-            if ($null -ne $delay) { $xpiFetchDelaySeconds = [double]$delay }
+            $afterArm = Get-OpenPathLabField -InputObject $xpiFetch -Name 'afterArmSeconds'
+            if ($null -ne $afterArm) { $xpiFetchAfterArmSeconds = [double]$afterArm }
         }
         $verification = Get-OpenPathLabField -InputObject $PrepareState -Name 'verification'
         if ($verification) { $verificationStatus = [string](Get-OpenPathLabField -InputObject $verification -Name 'status') }
         $liveSignals = Get-OpenPathLabField -InputObject $PrepareState -Name 'liveSignals'
         if ($liveSignals) { $hostStarted = [bool](Get-OpenPathLabField -InputObject $liveSignals -Name 'hostStarted') }
+        $hostEvidence = Get-OpenPathLabField -InputObject $PrepareState -Name 'hostEvidence'
+        if ($hostEvidence) {
+            $productReasons = @(Get-OpenPathLabField -InputObject $hostEvidence -Name 'productReasons')
+            $hostSignalsMetrics = Get-OpenPathLabField -InputObject $hostEvidence -Name 'signals'
+            $appControlEvidence = @(Get-OpenPathLabField -InputObject $hostEvidence -Name 'verdict' | ForEach-Object { $_.appControlEvidence } | Where-Object { $_ })
+        }
     }
     $diagnosticKinds = [ordered]@{
         lines           = @($DiagnosticLines).Count
@@ -510,9 +577,12 @@ function Get-OpenPathFirstVisitMetrics {
         overlayStamps  = $overlayStamps
         acrylicLines   = $acrylicLines
         warmup         = [ordered]@{
-            xpiFetchDelaySeconds = $xpiFetchDelaySeconds
+            xpiFetchAfterArmSeconds = $xpiFetchAfterArmSeconds
             verificationStatus   = $verificationStatus
             hostStarted          = $hostStarted
+            productReasons       = @($productReasons)
+            hostSignals          = $hostSignalsMetrics
+            appControlEvidence   = @($appControlEvidence | Select-Object -First 5)
         }
         fixture        = if ($FixtureState) { [ordered]@{ requests = [int]$FixtureState.requests } } else { $null }
     }
@@ -541,13 +611,18 @@ function Invoke-OpenPathFirstVisitPrepare {
     $bootId = [string](& $Transport.GetGuestBootId $Vmid)
     if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-guest-not-ready' }
     $setup = Invoke-OpenPathLabAcceptanceGuestSetup -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -TimeoutSeconds $TimeoutSeconds -HarnessSourcePath (Get-OpenPathFirstVisitHarnessSourcePath)
-    # The session launcher is a small helper the guest harness needs next to it.
+    # The session launcher and the shared verdict/result modules the harness
+    # dot-sources from its own directory (Phase 3A.3 L2/L3).
     $launcherText = Get-Content -LiteralPath (Get-OpenPathFirstVisitLauncherSourcePath) -Raw
     $launcherLiteral = ConvertTo-OpenPathLabPowerShellLiteral -Value $launcherText
+    $warmupModuleLiteral = ConvertTo-OpenPathLabPowerShellLiteral -Value (Get-Content -LiteralPath (Join-Path (Get-OpenPathFirstVisitFixturesRoot) 'FirstVisitWarmup.psm1') -Raw)
+    $resultModuleLiteral = ConvertTo-OpenPathLabPowerShellLiteral -Value (Get-Content -LiteralPath (Join-Path (Get-OpenPathFirstVisitFixturesRoot) 'FirstVisitResult.psm1') -Raw)
     & $Transport.InvokeGuestPowerShell $Vmid @"
 New-Item -ItemType Directory -Path 'C:\OpenPathLab\first-visit' -Force | Out-Null
 [IO.File]::WriteAllText('C:\OpenPathLab\first-visit\student-session-launch.ps1', $launcherLiteral, [Text.UTF8Encoding]::new(`$false))
-Write-Output 'launcher-staged'
+[IO.File]::WriteAllText('C:\OpenPathLab\first-visit\FirstVisitWarmup.psm1', $warmupModuleLiteral, [Text.UTF8Encoding]::new(`$false))
+[IO.File]::WriteAllText('C:\OpenPathLab\first-visit\FirstVisitResult.psm1', $resultModuleLiteral, [Text.UTF8Encoding]::new(`$false))
+Write-Output 'guest-helpers-staged'
 "@ 120 | Out-Null
     $fixture = Start-OpenPathFirstVisitFixture -Config $Config -Transport $Transport -RunId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId')) -ArtifactsRoot ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot'))
     Write-OpenPathFirstVisitGuestFixtureInfo -Transport $Transport -Vmid $Vmid -Settings $fixture.Settings -Plan $fixture.Plan
@@ -593,19 +668,56 @@ Write-Output 'autologon-on'
     }
     Start-Sleep -Seconds $script:OpenPathFirstVisitRefreshSettleSeconds
     $warmSession = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
-    $warmFirefox = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'wait-firefox' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 400
+    $warmFirefox = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'wait-firefox' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 400 -AllowRetry
     # One fixture clock for the fetch check (count from before the logon) and
     # for the delay (from the moment the browser was first seen).
     $warmupFixtureJson = ''
     try {
+        $warmupBaseline = Get-OpenPathLabField -InputObject $warmup.body.state -Name 'fixtureBeforeLaunch'
         $baseline = [ordered]@{
-            xpiCount  = [int](Get-OpenPathLabField -InputObject $warmup.body.state -Name 'fixtureBeforeLaunch' | ForEach-Object { $_.xpiCount })
-            serverNow = [double](Get-OpenPathLabField -InputObject $warmFirefox.body.state -Name 'firefoxSeenFixtureClock')
+            xpiCount  = [int](Get-OpenPathLabField -InputObject $warmupBaseline -Name 'xpiCount')
+            # Same fixture clock as the fetch timestamp; this is the warm-up arm
+            # mark, not the later "Firefox was seen" probe (which produced
+            # negative deltas in Phase 3A.2 red-b r1).
+            serverNow = [double](Get-OpenPathLabField -InputObject $warmupBaseline -Name 'serverNow')
         }
         $warmupFixtureJson = ($baseline | ConvertTo-Json -Compress)
     }
     catch { }
-    $warmVerify = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'verify-warmup' -HarnessGuestPath $setup.HarnessGuestPath -Capabilities ([string]$capabilities.CapabilityArgument) -FixtureBaselineJson $warmupFixtureJson -TimeoutSeconds 900
+    $warmVerify = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'verify-warmup' -HarnessGuestPath $setup.HarnessGuestPath -Capabilities ([string]$capabilities.CapabilityArgument) -FixtureBaselineJson $warmupFixtureJson -TimeoutSeconds 900 -AllowRetry
+
+    # Lane preconditions (fixture served + signed extension installed and
+    # active) are INFRA when they fail: without them the visit measures
+    # nothing. The native host start is product behaviour and never blocks the
+    # visit (Phase 3A.3 L2).
+    $preconditions = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'preconditions'
+    if ($preconditions -and ([string](Get-OpenPathLabField -InputObject $preconditions -Name 'status') -ne 'passed')) {
+        $preconditionReasons = @(Get-OpenPathLabField -InputObject $preconditions -Name 'reasons')
+        throw "first-visit-precondition-failed-$(($preconditionReasons) -join '-')"
+    }
+    # Host signals and AppLocker events: separate short calls (event and policy
+    # queries hung the guest when they ran inside verify-warmup in 3A.2).
+    $hostSignalsBody = $null
+    $hostEventsBody = $null
+    $hostEvidenceError = ''
+    try {
+        $hostSignalsStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'host-signals' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 240 -AllowRetry -AllowFailed
+        $hostSignalsBody = $hostSignalsStep.body.state.hostSignals
+    }
+    catch { $hostEvidenceError = [string]$_.Exception.Message }
+    try {
+        $hostEventsStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'host-events' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300 -AllowRetry -AllowFailed
+        $hostEventsBody = $hostEventsStep.body.state.hostEvents
+    }
+    catch { $hostEvidenceError = (($hostEvidenceError + ' ' + [string]$_.Exception.Message).Trim()) }
+    $liveForVerdict = $hostSignalsBody
+    if (-not $liveForVerdict) {
+        # Fall back to the live signals the verify step already collected: the
+        # host verdict must still be reported when the separate call failed.
+        $liveForVerdict = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'hostSignals'
+    }
+    $hostVerdict = Get-FirstVisitHostSignalsVerdict -Live $liveForVerdict -Events $hostEventsBody -Capabilities ([string]$capabilities.CapabilityArgument) -StudentUserName $settings.StudentUserName -WindowStart ([string](Get-OpenPathLabField -InputObject $warmup.body.state -Name 'armedAt'))
+    Write-Host ('first-visit host verdict: reasons=' + (@($hostVerdict.productReasons) -join ',') + ' hostStarted=' + [string]$hostVerdict.signals.hostStarted + ' appControlBlocked=' + [string]$hostVerdict.blockedByAppControl)
     # The fixture must serve exactly the template's AMO-signed xpi on the
     # managed API path; record every sha and fail loudly on a mismatch.
     $xpiServedSha = ''
@@ -648,12 +760,21 @@ Write-Output 'autologon-on'
         warmupRebooted      = $warmupRebooted
         warmupSession       = [bool](Get-OpenPathLabField -InputObject $warmSession.body.state -Name 'session')
         warmupFirefox       = @(Get-OpenPathLabField -InputObject $warmFirefox.body.state -Name 'firefox')
-        verification        = $warmVerify.body.state.warmupVerification
-        liveSignals         = $warmVerify.body.state.liveSignals
-        xpiFetch            = $warmVerify.body.state.xpiFetch
-        hostDiagnostics     = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'hostDiagnostics'
-        extension           = $warmVerify.body.state.extension
-        warmupClose         = $warmVerify.body.state.closeAfterWarmup
+        verification        = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'warmupVerification'
+        preconditions       = $preconditions
+        liveSignals         = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'liveSignals'
+        xpiFetch            = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'xpiFetch'
+        extension           = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'extension'
+        warmupClose         = Get-OpenPathLabField -InputObject $warmVerify.body.state -Name 'closeAfterWarmup'
+        hostEvidence        = [ordered]@{
+            verdict      = $hostVerdict
+            productReasons = @($hostVerdict.productReasons)
+            signals      = $hostVerdict.signals
+            rawSignals   = $hostSignalsBody
+            events       = $hostEventsBody
+            error        = $hostEvidenceError
+        }
+        productReasons      = @($hostVerdict.productReasons)
     }
     Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
     $body = [ordered]@{ state = $state }
@@ -730,7 +851,7 @@ function Invoke-OpenPathFirstVisitObserve {
         # The visit step launched the browser on the student's desktop directly.
         Start-Sleep -Seconds $script:OpenPathFirstVisitObserveSettleSeconds
     }
-    $wait = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'wait-firefox' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 400
+    $wait = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'wait-firefox' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 400 -AllowRetry
     $launchedAt = [string]$wait.body.state.launchedAt
     if ($scenario -eq 'first-visit-hot') {
         # Hot window: the same instance gets a second window on anchor 2 and the
@@ -787,14 +908,14 @@ function Invoke-OpenPathFirstVisitObserve {
     if ($browserRequests -le 0) {
         throw 'first-visit-fixture-served-no-requests'
     }
-    $collect = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'collect' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
+    $collect = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'collect' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowRetry
     $mozExtract = @(Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'mozExtract')
     if ($mozExtract.Count -gt 0) {
         [IO.File]::WriteAllLines((Join-Path $evidenceDir 'moz-extract.txt'), $mozExtract, [Text.UTF8Encoding]::new($false))
     }
     $security = $null
     if ($scenario -in @('first-visit-settled', 'first-visit-control')) {
-        $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
+        $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowRetry
         Start-Sleep -Seconds 20
         $blockedCapture = Join-Path $captureDir "console-$scenario-blocked.ppm"
         try { & $Transport.CaptureScreendump $Vmid $blockedCapture | Out-Null } catch { Write-Warning 'blocked screendump failed' }

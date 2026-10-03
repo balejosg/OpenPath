@@ -1309,6 +1309,10 @@ function Install-AndEnrollClient {
 
         $strictCatalogPath = Join-Path $script:ArtifactsRoot 'strict-empty-application-catalog.json'
         @{ schemaVersion = 1; applications = @() } | ConvertTo-Json | Set-Content -LiteralPath $strictCatalogPath -Encoding UTF8
+        # Phase 3A.3 L5: the installer writes "<path>.json" (phase, rollback) and
+        # "<path>.appcontrol.json" (AppControl substep and reasonCodes) so an
+        # AppControl failure is diagnosable from the uploaded artifacts.
+        $installFailureStatusPath = Join-Path $script:ArtifactsRoot 'windows-student-policy-install-failure'
 
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:RepoRoot 'windows\Install-OpenPath.ps1') `
             -WhitelistUrl $Scenario.machine.whitelistUrl `
@@ -1316,11 +1320,25 @@ function Install-AndEnrollClient {
             -EnforceManagedBrowserBoundary `
             -AppControlProfile StrictApplicationAllowlist `
             -ApprovedApplicationCatalogPath $strictCatalogPath `
+            -FailureStatusPath $installFailureStatusPath `
             -SkipPreflight `
             -Unattended
 
         if ($LASTEXITCODE -ne 0) {
-            throw "Install-OpenPath.ps1 failed with exit code $LASTEXITCODE"
+            $failureDetail = ''
+            $failureJsonPath = "$installFailureStatusPath.json"
+            if (Test-Path -LiteralPath $failureJsonPath -PathType Leaf) {
+                try {
+                    $failureStatus = Get-Content -LiteralPath $failureJsonPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    $appControlSubstep = [string]$failureStatus.AppControlDiagnostic.Substep
+                    $appControlReasonCodes = @($failureStatus.AppControlDiagnostic.ReasonCodes) -join '+'
+                    $failureDetail = " (phase=$([string]$failureStatus.Phase) appcontrolSubstep=$appControlSubstep appcontrolReasonCodes=$appControlReasonCodes)"
+                }
+                catch {
+                    $failureDetail = ' (failure status unreadable)'
+                }
+            }
+            throw "Install-OpenPath.ps1 failed with exit code $LASTEXITCODE$failureDetail"
         }
         Assert-WindowsProfilelessAppControlCommitted
         Prepare-WindowsUserProfile

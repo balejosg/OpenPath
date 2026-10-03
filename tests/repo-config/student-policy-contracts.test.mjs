@@ -821,6 +821,11 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
+      /-FailureStatusPath \$installFailureStatusPath[\s\S]*appcontrolSubstep=\$appControlSubstep[\s\S]*appcontrolReasonCodes=\$appControlReasonCodes/s,
+      'Windows student-policy flow should keep the installer AppControl substep/reasonCode evidence'
+    );
+    assert.match(
+      windowsRunner,
       /\$process\.Refresh\(\)[\s\S]*if \(\$null -eq \$exitCode\) \{[\s\S]*\$exitCode = 0/s,
       'Windows student-policy process helper should avoid Start-Process ExitCode gaps under LocalSystem'
     );

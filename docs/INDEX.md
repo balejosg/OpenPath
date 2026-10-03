@@ -31,6 +31,7 @@
 - Agent config parity (cross-platform key mapping): [`docs/agent-config-parity.md`](agent-config-parity.md)
 - Extension <-> native host message contract: [`docs/extension-native-host-contract.md`](extension-native-host-contract.md)
 - Runtime dependency readiness plan (first-visit fix): [`docs/design/runtime-dependency-readiness-plan.md`](design/runtime-dependency-readiness-plan.md)
+- Windows native host under the AppControl boundary (design, Phase 3A.3): [`docs/design/windows-native-host-under-appcontrol.md`](design/windows-native-host-under-appcontrol.md)
 - OpenPath Promotion Contract v2: [`docs/openpath-promotion-contract-v2.md`](openpath-promotion-contract-v2.md)
 - API package guide: [`api/README.md`](../api/README.md)
 - Shared package guide: [`shared/README.md`](../shared/README.md)
