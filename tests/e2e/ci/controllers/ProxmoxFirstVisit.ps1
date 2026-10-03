@@ -473,8 +473,10 @@ function Get-OpenPathFirstVisitMetrics {
         [Parameter(Mandatory = $true)][object]$Plan,
         [Parameter(Mandatory = $true)][string]$Scenario,
         [Parameter(Mandatory = $true)][AllowNull()][object]$Report,
-        [Parameter(Mandatory = $true)][string[]]$DiagnosticLines,
-        [Parameter(Mandatory = $true)][string[]]$StartupProfiles,
+        # A host-blocked first visit produces no E1 diagnostics at all: the
+        # empty array must bind instead of failing (Phase 3A.3).
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$DiagnosticLines,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$StartupProfiles,
         [Parameter(Mandatory = $true)][AllowNull()][object]$FixtureState,
         [Parameter(Mandatory = $true)][AllowNull()][object]$Verdict,
         [string[]]$LogLines = @(),

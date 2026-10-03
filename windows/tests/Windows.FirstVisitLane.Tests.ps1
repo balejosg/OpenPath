@@ -433,6 +433,22 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
     }
 
     Context 'Metrics extraction' {
+        It 'Accepts an empty diagnostics and startup-profile set (host-blocked visit)' {
+            # A blocked native host emits no E1 lines; the metrics call must not
+            # fail binding an empty array (Phase 3A.3 observe failure).
+            $plan = [pscustomobject]@{
+                anchors = [pscustomobject]@{ a1 = [pscustomobject]@{ host = 'anchor1-x'; roles = [pscustomobject]@{} } }
+                controlDependencies = @('styles1-x')
+                neverLearnable = 'blocked9-x'
+            }
+            $report = [pscustomobject]@{ anchor = 'a1'; loads = 1; waves = [pscustomobject]@{ cssApplied = $false }; marks = [pscustomobject]@{} }
+            $verdict = [pscustomobject]@{ status = 'failed'; reasons = @('wave1-incomplete-or-over-threshold'); waves = $null; timesMs = $null; reloads = 0 }
+            $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario 'first-visit-settled' -Report $report `
+                -DiagnosticLines @() -StartupProfiles @() -FixtureState $null -Verdict $verdict
+            $metrics.verdict | Should -Be 'failed'
+            $metrics.diagnosticLines | Should -Be 0
+        }
+
         It 'Extracts reload reasons and host startup numbers from the E1 lines' {
             $plan = [pscustomobject]@{
                 anchors = [pscustomobject]@{ a1 = [pscustomobject]@{ host = 'anchor1-x'; roles = [pscustomobject]@{} } }
