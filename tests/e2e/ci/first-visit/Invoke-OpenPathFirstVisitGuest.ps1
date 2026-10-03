@@ -34,16 +34,20 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 # Phase 3A.3: the controller stages these modules next to the harness. The
 # verdict and result-serialization contracts live there so the lane tests can
-# execute them without a VM.
+# execute them without a VM. Import-Module (not dot-sourcing): the modules end
+# with Export-ModuleMember, which only defines commands in module scope.
 $script:WarmupModuleLoaded = $false
+$script:ResultModuleLoaded = $false
+$script:ModuleLoadError = ''
 $warmupModulePath = Join-Path $PSScriptRoot 'FirstVisitWarmup.psm1'
 if (Test-Path -LiteralPath $warmupModulePath) {
-    try { . $warmupModulePath; $script:WarmupModuleLoaded = $true } catch { }
+    try { Import-Module -Name $warmupModulePath -Force -ErrorAction Stop; $script:WarmupModuleLoaded = $true }
+    catch { $script:ModuleLoadError = "warmup: $($_.Exception.Message)" }
 }
-$script:ResultModuleLoaded = $false
 $resultModulePath = Join-Path $PSScriptRoot 'FirstVisitResult.psm1'
 if (Test-Path -LiteralPath $resultModulePath) {
-    try { . $resultModulePath; $script:ResultModuleLoaded = $true } catch { }
+    try { Import-Module -Name $resultModulePath -Force -ErrorAction Stop; $script:ResultModuleLoaded = $true }
+    catch { $script:ModuleLoadError = (($script:ModuleLoadError + " result: $($_.Exception.Message)").Trim()) }
 }
 $OpenPathRoot = 'C:\OpenPath'
 $LabRoot = 'C:\OpenPathLab'
@@ -854,6 +858,7 @@ switch ($Step) {
             }
             else {
                 $preconditions = [ordered]@{ status = 'failed'; reasons = @('warmup-module-missing') }
+                $script:Body.moduleLoadError = $script:ModuleLoadError
                 $script:Failures.Add('warmup-module-missing')
             }
             $script:Body.preconditions = $preconditions
