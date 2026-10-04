@@ -12,6 +12,7 @@ import importlib.util
 import hashlib
 import json
 import pathlib
+import re
 import socket
 import sys
 import tempfile
@@ -126,6 +127,30 @@ class FixtureServerTests(unittest.TestCase):
                 self.assertIn(needle, body.decode("utf-8"))
         status, _ = self.fetch(roles["font"], "/fixture-font.ttf")
         self.assertEqual(status, 503, "a missing font path must surface as 503, never a fake 200")
+
+    def test_wave_css_signals_depend_on_the_external_stylesheet(self) -> None:
+        # Phase 5 A1: an inline rule with the same declaration made cssApplied
+        # true even when the styles host never answered, so the lane could not
+        # detect a failed external stylesheet. The anchor may only carry @font-face
+        # and font-family inline.
+        host = self.plan["anchors"]["a1"]["host"]
+        status, body = self.fetch(host, "/")
+        self.assertEqual(status, 200)
+        html = body.decode("utf-8")
+        inline_match = re.search(r"<style>(?P<css>.*?)</style>", html, re.DOTALL)
+        self.assertIsNotNone(inline_match, "the anchor keeps an inline style block for @font-face")
+        inline_css = inline_match.group("css")
+        self.assertNotIn("background-color", inline_css, "cssApplied must come from the external stylesheet only")
+        self.assertNotIn("letter-spacing", inline_css, "blockedCssFailed must come from the blocked stylesheet only")
+        self.assertIn("backgroundColor === 'rgb(1, 2, 3)'", html, "the page still measures the external css value")
+        self.assertIn("letterSpacing !== '7px'", html, "the page measures the blocked stylesheet's distinctive rule")
+        styles = self.plan["anchors"]["a1"]["roles"]["styles"]
+        status, css = self.fetch(styles, "/first-visit.css")
+        self.assertEqual(status, 200)
+        self.assertIn("#probe { background-color: rgb(1, 2, 3); }", css.decode("utf-8"))
+        status, blocked_css = self.fetch(self.plan["neverLearnable"], "/never-learnable.css")
+        self.assertEqual(status, 200)
+        self.assertIn("#probe { letter-spacing: 7px; }", blocked_css.decode("utf-8"))
 
     def test_whitelist_and_plan_endpoints(self) -> None:
         status, body = self.fetch(self.plan["anchors"]["a1"]["host"], "/whitelist.txt")

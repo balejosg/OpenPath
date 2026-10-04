@@ -117,7 +117,7 @@ def anchor_html(plan: dict, anchor_key: str) -> str:
 <script src="http://{roles['core']}/core.js"></script>
 <style>
 @font-face {{ font-family: 'fixture-font'; src: url('http://{roles['font']}/fixture-font.ttf'); font-display: block; }}
-#probe {{ font-family: 'fixture-font', serif; background-color: rgb(1, 2, 3); }}
+#probe {{ font-family: 'fixture-font', serif; }}
 </style>
 </head><body>
 <h1 id="probe" class="probe">first-visit {anchor_key}</h1>
@@ -194,7 +194,11 @@ window.__firstVisit = {{
     fv.marks.load = performance.now();
     fv.waves.cssApplied = getComputedStyle(probe).backgroundColor === 'rgb(1, 2, 3)';
     fv.waves.imageLoaded = !!(px && px.complete && px.naturalWidth > 0);
-    fv.waves.blockedCssFailed = !window.__neverLearnableLoaded;
+    // The never-learnable CSS sets a distinctive letter-spacing; the wave is
+    // only 'blocked' when that external stylesheet did NOT apply. A comment-only
+    // stylesheet (or a flag set by a script that the page never loads) would
+    // make the previous check trivially true (Phase 5 A1).
+    fv.waves.blockedCssFailed = getComputedStyle(probe).letterSpacing !== '7px';
     if (document.fonts && document.fonts.check) {{
       document.fonts.check("12px 'fixture-font'").valueOf();
       document.fonts.load("12px 'fixture-font'").then(function () {{
@@ -239,9 +243,10 @@ DEFERRED_JS = """/* wave 3: the deferred script fetches the API host and paints 
   } catch (error) {
     fv.waves.apiPainted = false;
   }
-  fv.waves.blockedCssFailed = !window.__neverLearnableLoaded;
+  fv.waves.blockedCssFailed = getComputedStyle(document.getElementById('probe')).letterSpacing !== '7px';
   fv.waves.cssApplied = getComputedStyle(document.getElementById('probe')).backgroundColor === 'rgb(1, 2, 3)';
-  fv.waves.imageLoaded = !!(document.getElementById('px') || {}).complete;
+  var deferredImage = document.getElementById('px');
+  fv.waves.imageLoaded = !!(deferredImage && deferredImage.complete && deferredImage.naturalWidth > 0);
   fv.waves.fontLoaded = document.fonts && document.fonts.check ? document.fonts.check("12px 'fixture-font'") : false;
   fv.waves.coreExecuted = true;
   fv.marks.load = performance.now();
@@ -249,7 +254,11 @@ DEFERRED_JS = """/* wave 3: the deferred script fetches the API host and paints 
 })();
 """
 
-NEVER_LEARNABLE_CSS = "/* This host is in BLOCKED-SUBDOMAINS and must never be learned. */\n"
+NEVER_LEARNABLE_CSS = (
+    "/* This host is in BLOCKED-SUBDOMAINS and must never be learned. */\n"
+    "/* A distinctive rule the page can measure: applying it means the block failed. */\n"
+    "#probe { letter-spacing: 7px; }\n"
+)
 NEVER_LEARNABLE_JS = "window.__neverLearnableLoaded = true;\n"
 
 
