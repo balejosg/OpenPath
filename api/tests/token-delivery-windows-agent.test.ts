@@ -69,6 +69,19 @@ void describe('Windows agent delivery', { timeout: 30000 }, async () => {
       assert.ok(data.files.some((file) => file.path === 'scripts/Update-OpenPath.ps1'));
       assert.ok(data.files.some((file) => file.path === 'runtime/browser-policy-spec.json'));
       assert.ok(data.files.every((file) => file.sha256.length === 64));
+      // Phase 5.2 D1: the native host source ships so install/update can compile
+      // it; nothing else from native-host/ is published.
+      const nativeHostSource = data.files.find(
+        (file) => file.path === 'native-host/OpenPathNativeHost.cs'
+      );
+      assert.ok(nativeHostSource, 'native-host/OpenPathNativeHost.cs must be in the manifest');
+      assert.strictEqual(nativeHostSource.sha256.length, 64);
+      assert.ok(
+        data.files.every(
+          (file) => !file.path.startsWith('native-host/') || file.path.endsWith('.cs')
+        ),
+        'only .cs files may ship from native-host/'
+      );
     });
 
     await test('should download manifest file by relative path', async () => {

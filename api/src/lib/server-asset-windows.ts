@@ -11,6 +11,10 @@ import {
 } from './server-asset-roots.js';
 
 const WINDOWS_AGENT_DIRECTORIES = ['lib', 'scripts'] as const;
+// Phase 5.2 D1: the compiled native host source must reach installed machines
+// through the self-update manifest; only .cs files ship from native-host/.
+const WINDOWS_AGENT_NATIVE_HOST_DIRECTORY = 'native-host';
+const WINDOWS_AGENT_NATIVE_HOST_EXTENSIONS = /\.cs$/i;
 const WINDOWS_AGENT_RUNTIME_ROOT_FILES = ['OpenPath.ps1', 'Rotate-Token.ps1'] as const;
 const WINDOWS_AGENT_BOOTSTRAP_ROOT_FILES = [
   'Install-OpenPath.ps1',
@@ -110,6 +114,14 @@ export function buildWindowsAgentFileManifest(options?: {
     const absoluteDirectory = path.join(roots.windowsAgentRoot, relativeDirectory);
     addManifestDirectory(absoluteDirectory, relativeDirectory, /\.(ps1|psm1|cmd)$/i);
   }
+
+  // Phase 5.2 D1: native-host/OpenPathNativeHost.cs is the source the install
+  // and update flows compile; only .cs files from that directory are published.
+  addManifestDirectory(
+    path.join(roots.windowsAgentRoot, WINDOWS_AGENT_NATIVE_HOST_DIRECTORY),
+    WINDOWS_AGENT_NATIVE_HOST_DIRECTORY,
+    WINDOWS_AGENT_NATIVE_HOST_EXTENSIONS
+  );
 
   addManifestFile(
     'browser-extension/firefox/manifest.json',

@@ -586,14 +586,18 @@ download.mozilla.org/firefox/releases
                 $script:capturedHeaders['Authorization'] | Should -Be 'Bearer token123'
 
                 $payload = $script:capturedBody | ConvertFrom-Json
-                $payload.json.status | Should -Be 'DEGRADED'
-                $payload.json.hostname | Should -Be 'OPENPATH-TEST'
-                $payload.json.dnsmasqRunning | Should -BeTrue
-                $payload.json.dnsResolving | Should -BeFalse
-                $payload.json.failCount | Should -Be 2
-                $payload.json.actions | Should -Be 'watchdog_repair'
-                $payload.json.version | Should -Be '4.1.0'
-                @($payload.json.reasonCodes) | Should -Be @('appcontrol_effective_policy_absent', 'watchdog_task_missing')
+                # Phase 5.2 D3: tRPC mutations take the raw input; a `json`
+                # envelope hid hostname/status from the schema and every
+                # report returned 400.
+                $payload.PSObject.Properties.Name | Should -Not -Contain 'json'
+                $payload.status | Should -Be 'DEGRADED'
+                $payload.hostname | Should -Be 'OPENPATH-TEST'
+                $payload.dnsmasqRunning | Should -BeTrue
+                $payload.dnsResolving | Should -BeFalse
+                $payload.failCount | Should -Be 2
+                $payload.actions | Should -Be 'watchdog_repair'
+                $payload.version | Should -Be '4.1.0'
+                @($payload.reasonCodes) | Should -Be @('appcontrol_effective_policy_absent', 'watchdog_task_missing')
             }
             finally {
                 $env:COMPUTERNAME = $previousComputerName
@@ -618,7 +622,7 @@ download.mozilla.org/firefox/releases
             Send-OpenPathHealthReport -Status 'HEALTHY' -ReasonCodes @() -Version '4.1.0' | Should -BeTrue
 
             $payload = $script:capturedBody | ConvertFrom-Json
-            $payload.json.PSObject.Properties.Name | Should -Not -Contain 'reasonCodes'
+            $payload.PSObject.Properties.Name | Should -Not -Contain 'reasonCodes'
         }
 
         It "preserves the legacy positional Version argument when no reason codes are supplied" {
@@ -639,9 +643,9 @@ download.mozilla.org/firefox/releases
             Send-OpenPathHealthReport 'HEALTHY' $true $true 0 'legacy_action' '4.1.0' | Should -BeTrue
 
             $payload = $script:capturedBody | ConvertFrom-Json
-            $payload.json.actions | Should -Be 'legacy_action'
-            $payload.json.version | Should -Be '4.1.0'
-            $payload.json.PSObject.Properties.Name | Should -Not -Contain 'reasonCodes'
+            $payload.actions | Should -Be 'legacy_action'
+            $payload.version | Should -Be '4.1.0'
+            $payload.PSObject.Properties.Name | Should -Not -Contain 'reasonCodes'
         }
 
         It "Filters invalid reasonCodes and keeps the first 32 unique stable codes" {
@@ -664,9 +668,9 @@ download.mozilla.org/firefox/releases
             Send-OpenPathHealthReport -Status 'DEGRADED' -ReasonCodes $codes -Version '4.1.0' | Should -BeTrue
 
             $payload = $script:capturedBody | ConvertFrom-Json
-            @($payload.json.reasonCodes) | Should -HaveCount 32
-            @($payload.json.reasonCodes)[0] | Should -Be 'watchdog_task_missing'
-            @($payload.json.reasonCodes) | Should -Not -Contain 'BadCode'
+            @($payload.reasonCodes) | Should -HaveCount 32
+            @($payload.reasonCodes)[0] | Should -Be 'watchdog_task_missing'
+            @($payload.reasonCodes) | Should -Not -Contain 'BadCode'
         }
 
         It "Returns false when apiUrl is missing in config" {
@@ -706,11 +710,11 @@ download.mozilla.org/firefox/releases
             $result | Should -BeTrue
 
             $payload = $script:capturedBody | ConvertFrom-Json
-            $payload.json.configPosture.outboundEgressFloorEnabled | Should -Be 'true'
+            $payload.configPosture.outboundEgressFloorEnabled | Should -Be 'true'
             # Linux-only keys must be absent on Windows.
-            $payload.json.configPosture.PSObject.Properties.Name | Should -Not -Contain 'sinkholeFastFail'
+            $payload.configPosture.PSObject.Properties.Name | Should -Not -Contain 'sinkholeFastFail'
             # Zero streak must be omitted.
-            $payload.json.PSObject.Properties.Name | Should -Not -Contain 'healthReportFailStreak'
+            $payload.PSObject.Properties.Name | Should -Not -Contain 'healthReportFailStreak'
         }
 
         It "Defaults outboundEgressFloorEnabled to false when config omits it" {
@@ -733,7 +737,7 @@ download.mozilla.org/firefox/releases
             Send-OpenPathHealthReport -Status 'HEALTHY' -Version '4.1.0' | Should -BeTrue
 
             $payload = $script:capturedBody | ConvertFrom-Json
-            $payload.json.configPosture.outboundEgressFloorEnabled | Should -Be 'false'
+            $payload.configPosture.outboundEgressFloorEnabled | Should -Be 'false'
         }
 
         It "Counts a fail streak on delivery failure, reports it on next success, then resets" {
@@ -766,7 +770,7 @@ download.mozilla.org/firefox/releases
             Send-OpenPathHealthReport -Status 'HEALTHY' -Version '4.1.0' | Should -BeTrue
 
             $payload = $script:capturedBody | ConvertFrom-Json
-            $payload.json.healthReportFailStreak | Should -Be 1
+            $payload.healthReportFailStreak | Should -Be 1
             (Get-Content $streakPath -Raw).Trim() | Should -Be '0'
         }
 

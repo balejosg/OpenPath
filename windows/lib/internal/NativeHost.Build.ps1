@@ -335,22 +335,41 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         Health          = $null
         Error           = ''
         BuiltNow        = $false
+        # Phase 5.2 D2: a failed attempt backs off for an hour while the source
+        # is unchanged; the state fields explain a Fallback without a build.
+        BackoffActive   = $false
+        NextAttemptAt   = ''
     }
     $writeDiagnostics = {
         param([string]$Status, [string]$Error)
         try {
+            $attempts = 1
+            $previousAttempts = 0
+            if (Test-Path -LiteralPath $diagnosticsPath -PathType Leaf) {
+                try {
+                    $previousDiagnostics = Get-Content -LiteralPath $diagnosticsPath -Raw -ErrorAction Stop | ConvertFrom-Json
+                    if ($previousDiagnostics.PSObject.Properties['attempts']) { $previousAttempts = [int]$previousDiagnostics.attempts }
+                }
+                catch { }
+            }
+            $attempts = $previousAttempts + 1
+            $attemptedAt = [DateTime]::UtcNow
             $diagnostics = [ordered]@{
                 status          = $Status
                 error           = $Error
                 sourcePath      = $result.SourcePath
                 sourceSha256    = $result.SourceSha256
+                attempts        = $attempts
+                attemptedAt     = $attemptedAt.ToString('o')
+                nextAttemptAt   = if ($Status -eq 'Built') { '' } else { $attemptedAt.AddSeconds(3600).ToString('o') }
                 smartAppControl = Get-OpenPathSmartAppControlState
-                checkedAt       = [DateTime]::UtcNow.ToString('o')
+                checkedAt       = $attemptedAt.ToString('o')
             }
             [IO.File]::WriteAllText($diagnosticsPath, ($diagnostics | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
         }
         catch { }
     }
+    $failedDiagnosticStatuses = @('CompilationFailed', 'HealthCheckFailed', 'SourceMissing', 'Failed')
 
     try {
         if (-not (Test-Path -LiteralPath $NativeRoot)) { New-Item -ItemType Directory -Path $NativeRoot -Force | Out-Null }
@@ -358,12 +377,9 @@ function Build-OpenPathFirefoxNativeHostExecutable {
             $SourcePath = Get-OpenPathNativeHostInstalledSourcePath -OpenPathRoot $OpenPathRoot -NativeRoot $NativeRoot
         }
         $result.SourcePath = $SourcePath
-        if (-not $SourcePath -or -not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
-            $result.Error = 'native-host-source-missing'
-            & $writeDiagnostics 'SourceMissing' $result.Error
-            return [pscustomobject]$result
-        }
-        $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $sourceExists = ($SourcePath -and (Test-Path -LiteralPath $SourcePath -PathType Leaf))
+        $sourceHash = ''
+        if ($sourceExists) { $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant() }
         $result.SourceSha256 = $sourceHash
 
         $existing = $null
@@ -377,6 +393,32 @@ function Build-OpenPathFirefoxNativeHostExecutable {
             $result.Status = 'BuildSkipped'
             $result.ExecutablePath = $executablePath
             $result.ExecutableSha256 = [string]$existing.executableSha256
+            return [pscustomobject]$result
+        }
+
+        # Phase 5.2 D2: honour the failure backoff while the source is
+        # unchanged (a new source hash clears it), so a broken compiler or a
+        # missing payload can never trigger a compile loop.
+        if (-not $Force -and (Test-Path -LiteralPath $diagnosticsPath -PathType Leaf)) {
+            $previousFailure = $null
+            try { $previousFailure = Get-Content -LiteralPath $diagnosticsPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $previousFailure = $null }
+            if ($previousFailure -and ($failedDiagnosticStatuses -contains [string]$previousFailure.status)) {
+                $sameSource = ([string]$previousFailure.sourceSha256 -eq $sourceHash)
+                $attemptedAt = $null
+                try { $attemptedAt = ([datetime]$previousFailure.attemptedAt).ToUniversalTime() } catch { $attemptedAt = $null }
+                if ($sameSource -and $attemptedAt -and (((Get-Date).ToUniversalTime() - $attemptedAt).TotalSeconds -lt 3600)) {
+                    $result.Error = 'native-host-compile-backoff'
+                    $result.BackoffActive = $true
+                    $result.NextAttemptAt = $attemptedAt.AddSeconds(3600).ToString('o')
+                    if (Test-Path -LiteralPath $executablePath -PathType Leaf) { $result.ExecutablePath = $executablePath }
+                    return [pscustomobject]$result
+                }
+            }
+        }
+
+        if (-not $sourceExists) {
+            $result.Error = 'native-host-source-missing'
+            & $writeDiagnostics 'SourceMissing' $result.Error
             return [pscustomobject]$result
         }
 

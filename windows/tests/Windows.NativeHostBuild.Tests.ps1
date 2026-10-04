@@ -89,6 +89,33 @@ Describe 'Compiled native host (Phase 5)' {
             $script:CompileTracker.Calls | Should -Be 1
         }
 
+        It 'Backs off compiler retries for an hour while the source is unchanged (Phase 5.2 D2)' {
+            $first = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:BadCompiler -ProcessInvoker $script:HealthyProcess
+            $first.Status | Should -Be 'Fallback'
+            $script:CompileTracker.Calls | Should -Be 1
+
+            # Immediate second attempt: no compiler call at all.
+            $second = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:BadCompiler -ProcessInvoker $script:HealthyProcess
+            $second.Status | Should -Be 'Fallback'
+            $second.BackoffActive | Should -BeTrue
+            $second.Error | Should -Be 'native-host-compile-backoff'
+            $second.NextAttemptAt | Should -Not -BeNullOrEmpty
+            $script:CompileTracker.Calls | Should -Be 1
+
+            # A changed source clears the backoff and compiles again.
+            Set-Content -LiteralPath $script:Source -Value '// changed after the failure' -Encoding ASCII
+            $third = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:HealthyProcess
+            $third.Status | Should -Be 'Built'
+            $script:CompileTracker.Calls | Should -Be 2
+
+            # Force always retries.
+            Set-Content -LiteralPath $script:Source -Value '// changed again' -Encoding ASCII
+            Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:BadCompiler -ProcessInvoker $script:HealthyProcess | Out-Null
+            $forced = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:HealthyProcess -Force
+            $forced.Status | Should -Be 'Built'
+            $script:CompileTracker.Calls | Should -Be 4
+        }
+
         It 'Keeps the previous executable and reports Fallback when compilation fails' {
             Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:HealthyProcess | Out-Null
             $executable = Join-Path $script:NativeRoot 'OpenPath-NativeHost.exe'
@@ -208,6 +235,13 @@ Describe 'Compiled native host (Phase 5)' {
             $script:SourceText | Should -Not -Match 'pwsh\.exe'
             $script:SourceText | Should -Not -Match 'cmd\.exe'
             $script:SourceText | Should -Match 'schtasks\.exe'
+        }
+
+        It 'Invokes schtasks through the absolute system path (Phase 5.2 D4)' {
+            # A relative schtasks.exe inherits the caller's environment and can
+            # be hijacked by a planted executable on PATH.
+            $script:SourceText | Should -Not -Match 'FileName\s*=\s*"schtasks\.exe"'
+            ([regex]::Matches($script:SourceText, 'GetSystemExecutablePath\("schtasks\.exe"\)')).Count | Should -Be 2
         }
 
         It 'Uses no dynamic code, reflection or optional assemblies' {

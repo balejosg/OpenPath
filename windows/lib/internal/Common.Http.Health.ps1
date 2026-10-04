@@ -156,7 +156,11 @@ function Send-OpenPathHealthReport {
     if ($failStreak -gt 0) {
         $reportBody['healthReportFailStreak'] = [int]$failStreak
     }
-    $payload = @{ json = $reportBody } | ConvertTo-Json -Depth 8
+    # tRPC mutations expect the raw input object as the JSON body (no `json`
+    # envelope: the API has no transformer). The earlier `@{ json = ... }`
+    # wrapper made hostname/status invisible to the schema and every Windows
+    # health report returned 400 (Phase 5.2 D3).
+    $payload = $reportBody | ConvertTo-Json -Depth 8
 
     $healthUrl = "$($config.apiUrl.TrimEnd('/'))/trpc/healthReports.submit"
     $headers = @{ 'Content-Type' = 'application/json' }

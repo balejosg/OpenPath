@@ -1843,6 +1843,18 @@ namespace OpenPathNativeHost
             public int ElapsedMs;
         }
 
+        private static string GetSystemExecutablePath(string fileName)
+        {
+            string systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            if (string.IsNullOrEmpty(systemDirectory))
+            {
+                string windowsDirectory = Environment.GetEnvironmentVariable("SystemRoot");
+                if (string.IsNullOrEmpty(windowsDirectory)) { windowsDirectory = "C:\\Windows"; }
+                systemDirectory = System.IO.Path.Combine(windowsDirectory, "System32");
+            }
+            return System.IO.Path.Combine(systemDirectory, fileName);
+        }
+
         private static TaskRunResult RunScheduledTask(string taskName)
         {
             TaskRunResult result = new TaskRunResult();
@@ -1850,7 +1862,7 @@ namespace OpenPathNativeHost
             try
             {
                 System.Diagnostics.ProcessStartInfo info = new System.Diagnostics.ProcessStartInfo();
-                info.FileName = "schtasks.exe";
+                info.FileName = GetSystemExecutablePath("schtasks.exe");
                 info.Arguments = "/Run /TN " + QuoteArgument(taskName);
                 info.UseShellExecute = false;
                 info.CreateNoWindow = true;
@@ -3100,7 +3112,7 @@ namespace OpenPathNativeHost
             try
             {
                 System.Diagnostics.ProcessStartInfo info = new System.Diagnostics.ProcessStartInfo();
-                info.FileName = "schtasks.exe";
+                info.FileName = GetSystemExecutablePath("schtasks.exe");
                 info.Arguments = "/Query /TN " + QuoteArgument(taskName) + " /FO LIST /V";
                 info.UseShellExecute = false;
                 info.CreateNoWindow = true;

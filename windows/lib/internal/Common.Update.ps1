@@ -113,6 +113,12 @@ function Invoke-OpenPathAgentSelfUpdate {
     if ($comparison -ge 0) {
         $message = "Agent already up to date (current=$currentVersion)"
         Write-SelfUpdateMessage -Message $message
+        # Phase 5.2 D2: the periodic Update task also retries the compiled
+        # native host refresh (source delivered by a previous update, earlier
+        # compile failure, ...) under the one-hour failure backoff.
+        if (Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure' -ErrorAction SilentlyContinue) {
+            try { Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $config | Out-Null } catch { }
+        }
         return [PSCustomObject]@{
             Success = $true
             Updated = $false
@@ -318,6 +324,11 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
         if (Get-Command -Name 'Enable-OpenPathTask' -ErrorAction SilentlyContinue) {
             Enable-OpenPathTask | Out-Null
+        }
+        if (Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure' -ErrorAction SilentlyContinue) {
+            # Phase 5.2 D2: compile/refresh before the registration decides which
+            # launch path the Firefox manifest should carry.
+            try { Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $config | Out-Null } catch { }
         }
         if (Get-Command -Name 'Register-OpenPathFirefoxNativeHost' -ErrorAction SilentlyContinue) {
             Register-OpenPathFirefoxNativeHost -Config $config -PreserveExistingOnNotReady | Out-Null

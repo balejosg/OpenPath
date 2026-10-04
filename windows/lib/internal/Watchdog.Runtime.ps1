@@ -1409,6 +1409,22 @@ function Invoke-OpenPathWatchdogChecks {
         Write-OpenPathLog 'Watchdog: AppLocker non-admin app control refresh failed' -Level ERROR
     }
 
+    # Phase 5.2 D3: with the boundary active, a registered host that is not the
+    # healthy compiled executable means the Firefox path rules fail open. The
+    # reason code alone turns the report DEGRADED; it is not recovery-eligible
+    # (the watchdog repairs state, it never compiles the host).
+    try {
+        if (Get-Command -Name 'Get-OpenPathFirefoxNativeHostCompiledHealth' -ErrorAction SilentlyContinue) {
+            $nativeHostHealth = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $Config
+            if ($nativeHostHealth.BoundaryActive -and $nativeHostHealth.ReasonCode) {
+                & $addReasonCode ([string]$nativeHostHealth.ReasonCode)
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: compiled native host health check failed: $_" -Level WARN
+    }
+
     return [PSCustomObject]@{
         Issues = @($issues)
         ReasonCodes = @($reasonCodes.ToArray())

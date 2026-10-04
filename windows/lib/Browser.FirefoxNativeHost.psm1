@@ -213,6 +213,135 @@ function Sync-OpenPathFirefoxNativeHostState {
     return $true
 }
 
+function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
+    <#
+    .SYNOPSIS
+        Single entry point that keeps the compiled native host in sync with the
+        installed C# source.
+    .DESCRIPTION
+        Phase 5.2 D2: installation/enrollment, agent self-update and the
+        periodic Update task all call this. Never throws; the outcome carries
+        Status (Built/BuildSkipped/Fallback), BackoffActive and the error so the
+        caller can log it. A failed attempt backs off for an hour while the
+        source is unchanged.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Config = $null)
+
+    $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
+    try { Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null } catch { }
+    $result = $null
+    try {
+        $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $script:OpenPathRoot
+    }
+    catch {
+        $result = [pscustomobject][ordered]@{
+            Status = 'Failed'; Error = [string]$_; BackoffActive = $false; NextAttemptAt = ''
+            BuiltNow = $false; ExecutablePath = ''; ManifestPath = ''; SourcePath = ''
+            SourceSha256 = ''; ExecutableSha256 = ''; Health = $null
+        }
+    }
+    if ($result.BackoffActive) {
+        Write-OpenPathLog "Compiled native host refresh is in failure backoff until $($result.NextAttemptAt): $($result.Error)" -Level WARN
+    }
+    elseif ($result.Status -eq 'Fallback') {
+        Write-OpenPathLog "Compiled native host refresh failed; keeping the previous host: $($result.Error)" -Level WARN
+    }
+    elseif ($result.Status -in @('Built', 'BuildSkipped')) {
+        Write-OpenPathLog "Compiled native host ensured ($($result.Status), sha256=$($result.ExecutableSha256))."
+    }
+    return $result
+}
+
+function Get-OpenPathFirefoxNativeHostCompiledHealth {
+    <#
+    .SYNOPSIS
+        Reports whether the registered native host is the healthy compiled
+        executable, with a stable reason code for the watchdog.
+    .DESCRIPTION
+        Phase 5.2 D3: with the AppControl boundary active (enableNonAdminAppControl)
+        and a registered host that is not the healthy compiled .exe, the
+        Firefox path rules fail open. Reason codes:
+          native_host_compile_failed, native_host_health_ping_failed,
+          native_host_smart_app_control_blocked, native_host_compiled_unavailable.
+        Read-only and best-effort; it never throws.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Config = $null,
+        [string]$NativeRoot = '',
+        [string]$OpenPathRoot = '',
+        # Test seam: the Firefox messaging manifest to inspect.
+        [string]$ManifestPath = ''
+    )
+
+    if (-not $NativeRoot) { $NativeRoot = Get-OpenPathFirefoxNativeHostRoot }
+    if (-not $OpenPathRoot) { $OpenPathRoot = $script:OpenPathRoot }
+    if (-not $ManifestPath) { $ManifestPath = Get-OpenPathFirefoxNativeHostManifestPath }
+    $boundaryActive = $false
+    if ($Config -and $Config.PSObject.Properties['enableNonAdminAppControl']) {
+        $boundaryActive = [bool]$Config.enableNonAdminAppControl
+    }
+    $health = [ordered]@{
+        BoundaryActive   = $boundaryActive
+        RegisteredPath   = ''
+        UsesCompiledHost = $false
+        CompiledHealthy  = $false
+        CompileStatus    = ''
+        ReasonCode       = ''
+    }
+    try {
+        $manifestPath = $ManifestPath
+        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            $health.RegisteredPath = [string]$manifest.path
+        }
+    }
+    catch { }
+    $executableName = Get-OpenPathNativeHostExecutableName
+    $executablePath = Join-Path $NativeRoot $executableName
+    $health.UsesCompiledHost = [bool]($health.RegisteredPath -and ((Split-Path -Leaf $health.RegisteredPath) -ieq $executableName))
+    $buildManifest = $null
+    $diagnostics = $null
+    try {
+        $buildManifestPath = Join-Path $NativeRoot (Get-OpenPathNativeHostBuildManifestName)
+        if (Test-Path -LiteralPath $buildManifestPath -PathType Leaf) {
+            $buildManifest = Get-Content -LiteralPath $buildManifestPath -Raw | ConvertFrom-Json
+        }
+        $diagnosticsPath = Join-Path $NativeRoot (Get-OpenPathNativeHostBuildDiagnosticsName)
+        if (Test-Path -LiteralPath $diagnosticsPath -PathType Leaf) {
+            $diagnostics = Get-Content -LiteralPath $diagnosticsPath -Raw | ConvertFrom-Json
+        }
+    }
+    catch { }
+    if ((Test-Path -LiteralPath $executablePath -PathType Leaf) -and $buildManifest -and ([string]$buildManifest.healthStatus -eq 'healthy')) {
+        try {
+            $healthy = ([string]$buildManifest.executableSha256 -eq (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant())
+            if ($healthy) {
+                $sourcePath = Get-OpenPathNativeHostInstalledSourcePath -OpenPathRoot $OpenPathRoot -NativeRoot $NativeRoot
+                if ($sourcePath) {
+                    $currentSourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    if ([string]$buildManifest.sourceSha256 -and ($currentSourceHash -ne [string]$buildManifest.sourceSha256)) {
+                        $healthy = $false
+                    }
+                }
+            }
+            $health.CompiledHealthy = $healthy
+        }
+        catch { $health.CompiledHealthy = $false }
+    }
+    if (-not $boundaryActive) { return [pscustomobject]$health }
+    if ($health.UsesCompiledHost -and $health.CompiledHealthy) { return [pscustomobject]$health }
+    $status = if ($diagnostics) { [string]$diagnostics.status } else { '' }
+    $health.CompileStatus = $status
+    $sac = Get-OpenPathSmartAppControlState
+    $health.ReasonCode = if ($status -in @('CompilationFailed', 'SourceMissing', 'Failed')) { 'native_host_compile_failed' }
+        elseif ($status -eq 'HealthCheckFailed') { 'native_host_health_ping_failed' }
+        elseif ($sac.State -eq 'enforcement' -and -not $health.CompiledHealthy) { 'native_host_smart_app_control_blocked' }
+        else { 'native_host_compiled_unavailable' }
+    return [pscustomobject]$health
+}
+
 function Register-OpenPathFirefoxNativeHost {
     # stages artifacts, writes the manifest, and sets both registry entries; skips registration entirely when request setup is incomplete
     param(
@@ -320,6 +449,8 @@ Export-ModuleMember -Function @(
     'Test-OpenPathFirefoxNativeHostRequestSetupComplete',
     'Sync-OpenPathFirefoxNativeHostArtifacts',
     'Sync-OpenPathFirefoxNativeHostState',
+    'Invoke-OpenPathFirefoxNativeHostCompiledEnsure',
+    'Get-OpenPathFirefoxNativeHostCompiledHealth',
     'Register-OpenPathFirefoxNativeHost',
     'Unregister-OpenPathFirefoxNativeHost'
 )

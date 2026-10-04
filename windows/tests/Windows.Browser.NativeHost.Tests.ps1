@@ -2953,3 +2953,71 @@ Initialize-NativeHostCaptivePortalSupportFiles
         $report.stateFiles | Should -BeTrue
     }
 }
+
+Describe "Compiled native host health (Phase 5.2 D3)" {
+    BeforeAll {
+        $browserModulePath = Join-Path (Join-Path $PSScriptRoot ".." "lib") "Browser.psm1"
+        Import-Module $browserModulePath -Force -Global -ErrorAction Stop
+        $nativeHostModulePath = Join-Path (Join-Path $PSScriptRoot ".." "lib") "Browser.FirefoxNativeHost.psm1"
+        Import-Module $nativeHostModulePath -Force -Global -ErrorAction Stop
+    }
+
+    BeforeEach {
+        $script:NativeHealthRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-health-" + [Guid]::NewGuid().ToString("N"))
+        $script:NativeHealthNativeRoot = Join-Path $script:NativeHealthRoot "native"
+        New-Item -ItemType Directory -Path $script:NativeHealthNativeRoot -Force | Out-Null
+        $script:NativeHealthManifest = Join-Path $script:NativeHealthRoot "whitelist_native_host.json"
+        $script:BoundaryConfig = [pscustomobject]@{ enableNonAdminAppControl = $true }
+    }
+
+    It "Reports no reason while the boundary is inactive" {
+        $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config ([pscustomobject]@{ enableNonAdminAppControl = $false }) -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
+        $health.BoundaryActive | Should -BeFalse
+        $health.ReasonCode | Should -Be ""
+    }
+
+    It "Flags a missing compiled host while the boundary is active" {
+        $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:BoundaryConfig -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
+        $health.ReasonCode | Should -Be "native_host_compiled_unavailable"
+        $health.CompiledHealthy | Should -BeFalse
+    }
+
+    It "Flags a cmd-registered host as unavailable even when a healthy exe exists" {
+        $exePath = Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.exe"
+        Set-Content -LiteralPath $exePath -Value "MZ-fake" -Encoding ASCII
+        [ordered]@{
+            healthStatus = "healthy"
+            executableSha256 = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            sourceSha256 = "0" * 64
+        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.manifest.json") -Encoding UTF8
+        [ordered]@{ path = (Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.cmd") } | ConvertTo-Json | Set-Content -LiteralPath $script:NativeHealthManifest -Encoding UTF8
+        $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:BoundaryConfig -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
+        $health.UsesCompiledHost | Should -BeFalse
+        $health.CompiledHealthy | Should -BeTrue
+        $health.ReasonCode | Should -Be "native_host_compiled_unavailable"
+    }
+
+    It "Reports healthy when the registered launch path is the healthy exe" {
+        $exePath = Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.exe"
+        Set-Content -LiteralPath $exePath -Value "MZ-fake" -Encoding ASCII
+        [ordered]@{
+            healthStatus = "healthy"
+            executableSha256 = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            sourceSha256 = "0" * 64
+        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.manifest.json") -Encoding UTF8
+        [ordered]@{ path = $exePath } | ConvertTo-Json | Set-Content -LiteralPath $script:NativeHealthManifest -Encoding UTF8
+        $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:BoundaryConfig -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
+        $health.UsesCompiledHost | Should -BeTrue
+        $health.CompiledHealthy | Should -BeTrue
+        $health.ReasonCode | Should -Be ""
+    }
+
+    It "Names the compile failure and the health-ping failure from the diagnostics" {
+        [ordered]@{ status = "CompilationFailed"; error = "error CS0000" } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.build.json") -Encoding UTF8
+        $compileHealth = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:BoundaryConfig -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
+        $compileHealth.ReasonCode | Should -Be "native_host_compile_failed"
+        [ordered]@{ status = "HealthCheckFailed"; error = "health-check-timeout" } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.build.json") -Encoding UTF8
+        $pingHealth = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:BoundaryConfig -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
+        $pingHealth.ReasonCode | Should -Be "native_host_health_ping_failed"
+    }
+}
