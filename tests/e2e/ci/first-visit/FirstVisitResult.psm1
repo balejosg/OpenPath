@@ -117,32 +117,34 @@ function ConvertTo-FirstVisitResultJson {
     $encode = {
         param([string]$FlatKey, [object]$Value, [int]$Depth = 0)
         # Returns the inline value, a part descriptor, or $null when rejected.
-        if (-not (& $probe $Value)) {
-            if ($customProbe) { $diagnostics[$FlatKey] = 'custom-probe-rejected' }
-            else { $diagnostics[$FlatKey] = (Get-FirstVisitSerializationError -Value $Value) }
-            return $null
-        }
+        $probeOk = & $probe $Value
         $valueJson = $null
-        if ($MaxInlineBytes -gt 0 -and $PartsDirectory) {
+        $oversized = $false
+        if ($probeOk -and $MaxInlineBytes -gt 0 -and $PartsDirectory) {
             try { $valueJson = $Value | ConvertTo-Json -Depth 12 -Compress } catch { $valueJson = $null }
+            $oversized = ($valueJson -and $valueJson.Length -gt $MaxInlineBytes)
         }
-        $oversized = ($valueJson -and $valueJson.Length -gt $MaxInlineBytes)
-        if ($oversized -and $Depth -lt 3 -and ($Value -is [System.Collections.IDictionary])) {
-            # Split the big value by its own keys first: the result keeps the
-            # small keys inline and moves only the oversized ones to part files.
+        if ((($oversized) -or (-not $probeOk)) -and $Depth -lt 3 -and ($Value -is [System.Collections.IDictionary])) {
+            # Split the big or unserializable value by its own keys: healthy
+            # children still reach the controller (a big one as a part file, a
+            # small one inline) and only the failing children are named under
+            # serializationDiagnostics/bodySerializationFailures.
             $child = [ordered]@{}
-            $childComplete = $true
             foreach ($childKey in @($Value.Keys)) {
                 $childValue = Get-FirstVisitResultField -InputObject $Value -Name $childKey
                 $encodedChild = & $encode ("$FlatKey.$childKey") $childValue ($Depth + 1)
                 if ($null -eq $encodedChild) {
-                    $childComplete = $false
                     $failures.Add("$FlatKey.$childKey")
                     continue
                 }
                 $child[[string]$childKey] = $encodedChild
             }
-            if ($childComplete) { return $child }
+            return $child
+        }
+        if (-not $probeOk) {
+            if ($customProbe) { $diagnostics[$FlatKey] = 'custom-probe-rejected' }
+            else { $diagnostics[$FlatKey] = (Get-FirstVisitSerializationError -Value $Value) }
+            return $null
         }
         $partName = & $writePart $FlatKey $Value $valueJson
         if ($partName) {

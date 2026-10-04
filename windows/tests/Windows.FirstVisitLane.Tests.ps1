@@ -451,6 +451,22 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             (Test-Path -LiteralPath (Join-Path $script:FirstVisitArtifacts 'guest-observe-collect.part-body_state_collect_diagnostics_all.json')) | Should -BeTrue
         }
 
+        It 'Computes metrics when the serializer dropped the collect subtree' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
+            $transport = New-FirstVisitTestTransport -State $state
+            $preparePayload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized
+            Invoke-OpenPathProxmoxControllerPhase -Payload $preparePayload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            $state.ReportJson = New-FirstVisitReportJson
+            # The serializer dropped the collect subtree (naming it) but the step
+            # itself passed: the scene must still produce metrics, not throw.
+            $state.ResponseOverrides['observe/collect'] = '{"status":"passed","body":{"state":{"session":""},"bodySerializationFailures":["body.state.collect"]}}'
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Phase 'observe'
+            $result = Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport
+            $result.status | Should -Be 'passed'
+            $result.observation.state.metrics.diagnosticLines | Should -Be 0
+            (Test-Path -LiteralPath (Join-Path $script:FirstVisitArtifacts 'metrics.json')) | Should -BeTrue
+        }
+
         It 'Writes a per-step trace with timings for every guest step' {
             $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
             $transport = New-FirstVisitTestTransport -State $state
@@ -776,12 +792,41 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             # throws; pwsh and PS 5.1 differ on what throws).
             (Get-FirstVisitSerializationError -Value 'plain') | Should -Be ''
             (Get-FirstVisitSerializationError -Value @('a', 'b')) | Should -Be ''
-            # The reducer path records the diagnostic with the custom probe.
+            # The reducer path records the diagnostic with the custom probe; a
+            # scalar value is named directly (dictionaries are split by keys).
             $probe = { param($value) return $false }
-            $payload = [ordered]@{ status = 'failed'; step = 'collect'; failures = @(); body = [ordered]@{ state = [ordered]@{ collect = [ordered]@{ bad = 'x' } }; session = '' } }
+            $payload = [ordered]@{ status = 'failed'; step = 'collect'; failures = @(); body = [ordered]@{ state = [ordered]@{ collect = 'BAD' }; session = '' } }
             $parsed = (ConvertTo-FirstVisitResultJson -Payload $payload -SerializableProbe $probe) | ConvertFrom-Json
             $parsed.body.serializationDiagnostics.'body.state.collect' | Should -Be 'custom-probe-rejected'
             ($parsed.body.bodySerializationFailures -join ',') | Should -Match 'body\.state\.collect'
+        }
+
+        It 'Splits an unserializable dictionary so healthy children still arrive' {
+            $probe = {
+                param($value)
+                if ($value -is [System.Collections.IDictionary] -and @($value.Keys) -contains 'bad') { return $false }
+                if ($value -is [string] -and $value -eq 'POISON') { return $false }
+                return $true
+            }
+            $payload = [ordered]@{
+                status   = 'passed'
+                step     = 'collect'
+                failures = @()
+                body     = [ordered]@{
+                    state = [ordered]@{
+                        collect = [ordered]@{ good = 'kept'; bad = 'POISON' }
+                    }
+                    session = ''
+                }
+            }
+            $json = ConvertTo-FirstVisitResultJson -Payload $payload -SerializableProbe $probe
+            $parsed = $json | ConvertFrom-Json
+            # The dictionary itself was rejected; its healthy child survived and
+            # only the poison child was named.
+            $parsed.body.state.collect.good | Should -Be 'kept'
+            $parsed.body.state.collect.PSObject.Properties['bad'] | Should -BeNullOrEmpty
+            ($parsed.body.bodySerializationFailures -join ',') | Should -Match 'body\.state\.collect\.bad'
+            $parsed.body.serializationDiagnostics.'body.state.collect.bad' | Should -Be 'custom-probe-rejected'
         }
     }
 

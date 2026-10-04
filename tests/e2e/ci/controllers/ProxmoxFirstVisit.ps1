@@ -1059,7 +1059,11 @@ function Invoke-OpenPathFirstVisitObserve {
         throw 'first-visit-fixture-served-no-requests'
     }
     $collect = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'collect' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowRetry
-    $mozExtract = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'mozExtract'))
+    # Strict mode: never dereference a property chain directly. The serializer
+    # may drop the collect subtree (naming the failing keys) and the scene must
+    # still produce metrics instead of aborting the phase.
+    $collectState = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $collect -Name 'body') -Name 'state') -Name 'collect'
+    $mozExtract = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'mozExtract'))
     if ($mozExtract.Count -gt 0) {
         [IO.File]::WriteAllLines((Join-Path $evidenceDir 'moz-extract.txt'), $mozExtract, [Text.UTF8Encoding]::new($false))
     }
@@ -1072,13 +1076,12 @@ function Invoke-OpenPathFirstVisitObserve {
     }
     $plan = $state.plan
     $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario -RepairReloads $repairReloads
-    $workerStateJson = [string](Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'workerState')
+    $workerStateJson = [string](Get-OpenPathLabField -InputObject $collectState -Name 'workerState')
     if ($workerStateJson -and -not $workerStateJson.StartsWith('{')) { $workerStateJson = '' }
     $metricsFixture = if ($fixtureState) {
         [pscustomobject]@{ requests = [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests'); browserRequests = $browserRequests; workerStateJson = $workerStateJson }
     }
     else { [pscustomobject]@{ requests = 0; browserRequests = 0; workerStateJson = $workerStateJson } }
-    $collectState = $collect.body.state.collect
     $collectDiagnostics = Get-OpenPathLabField -InputObject $collectState -Name 'diagnostics'
     $diagnosticLines = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectDiagnostics -Name 'all'))
     $startupProfiles = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'startupProfiles'))

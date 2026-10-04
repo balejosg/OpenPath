@@ -42,7 +42,7 @@ function Test-OpenPathLabBlockedErrorCode {
 }
 
 function Get-OpenPathLabField {
-    param([Parameter(Mandatory = $true)][object]$InputObject, [Parameter(Mandatory = $true)][string]$Name)
+    param([Parameter(Mandatory = $true)][AllowNull()][object]$InputObject, [Parameter(Mandatory = $true)][string]$Name)
     if ($null -eq $InputObject) { return $null }
     if ($InputObject -is [System.Collections.IDictionary]) {
         if ($InputObject.Contains($Name)) { return $InputObject[$Name] }
