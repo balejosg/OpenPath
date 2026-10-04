@@ -285,6 +285,7 @@ windows/lib/internal/NativeHost.Actions.RuntimeDependency.ps1|windows/tests/Wind
 windows/lib/internal/NativeHost.Actions.Shared.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1
 windows/lib/internal/NativeHost.ArtifactCatalog.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1,windows/tests/Windows.Installer.Tests.ps1
 windows/lib/internal/NativeHost.CaptivePortalRecoveryQueue.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1,tests/windows-runner-direct.test.mjs
+windows/lib/internal/NativeHost.Build.ps1|windows/tests/Windows.NativeHostBuild.Tests.ps1
 windows/lib/internal/CaptivePortal.AcrylicPolicyTransaction.ps1|windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/CaptivePortal.DiagnosticsDiscovery.ps1|windows/tests/Windows.Watchdog.Tests.ps1,tests/wedu-captive-portal-harness-contract.test.mjs
 windows/lib/internal/CaptivePortal.RecoveryTransition.ps1|windows/tests/Windows.Watchdog.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1
