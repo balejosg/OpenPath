@@ -696,4 +696,18 @@ function Write-OpenPathLabTestConfigFile {
         $blocked.status | Should -Be 'blocked'
         $blocked.correlationNonce | Should -Be ('b' * 32)
     }
+
+    It 'persists the boundary probes before asserting them (Phase 5.2 C6c)' {
+        # A red boundary scene must carry the probes and the unexpected denials
+        # in acceptance-state.json; the throw used to happen first.
+        $path = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\controllers\ProxmoxWindowsLab.psm1'
+        $text = Get-Content -LiteralPath $path -Raw
+        foreach ($code in @('desktop-lab-pre-reboot-boundary-unexpected', 'desktop-lab-post-reboot-boundary-unexpected')) {
+            $index = $text.IndexOf("throw '$code'")
+            $index | Should -BeGreaterThan 0 -Because $code
+            $window = $text.Substring([Math]::Max(0, $index - 450), 450)
+            $window | Should -Match 'Write-OpenPathLabAcceptanceState' -Because $code
+            $window | Should -Match 'criticalUnexpectedDenials' -Because $code
+        }
+    }
 }

@@ -175,6 +175,52 @@ function Get-ExtensionEntryFromJson {
     return [ordered]@{ parsed = $true; found = $false; addonCount = @($json.addons).Count }
 }
 
+function Get-BoundedMozMatches {
+    # Phase 5.2 C2: the original Select-String read every *.log* under the
+    # shared lab dir and the visit root in full; on a run with accumulated
+    # MOZ_LOG files the collect step spent tens of minutes there. This scans
+    # only the newest files, only their tail, with a line cap and a hard time
+    # budget, so the block can never consume the scene.
+    param(
+        [string[]]$Directories = @(),
+        [string]$Pattern = 'nsHostResolver|nsHttp',
+        [int]$MaxFiles = 4,
+        [int]$MaxBytesPerFile = 4194304,
+        [int]$MaxMatches = 200,
+        [int]$BudgetSeconds = 20
+    )
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $files = New-Object System.Collections.Generic.List[object]
+    foreach ($directory in $Directories) {
+        if (-not $directory) { continue }
+        foreach ($file in @(Get-ChildItem -LiteralPath $directory -Filter '*.log*' -ErrorAction SilentlyContinue)) {
+            $files.Add($file) | Out-Null
+        }
+    }
+    $ordered = @($files | Sort-Object LastWriteTime -Descending)
+    $matches = New-Object System.Collections.Generic.List[string]
+    $scanned = 0
+    $truncated = $false
+    foreach ($file in $ordered) {
+        if ($matches.Count -ge $MaxMatches -or $stopwatch.Elapsed.TotalSeconds -gt $BudgetSeconds) { $truncated = $true; break }
+        if ($scanned -ge $MaxFiles) { $truncated = $true; break }
+        $scanned += 1
+        foreach ($line in @(Get-FileTailSafe -Path $file.FullName -Lines 4000 -MaxBytes $MaxBytesPerFile)) {
+            if ($line -match $Pattern) {
+                $matches.Add([string]$line) | Out-Null
+                if ($matches.Count -ge $MaxMatches) { break }
+            }
+        }
+    }
+    return [ordered]@{
+        lines     = @($matches)
+        files     = $scanned
+        totalFiles = $ordered.Count
+        truncated = $truncated
+        elapsedMs = [int]$stopwatch.ElapsedMilliseconds
+    }
+}
+
 function Get-FirefoxProcesses {
     return @(Get-Process -Name 'firefox' -ErrorAction SilentlyContinue |
             ForEach-Object {
@@ -918,11 +964,24 @@ switch ($Step) {
         Complete-Step
     }
     'collect' {
+        # Phase 5.2 C2: per-block timings travel in the result so the workflow
+        # evidence shows exactly where the step spends its time, and the step
+        # stays inside its controller budget (<=120 s).
+        $collectWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $timings = [ordered]@{}
+        $lap = {
+            param([string]$Name)
+            $timings[$Name] = [int]$collectWatch.ElapsedMilliseconds
+            $collectWatch.Restart()
+        }
+        $script:Body.collect = [ordered]@{ timings = $timings }
+        Save-PartialResult
         $addonsLog = @()
         $addonsPath = Join-Path $script:VisitRoot 'moz\addons.log'
         if (Test-Path -LiteralPath $addonsPath) {
             $addonsLog = @(Get-Content -LiteralPath $addonsPath -Tail 80 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'addon|Addon|install|xpi|policy' } | Select-Object -First 30)
         }
+        & $lap 'addonsMs'
         # No extensions.json read here: the authoritative warm-up state signal
         # already ran after an orderly close. Reading it with Firefox open is a
         # false negative (Phase 3A.2 K1).
@@ -934,46 +993,99 @@ switch ($Step) {
             $match = [regex]::Match($line, '"reason":"([^"]+)"')
             if ($match.Success) { $reloadReasons += $match.Groups[1].Value }
         }
+        & $lap 'nativeHostMs'
         $profiles = @($nativeHost | Where-Object { $_ -match 'stage=startup-profile' })
+        & $lap 'profilesMs'
         $openpath = Get-LogTail -Path "$OpenPathRoot\logs\openpath.log" -Tail 300
+        & $lap 'openpathMs'
         $workerState = ''
         if (Test-Path -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json") {
             $workerState = Get-Content -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json" -Raw
         }
-        $mozExtract = @()
-        $mozFiles = @()
-        foreach ($mozDir in @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz'))) {
-            $mozFiles += @(Get-ChildItem -LiteralPath $mozDir -Filter '*.log*' -ErrorAction SilentlyContinue)
+        & $lap 'workerStateMs'
+        $moz = Get-BoundedMozMatches -Directories @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz'))
+        $mozExtract = @($moz.lines)
+        & $lap 'mozScanMs'
+        $timings.mozFiles = $moz.files
+        $timings.mozFilesTotal = $moz.totalFiles
+        $timings.mozTruncated = $moz.truncated
+        $overlayHosts = @(Get-OverlayHosts)
+        & $lap 'overlayHostsMs'
+        $whitelistMirror = @(Get-LogTail -Path "$OpenPathRoot\data\whitelist.txt" -Tail 40)
+        & $lap 'whitelistMs'
+        $firefoxProcesses = @(Get-FirefoxProcesses)
+        & $lap 'processesMs'
+        $script:Body.collect.diagnostics = [ordered]@{
+            lines                = $diagnostics.Count
+            hostStarted          = $liveCollect.hostStarted
+            backgroundStart      = $liveCollect.backgroundStart
+            batchFirst           = $liveCollect.diagnosticBatchFirst
+            transportTransitions = @($diagnostics | Where-Object { $_ -match 'kind":"transport' }).Count
+            holdOutcomes         = @($diagnostics | Where-Object { $_ -match 'kind":"hold-outcome' }).Count
+            reloadDecisions      = @($diagnostics | Where-Object { $_ -match 'kind":"reload-decision' }).Count
+            reloadReasons        = $reloadReasons
+            all                  = @($diagnostics | Select-Object -First 1000)
         }
-        foreach ($mozFile in $mozFiles) {
-            $mozExtract += @(Select-String -LiteralPath $mozFile.FullName -Pattern 'nsHostResolver|nsHttp' -ErrorAction SilentlyContinue |
-                    Select-Object -First 400 | ForEach-Object { $_.Line })
+        $script:Body.collect.addonsLog = @($addonsLog | Select-Object -First 30)
+        $script:Body.collect.mozExtract = @($mozExtract | Select-Object -First 600)
+        $script:Body.collect.diagnosticLines = $diagnostics.Count
+        $script:Body.collect.diagnosticSample = @($diagnostics | Select-Object -First 40)
+        $script:Body.collect.startupProfiles = @($profiles | Select-Object -Last 8)
+        $script:Body.collect.nativeHostTail = @($nativeHost | Select-Object -Last 120)
+        $script:Body.collect.openpathTail = @($openpath | Select-Object -Last 80)
+        $script:Body.collect.workerState = $workerState
+        $script:Body.collect.overlayHosts = @($overlayHosts)
+        $script:Body.collect.whitelistMirror = @($whitelistMirror)
+        $script:Body.collect.firefoxProcesses = @($firefoxProcesses)
+        # Time one reduced serialization of the payload; the real serialization
+        # in Complete-Step then runs with the measured value included.
+        $pending = Get-StepResultPayload
+        $serializeWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        if ($script:ResultModuleLoaded) {
+            try { $null = ConvertTo-FirstVisitResultJson -Payload $pending -MaxInlineBytes 0 } catch { }
         }
-        $script:Body.collect = [ordered]@{
-            diagnostics          = [ordered]@{
-                lines                = $diagnostics.Count
-                hostStarted          = $liveCollect.hostStarted
-                backgroundStart      = $liveCollect.backgroundStart
-                batchFirst           = $liveCollect.diagnosticBatchFirst
-                transportTransitions = @($diagnostics | Where-Object { $_ -match 'kind":"transport' }).Count
-                holdOutcomes         = @($diagnostics | Where-Object { $_ -match 'kind":"hold-outcome' }).Count
-                reloadDecisions      = @($diagnostics | Where-Object { $_ -match 'kind":"reload-decision' }).Count
-                reloadReasons        = $reloadReasons
-                all                  = @($diagnostics | Select-Object -First 1000)
-            }
-            addonsLog            = @($addonsLog | Select-Object -First 30)
-            mozExtract           = @($mozExtract | Select-Object -First 600)
-            diagnosticLines      = $diagnostics.Count
-            diagnosticSample     = @($diagnostics | Select-Object -First 40)
-            startupProfiles      = @($profiles | Select-Object -Last 8)
-            nativeHostTail       = @($nativeHost | Select-Object -Last 120)
-            openpathTail         = @($openpath | Select-Object -Last 80)
-            workerState          = $workerState
-            overlayHosts         = @(Get-OverlayHosts)
-            whitelistMirror      = @(Get-LogTail -Path "$OpenPathRoot\data\whitelist.txt" -Tail 40)
-            firefoxProcesses     = @(Get-FirefoxProcesses)
-        }
+        $serializeWatch.Stop()
+        & $lap 'serializationMs'
+        $timings.serializationMs = [int]$serializeWatch.ElapsedMilliseconds
+        $timings.totalMs = [int](($timings.Values | Where-Object { $_ -is [int] -or $_ -is [long] -or $_ -is [double] } | Measure-Object -Sum).Sum)
         $script:Body.session = $script:Body.session
+        Complete-Step
+    }
+    'host-probe' {
+        # Phase 5.2 E2: the student probe runs inside every scene and produces
+        # the B6 evidence from the workflow itself: the compiled .exe launched
+        # as the restricted student, the still-denied powershell.exe (new 8004)
+        # and the student's native-host log line. Older templates without the
+        # exe record compiledHostPresent=false plus the deny evidence instead.
+        Save-PartialResult
+        $probeScript = Join-Path $PSScriptRoot 'Test-OpenPathNativeHostAsStudent.ps1'
+        $probeWork = 'C:\OpenPathLab\phase5\b6'
+        $probeResult = $null
+        $probeError = ''
+        $probeOutput = ''
+        if (-not (Test-Path -LiteralPath $probeScript)) {
+            $probeError = 'student-host-probe-script-missing'
+        }
+        else {
+            try {
+                $launcherPath = 'C:\OpenPathLab\first-visit\student-session-launch.ps1'
+                $probeOutput = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probeScript -HostExe 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.exe' -StudentUserName $StudentUserName -LauncherPath $launcherPath -WorkDir $probeWork 2>&1 | Out-String).Trim()
+                $probeResultPath = Join-Path $probeWork 'b6-result.json'
+                if (Test-Path -LiteralPath $probeResultPath) {
+                    $probeResult = Get-Content -LiteralPath $probeResultPath -Raw | ConvertFrom-Json
+                }
+                if (-not $probeResult) { $probeError = 'student-host-probe-result-missing' }
+            }
+            catch {
+                $probeError = [string]$_.Exception.Message
+            }
+        }
+        $script:Body.hostProbe = [ordered]@{
+            scriptFound = (Test-Path -LiteralPath $probeScript)
+            error       = $probeError
+            result      = $probeResult
+            raw         = if ($probeError) { $probeOutput.Substring(0, [Math]::Min(2000, $probeOutput.Length)) } else { '' }
+        }
         Complete-Step
     }
     'host-signals' {

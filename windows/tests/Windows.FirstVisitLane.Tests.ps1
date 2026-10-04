@@ -159,7 +159,7 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             function New-FirstVisitReportJson {
                 param([int]$Loads = 1, [int]$ApiMark = 7000)
                 return @"
-{"schemaVersion":1,"runId":"12345","anchor":"a1","anchorHost":"anchor1-ab12cd.192.168.1.150.sslip.io","navigationType":"navigate","loads":$Loads,"waves":{"cssApplied":true,"fontLoaded":true,"imageLoaded":true,"coreExecuted":true,"deferredExecuted":true,"apiPainted":true,"blockedCssFailed":true},"marks":{"start":1,"core":3000,"deferred":5000,"api":$ApiMark,"load":$ApiMark},"timings":{}}
+{"schemaVersion":1,"runId":"12345","anchor":"a1","anchorHost":"anchor1-ab12cd.192.168.1.150.sslip.io","navigationType":"navigate","loads":$Loads,"waves":{"cssApplied":true,"fontLoaded":true,"imageLoaded":true,"coreExecuted":true,"deferredExecuted":true,"apiPainted":true,"blockedCssFailed":true},"blockedPathEnforced":true,"blockedPathFinal":true,"marks":{"start":1,"core":3000,"deferred":5000,"api":$ApiMark,"load":$ApiMark},"timings":{}}
 "@
             }
             function New-FirstVisitTestState {
@@ -268,6 +268,7 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                             'observe/visit'     = '{"status":"passed","body":{"state":{"arm":{"mode":"in-session"},"anchor":"a1"},"session":""}}'
                             'observe/wait-firefox' = '{"status":"passed","body":{"state":{"launchedAt":"2026-10-01T20:00:30.0000000Z","firefox":[{"pid":3,"created":"2026-10-01T20:00:30.0000000Z"}],"firefoxLog":[]},"session":""}}'
                             'observe/collect'   = '{"status":"passed","body":{"state":{"collect":{"diagnostics":{"lines":3,"hostStarted":true,"backgroundStart":true,"batchFirst":true,"reloadReasons":["reloaded"],"all":["stage=extension-diagnostic {\"kind\":\"reload-decision\",\"reason\":\"reloaded\"}","stage=extension-diagnostic {\"kind\":\"background-start\"}","stage=extension-diagnostic {\"kind\":\"hold-outcome\",\"outcome\":\"released-budget\"}"]},"startupProfiles":["stage=startup-profile processToScriptMs=6341 pingMs=2210 firstEnqueueMs=120"]}},"session":""}}'
+                            'observe/host-probe' = '{"status":"passed","body":{"state":{"hostProbe":{"scriptFound":true,"error":"","result":{"hostExists":true,"compiledHostPresent":true,"manifestHealthy":true,"manifestTargetsCompiledHost":true,"pingResponded":true,"readsResponded":true,"portalProtocolResponded":true,"deniedPowershell":true,"responses":[{"action":"ping","success":true}]}}},"session":""}}'
                             'observe/security'  = '{"status":"passed","body":{"state":{"overlay":{"unexpected":[],"missing":[]}},"session":""}}'
                             'cleanup/cleanup'   = '{"status":"passed","body":{"state":{"clean":{"rootGone":true}},"session":""}}'
                         }
@@ -342,6 +343,8 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                 $script:OpenPathFirstVisitObserveSettleSeconds = 0
                 $script:OpenPathFirstVisitHotWindowSeconds = 0
                 $script:OpenPathFirstVisitHotSecondSettleSeconds = 0
+                $script:OpenPathFirstVisitReportGraceSeconds = 0
+                $script:OpenPathFirstVisitReportWaitSeconds = 0
             }
             $script:FirstVisitArtifacts = Join-Path $TestDrive ('first-visit-' + [guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $script:FirstVisitArtifacts -Force | Out-Null
@@ -467,6 +470,75 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             (Test-Path -LiteralPath (Join-Path $script:FirstVisitArtifacts 'metrics.json')) | Should -BeTrue
         }
 
+        It 'Keeps the verdict when the collect step fails and marks the evidence incomplete' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
+            $transport = New-FirstVisitTestTransport -State $state
+            $preparePayload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized
+            Invoke-OpenPathProxmoxControllerPhase -Payload $preparePayload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            $state.ReportJson = New-FirstVisitReportJson
+            $state.ResponseOverrides['observe/collect'] = '{"status":"failed","failures":["collect-timeout"],"body":{"state":{}}}'
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Phase 'observe'
+            $result = Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport
+            $result.status | Should -Be 'passed'
+            # The verdict was written before the collect and survives it.
+            $result.observation.state.verdict.status | Should -Be 'passed'
+            $result.observation.state.evidenceIncomplete | Should -BeTrue
+            $result.observation.state.metrics.evidenceIncomplete | Should -BeTrue
+            $result.observation.state.metrics.collectError | Should -Match 'collect-timeout'
+            $verdictPath = Join-Path $script:FirstVisitArtifacts 'observe-verdict.json'
+            (Test-Path -LiteralPath $verdictPath) | Should -BeTrue
+            $verdictFile = Get-Content -LiteralPath $verdictPath -Raw | ConvertFrom-Json
+            $verdictFile.reportPresent | Should -BeTrue
+            $verdictFile.evidenceIncomplete | Should -BeTrue
+            (Test-Path -LiteralPath (Join-Path $script:FirstVisitArtifacts 'metrics.json')) | Should -BeTrue
+        }
+
+        It 'Persists a self-report-missing verdict instead of aborting the scene' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
+            $transport = New-FirstVisitTestTransport -State $state
+            $preparePayload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized
+            Invoke-OpenPathProxmoxControllerPhase -Payload $preparePayload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            # No ReportJson: the fixture never saw the page report.
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Phase 'observe'
+            $result = Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport
+            $result.status | Should -Be 'passed'
+            $result.observation.state.verdict.status | Should -Be 'failed'
+            $verdictFile = Get-Content -LiteralPath (Join-Path $script:FirstVisitArtifacts 'observe-verdict.json') -Raw | ConvertFrom-Json
+            $verdictFile.reportPresent | Should -BeFalse
+        }
+
+        It 'Carries the prepare AppControl product reason into the verdict file' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
+            $state.ResponseOverrides['prepare/host-signals'] = '{"status":"passed","body":{"state":{"hostSignals":{"hostStarted":false,"hostPids":[],"firstInitLine":"","diagnosticLines":0,"backgroundStart":false,"diagnosticBatchFirst":false}},"session":""}}'
+            $state.ResponseOverrides['prepare/host-events'] = '{"status":"passed","body":{"state":{"hostEvents":{"events8004":["Event[0]: denied C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe for alumno"],"events8007":[]}},"session":""}}'
+            $transport = New-FirstVisitTestTransport -State $state
+            $preparePayload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized
+            Invoke-OpenPathProxmoxControllerPhase -Payload $preparePayload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            $state.ReportJson = New-FirstVisitReportJson
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Phase 'observe'
+            Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            $verdictFile = Get-Content -LiteralPath (Join-Path $script:FirstVisitArtifacts 'observe-verdict.json') -Raw | ConvertFrom-Json
+            @($verdictFile.productReasons) | Should -Contain 'native-host-blocked-by-appcontrol'
+            $verdictFile.blockedByAppControl | Should -BeTrue
+        }
+
+        It 'Carries the student host probe evidence into the metrics (Phase 5.2 E2)' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
+            $transport = New-FirstVisitTestTransport -State $state
+            $preparePayload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized
+            Invoke-OpenPathProxmoxControllerPhase -Payload $preparePayload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            $state.ReportJson = New-FirstVisitReportJson
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Phase 'observe'
+            $result = Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport
+            $result.status | Should -Be 'passed'
+            @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:observe/host-probe'
+            $probe = $result.observation.state.metrics.studentHostProbe
+            $probe.compiledHostPresent | Should -BeTrue
+            $probe.pingResponded | Should -BeTrue
+            $probe.manifestTargetsCompiledHost | Should -BeTrue
+            $probe.deniedPowershell | Should -BeTrue
+        }
+
         It 'Writes a per-step trace with timings for every guest step' {
             $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
             $transport = New-FirstVisitTestTransport -State $state
@@ -485,6 +557,9 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                 $entry = $entries[-1]
                 $entry.elapsedMs | Should -BeGreaterThan -1
                 $entry.status | Should -Be 'passed'
+                $entry.startedAt | Should -Not -BeNullOrEmpty
+                # The running entry is updated in place, never duplicated.
+                $entries.Count | Should -Be 1
             }
         }
     }
@@ -799,6 +874,30 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             $parsed = (ConvertTo-FirstVisitResultJson -Payload $payload -SerializableProbe $probe) | ConvertFrom-Json
             $parsed.body.serializationDiagnostics.'body.state.collect' | Should -Be 'custom-probe-rejected'
             ($parsed.body.bodySerializationFailures -join ',') | Should -Match 'body\.state\.collect'
+        }
+
+        It 'Keeps null and empty collection values instead of listing them as failures' {
+            # Phase 5.2: PowerShell collapses a returned $null or empty array to
+            # no output; the reducer must not confuse that with a rejected value.
+            $probe = { param($value) return -not ($value -is [string] -and $value -eq 'UNSERIALIZABLE') }
+            $payload = [ordered]@{
+                status   = 'passed'
+                step     = 'collect'
+                failures = @()
+                body     = [ordered]@{
+                    state = [ordered]@{
+                        collect = [ordered]@{ diagnostics = [ordered]@{ all = @() }; mozExtract = @() }
+                        session = $null
+                    }
+                    session = ''
+                }
+            }
+            $parsed = (ConvertTo-FirstVisitResultJson -Payload $payload -SerializableProbe $probe) | ConvertFrom-Json
+            $parsed.PSObject.Properties['failures'] | Should -Not -BeNullOrEmpty
+            @($parsed.failures).Count | Should -Be 0
+            $parsed.body.state.PSObject.Properties['session'] | Should -Not -BeNullOrEmpty
+            $parsed.body.state.PSObject.Properties['collect'] | Should -Not -BeNullOrEmpty
+            @($parsed.body.bodySerializationFailures).Count | Should -Be 0
         }
 
         It 'Splits an unserializable dictionary so healthy children still arrive' {

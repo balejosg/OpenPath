@@ -2217,16 +2217,37 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Get-OpenPat
                     throw "OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed. reasonCodes=appcontrol_recovery_required"
                 }
             }
-            $result = Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot 'C:\OpenPath' -TimeoutSeconds 60 -PollSeconds 1 -Assert $assert
+            $evidencePath = Join-Path $TestDrive 'boundary-wait.json'
+            $result = Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot 'C:\OpenPath' -TimeoutSeconds 60 -PollSeconds 1 -Assert $assert -EvidencePath $evidencePath
             $result | Should -BeTrue
             $script:waitAttempts | Should -Be 3
+            # Phase 5.2 C6(a): every attempt is persisted, also on success.
+            $evidence = @(Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json)
+            $evidence.Count | Should -Be 3
+            $evidence[0].passed | Should -BeFalse
+            @($evidence[0].reasonCodes) | Should -Contain 'appcontrol_recovery_required'
+            $evidence[-1].passed | Should -BeTrue
         }
 
         It "Surfaces the last detailed error when the boundary never settles" {
-            $assert = { param($Root) throw 'OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed. reasonCodes=appcontrol_effective_policy_invalid' }
+            $assert = { param($Root) throw 'OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed. reasonCodes=appcontrol_effective_policy_invalid observed=TransactionState=apply-attempted' }
+            $evidencePath = Join-Path $TestDrive 'boundary-wait-fail.json'
             {
-                Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot 'C:\OpenPath' -TimeoutSeconds 1 -PollSeconds 1 -Assert $assert
+                Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot 'C:\OpenPath' -TimeoutSeconds 1 -PollSeconds 1 -Assert $assert -EvidencePath $evidencePath
             } | Should -Throw "*reasonCodes=appcontrol_effective_policy_invalid*"
+            $evidence = @(Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json)
+            $evidence[-1].passed | Should -BeFalse
+            @($evidence[-1].reasonCodes) | Should -Contain 'appcontrol_effective_policy_invalid'
+            $evidence[-1].observed | Should -Be 'TransactionState=apply-attempted'
+        }
+    }
+
+    Context "Boundary failure summary contract (Phase 5.2 C6b)" {
+        It "writes the exact failing assertion next to the boundary artifacts" {
+            $scriptPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\run-windows-browser-boundary-ci.ps1'
+            $text = Get-Content -LiteralPath $scriptPath -Raw
+            $text | Should -Match 'browser-boundary-failure\.json'
+            $text | Should -Match 'message\s*=\s*\[string\]\$_\.Exception\.Message'
         }
     }
 

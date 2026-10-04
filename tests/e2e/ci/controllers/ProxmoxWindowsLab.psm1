@@ -886,6 +886,9 @@ function Invoke-OpenPathLabAcceptanceObserve {
 
     $boundary = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'boundary-collect' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 900
     $state.preRebootProbes = $boundary.body
+    # Phase 5.2 C6(c): the probes (including any unexpected denials) are
+    # persisted before the assert, so a red scene still carries its evidence.
+    Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
     if (@($boundary.body.criticalUnexpectedDenials).Count -gt 0) { throw 'desktop-lab-pre-reboot-boundary-unexpected' }
     $body.preRebootStudentBoundary = $boundary.body
     $state.bootIdAfterObserve = [string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')
@@ -936,6 +939,8 @@ function Invoke-OpenPathLabAcceptanceAfterReboot {
 
     $boundary = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'boundary-collect' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 900
     $state.postRebootProbes = $boundary.body
+    # Phase 5.2 C6(c): persist before the assert (see the pre-reboot site).
+    Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
     if (@($boundary.body.criticalUnexpectedDenials).Count -gt 0) { throw 'desktop-lab-post-reboot-boundary-unexpected' }
     $body.postRebootStudentBoundary = $boundary.body
     Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state

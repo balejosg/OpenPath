@@ -3519,6 +3519,10 @@ function Wait-InstalledOpenPathBrowserBoundaryActive {
         [Parameter(Mandatory = $true)][string]$OpenPathRoot,
         [int]$TimeoutSeconds = 240,
         [int]$PollSeconds = 10,
+        # Phase 5.2 C6(a): every attempt (time, reasonCodes, observed) is
+        # persisted here, also when the wait succeeds, so a red run can be
+        # explained after the job log is gone (BlobNotFound).
+        [AllowNull()][string]$EvidencePath = '',
         # Test seam: inject the assert so the wait contract is testable without
         # an installed AppControl boundary.
         [scriptblock]$Assert = $null
@@ -3532,21 +3536,56 @@ function Wait-InstalledOpenPathBrowserBoundaryActive {
     $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
     $attempt = 0
     $lastError = $null
+    $attempts = New-Object System.Collections.Generic.List[object]
+    $writeEvidence = {
+        param([AllowNull()][string]$Path, [AllowNull()][object]$Attempts)
+        if (-not $Path) { return }
+        try {
+            $parent = Split-Path -Parent $Path
+            if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            # -InputObject: wrapping a scriptblock-bound List[object] in @() trips
+            # a PS 7.4 DLR binder bug ("Argument types do not match").
+            $jsonText = [string](ConvertTo-Json -InputObject $Attempts -Depth 6)
+            [IO.File]::WriteAllText($Path, $jsonText, [Text.UTF8Encoding]::new($false))
+        }
+        catch { Write-Warning "boundary-wait evidence could not be written: $($_.Exception.Message)" }
+    }
     while ($true) {
         $attempt++
+        $passed = $false
+        $errorText = ''
+        $reasonCodes = @()
+        $observed = ''
         try {
             & $assertAction $OpenPathRoot
+            $passed = $true
+        }
+        catch {
+            $lastError = $_
+            $errorText = [string]$_.Exception.Message
+            $reasonMatch = [regex]::Match($errorText, 'reasonCodes=([^\s]+)')
+            if ($reasonMatch.Success) { $reasonCodes = @($reasonMatch.Groups[1].Value -split ',' | Where-Object { $_ }) }
+            $observedMatch = [regex]::Match($errorText, 'observed=([^\s]+)')
+            if ($observedMatch.Success) { $observed = $observedMatch.Groups[1].Value }
+        }
+        $attempts.Add([pscustomobject]@{
+            attempt     = $attempt
+            at          = [DateTime]::UtcNow.ToString('o')
+            passed      = $passed
+            error       = $errorText
+            reasonCodes = @($reasonCodes)
+            observed    = $observed
+        }) | Out-Null
+        & $writeEvidence $EvidencePath $attempts
+        if ($passed) {
             if ($attempt -gt 1) {
                 Write-Host "OpenPath AppControl boundary became active after $attempt attempt(s)."
             }
             return $true
         }
-        catch {
-            $lastError = $_
-            if ((Get-Date) -ge $deadline) { break }
-            Write-Host ("Waiting for the OpenPath AppControl boundary to settle (attempt $attempt): $($_.Exception.Message)")
-            Start-Sleep -Seconds ([Math]::Max(1, $PollSeconds))
-        }
+        if ((Get-Date) -ge $deadline) { break }
+        Write-Host ("Waiting for the OpenPath AppControl boundary to settle (attempt $attempt): $errorText")
+        Start-Sleep -Seconds ([Math]::Max(1, $PollSeconds))
     }
     throw $lastError
 }

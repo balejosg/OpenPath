@@ -1161,6 +1161,31 @@ function Get-OpenPathDisposableCanonicalPhase {
     }
 }
 
+function Get-OpenPathDisposableTimeoutDetail {
+    <#
+    .SYNOPSIS
+    Names the guest step that consumed the phase timeout.
+    .DESCRIPTION
+    Phase 5.2 C3: the first-visit controller persists a running entry before
+    invoking every step, so a timeout names the step in progress (in-step) with
+    the time consumed so far; completed traces keep the last-step wording.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object[]]$Trace = @())
+    if (@($Trace).Count -eq 0) { return 'controller-timeout' }
+    $last = @($Trace)[-1]
+    if ([string]$last.status -eq 'running') {
+        $runningMs = -1
+        try {
+            $started = [datetime]$last.startedAt
+            $runningMs = [int](([DateTime]::UtcNow) - $started.ToUniversalTime()).TotalMilliseconds
+        }
+        catch { }
+        return ('controller-timeout: in-step={0} runningMs={1} timeoutSeconds={2} source=running-entry' -f [string]$last.step, [string]$runningMs, [string]$last.timeoutSeconds)
+    }
+    return ('controller-timeout: last-step={0} elapsedMs={1} timeoutSeconds={2} status={3} source={4}' -f [string]$last.step, [string]$last.elapsedMs, [string]$last.timeoutSeconds, [string]$last.status, [string]$last.resultSource)
+}
+
 function Invoke-OpenPathDisposableWindowsController {
     <#
     .SYNOPSIS
@@ -1293,8 +1318,7 @@ function Invoke-OpenPathDisposableWindowsController {
                 if (Test-Path -LiteralPath $tracePath -PathType Leaf) {
                     $trace = @(Get-Content -LiteralPath $tracePath -Raw | ConvertFrom-Json)
                     if ($trace.Count -gt 0) {
-                        $last = $trace[-1]
-                        $timeoutDetail = ('controller-timeout: last-step={0} elapsedMs={1} timeoutSeconds={2} status={3} source={4}' -f [string]$last.step, [string]$last.elapsedMs, [string]$last.timeoutSeconds, [string]$last.status, [string]$last.resultSource)
+                        $timeoutDetail = Get-OpenPathDisposableTimeoutDetail -Trace $trace
                     }
                 }
             }
@@ -1395,4 +1419,4 @@ function Read-OpenPathDisposableWindowsObservation {
     return $observation
 }
 
-Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Initialize-OpenPathDisposableTargetProfile, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, Invoke-OpenPathDisposablePostApplicationPair, Get-OpenPathDisposablePolicyConverterObservation, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget, Invoke-OpenPathDisposableWindowsController, Read-OpenPathDisposableWindowsObservation
+Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Initialize-OpenPathDisposableTargetProfile, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, Invoke-OpenPathDisposablePostApplicationPair, Get-OpenPathDisposablePolicyConverterObservation, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget, Invoke-OpenPathDisposableWindowsController, Read-OpenPathDisposableWindowsObservation, Get-OpenPathDisposableTimeoutDetail

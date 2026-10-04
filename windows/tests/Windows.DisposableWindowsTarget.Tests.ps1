@@ -9,6 +9,25 @@ Describe 'Disposable Windows target boundary' {
             Should -Throw '*correlation-mismatch*'
     }
 
+    It 'names the step in progress when a phase times out during a running step' {
+        # Phase 5.2 C3: the first-visit controller persists a running entry
+        # before invoking each guest step.
+        $trace = @(
+            [pscustomobject]@{ step = 'visit'; status = 'passed'; elapsedMs = 1200; timeoutSeconds = 300; resultSource = 'stdout' },
+            [pscustomobject]@{ step = 'collect'; status = 'running'; startedAt = ([DateTime]::UtcNow.AddSeconds(-30)).ToString('o'); timeoutSeconds = 120 }
+        )
+        $detail = Get-OpenPathDisposableTimeoutDetail -Trace $trace
+        $detail | Should -Match 'in-step=collect'
+        $detail | Should -Match 'runningMs=[0-9]+'
+        $detail | Should -Match 'source=running-entry'
+    }
+
+    It 'keeps the last completed step wording when the trace has no running entry' {
+        $trace = @([pscustomobject]@{ step = 'security'; status = 'passed'; elapsedMs = 555; timeoutSeconds = 300; resultSource = 'stdout' })
+        (Get-OpenPathDisposableTimeoutDetail -Trace $trace) | Should -Match 'last-step=security'
+        (Get-OpenPathDisposableTimeoutDetail -Trace @()) | Should -Be 'controller-timeout'
+    }
+
     It 'accepts only a passed observation with a body' {
         $path = Join-Path $TestDrive 'observation.json'
         @{ runId = 'run-a'; runAttempt = 1; scenarioId = 'scenario-a'; phase = 'observe'; correlationNonce = ('a' * 32); status = 'passed'; observation = @{ bootId = 'boot-1' } } |

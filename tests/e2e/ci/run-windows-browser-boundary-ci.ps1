@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 Import-Module (Join-Path $PSScriptRoot 'BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop
+# Phase 5.2 C6(a): the boundary wait writes every attempt here, also on success.
+$script:BoundaryWaitEvidencePath = Join-Path $ArtifactsRoot 'boundary-wait.json'
 $probeScript = Join-Path $script:RepoRoot 'tests\e2e\ci\windows-browser-enforcement.ps1'
 if (-not (Test-Path -LiteralPath $probeScript)) {
     throw "Windows browser enforcement probe script not found: $probeScript"
@@ -510,7 +512,7 @@ function Get-OpenPathNegativeHealthRestoration {
         [AllowNull()][object]$ApplicationCatalog
     )
 
-    Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot $OpenPathRoot
+    Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot $OpenPathRoot -EvidencePath $script:BoundaryWaitEvidencePath
     $watchdogHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
     $appControlHealth = Get-OpenPathNonAdminAppControlHealth `
         -Mode $Mode `
@@ -885,7 +887,7 @@ $installedOpenPathRoot = 'C:\OpenPath'
 # this step; a repair transaction in flight makes any AppControl health query
 # report recovery-required. The bounded wait re-runs the same assert-only check
 # until the boundary settles (or surfaces the last detailed error).
-Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot $installedOpenPathRoot
+Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot $installedOpenPathRoot -EvidencePath $script:BoundaryWaitEvidencePath
 $watchdogRuntimePath = Initialize-OpenPathNegativeHealthRuntime -OpenPathRoot $installedOpenPathRoot
 . $watchdogRuntimePath
 Assert-OpenPathNegativeHealthRuntimeCommands
@@ -970,6 +972,23 @@ try {
         artifactsRoot = $ArtifactsRoot
         timestamp = (Get-Date).ToString('o')
     } | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $ArtifactsRoot 'browser-boundary-summary.json') -Encoding UTF8
+}
+catch {
+    # Phase 5.2 C6(b): self-hosted job logs have been lost (BlobNotFound), so
+    # the step records the exact failing assertion next to its artifacts.
+    try {
+        $failure = [ordered]@{
+            schemaVersion    = 1
+            at               = [DateTime]::UtcNow.ToString('o')
+            message          = [string]$_.Exception.Message
+            scriptStackTrace = [string]$_.ScriptStackTrace
+            artifactsRoot    = $ArtifactsRoot
+        }
+        New-Item -ItemType Directory -Path $ArtifactsRoot -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $ArtifactsRoot 'browser-boundary-failure.json'), ($failure | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    }
+    catch { }
+    throw
 }
 finally {
     if ($localUser) {

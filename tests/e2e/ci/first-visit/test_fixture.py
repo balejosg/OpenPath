@@ -66,6 +66,20 @@ class PlanTests(unittest.TestCase):
         for dependency in plan["controlDependencies"]:
             self.assertNotIn(dependency, body)
 
+    def test_whitelist_carries_a_blocked_path_on_each_allowed_anchor(self) -> None:
+        # Phase 5.2 E3: DNS cannot block paths; the blocked path on an allowed
+        # anchor only takes effect through the host-driven path rules.
+        plan = fixture_server.build_plan("run-3", seed=11, ip="192.168.1.150", token="t")
+        self.assertEqual(len(plan["blockedPaths"]), 2)
+        for entry in plan["anchors"].values():
+            self.assertTrue(
+                any(rule.startswith(f"{entry['host']}/blocked-path/probe.bin") for rule in plan["blockedPaths"])
+            )
+        body = fixture_server.whitelist_body(plan)
+        self.assertIn("## BLOCKED-PATHS", body)
+        for rule in plan["blockedPaths"]:
+            self.assertIn(rule, body)
+
 
 class FixtureServerTests(unittest.TestCase):
     @classmethod
@@ -111,6 +125,17 @@ class FixtureServerTests(unittest.TestCase):
         self.assertIn("__firstVisit", text)
         self.assertIn("/__report", text)
         self.assertIn(self.plan["neverLearnable"], text)
+        # Phase 5.2 E3: the page probes the blocked path and reports the final
+        # value for the controller verdict.
+        self.assertIn("/blocked-path/probe.bin", text)
+        self.assertIn("blockedPathEnforced", text)
+        self.assertIn("blockedPathFinal", text)
+
+    def test_blocked_path_probe_is_served_so_only_enforcement_can_stop_it(self) -> None:
+        host = self.plan["anchors"]["a1"]["host"]
+        status, body = self.fetch(host, "/blocked-path/probe.bin")
+        self.assertEqual(status, 200, "without host enforcement the probe must load")
+        self.assertGreater(len(body), 0)
 
     def test_wave_assets_are_served_per_host(self) -> None:
         roles = self.plan["anchors"]["a2"]["roles"]

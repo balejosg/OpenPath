@@ -78,6 +78,13 @@ def build_plan(run_id: str, seed: int, ip: str, token: str) -> dict:
     control_dependencies = sorted(
         {role_host for entry in anchors.values() for role_host in entry["roles"].values()}
     )
+    # Phase 5.2 E3: a blocked path on an *allowed* anchor. DNS cannot block
+    # paths, so this signal isolates the host-driven path rules: with the native
+    # host unavailable the extension loads no blocked-path rules and the probe
+    # succeeds (fail open); with the healthy compiled host the fetch is
+    # cancelled. The probe is a same-origin fetch (xmlhttprequest), one of the
+    # request types background-path-rules.ts enforces.
+    blocked_paths = [f"{entry['host']}/blocked-path/probe.bin" for entry in anchors.values()]
     return {
         "schemaVersion": 1,
         "runId": run_id,
@@ -91,6 +98,7 @@ def build_plan(run_id: str, seed: int, ip: str, token: str) -> dict:
         "unlisted": unlisted,
         "whitelistHosts": whitelist_hosts,
         "blockedSubdomains": [never_learnable],
+        "blockedPaths": blocked_paths,
         "waveCriteria": {
             "wave1": ["cssApplied", "coreExecuted", "imageLoaded"],
             "wave2": ["deferredExecuted"],
@@ -104,6 +112,8 @@ def whitelist_body(plan: dict) -> str:
     lines.extend(plan["whitelistHosts"])
     lines.append("## BLOCKED-SUBDOMAINS")
     lines.extend(plan["blockedSubdomains"])
+    lines.append("## BLOCKED-PATHS")
+    lines.extend(plan.get("blockedPaths", []))
     return "\r\n".join(lines) + "\r\n"
 
 
@@ -132,12 +142,30 @@ window.__firstVisit = {{
   roles: {json.dumps(roles)},
   blockedHost: {json.dumps(plan['neverLearnable'])},
   waves: {{ cssApplied: false, fontLoaded: false, imageLoaded: false, coreExecuted: false, deferredExecuted: false, apiPainted: false, blockedCssFailed: false }},
+  blockedPath: {{ attempts: [], enforced: null, final: false }},
   marks: {{ start: 0, core: 0, deferred: 0, api: 0, load: 0 }},
   loads: 0
 }};
 (function () {{
   var fv = window.__firstVisit;
   fv.marks.start = performance.now();
+  // Phase 5.2 E3: probe the blocked path on this allowed anchor. The request
+  // type is enforced by background-path-rules.ts; only the native host can
+  // supply the rules, so this is a generic host-driven path signal (DNS cannot
+  // block paths). Three attempts settle the value; the report that carries
+  // blockedPathFinal=true is the one the controller consumes.
+  function probeBlockedPath() {{
+    fetch('http://' + location.host + '/blocked-path/probe.bin?n=' + fv.blockedPath.attempts.length, {{ cache: 'no-store' }})
+      .then(function () {{ fv.blockedPath.attempts.push({{ seq: fv.blockedPath.attempts.length + 1, blocked: false }}); }})
+      .catch(function () {{ fv.blockedPath.attempts.push({{ seq: fv.blockedPath.attempts.length + 1, blocked: true }}); }})
+      .then(function () {{
+        if (fv.blockedPath.attempts.length >= 3) {{
+          fv.blockedPath.enforced = fv.blockedPath.attempts[fv.blockedPath.attempts.length - 1].blocked;
+          fv.blockedPath.final = true;
+        }}
+        send();
+      }});
+  }}
   // Hot-session scenario: the same page navigates to the second anchor after
   // the hot window, keeping the Firefox instance and the host process.
   try {{
@@ -170,6 +198,9 @@ window.__firstVisit = {{
       ts: Date.now(),
       timeOrigin: performance.timeOrigin,
       waves: fv.waves,
+      blockedPathEnforced: fv.blockedPath.final ? fv.blockedPath.enforced : null,
+      blockedPathFinal: fv.blockedPath.final,
+      blockedPathAttempts: fv.blockedPath.attempts,
       marks: fv.marks,
       timings: {{
         start: fv.marks.start,
@@ -188,6 +219,9 @@ window.__firstVisit = {{
     }} catch (e) {{}}
   }}
   window.__firstVisitSend = send;
+  probeBlockedPath();
+  setTimeout(probeBlockedPath, 2000);
+  setTimeout(probeBlockedPath, 4000);
   var probe = document.getElementById('probe');
   var px = document.getElementById('px');
   window.addEventListener('load', function () {{
@@ -410,6 +444,12 @@ class FixtureHandler(BaseHTTPRequestHandler):
             if path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
                 self._finish(204, path)
+                return
+            if path == "/blocked-path/probe.bin":
+                # Served so an unenforced (host-less) fetch succeeds; the
+                # extension cancels it when the blocked-path rules are loaded.
+                self._send(200, PIXEL_PNG, "application/octet-stream")
+                self._finish(200, path, "blocked-path-probe")
                 return
             self._send(404, b"anchor: not found", "text/plain")
             self._finish(404, path)

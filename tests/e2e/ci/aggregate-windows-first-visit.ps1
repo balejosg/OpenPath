@@ -21,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'first-visit\FirstVisitOutcome.psm1') -Force
 function Get-FirstVisitProperty {
     param([AllowNull()][object]$InputObject, [Parameter(Mandatory)][string]$Name, [object]$Default = $null)
     if ($null -eq $InputObject) { return $Default }
@@ -70,11 +71,24 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
         workerApplyMs = -1
         overlayStamps = 0
         acrylicLines  = 0
+        # Phase 5.2: verdict-before-collect evidence.
+        evidenceIncomplete = $false
+        collectError = ''
+        collectTimings = $null
+        blockedPathEnforced = $null
+        # Phase 5.2 E2: student host probe (compiled exe as the student).
+        hostProbePresent = $false
+        hostProbePing = $false
+        hostProbeReads = $false
+        hostProbeDeniedPowershell = $false
+        hostProbeManifestExe = $false
+        hostProbeError = ''
     }
+    $prepareError = ''
     if (Test-Path -LiteralPath $preparePath) {
         try {
             $prepare = Get-Content -LiteralPath $preparePath -Raw | ConvertFrom-Json
-            if ([string]$prepare.status -ne 'passed') { $row.error = [string]$prepare.error }
+            if ([string]$prepare.status -ne 'passed') { $row.error = [string]$prepare.error; $prepareError = [string]$prepare.error }
         }
         catch { }
     }
@@ -110,40 +124,59 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
         }
         catch { }
     }
+    $metricsObject = $null
     if (Test-Path -LiteralPath $metricsPath) {
-        $metrics = Get-Content -LiteralPath $metricsPath -Raw | ConvertFrom-Json
+        $metricsObject = Get-Content -LiteralPath $metricsPath -Raw | ConvertFrom-Json
         $row.status = 'observed'
-        $row.verdict = [string]$metrics.verdict
-        $row.reasons = @($metrics.reasons)
-        $row.reloads = [int]$metrics.reloads
-        $row.waveTimesMs = $metrics.waveTimesMs
-        $row.hostProfile = @($metrics.hostProfile)
-        $row.warmup = Get-FirstVisitProperty -InputObject $metrics -Name 'warmup'
-        $row.diagnostics = Get-FirstVisitProperty -InputObject $metrics -Name 'diagnostics'
-        $row.workerApplyMs = [int](Get-FirstVisitProperty -InputObject $metrics -Name 'workerApplyMs' -Default -1)
-        $row.overlayStamps = [int](Get-FirstVisitProperty -InputObject $metrics -Name 'overlayStamps' -Default 0)
-        $row.acrylicLines = [int](Get-FirstVisitProperty -InputObject $metrics -Name 'acrylicLines' -Default 0)
+        $row.verdict = [string]$metricsObject.verdict
+        $row.reasons = @($metricsObject.reasons)
+        $row.reloads = [int]$metricsObject.reloads
+        $row.waveTimesMs = $metricsObject.waveTimesMs
+        $row.hostProfile = @($metricsObject.hostProfile)
+        $row.warmup = Get-FirstVisitProperty -InputObject $metricsObject -Name 'warmup'
+        $row.diagnostics = Get-FirstVisitProperty -InputObject $metricsObject -Name 'diagnostics'
+        $row.workerApplyMs = [int](Get-FirstVisitProperty -InputObject $metricsObject -Name 'workerApplyMs' -Default -1)
+        $row.overlayStamps = [int](Get-FirstVisitProperty -InputObject $metricsObject -Name 'overlayStamps' -Default 0)
+        $row.acrylicLines = [int](Get-FirstVisitProperty -InputObject $metricsObject -Name 'acrylicLines' -Default 0)
         $row.productReasons = @(Get-FirstVisitProperty -InputObject $row.warmup -Name 'productReasons' -Default @())
         $hostSignals = Get-FirstVisitProperty -InputObject $row.warmup -Name 'hostSignals'
         if ($hostSignals) { $row.appControlBlocked = [bool](Get-FirstVisitProperty -InputObject $hostSignals -Name 'blockedByAppControl') }
-        # A measured visit is a product verdict; explicit warm-up product
-        # reasons (native host blocked/not started) make it PRODUCT even when
-        # the page waves happened to load.
-        $row.category = if ($row.verdict -eq 'passed' -and $row.productReasons.Count -eq 0) { 'PASS' } else { 'PRODUCT' }
+        $row.evidenceIncomplete = [bool](Get-FirstVisitProperty -InputObject $metricsObject -Name 'evidenceIncomplete' -Default $false)
+        $row.collectError = [string](Get-FirstVisitProperty -InputObject $metricsObject -Name 'collectError' -Default '')
+        $row.collectTimings = Get-FirstVisitProperty -InputObject $metricsObject -Name 'collectTimings'
+        $metricsBlockedPath = Get-FirstVisitProperty -InputObject $metricsObject -Name 'blockedPathEnforced'
+        if ($null -ne $metricsBlockedPath) { $row.blockedPathEnforced = [bool]$metricsBlockedPath }
+        $hostProbe = Get-FirstVisitProperty -InputObject $metricsObject -Name 'studentHostProbe'
+        $row.hostProbeError = [string](Get-FirstVisitProperty -InputObject $metricsObject -Name 'studentHostProbeError' -Default '')
+        if ($hostProbe) {
+            $row.hostProbePresent = [bool](Get-FirstVisitProperty -InputObject $hostProbe -Name 'compiledHostPresent' -Default $false)
+            $row.hostProbePing = [bool](Get-FirstVisitProperty -InputObject $hostProbe -Name 'pingResponded' -Default $false)
+            $row.hostProbeReads = [bool](Get-FirstVisitProperty -InputObject $hostProbe -Name 'readsResponded' -Default $false)
+            $row.hostProbeDeniedPowershell = [bool](Get-FirstVisitProperty -InputObject $hostProbe -Name 'deniedPowershell' -Default $false)
+            $row.hostProbeManifestExe = [bool](Get-FirstVisitProperty -InputObject $hostProbe -Name 'manifestTargetsCompiledHost' -Default $false)
+        }
     }
-    elseif ($row.error) {
-        # Without a verdict the run is INFRA with the demonstrated cause:
-        # preconditions, timeouts, lost results and lab transport failures are
-        # never green by design (Phase 3A.3 policy).
-        $row.category = 'INFRA'
+    # Phase 5.2 C1: the controller persists the scene verdict (from the page
+    # self-report plus the prepare product signals) before the collect step;
+    # it is the authoritative classification even when metrics are missing.
+    $verdictFilePath = Join-Path $scenarioDir.FullName 'observe-verdict.json'
+    $verdictFile = $null
+    if (Test-Path -LiteralPath $verdictFilePath) {
+        try { $verdictFile = Get-Content -LiteralPath $verdictFilePath -Raw | ConvertFrom-Json } catch { $verdictFile = $null }
     }
-    else {
-        # Phase 5 A2: a scene with no verdict and no recorded error is still
-        # never UNKNOWN. It is INFRA with an explicit cause.
-        $row.category = 'INFRA'
-        $row.error = 'no-metrics-no-error'
-        if ($row.reasons -notcontains 'no-metrics-no-error') { $row.reasons += 'no-metrics-no-error' }
-    }
+    $outcome = Get-OpenPathFirstVisitSceneOutcome -VerdictFile $verdictFile -Metrics $metricsObject `
+        -ObserveStatus ([string]$row.observeStatus) -ObserveError ([string]$row.error) `
+        -ObserveReasonCode ([string]$row.observeReasonCode) -PrepareError $prepareError
+    $row.verdict = $outcome.verdict
+    $row.category = $outcome.category
+    if (@($outcome.reasons).Count -gt 0) { $row.reasons = @($outcome.reasons) }
+    if (@($outcome.productReasons).Count -gt 0) { $row.productReasons = @($outcome.productReasons) }
+    $row.error = $outcome.error
+    $row.evidenceIncomplete = $outcome.evidenceIncomplete
+    if ($outcome.collectError) { $row.collectError = $outcome.collectError }
+    if ($null -ne $outcome.blockedPathEnforced) { $row.blockedPathEnforced = $outcome.blockedPathEnforced }
+    if ($row.category -eq 'INFRA' -and -not $row.error) { $row.error = 'no-metrics-no-error' }
+    if ($row.category -eq 'INFRA' -and $row.reasons -notcontains 'no-metrics') { $row.reasons += 'no-metrics' }
     if (Test-Path -LiteralPath $observePath) {
         try {
             $observe = Get-Content -LiteralPath $observePath -Raw | ConvertFrom-Json
@@ -229,14 +262,20 @@ $lines = @(
     '',
     "Run: $RunId attempt $RunAttempt - overall: $statusOverall",
     '',
-    '| scenario | verdict | category | observe | reasons | error | product reasons | reloads | wave1 ms | visit delay s |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    '| scenario | verdict | category | observe | evidence | blocked path | probe | reasons | error | product reasons | reloads | wave1 ms | visit delay s |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
 )
 foreach ($row in $rows) {
     $wave1 = if ($row.waveTimesMs) { [string]$row.waveTimesMs.wave1 } else { '' }
     $errorText = ([string]$row.error) -replace '\|', '/'
     if ($errorText.Length -gt 240) { $errorText = $errorText.Substring(0, 240) + '...' }
-    $lines += "| $($row.scenario) | $($row.verdict) | $($row.category) | $($row.observeStatus) | $(@($row.reasons) -join ',') | $errorText | $(@($row.productReasons) -join ',') | $($row.reloads) | $wave1 | $($row.visitDelaySeconds) |"
+    $evidenceText = if ($row.evidenceIncomplete) { 'incomplete' } else { 'complete' }
+    $blockedPathText = if ($null -eq $row.blockedPathEnforced) { '' } else { [string][bool]$row.blockedPathEnforced }
+    $probeText = if ($row.hostProbeError) { "error: $($row.hostProbeError)" }
+        elseif ($row.hostProbePresent) { "exe ping=$([int]$row.hostProbePing) reads=$([int]$row.hostProbeReads) deny=$([int]$row.hostProbeDeniedPowershell) manifest=$([int]$row.hostProbeManifestExe)" }
+        elseif ($row.status -eq 'observed') { "no-exe deny=$([int]$row.hostProbeDeniedPowershell)" }
+        else { '' }
+    $lines += "| $($row.scenario) | $($row.verdict) | $($row.category) | $($row.observeStatus) | $evidenceText | $blockedPathText | $probeText | $(@($row.reasons) -join ',') | $errorText | $(@($row.productReasons) -join ',') | $($row.reloads) | $wave1 | $($row.visitDelaySeconds) |"
 }
 $lines += ''
 $lines += '## Baselines (median / max, one clock per segment)'
@@ -253,6 +292,20 @@ $lines += ''
 foreach ($name in ($baselines.Keys | Sort-Object)) {
     $reasons = $baselines[$name].reloadReasons
     $lines += "- ${name}: " + $(if ($reasons.Count -gt 0) { ($reasons.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ', ' } else { 'none' })
+}
+$lines += ''
+$lines += '## Collect timings (ms per guest block, Phase 5.2 C2)'
+$lines += ''
+$lines += '| scenario | total | addons | native | prof | openpath | worker | moz | overlay | whitelist | process | serialize | moz files | truncated |'
+$lines += '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+foreach ($row in $rows) {
+    $t = $row.collectTimings
+    if (-not $t) {
+        $lines += "| $($row.scenario) | - | | | | | | | | | | | | |"
+        continue
+    }
+    $get = { param($name) $value = Get-FirstVisitProperty -InputObject $t -Name $name; if ($null -eq $value) { '' } else { [string]$value } }
+    $lines += "| $($row.scenario) | $(& $get 'totalMs') | $(& $get 'addonsMs') | $(& $get 'nativeHostMs') | $(& $get 'profilesMs') | $(& $get 'openpathMs') | $(& $get 'workerStateMs') | $(& $get 'mozScanMs') | $(& $get 'overlayHostsMs') | $(& $get 'whitelistMs') | $(& $get 'processesMs') | $(& $get 'serializationMs') | $(& $get 'mozFiles') | $(& $get 'mozTruncated') |"
 }
 $markdown = $lines -join "`n"
 if ($SummaryMarkdownPath) { [IO.File]::WriteAllText($SummaryMarkdownPath, $markdown, [Text.UTF8Encoding]::new($false)) }

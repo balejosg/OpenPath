@@ -14,6 +14,10 @@ $script:OpenPathFirstVisitRefreshSettleSeconds = 30
 $script:OpenPathFirstVisitObserveSettleSeconds = 15
 $script:OpenPathFirstVisitHotWindowSeconds = 300
 $script:OpenPathFirstVisitHotSecondSettleSeconds = 20
+# Phase 5.2 C1: extra seconds the report wait keeps polling for the page's
+# final blocked-path probe (0 in the contract tests), and the wait cap.
+$script:OpenPathFirstVisitReportGraceSeconds = 15
+$script:OpenPathFirstVisitReportWaitSeconds = 120
 # Phase 5 A2: per-phase step trace (step, elapsed, source, status). Append-only
 # and persisted after every step so a killed controller can still be measured.
 $script:OpenPathFirstVisitStepTrace = $null
@@ -314,6 +318,10 @@ function Add-OpenPathFirstVisitStepTrace {
     .SYNOPSIS
     Records one guest step timing entry and persists the trace next to the run
     artifacts so a killed controller still explains where the time went.
+    .DESCRIPTION
+    Phase 5.2 C3: the entry is written with status=running BEFORE the step is
+    invoked and updated in place when it ends. A phase timeout can therefore
+    name the step that was in progress, not only the last one that finished.
     #>
     [CmdletBinding()]
     param(
@@ -324,7 +332,21 @@ function Add-OpenPathFirstVisitStepTrace {
     if (-not $script:OpenPathFirstVisitStepTrace) {
         $script:OpenPathFirstVisitStepTrace = New-Object System.Collections.ArrayList
     }
-    $null = $script:OpenPathFirstVisitStepTrace.Add($Entry)
+    $existing = $null
+    foreach ($candidate in @($script:OpenPathFirstVisitStepTrace)) {
+        if ([string]$candidate['phase'] -eq [string]$Entry['phase'] -and
+            [string]$candidate['step'] -eq [string]$Entry['step'] -and
+            [string]$candidate['startedAt'] -eq [string]$Entry['startedAt']) {
+            $existing = $candidate
+            break
+        }
+    }
+    if ($existing) {
+        foreach ($key in @($Entry.Keys)) { $existing[[string]$key] = $Entry[$key] }
+    }
+    else {
+        $null = $script:OpenPathFirstVisitStepTrace.Add($Entry)
+    }
     if ([string]::IsNullOrWhiteSpace($ArtifactsRoot) -or [string]::IsNullOrWhiteSpace($Phase)) { return }
     try {
         $path = Join-Path $ArtifactsRoot "$Phase-step-trace.json"
@@ -364,10 +386,13 @@ function Send-OpenPathFirstVisitStep {
         timeoutSeconds = $TimeoutSeconds
         attempts       = 0
         resultSource   = ''
-        status         = ''
+        status         = 'running'
         failures       = @()
     }
-    $artifactsRoot = ''
+    $artifactsRoot = [string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')
+    # Phase 5.2 C3: persist the running entry before invoking the step so a
+    # killed controller (phase timeout) still names the step in progress.
+    Add-OpenPathFirstVisitStepTrace -Entry $stepEntry -ArtifactsRoot $artifactsRoot -Phase $Phase
     try {
         Update-OpenPathLabActiveHeartbeat
         $resultPath = $Paths.GuestDir.TrimEnd('\') + "\result-$Phase-$Step.json"
@@ -394,7 +419,6 @@ function Send-OpenPathFirstVisitStep {
     $fileText = ''
     $exitCode = -999
     $exitKnown = $false
-    $artifactsRoot = [string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         try { $output = & $Transport.InvokeGuestPowerShell $Vmid $script $attemptTimeout }
         catch { $output = '' }
@@ -556,6 +580,11 @@ function Get-OpenPathFirstVisitReportVerdict {
         fontLoaded = $false
         neverLearnableBlocked = $false
         visitDelaySeconds = -1
+        # Phase 5.2 E3: generic product signal that only the host-driven path
+        # rules can satisfy (DNS cannot block paths; a dead host fails open).
+        blockedPathEnforced = $false
+        blockedPathFinal    = $false
+        blockedPathEvidence = $false
     }
     if ($null -eq $Report -or -not $Report.waves) {
         $result.reasons += 'self-report-missing'
@@ -590,7 +619,15 @@ function Get-OpenPathFirstVisitReportVerdict {
     $result.fontLoaded = [bool](Get-OpenPathLabField -InputObject $waves -Name 'fontLoaded')
     $result.neverLearnableBlocked = [bool](Get-OpenPathLabField -InputObject $waves -Name 'blockedCssFailed')
     if (-not $result.neverLearnableBlocked) { $result.reasons += 'never-learnable-host-not-blocked' }
-    $result.status = if ($result.reasons | Where-Object { $_ -like '*incomplete*' -or $_ -in @('too-many-reloads', 'self-report-missing', 'never-learnable-host-not-blocked') }) { 'failed' } else { 'passed' }
+    # Phase 5.2 E3: only a report that explicitly settled the blocked-path probe
+    # can carry the generic path signal; the waves stay the page self-report.
+    $result.blockedPathFinal = [bool](Get-OpenPathLabField -InputObject $Report -Name 'blockedPathFinal')
+    $result.blockedPathEnforced = [bool](Get-OpenPathLabField -InputObject $Report -Name 'blockedPathEnforced')
+    if ($result.blockedPathFinal) {
+        $result.blockedPathEvidence = $true
+        if (-not $result.blockedPathEnforced) { $result.reasons += 'blocked-path-not-enforced' }
+    }
+    $result.status = if ($result.reasons | Where-Object { $_ -like '*incomplete*' -or $_ -in @('too-many-reloads', 'self-report-missing', 'never-learnable-host-not-blocked', 'blocked-path-not-enforced') }) { 'failed' } else { 'passed' }
     return [pscustomobject]$result
 }
 
@@ -617,7 +654,15 @@ function Get-OpenPathFirstVisitMetrics {
         [Parameter(Mandatory = $true)][AllowNull()][object]$Verdict,
         [string[]]$LogLines = @(),
         [AllowNull()][object]$Diagnostics = $null,
-        [AllowNull()][object]$PrepareState = $null
+        [AllowNull()][object]$PrepareState = $null,
+        # Phase 5.2 C1/C2: the scene keeps its verdict when the collect failed;
+        # the failure and the guest block timings travel as evidence.
+        [bool]$EvidenceIncomplete = $false,
+        [string]$CollectError = '',
+        [AllowNull()][object]$CollectTimings = $null,
+        # Phase 5.2 E2: student host probe evidence (per scene).
+        [AllowNull()][object]$HostProbe = $null,
+        [string]$HostProbeError = ''
     )
     $hostProfile = @()
     foreach ($line in $StartupProfiles) {
@@ -706,6 +751,13 @@ function Get-OpenPathFirstVisitMetrics {
         repairReloads  = if ($Verdict) { $Verdict.reloads } else { -1 }
         fontLoaded     = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'fontLoaded')
         neverLearnableBlocked = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'neverLearnableBlocked')
+        blockedPathEnforced = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'blockedPathEnforced')
+        blockedPathFinal = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'blockedPathFinal')
+        evidenceIncomplete = $EvidenceIncomplete
+        collectError = $CollectError
+        collectTimings = $CollectTimings
+        studentHostProbe = $HostProbe
+        studentHostProbeError = $HostProbeError
         reloadReasons  = $reloadReasons
         diagnosticLines = @($DiagnosticLines).Count
         holdOutcomes   = $holdOutcomes.Count
@@ -740,6 +792,8 @@ function Invoke-OpenPathFirstVisitPrepare {
     )
     $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
     $firstVisit = Get-OpenPathFirstVisitSettings -Payload $Payload -Config $Config
+    # Phase 5.2 C3: each phase owns its step trace.
+    $script:OpenPathFirstVisitStepTrace = $null
     # A transport dry-run lab cannot produce a first-visit verdict; report
     # BLOCKED instead of a green run with no evidence.
     if ([string](Get-OpenPathLabField -InputObject $Config -Name 'mode') -ne 'acceptance') {
@@ -761,7 +815,7 @@ New-Item -ItemType Directory -Path 'C:\OpenPathLab\first-visit' -Force | Out-Nul
 [IO.File]::WriteAllText('C:\OpenPathLab\first-visit\student-session-launch.ps1', $launcherLiteral, [Text.UTF8Encoding]::new(`$false))
 Write-Output 'launcher-staged'
 "@ 120 | Out-Null
-    foreach ($moduleName in @('FirstVisitWarmup.psm1', 'FirstVisitResult.psm1')) {
+    foreach ($moduleName in @('FirstVisitWarmup.psm1', 'FirstVisitResult.psm1', 'Test-OpenPathNativeHostAsStudent.ps1')) {
         $localModule = Join-Path (Get-OpenPathFirstVisitFixturesRoot) $moduleName
         if (-not (Test-Path -LiteralPath $localModule -PathType Leaf)) { throw "first-visit-helper-missing-$moduleName" }
         $published = & $Transport.PublishArtifact $Paths.StagingDir $localModule
@@ -970,6 +1024,8 @@ function Invoke-OpenPathFirstVisitObserve {
     $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
     $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
     $firstVisit = Get-OpenPathLabField -InputObject $Payload -Name 'firstVisit'
+    # Phase 5.2 C3: each phase owns its step trace.
+    $script:OpenPathFirstVisitStepTrace = $null
     $scenario = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'scenario') } else { 'first-visit-settled' }
     if (-not $scenario) { $scenario = 'first-visit-settled' }
     if ([string](Get-OpenPathLabField -InputObject $Config -Name 'mode') -ne 'acceptance') {
@@ -1024,19 +1080,33 @@ function Invoke-OpenPathFirstVisitObserve {
         try { & $Transport.CaptureScreendump $Vmid $capture | Out-Null } catch { Write-Warning "screendump t$offset failed: $($_.Exception.Message)" }
     }
 
-    # 3) The verdict comes from the page self-report (never from MOZ_LOG); the
-    #    repair-reload count is computed from the report sequence.
+    # 3) Phase 5.2 C1: the verdict is computed and persisted from the page
+    #    self-report (plus the prepare product signals) BEFORE the heavy collect.
+    #    A slow or failed collect can no longer turn a measured PRODUCT failure
+    #    into INFRA: it only marks the evidence incomplete.
     $fixtureUrl = [string]$state.fixtureUrl
     $staging = "$([string](Get-OpenPathLabField -InputObject $Config -Name 'hostStagingRoot'))/$([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId'))".Replace('//', '/')
     $report = $null
     $fixtureState = $null
-    $deadline = (Get-Date).AddSeconds(120)
-    while ((Get-Date) -lt $deadline) {
+    $deadline = (Get-Date).AddSeconds($script:OpenPathFirstVisitReportWaitSeconds)
+    $firstReportAt = $null
+    while ($true) {
         $stateTextForObserve = (& $Transport.InvokeHostCommand @('curl', '-s', '--max-time', '10', "$fixtureUrl/state.json") '').Trim()
         if ($stateTextForObserve.StartsWith('{')) {
             $fixtureState = $stateTextForObserve | ConvertFrom-Json
-            if ($fixtureState.lastReport) { $report = $fixtureState.lastReport; break }
+            $lastReport = Get-OpenPathLabField -InputObject $fixtureState -Name 'lastReport'
+            if ($lastReport) {
+                $report = $lastReport
+                if (-not $firstReportAt) { $firstReportAt = Get-Date }
+                # The blocked-path probe (Phase 5.2 E3) settles a few seconds
+                # after load; prefer the report that carries its final value,
+                # bounded by the grace so a legacy page can never stall here.
+                if ([bool](Get-OpenPathLabField -InputObject $report -Name 'blockedPathFinal')) { break }
+                if ($script:OpenPathFirstVisitReportGraceSeconds -le 0) { break }
+                if (((Get-Date) - $firstReportAt).TotalSeconds -ge $script:OpenPathFirstVisitReportGraceSeconds) { break }
+            }
         }
+        if ((Get-Date) -ge $deadline) { break }
         Start-Sleep -Seconds 5
     }
     $repairReloads = -1
@@ -1055,10 +1125,47 @@ function Invoke-OpenPathFirstVisitObserve {
         $repairReloads = $reloadCount
     }
     $browserRequests = if ($fixtureState) { [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'browserRequests') } else { 0 }
-    if ($browserRequests -le 0) {
-        throw 'first-visit-fixture-served-no-requests'
+    $plan = $state.plan
+    $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario -RepairReloads $repairReloads
+    $prepareHostEvidence = Get-OpenPathLabField -InputObject $state -Name 'hostEvidence'
+    $prepareProductReasons = @(Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'productReasons')
+    $prepareHostSignals = Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'signals'
+    $prepareHostVerdict = Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'verdict'
+    $prepareLiveSignals = Get-OpenPathLabField -InputObject $state -Name 'liveSignals'
+    $verdictDocument = [ordered]@{
+        schemaVersion       = 1
+        scenario            = $scenario
+        source              = 'self-report+prepare'
+        verdict             = $verdict
+        reportPresent       = ($null -ne $report)
+        browserRequests     = $browserRequests
+        fixtureRequests     = if ($fixtureState) { [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests') } else { 0 }
+        repairReloads       = $repairReloads
+        productReasons      = @($prepareProductReasons)
+        hostStarted         = [bool](Get-OpenPathLabField -InputObject $prepareLiveSignals -Name 'hostStarted')
+        hostSignals         = $prepareHostSignals
+        blockedByAppControl = [bool](Get-OpenPathLabField -InputObject $prepareHostVerdict -Name 'blockedByAppControl')
+        blockedPathEnforced = Get-OpenPathLabField -InputObject $report -Name 'blockedPathEnforced'
+        blockedPathFinal    = [bool](Get-OpenPathLabField -InputObject $report -Name 'blockedPathFinal')
+        evidenceIncomplete  = $false
+        collectError        = ''
+        writtenAt           = [DateTime]::UtcNow.ToString('o')
     }
-    $collect = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'collect' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowRetry
+    $verdictPath = Join-Path $artifactsRoot 'observe-verdict.json'
+    [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+
+    # 4) Collect: bounded (<=120 s controller budget) and best-effort. Its
+    #    failure is recorded literally and never changes the persisted verdict.
+    $collect = $null
+    $collectError = ''
+    try {
+        $collect = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'collect' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 -AllowRetry
+    }
+    catch {
+        $collectError = [string]$_.Exception.Message
+        if ($collectError.Length -gt 600) { $collectError = $collectError.Substring(0, 600) + '...' }
+        Write-Warning "first-visit collect failed (verdict preserved): $collectError"
+    }
     # Strict mode: never dereference a property chain directly. The serializer
     # may drop the collect subtree (naming the failing keys) and the scene must
     # still produce metrics instead of aborting the phase.
@@ -1068,14 +1175,37 @@ function Invoke-OpenPathFirstVisitObserve {
         [IO.File]::WriteAllLines((Join-Path $evidenceDir 'moz-extract.txt'), $mozExtract, [Text.UTF8Encoding]::new($false))
     }
     $security = $null
+    $securityError = ''
+    # Phase 5.2 E2: the student host probe is scene evidence, not a gate: its
+    # result travels in metrics and never changes the persisted verdict.
+    $hostProbe = $null
+    $hostProbeError = ''
+    try {
+        $hostProbe = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'host-probe' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 240 -AllowRetry
+    }
+    catch {
+        $hostProbeError = [string]$_.Exception.Message
+        if ($hostProbeError.Length -gt 400) { $hostProbeError = $hostProbeError.Substring(0, 400) + '...' }
+        Write-Warning "first-visit student host probe failed: $hostProbeError"
+    }
+    $hostProbeState = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostProbe -Name 'body') -Name 'state'
+    $hostProbeResult = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostProbeState -Name 'hostProbe') -Name 'result'
+    if (-not $hostProbeError) {
+        $hostProbeError = [string](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostProbeState -Name 'hostProbe') -Name 'error')
+    }
     if ($scenario -in @('first-visit-settled', 'first-visit-control')) {
-        $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowRetry
+        try {
+            $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300 -AllowRetry
+        }
+        catch {
+            $securityError = [string]$_.Exception.Message
+            if ($securityError.Length -gt 400) { $securityError = $securityError.Substring(0, 400) + '...' }
+            Write-Warning "first-visit security step failed: $securityError"
+        }
         Start-Sleep -Seconds 20
         $blockedCapture = Join-Path $captureDir "console-$scenario-blocked.ppm"
         try { & $Transport.CaptureScreendump $Vmid $blockedCapture | Out-Null } catch { Write-Warning 'blocked screendump failed' }
     }
-    $plan = $state.plan
-    $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario -RepairReloads $repairReloads
     $workerStateJson = [string](Get-OpenPathLabField -InputObject $collectState -Name 'workerState')
     if ($workerStateJson -and -not $workerStateJson.StartsWith('{')) { $workerStateJson = '' }
     $metricsFixture = if ($fixtureState) {
@@ -1083,12 +1213,20 @@ function Invoke-OpenPathFirstVisitObserve {
     }
     else { [pscustomobject]@{ requests = 0; browserRequests = 0; workerStateJson = $workerStateJson } }
     $collectDiagnostics = Get-OpenPathLabField -InputObject $collectState -Name 'diagnostics'
+    $collectTimings = Get-OpenPathLabField -InputObject $collectState -Name 'timings'
     $diagnosticLines = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectDiagnostics -Name 'all'))
     $startupProfiles = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'startupProfiles'))
     $openpathTail = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'openpathTail'))
-    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles $startupProfiles -FixtureState $metricsFixture -Verdict $verdict -LogLines $openpathTail -Diagnostics $collectDiagnostics -PrepareState $state
+    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles $startupProfiles -FixtureState $metricsFixture -Verdict $verdict -LogLines $openpathTail -Diagnostics $collectDiagnostics -PrepareState $state -EvidenceIncomplete ([bool]$collectError) -CollectError $collectError -CollectTimings $collectTimings -HostProbe $hostProbeResult -HostProbeError $hostProbeError
+    if ($collectError) {
+        # Same file, added fields only: the verdict written before the collect
+        # is never replaced, the incompleteness is.
+        $verdictDocument.evidenceIncomplete = $true
+        $verdictDocument.collectError = $collectError
+        [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+    }
     $metricsPath = Join-Path $artifactsRoot 'metrics.json'
-    [IO.File]::WriteAllText($metricsPath, ($metrics | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($metricsPath, ($metrics | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
     $studentUser = [string]$settings.StudentUserName
     Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath "C:\Users\$studentUser\AppData\Local\OpenPath\native-host.log" -LocalPath (Join-Path $evidenceDir 'native-host.log') | Out-Null
     Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath 'C:\OpenPath\logs\openpath.log' -LocalPath (Join-Path $evidenceDir 'openpath.log') | Out-Null
@@ -1104,8 +1242,12 @@ function Invoke-OpenPathFirstVisitObserve {
             firefoxLog        = @(Get-OpenPathLabField -InputObject $wait.body.state -Name 'firefoxLog')
             report            = $report
             verdict           = $verdict
+            verdictDocument   = $verdictDocument
             metrics           = $metrics
+            evidenceIncomplete = [bool]$collectError
+            collectError      = $collectError
             security          = if ($security) { $security.body.state } else { $null }
+            securityError     = $securityError
         }
     }
     return New-OpenPathLabAcceptanceObservation -Payload $Payload -Phase 'observe' -Body $body
@@ -1124,6 +1266,8 @@ function Invoke-OpenPathFirstVisitCleanup {
         [Parameter(Mandatory = $true)][bool]$RestoreBaseline
     )
     $body = [ordered]@{ state = [ordered]@{ uninstall = $null; fixtureStopped = $false } }
+    # Phase 5.2 C3: each phase owns its step trace.
+    $script:OpenPathFirstVisitStepTrace = $null
     try {
         $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
         $state = $null

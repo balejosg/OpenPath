@@ -68,6 +68,35 @@ jobs:
           # clone would silently skip the lane (Phase 3A finding).
           fetch-depth: 0
 
+      - name: Superseded auto-run guard
+        id: supersede
+        if: github.event_name == 'workflow_run'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          TRIGGER_CREATED_AT: ${{ github.event.workflow_run.created_at }}
+        run: |
+          # Phase 5.2 C5: only the newest non-cancelled release-scripts run
+          # gives the verdict; older auto-runs end as skipped-superseded.
+          Import-Module (Resolve-Path 'tests/e2e/ci/first-visit/FirstVisitSupersedeGuard.psm1') -Force
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $runs = @()
+          try {
+            $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/workflows/release-scripts.yml/runs?branch=main&per_page=30" -Headers $headers -TimeoutSec 60
+            $runs = @($response.workflow_runs)
+          }
+          catch {
+            Write-Host "Supersede guard: REST query failed (fails open): $($_.Exception.Message)"
+          }
+          $decision = Get-OpenPathFirstVisitSupersedeDecision -TriggerRunId $env:TRIGGER_RUN_ID -TriggerCreatedAt $env:TRIGGER_CREATED_AT -Runs $runs
+          Write-Host "Supersede guard: superseded=$($decision.superseded) newer=$($decision.newerRunId) reason=$($decision.reason)"
+          if ($decision.superseded) {
+            "## Windows First Visit Lab`n`nskipped-superseded: a newer release-scripts run ($($decision.newerRunId)) exists; the newest run owns the verdict." | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "skip=$($decision.superseded.ToString().ToLowerInvariant())"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "newer_run_id=$($decision.newerRunId)"
+
       - name: Detect relevant changes
         id: scope
         shell: pwsh
@@ -92,7 +121,7 @@ jobs:
 
       - name: Resolve template source
         id: template
-        if: steps.scope.outputs.run == 'true'
+        if: steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -119,7 +148,7 @@ jobs:
           Write-Host "Using release-scripts run $($resolved.runId) (template sha $($resolved.templateSha), mode $($resolved.mode))"
 
       - name: Download exact candidate artifacts
-        if: steps.scope.outputs.run == 'true'
+        if: steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -138,7 +167,7 @@ jobs:
           Get-ChildItem windows-offline-template-assets, windows-personalized-exe | Select-Object Name, Length
 
       - name: Reclaim lab lock from finished runs
-        if: steps.scope.outputs.run == 'true'
+        if: steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -147,7 +176,7 @@ jobs:
             -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') -ReclaimFinishedOwners
 
       - name: Require lab controller
-        if: steps.scope.outputs.run == 'true'
+        if: steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'
         shell: pwsh
         env:
           OPENPATH_FIRST_VISIT_CONTROLLER: ${{ secrets.OPENPATH_FIRST_VISIT_CONTROLLER }}
@@ -164,7 +193,7 @@ jobs:
 
       - name: Run first-visit suite
         id: suite
-        if: steps.scope.outputs.run == 'true'
+        if: steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'
         shell: pwsh
         env:
           OPENPATH_FIRST_VISIT_CONTROLLER: ${{ secrets.OPENPATH_FIRST_VISIT_CONTROLLER }}
@@ -188,7 +217,7 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Aggregate results
-        if: always() && steps.scope.outputs.run == 'true'
+        if: always() && steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'
         shell: pwsh
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'openpath-first-visit'
@@ -217,7 +246,7 @@ jobs:
             -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}')
 
       - name: Upload first-visit evidence
-        if: always() && steps.scope.outputs.run == 'true'
+        if: always() && steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: windows-first-visit-evidence

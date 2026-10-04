@@ -116,7 +116,11 @@ function ConvertTo-FirstVisitResultJson {
     }
     $encode = {
         param([string]$FlatKey, [object]$Value, [int]$Depth = 0)
-        # Returns the inline value, a part descriptor, or $null when rejected.
+        # Returns [ordered]@{ ok = $true; value = <inline value|part> } or
+        # @{ ok = $false } when rejected. The wrapper exists because $null, $null
+        # and an empty array all collapse to 'no output' when a function returns
+        # them; Phase 5.2 found empty arrays and null state values being listed
+        # as serialization failures (body.state.session, failures).
         $probeOk = & $probe $Value
         $valueJson = $null
         $oversized = $false
@@ -133,18 +137,18 @@ function ConvertTo-FirstVisitResultJson {
             foreach ($childKey in @($Value.Keys)) {
                 $childValue = Get-FirstVisitResultField -InputObject $Value -Name $childKey
                 $encodedChild = & $encode ("$FlatKey.$childKey") $childValue ($Depth + 1)
-                if ($null -eq $encodedChild) {
+                if (-not $encodedChild.ok) {
                     $failures.Add("$FlatKey.$childKey")
                     continue
                 }
-                $child[[string]$childKey] = $encodedChild
+                $child[[string]$childKey] = $encodedChild.value
             }
-            return $child
+            return [ordered]@{ ok = $true; value = $child }
         }
         if (-not $probeOk) {
             if ($customProbe) { $diagnostics[$FlatKey] = 'custom-probe-rejected' }
             else { $diagnostics[$FlatKey] = (Get-FirstVisitSerializationError -Value $Value) }
-            return $null
+            return [ordered]@{ ok = $false }
         }
         $partName = & $writePart $FlatKey $Value $valueJson
         if ($partName) {
@@ -156,15 +160,15 @@ function ConvertTo-FirstVisitResultJson {
                 $sha = (Get-FileHash -LiteralPath (Join-Path $PartsDirectory $partName) -Algorithm SHA256).Hash.ToLowerInvariant()
             }
             catch { }
-            return [ordered]@{ firstVisitPart = [string]$partName; bytes = 0; count = $count; sha256 = $sha }
+            return [ordered]@{ ok = $true; value = [ordered]@{ firstVisitPart = [string]$partName; bytes = 0; count = $count; sha256 = $sha } }
         }
-        return $Value
+        return [ordered]@{ ok = $true; value = $Value }
     }
     $reduced = [ordered]@{}
     foreach ($key in @($Payload.Keys)) {
         if ($key -eq 'body') { continue }
         $encoded = & $encode ([string]$key) $Payload[$key]
-        if ($null -ne $encoded) { $reduced[[string]$key] = $encoded }
+        if ($encoded.ok) { $reduced[[string]$key] = $encoded.value }
         else { $failures.Add([string]$key) }
     }
     $body = Get-FirstVisitResultField -InputObject $Payload -Name 'body'
@@ -175,7 +179,7 @@ function ConvertTo-FirstVisitResultJson {
             if ($key -eq 'state') { continue }
             $value = Get-FirstVisitResultField -InputObject $body -Name $key
             $encoded = & $encode ("body.$key") $value
-            if ($null -ne $encoded) { $reducedBody[[string]$key] = $encoded }
+            if ($encoded.ok) { $reducedBody[[string]$key] = $encoded.value }
             else { $failures.Add("body.$key") }
         }
         $stateObject = Get-FirstVisitResultField -InputObject $body -Name 'state'
@@ -183,7 +187,7 @@ function ConvertTo-FirstVisitResultJson {
             foreach ($key in @($stateObject.Keys)) {
                 $value = Get-FirstVisitResultField -InputObject $stateObject -Name $key
                 $encoded = & $encode ("body.state.$key") $value
-                if ($null -ne $encoded) { $state[[string]$key] = $encoded }
+                if ($encoded.ok) { $state[[string]$key] = $encoded.value }
                 else { $failures.Add("body.state.$key") }
             }
         }

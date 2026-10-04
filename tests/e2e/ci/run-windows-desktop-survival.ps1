@@ -75,8 +75,15 @@ if ([string]::IsNullOrWhiteSpace($ControllerPayloadPath)) {
 }
 
 $controllerResult = $null
+$phaseTimeoutSeconds = 1800
+if ($env:OPENPATH_SUITE_KIND -eq 'FirstVisit') {
+    # Phase 5.2 C4: a first-visit scene is bounded per phase so the scheduled
+    # plan fits the workflow timeout with margin.
+    Import-Module (Join-Path $PSScriptRoot 'first-visit\FirstVisitBudget.psm1') -Force
+    $phaseTimeoutSeconds = Get-OpenPathFirstVisitPhaseBudget -Mode $Mode
+}
 try {
-    $controllerResult = Invoke-OpenPathDisposableWindowsController -Command $ControllerCommand -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -PayloadPath $ControllerPayloadPath -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath
+    $controllerResult = Invoke-OpenPathDisposableWindowsController -Command $ControllerCommand -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -PayloadPath $ControllerPayloadPath -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -TimeoutSeconds $phaseTimeoutSeconds
     if ($controllerResult.status -eq 'blocked') {
         $common.status = 'blocked'
         $common.reasonCode = 'BLOCKED_PLATFORM_VALIDATION'

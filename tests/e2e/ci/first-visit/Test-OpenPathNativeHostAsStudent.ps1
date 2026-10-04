@@ -27,15 +27,23 @@ $result = [ordered]@{
     startedAt     = [DateTime]::UtcNow.ToString('o')
     hostExe       = $HostExe
     hostExists    = (Test-Path -LiteralPath $HostExe -PathType Leaf)
+    compiledHostPresent = (Test-Path -LiteralPath $HostExe -PathType Leaf)
+    manifestHealthy = $false
+    manifestTargetsCompiledHost = $false
     manifestPath  = ''
     launchPath    = ''
     responses     = @()
+    pingResponded = $false
+    readsResponded = $false
+    portalProtocolResponded = $false
+    smartAppControl = $null
     hostLogInit   = @()
     hostLogBytes  = 0
     deniedPowershell = $false
     events8004Before = 0
     events8004After = 0
     error         = ''
+    skipReason    = ''
 }
 
 function Read-NativeHost8004Count {
@@ -50,69 +58,87 @@ $count
 }
 
 try {
-    if (-not $result.hostExists) { throw 'compiled-host-missing' }
-    $manifestPath = Join-Path (Split-Path $HostExe -Parent) 'OpenPath-NativeHost.manifest.json'
-    if (Test-Path -LiteralPath $manifestPath) {
-        $result.manifestPath = $manifestPath
-        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-        if ([string]$manifest.healthStatus -ne 'healthy') { throw 'compiled-host-manifest-unhealthy' }
-    }
-    $messagingManifest = Join-Path (Split-Path $HostExe -Parent) 'whitelist_native_host.json'
-    if (Test-Path -LiteralPath $messagingManifest) {
-        $result.launchPath = [string](Get-Content -LiteralPath $messagingManifest -Raw | ConvertFrom-Json).path
-    }
-
-    # 1) Framed requests.
-    $requests = @(
-        (@{ action = 'ping'; id = 'b6-1' } | ConvertTo-Json -Compress),
-        (@{ action = 'get-hostname' } | ConvertTo-Json -Compress),
-        (@{ action = 'get-machine-token' } | ConvertTo-Json -Compress),
-        (@{ action = 'get-blocked-paths' } | ConvertTo-Json -Compress),
-        (@{ action = 'get-allowed-paths' } | ConvertTo-Json -Compress),
-        (@{ action = 'get-blocked-subdomains' } | ConvertTo-Json -Compress),
-        (@{ action = 'check'; domains = @('example.com') } | ConvertTo-Json -Compress),
-        # Portal recovery protocol check: no trigger host must answer the
-        # structured InvalidHost response (never a crash).
-        (@{ action = 'recover-captive-portal-navigation'; operation = 'open' } | ConvertTo-Json -Compress)
-    )
-    $requestPath = Join-Path $WorkDir 'b6-requests.bin'
-    $stream = [IO.File]::Open($requestPath, [IO.FileMode]::Create, [IO.FileAccess]::Write)
+    # Smart App Control state is part of the acceptance evidence: enforcement
+    # can block an unsigned locally compiled host.
     try {
-        foreach ($json in $requests) {
-            $bytes = [Text.Encoding]::UTF8.GetBytes($json)
-            $stream.Write([BitConverter]::GetBytes([int]$bytes.Length), 0, 4)
-            $stream.Write($bytes, 0, $bytes.Length)
-        }
+        $result.smartAppControl = [int](Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name 'VerifiedAndReputablePolicyState' -ErrorAction Stop).VerifiedAndReputablePolicyState
     }
-    finally { $stream.Dispose() }
+    catch { $result.smartAppControl = $null }
 
-    # 2) Launch as the student through the session launcher (cmd handles the
-    #    redirection; AppLocker still allows cmd.exe under %WINDIR%).
-    $responsePath = Join-Path $WorkDir 'b6-responses.bin'
-    $errorPath = Join-Path $WorkDir 'b6-student-err.txt'
-    Remove-Item -LiteralPath $responsePath, $errorPath -Force -ErrorAction SilentlyContinue
-    $commandLine = '"C:\Windows\System32\cmd.exe" /c ""' + $HostExe + '" < "' + $requestPath + '" > "' + $responsePath + '" 2> "' + $errorPath + '""'
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($commandLine))
-    $launch = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $LauncherPath -CommandLineBase64 $encoded 2>&1 | Out-String
-    $result.launchOutput = $launch.Trim()
-
-    # 3) Poll and parse the framed responses.
-    $deadline = (Get-Date).AddSeconds(60)
-    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $responsePath -PathType Leaf)) { Start-Sleep -Seconds 2 }
-    Start-Sleep -Seconds 2
-    if (Test-Path -LiteralPath $responsePath -PathType Leaf) {
-        $bytes = [IO.File]::ReadAllBytes($responsePath)
-        $offset = 0
-        while ($offset + 4 -le $bytes.Length) {
-            $length = [BitConverter]::ToInt32($bytes, $offset)
-            $offset += 4
-            if ($length -le 0 -or $offset + $length -gt $bytes.Length) { break }
-            $json = [Text.Encoding]::UTF8.GetString($bytes, $offset, $length)
-            $offset += $length
-            try { $result.responses += ($json | ConvertFrom-Json) } catch { $result.responses += @{ parseError = $json } }
-        }
+    if (-not $result.hostExists) {
+        # An older template ships no compiled host; the evidence is still
+        # collected (compiledHostPresent=false and the PowerShell deny probe),
+        # never a hard probe failure.
+        $result.skipReason = 'compiled-host-missing'
     }
-    if (Test-Path -LiteralPath $errorPath) { $result.studentStderr = (Get-Content -LiteralPath $errorPath -Raw) }
+    else {
+        $manifestPath = Join-Path (Split-Path $HostExe -Parent) 'OpenPath-NativeHost.manifest.json'
+        if (Test-Path -LiteralPath $manifestPath) {
+            $result.manifestPath = $manifestPath
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            $result.manifestHealthy = ([string]$manifest.healthStatus -eq 'healthy')
+        }
+        $messagingManifest = Join-Path (Split-Path $HostExe -Parent) 'whitelist_native_host.json'
+        if (Test-Path -LiteralPath $messagingManifest) {
+            $result.launchPath = [string](Get-Content -LiteralPath $messagingManifest -Raw | ConvertFrom-Json).path
+            $result.manifestTargetsCompiledHost = [bool]($result.launchPath -and ((Split-Path -Leaf $result.launchPath) -ieq 'OpenPath-NativeHost.exe'))
+        }
+
+        # 1) Framed requests.
+        $requests = @(
+            (@{ action = 'ping'; id = 'b6-1' } | ConvertTo-Json -Compress),
+            (@{ action = 'get-hostname' } | ConvertTo-Json -Compress),
+            (@{ action = 'get-machine-token' } | ConvertTo-Json -Compress),
+            (@{ action = 'get-blocked-paths' } | ConvertTo-Json -Compress),
+            (@{ action = 'get-allowed-paths' } | ConvertTo-Json -Compress),
+            (@{ action = 'get-blocked-subdomains' } | ConvertTo-Json -Compress),
+            (@{ action = 'check'; domains = @('example.com') } | ConvertTo-Json -Compress),
+            # Portal recovery protocol check: no trigger host must answer the
+            # structured InvalidHost response (never a crash).
+            (@{ action = 'recover-captive-portal-navigation'; operation = 'open' } | ConvertTo-Json -Compress)
+        )
+        $requestPath = Join-Path $WorkDir 'b6-requests.bin'
+        $stream = [IO.File]::Open($requestPath, [IO.FileMode]::Create, [IO.FileAccess]::Write)
+        try {
+            foreach ($json in $requests) {
+                $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+                $stream.Write([BitConverter]::GetBytes([int]$bytes.Length), 0, 4)
+                $stream.Write($bytes, 0, $bytes.Length)
+            }
+        }
+        finally { $stream.Dispose() }
+
+        # 2) Launch as the student through the session launcher (cmd handles the
+        #    redirection; AppLocker still allows cmd.exe under %WINDIR%).
+        $responsePath = Join-Path $WorkDir 'b6-responses.bin'
+        $errorPath = Join-Path $WorkDir 'b6-student-err.txt'
+        Remove-Item -LiteralPath $responsePath, $errorPath -Force -ErrorAction SilentlyContinue
+        $commandLine = '"C:\Windows\System32\cmd.exe" /c ""' + $HostExe + '" < "' + $requestPath + '" > "' + $responsePath + '" 2> "' + $errorPath + '""'
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($commandLine))
+        $launch = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $LauncherPath -CommandLineBase64 $encoded 2>&1 | Out-String
+        $result.launchOutput = $launch.Trim()
+
+        # 3) Poll and parse the framed responses.
+        $deadline = (Get-Date).AddSeconds(60)
+        while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $responsePath -PathType Leaf)) { Start-Sleep -Seconds 2 }
+        Start-Sleep -Seconds 2
+        if (Test-Path -LiteralPath $responsePath -PathType Leaf) {
+            $bytes = [IO.File]::ReadAllBytes($responsePath)
+            $offset = 0
+            while ($offset + 4 -le $bytes.Length) {
+                $length = [BitConverter]::ToInt32($bytes, $offset)
+                $offset += 4
+                if ($length -le 0 -or $offset + $length -gt $bytes.Length) { break }
+                $json = [Text.Encoding]::UTF8.GetString($bytes, $offset, $length)
+                $offset += $length
+                try { $result.responses += ($json | ConvertFrom-Json) } catch { $result.responses += @{ parseError = $json } }
+            }
+        }
+        if (Test-Path -LiteralPath $errorPath) { $result.studentStderr = (Get-Content -LiteralPath $errorPath -Raw) }
+        $result.pingResponded = [bool](@($result.responses | Where-Object { $_.action -eq 'ping' -and $_.success -eq $true }).Count -gt 0)
+        $result.readsResponded = [bool](@($result.responses | Where-Object { $_.action -in @('get-hostname', 'get-machine-token', 'get-blocked-paths', 'get-allowed-paths', 'get-blocked-subdomains') -and $_.success -eq $true }).Count -ge 5)
+        $result.portalProtocolResponded = [bool](@($result.responses | Where-Object { $_.action -eq 'recover-captive-portal-navigation' }).Count -gt 0)
+    }
 
     # 4) powershell.exe must still be denied for the student (new 8004 events).
     $before = Read-NativeHost8004Count
