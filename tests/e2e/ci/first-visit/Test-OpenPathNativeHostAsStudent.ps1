@@ -70,7 +70,10 @@ try {
         (@{ action = 'get-blocked-paths' } | ConvertTo-Json -Compress),
         (@{ action = 'get-allowed-paths' } | ConvertTo-Json -Compress),
         (@{ action = 'get-blocked-subdomains' } | ConvertTo-Json -Compress),
-        (@{ action = 'check'; domains = @('example.com') } | ConvertTo-Json -Compress)
+        (@{ action = 'check'; domains = @('example.com') } | ConvertTo-Json -Compress),
+        # Portal recovery protocol check: no trigger host must answer the
+        # structured InvalidHost response (never a crash).
+        (@{ action = 'recover-captive-portal-navigation'; operation = 'open' } | ConvertTo-Json -Compress)
     )
     $requestPath = Join-Path $WorkDir 'b6-requests.bin'
     $stream = [IO.File]::Open($requestPath, [IO.FileMode]::Create, [IO.FileAccess]::Write)
