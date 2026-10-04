@@ -384,6 +384,11 @@ foreach ($registryPath in $firefoxNativeHostRegistryPaths) {
 $firefoxNativeHostArtifacts = @(
     "$OpenPathRoot\browser-extension\firefox\native\OpenPath-NativeHost.ps1",
     "$OpenPathRoot\browser-extension\firefox\native\OpenPath-NativeHost.cmd",
+    # Phase 5: compiled host, its build source and the build manifest/diagnostics.
+    "$OpenPathRoot\browser-extension\firefox\native\OpenPath-NativeHost.exe",
+    "$OpenPathRoot\browser-extension\firefox\native\OpenPathNativeHost.cs",
+    "$OpenPathRoot\browser-extension\firefox\native\OpenPath-NativeHost.manifest.json",
+    "$OpenPathRoot\browser-extension\firefox\native\OpenPath-NativeHost.build.json",
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.State.ps1",
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Protocol.ps1",
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Actions.ps1",

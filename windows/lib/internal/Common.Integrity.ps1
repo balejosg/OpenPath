@@ -64,6 +64,14 @@ function Get-OpenPathCriticalFiles {
         )
     }
 
+    # Phase 5: the compiled native host is generated at install/update time under
+    # the restricted runtime root and is launched by the student's browser, so a
+    # tampered binary would be a boundary escape. Covered whenever it exists.
+    $nativeHostExecutable = "$script:OpenPathRoot\browser-extension\firefox\native\OpenPath-NativeHost.exe"
+    if (Test-Path -LiteralPath $nativeHostExecutable -PathType Leaf) {
+        $files += $nativeHostExecutable
+    }
+
     return $files | Where-Object { Test-Path $_ }
 }
 

@@ -1,8 +1,11 @@
 function Get-OpenPathNativeHostArtifactNames {
-    # returns the ordered list of all ps1/psm1/cmd files that must be staged in the native host directory before the host can run.
+    # returns the ordered list of all ps1/psm1/cmd/cs files that must be staged in the native host directory before the host can run.
     return @(
         'OpenPath-NativeHost.ps1',
         'OpenPath-NativeHost.cmd',
+        # Phase 5: build input for the compiled host. Staged next to the runtime
+        # support files so the build step can find it from either install layout.
+        'OpenPathNativeHost.cs',
         'CapabilityStorage.ps1',
         'RequestSetup.State.psm1',
         'Common.Redaction.ps1',
@@ -45,6 +48,9 @@ function Get-OpenPathNativeHostArtifactCandidateRoots {
         if (-not [string]::IsNullOrWhiteSpace($sourceParent)) {
             $candidateRoots += (Join-Path $sourceParent 'lib')
             $candidateRoots += (Join-Path $sourceParent 'lib\internal')
+            # Phase 5: the compiled host source lives in native-host/ at the
+            # install root (windows/native-host/ in the repository).
+            $candidateRoots += (Join-Path $sourceParent 'native-host')
         }
     }
 

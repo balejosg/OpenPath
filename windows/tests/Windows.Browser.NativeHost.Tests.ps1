@@ -129,7 +129,10 @@ Describe "Browser Module - Native Host" {
                 "\$($fixture.manifestFilename)",
                 "type = '$($fixture.type)'",
                 "allowed_extensions = @('$($fixture.allowedExtensions[0])')",
-                'path = $wrapperPath'
+                # Phase 5: the manifest points at the compiled host when one is
+                # health-checked, with the cmd wrapper as the fallback.
+                'path = $launchPath',
+                'Get-OpenPathNativeHostLaunchPath -NativeRoot $nativeRoot'
             )
         }
 

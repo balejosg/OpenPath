@@ -6,6 +6,7 @@ Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\RequestSetup.State.psm1" -Force -ErrorAction Stop
 . (Join-Path $PSScriptRoot 'internal\NativeHost.ArtifactCatalog.ps1')
+. (Join-Path $PSScriptRoot 'internal\NativeHost.Build.ps1')
 
 function Get-OpenPathFirefoxNativeHostName {
     # returns the fixed native messaging host identifier registered with Firefox
@@ -240,12 +241,30 @@ function Register-OpenPathFirefoxNativeHost {
 
     Sync-OpenPathFirefoxNativeHostArtifacts | Out-Null
 
+    # Phase 5: compile the C# host when the source changed and point the
+    # manifest at it only after a framed ping health check. Any failure keeps
+    # the cmd/PowerShell host registered (never a manifest pointing at a
+    # missing or unhealthy executable).
+    try {
+        $buildResult = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $script:OpenPathRoot
+        if ($buildResult.Status -eq 'Fallback') {
+            Write-OpenPathLog "Compiled native host unavailable; keeping the PowerShell host fallback. $($buildResult.Error)" -Level WARN
+        }
+        elseif ($buildResult.Status -in @('Built', 'BuildSkipped')) {
+            Write-OpenPathLog "Compiled native host ready ($($buildResult.Status), sha256=$($buildResult.ExecutableSha256))."
+        }
+    }
+    catch {
+        Write-OpenPathLog "Compiled native host build failed; keeping the PowerShell host fallback: $_" -Level WARN
+    }
+
     $manifestPath = Get-OpenPathFirefoxNativeHostManifestPath
     $wrapperPath = Get-OpenPathFirefoxNativeHostWrapperPath
+    $launchPath = Get-OpenPathNativeHostLaunchPath -NativeRoot $nativeRoot
     $manifestJson = [ordered]@{
         name = Get-OpenPathFirefoxNativeHostName
         description = 'OpenPath Windows Native Messaging Host'
-        path = $wrapperPath
+        path = $launchPath
         type = 'stdio'
         allowed_extensions = @('openpath-block-monitor@openpath')
     } | ConvertTo-Json -Depth 8
@@ -260,10 +279,12 @@ function Register-OpenPathFirefoxNativeHost {
 }
 
 function Unregister-OpenPathFirefoxNativeHost {
-    # removes registry entries, manifest, staged artifacts, state file, and whitelist mirror; always returns true
+    # removes registry entries, manifest, staged artifacts, the compiled host and
+    # its build manifest; always returns true
     foreach ($registryPath in Get-OpenPathFirefoxNativeHostRegistryPaths) {
         Remove-OpenPathRegistryKeyIfPresent -RegistryPath $registryPath
     }
+    try { Remove-OpenPathNativeHostExecutableArtifacts -NativeRoot (Get-OpenPathFirefoxNativeHostRoot) } catch { }
 
     $paths = @(
         (Get-OpenPathFirefoxNativeHostManifestPath),
