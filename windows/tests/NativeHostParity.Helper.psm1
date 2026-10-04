@@ -106,7 +106,11 @@ function New-NativeHostParityFixture {
         apiUrl                                     = 'https://api.parity.invalid'
         requestApiUrl                              = 'https://api.parity.invalid'
         whitelistUrl                               = 'https://api.parity.invalid/w/tok12345678/whitelist.txt'
-        captivePortalDomains                       = @('portal.parity.invalid')
+        # The reference reads configured captive-portal domains through the
+        # lazily imported CaptivePortal/Common modules; whether that import
+        # succeeds is environment-dependent. An empty list keeps both hosts
+        # deterministic (the marker drives the recent-success case instead).
+        captivePortalDomains                       = @()
         runtimeDependencyPersistentTransportDisabled = $false
         extensionDiagnosticsDisabled               = $false
     }

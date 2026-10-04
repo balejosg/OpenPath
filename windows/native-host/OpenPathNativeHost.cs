@@ -394,7 +394,16 @@ namespace OpenPathNativeHost
         internal static List<object> AsArray(object value)
         {
             List<object> items = value as List<object>;
-            return items;
+            if (items != null) { return items; }
+            // In-code responses use List<string> for lists; JSON parsing produces
+            // List<object>. Both must behave like arrays (a bare 'as List<object>'
+            // silently emptied every List<string> list, which made the recent
+            // captive-portal success path treat its host lists as empty).
+            System.Collections.IEnumerable enumerable = value as System.Collections.IEnumerable;
+            if (enumerable == null || value is string) { return null; }
+            List<object> converted = new List<object>();
+            foreach (object item in enumerable) { converted.Add(item); }
+            return converted;
         }
 
         internal static string Sha256Hex(byte[] bytes)
