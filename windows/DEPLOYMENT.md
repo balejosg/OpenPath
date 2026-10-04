@@ -229,6 +229,44 @@ The installer stages browser-extension artifacts when the corresponding director
 - **Managed Chromium**: requires `browser-extension\chromium-managed\metadata.json`; policy is applied via Group Policy or Intune-managed registry keys documented in [`firefox-extension/README.md`](../firefox-extension/README.md).
 - **Unmanaged Chromium**: store URLs are written to `config.json` and surfaced as `.url` shortcuts; no forced install.
 
+## Compiled Native Host (AppControl classrooms)
+
+Classroom installs enforce the non-admin AppLocker boundary, which denies
+`powershell.exe`/`pwsh.exe` to the restricted student and therefore blocked the
+PowerShell native messaging host. The installer now compiles the shipped C#
+source on the target machine and registers the executable after a framed `ping`
+health check; the PowerShell/cmd host remains the fallback.
+
+Artifacts under `browser-extension\firefox\native\`:
+
+- `OpenPath-NativeHost.exe` - compiled host (generated on the machine, never shipped);
+  source payload at `C:\OpenPath\native-host\OpenPathNativeHost.cs`.
+- `OpenPath-NativeHost.manifest.json` - source/executable hashes and health state.
+- `OpenPath-NativeHost.build.json` - build diagnostics (compiler output, Smart App Control state).
+- `OpenPath-NativeHost.cmd` - PowerShell fallback; the Firefox manifest `path`
+  points at the `.exe` only when the manifest is healthy and the executable hash
+  still matches.
+
+The build uses the in-box `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`
+(no SDK, no NuGet, no network). Compile or health failures keep the previous
+executable or the `.cmd` fallback and are recorded in the diagnostics file.
+Uninstall removes the executable, source, manifest and diagnostics; the
+integrity baseline covers the executable whenever present. An unsigned locally
+compiled binary can be blocked by Smart App Control in enforcement; the build
+diagnostics record that state and the fallback keeps working. See
+[`docs/design/windows-native-host-under-appcontrol.md`](../docs/design/windows-native-host-under-appcontrol.md)
+and [`docs/extension-native-host-contract.md`](../docs/extension-native-host-contract.md).
+
+```powershell
+# Registered launch path (.exe = compiled host, .cmd = fallback)
+(Get-Content 'C:\OpenPath\browser-extension\firefox\native\whitelist_native_host.json' -Raw | ConvertFrom-Json).path
+# Build state
+Get-Content 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.manifest.json' -Raw
+Get-Content 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.build.json' -Raw -ErrorAction SilentlyContinue
+# Force a rebuild after changing the source
+.\OpenPath.ps1 update
+```
+
 ## Deployment Verification
 
 After installation, verify:

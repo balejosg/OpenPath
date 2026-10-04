@@ -314,6 +314,43 @@ Persistent native transport (Phase 2C):
   reloads twice for the same navigation and is skipped for POST navigations,
   stale navigations, the blocked screen and captive-portal flows.
 
+### Compiled native host (Phase 5)
+
+On installed machines the registered native messaging host is the compiled
+`OpenPath-NativeHost.exe` (C# source `windows\native-host\OpenPathNativeHost.cs`),
+because the classroom AppLocker boundary denies `powershell.exe`/`pwsh.exe` to
+the restricted student. The PowerShell/cmd host remains as the fallback.
+
+```powershell
+# What is registered (path field): .exe = compiled host, .cmd = fallback
+Get-Content 'C:\OpenPath\browser-extension\firefox\native\whitelist_native_host.json' -Raw
+
+# Build manifest: source/executable hashes and health state
+Get-Content 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.manifest.json' -Raw
+
+# Build diagnostics when the compiled host is unavailable
+Get-Content 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.build.json' -Raw
+
+# Force a rebuild (update recompiles when the source hash changed)
+.\OpenPath.ps1 update
+
+# Smart App Control / WDAC can block an unsigned locally compiled binary:
+Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -ErrorAction SilentlyContinue
+Get-ChildItem "$env:WINDIR\System32\CodeIntegrity\CiPolicies\Active" -ErrorAction SilentlyContinue
+```
+
+The compiled host is only registered after a framed `ping` health check; a
+compile or health failure keeps the previous host (executable or `.cmd`) and
+writes `OpenPath-NativeHost.build.json` with the compiler output and the
+Smart App Control state. The per-user log still starts with
+`Native host initialization completed pid=...`, and the startup profile line
+(`stage=startup-profile ... processToScriptMs= pingMs=`) reports the cold and
+warm start budgets.
+
+Protocol parity between both hosts is enforced by
+`windows\tests\Windows.NativeHostParity.Tests.ps1` (framed reference sequence
+against the PowerShell host and the compiled host, same fixture state).
+
 If the machine is not enrolled, re-enroll:
 
 ```powershell

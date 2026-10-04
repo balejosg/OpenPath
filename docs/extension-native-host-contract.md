@@ -23,11 +23,24 @@ are handled entirely inside the extension; those are defined in
 - Protocol: [browser native messaging](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_messaging)
 - API: `browser.runtime.sendNativeMessage()` / `browser.runtime.connectNative()`
 - Framing: 4-byte little-endian length prefix followed by UTF-8 JSON (standard native-messaging wire format)
-- Windows host entry point: `windows/scripts/OpenPath-NativeHost.ps1`; framing in `windows/lib/internal/NativeHost.Protocol.ps1::Read-NativeMessage` / `Write-NativeMessage`
+- Windows host entry point: `windows/scripts/OpenPath-NativeHost.ps1` (PowerShell reference and fallback); on installed machines the registered host is the compiled `OpenPath-NativeHost.exe` built from `windows/native-host/OpenPathNativeHost.cs`; framing in `windows/lib/internal/NativeHost.Protocol.ps1::Read-NativeMessage` / `Write-NativeMessage` and the identical C# reader/writer
 - Linux host entry point: `firefox-extension/native/openpath-native-host.py`
-- Dispatch: `windows/lib/internal/NativeHost.Actions.ps1::Handle-Message` -> `Invoke-NativeHostMessageAction`
+- Dispatch: `windows/lib/internal/NativeHost.Actions.ps1::Handle-Message` -> `Invoke-NativeHostMessageAction`; the compiled host mirrors the same dispatch table
 
 Every response includes at minimum `{ success: boolean }`. Errors add `{ error: string }`.
+
+### Compiled Windows host (Phase 5)
+
+The classroom AppLocker boundary denies `powershell.exe`/`pwsh.exe` to the
+restricted student, which blocked the PowerShell host. The installer compiles
+the C# source with the in-box .NET Framework compiler and registers the
+executable only after a framed `ping` health check; the PowerShell/cmd host
+stays as the registered fallback whenever the build or the health check fails.
+The wire format, action names, response shapes, `protocolVersion`, capability
+list, id echo and the per-user `native-host.log` lines are identical, and
+`windows/tests/Windows.NativeHostParity.Tests.ps1` compares both hosts action by
+action on Windows. See
+[`design/windows-native-host-under-appcontrol.md`](design/windows-native-host-under-appcontrol.md).
 
 ### Persistent transport (Phase 2C)
 
