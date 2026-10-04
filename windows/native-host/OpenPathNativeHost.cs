@@ -2963,6 +2963,10 @@ namespace OpenPathNativeHost
                     success.EffectiveExactHosts = StringList(summary.Get("effectiveExactHosts"));
                     success.LimitedModeReady = GetBool(summary.Get("limitedModeReady"), false);
                     success.RecentSuccessEligible = GetBool(summary.Get("recentSuccessEligible"), false);
+                    // Derived flags the response reuses: the marker file has no
+                    // recoveryHostsApplied/configured... fields of its own.
+                    success.ConfiguredApplied = GetBool(summary.Get("configuredCaptivePortalDomainsApplied"), false);
+                    success.RecoveryHostsApplied = GetBool(summary.Get("recoveryHostsApplied"), false);
                     success.FallbackMode = GetString(summary.Get("fallbackMode"));
                     success.Payload = marker;
                     success.BootstrapHosts = StringList(summary.Get("bootstrapHosts"));
