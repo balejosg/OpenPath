@@ -217,8 +217,10 @@ function Get-NativeHostParityMaskedKeys {
         'taskNextRunTime', 'taskNumberOfMissedRuns', 'taskDiagnosticsError',
         'queuePath', 'resultPath', 'progressPath', 'pendingRequestIds',
         # The two fixture roots are separate directories, so file mtimes differ
-        # by construction; presence still must match.
-        'mtime'
+        # by construction; presence still must match. expiresAt is opaque to the
+        # extension and the PowerShell host stringifies it with the machine
+        # culture (DateTime), while the compiled host keeps the ISO-8601 value.
+        'mtime', 'expiresAt'
     )
 }
 
@@ -360,7 +362,26 @@ function Compare-NativeHostParityValue {
     $referenceNull = $null -eq $Reference
     $candidateNull = $null -eq $Candidate
     if ($referenceNull -and $candidateNull) { return '' }
-    if ($referenceNull -or $candidateNull) { return "$Path reference=$Reference candidate=$Candidate" }
+
+    # Normalize PowerShell array-unrolling artifacts (documented comparator
+    # rule): a single-element array and its element are the same value, and an
+    # empty array equals null. Multi-element arrays still compare element-wise.
+    $referenceArray = -not $referenceNull -and $Reference -is [System.Collections.IEnumerable] -and -not ($Reference -is [string])
+    $candidateArray = -not $candidateNull -and $Candidate -is [System.Collections.IEnumerable] -and -not ($Candidate -is [string])
+    if ($referenceArray -and -not $candidateArray -and @($Reference).Count -eq 1) {
+        $Reference = @($Reference)[0]
+        $referenceArray = $false
+        $referenceNull = $null -eq $Reference
+    }
+    if ($candidateArray -and -not $referenceArray -and @($Candidate).Count -eq 1) {
+        $Candidate = @($Candidate)[0]
+        $candidateArray = $false
+        $candidateNull = $null -eq $Candidate
+    }
+    $referenceEmpty = $referenceNull -or ($referenceArray -and @($Reference).Count -eq 0)
+    $candidateEmpty = $candidateNull -or ($candidateArray -and @($Candidate).Count -eq 0)
+    if ($referenceEmpty -and $candidateEmpty) { return '' }
+    if ($referenceEmpty -or $candidateEmpty) { return "$Path reference=$Reference candidate=$Candidate" }
 
     $referenceObject = $Reference -is [System.Management.Automation.PSCustomObject] -or $Reference -is [System.Collections.IDictionary]
     $candidateObject = $Candidate -is [System.Management.Automation.PSCustomObject] -or $Candidate -is [System.Collections.IDictionary]
@@ -370,7 +391,8 @@ function Compare-NativeHostParityValue {
         $missing = @($referenceKeys | Where-Object { $candidateKeys -notcontains $_ })
         $extra = @($candidateKeys | Where-Object { $referenceKeys -notcontains $_ })
         if ($missing.Count -gt 0 -or $extra.Count -gt 0) {
-            return "$Path keys reference=[$(($referenceKeys | Sort-Object) -join ',')] candidate=[$(($candidateKeys | Sort-Object) -join ',')]"
+            # Compact diff: the full key lists exceed the Pester message budget.
+            return "$Path key-diff reference-only=[$(($missing | Sort-Object) -join ',')] candidate-only=[$(($extra | Sort-Object) -join ',')]"
         }
         foreach ($key in $referenceKeys) {
             $child = Compare-NativeHostParityValue -Reference $Reference.$key -Candidate $Candidate.$key -Path "$Path.$key" -MaskedKeys $MaskedKeys -KeyName $key
@@ -378,8 +400,6 @@ function Compare-NativeHostParityValue {
         }
         return ''
     }
-    $referenceArray = $Reference -is [System.Collections.IEnumerable] -and -not ($Reference -is [string])
-    $candidateArray = $Candidate -is [System.Collections.IEnumerable] -and -not ($Candidate -is [string])
     if ($referenceArray -and $candidateArray) {
         $referenceItems = @($Reference)
         $candidateItems = @($Candidate)

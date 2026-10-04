@@ -115,6 +115,27 @@ Describe 'Native host parity (Phase 5 B1)' {
         }
     }
 
+    Context 'Comparison rules' {
+        It 'Treats a single-element array and its element as equivalent' {
+            (Compare-NativeHostParityValue -Reference @('one') -Candidate 'one') | Should -Be ''
+            (Compare-NativeHostParityValue -Reference 'one' -Candidate @('one')) | Should -Be ''
+            (Compare-NativeHostParityValue -Reference @('one', 'two') -Candidate 'one') | Should -Not -Be ''
+            (Compare-NativeHostParityValue -Reference 'one' -Candidate 'two') | Should -Not -Be ''
+        }
+
+        It 'Treats null and an empty array as equivalent but not a value' {
+            (Compare-NativeHostParityValue -Reference $null -Candidate @()) | Should -Be ''
+            (Compare-NativeHostParityValue -Reference @() -Candidate $null) | Should -Be ''
+            (Compare-NativeHostParityValue -Reference $null -Candidate @('x')) | Should -Not -Be ''
+        }
+
+        It 'Masks only the documented nondeterministic keys' {
+            (Compare-NativeHostParityValue -Reference 'a' -Candidate 'b' -KeyName 'expiresAt' -MaskedKeys @('expiresAt')) | Should -Be ''
+            (Compare-NativeHostParityValue -Reference 'a' -Candidate 'b' -KeyName 'source') | Should -Not -Be ''
+            (Compare-NativeHostParityValue -Reference 'a' -Candidate 'b' -KeyName 'state') | Should -Not -Be ''
+        }
+    }
+
     Context 'Compiled host equivalence' -Skip:(-not $script:ParityCompilerAvailable) {
         It 'Compiles the payload source with the in-box compiler' {
             $script:ParityCompiledExecutable | Should -Not -BeNullOrEmpty
@@ -132,6 +153,12 @@ Describe 'Native host parity (Phase 5 B1)' {
             $candidate.Count | Should -Be 1
             $candidate[0].response | Should -Not -BeNullOrEmpty -Because $ParityCase.name
             $difference = Compare-NativeHostParityValue -Reference $reference[0].response -Candidate $candidate[0].response -MaskedKeys $script:ParityMaskedKeys
+            if ($difference) {
+                # Full evidence in the job log: the assertion message is budget-capped.
+                Write-Host ("PARITY-DIFF " + $ParityCase.name + " :: " + $difference)
+                Write-Host ("PARITY-REF " + $ParityCase.name + " :: " + (($reference[0].response | ConvertTo-Json -Depth 10 -Compress)))
+                Write-Host ("PARITY-CAND " + $ParityCase.name + " :: " + (($candidate[0].response | ConvertTo-Json -Depth 10 -Compress)))
+            }
             $difference | Should -Be '' -Because $ParityCase.name
         }
 
