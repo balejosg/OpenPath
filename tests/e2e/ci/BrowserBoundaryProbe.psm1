@@ -3455,12 +3455,36 @@ function Assert-InstalledOpenPathBrowserBoundaryAppControl {
     }
 
     # Pure assert-only: DO NOT CALL Set-OpenPathNonAdminAppControl or repair!
-    if (-not (Test-OpenPathNonAdminAppControlActive `
+    $boundaryHealthy = $false
+    $healthReasonCodes = @()
+    $healthObserved = ''
+    if (Get-Command -Name 'Get-OpenPathNonAdminAppControlHealth' -ErrorAction SilentlyContinue) {
+        # Phase 5 A3: the structured snapshot names why the boundary is not
+        # active (recovery-required, policy mismatch, runtime evaluation, ...)
+        # instead of a bare boolean that cannot be diagnosed after the fact.
+        $health = Get-OpenPathNonAdminAppControlHealth `
+            -Mode $mode `
+            -ApprovedBrowsers $approvedBrowsers `
+            -Profile $profile `
+            -ApplicationCatalog $catalog
+        $boundaryHealthy = [bool]$health.Healthy
+        if (-not $boundaryHealthy) {
+            $healthReasonCodes = @($health.ReasonCodes | ForEach-Object { [string]$_ } | Where-Object { $_ })
+            try { $healthObserved = ($health.Observed | ConvertTo-Json -Compress -Depth 4) } catch { $healthObserved = '' }
+            if ($healthObserved.Length -gt 800) { $healthObserved = $healthObserved.Substring(0, 800) }
+        }
+    }
+    else {
+        $boundaryHealthy = [bool](Test-OpenPathNonAdminAppControlActive `
                 -Mode $mode `
                 -ApprovedBrowsers $approvedBrowsers `
                 -Profile $profile `
-                -ApplicationCatalog $catalog)) {
-        throw "OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed."
+                -ApplicationCatalog $catalog)
+    }
+    if (-not $boundaryHealthy) {
+        $detail = if ($healthReasonCodes.Count -gt 0) { " reasonCodes=$($healthReasonCodes -join ',')" } else { '' }
+        if ($healthObserved) { $detail += " observed=$healthObserved" }
+        throw "OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed.$detail"
     }
 
     if (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
@@ -3474,6 +3498,57 @@ function Assert-InstalledOpenPathBrowserBoundaryAppControl {
             }
         }
     }
+}
+
+function Wait-InstalledOpenPathBrowserBoundaryActive {
+    <#
+    .SYNOPSIS
+        Waits (bounded) for the installed AppControl boundary to assert healthy.
+    .DESCRIPTION
+        Phase 5 A3: the Windows student-policy flow re-enables and starts
+        OpenPath-Watchdog seconds before the browser-boundary probes run. When
+        the watchdog starts a repair, it opens an AppControl transaction; any
+        health query while that transaction is not terminal reports
+        recovery-required, so the assert-only check can fail on a boundary that
+        is merely converging. This wait never repairs or relaxes anything: it
+        re-runs the same assert until it passes or the budget expires, and then
+        surfaces the last detailed error (reason codes included).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [int]$TimeoutSeconds = 240,
+        [int]$PollSeconds = 10,
+        # Test seam: inject the assert so the wait contract is testable without
+        # an installed AppControl boundary.
+        [scriptblock]$Assert = $null
+    )
+    $assertAction = if ($Assert) {
+        $Assert
+    }
+    else {
+        { param($Root) Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $Root }
+    }
+    $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
+    $attempt = 0
+    $lastError = $null
+    while ($true) {
+        $attempt++
+        try {
+            & $assertAction $OpenPathRoot
+            if ($attempt -gt 1) {
+                Write-Host "OpenPath AppControl boundary became active after $attempt attempt(s)."
+            }
+            return $true
+        }
+        catch {
+            $lastError = $_
+            if ((Get-Date) -ge $deadline) { break }
+            Write-Host ("Waiting for the OpenPath AppControl boundary to settle (attempt $attempt): $($_.Exception.Message)")
+            Start-Sleep -Seconds ([Math]::Max(1, $PollSeconds))
+        }
+    }
+    throw $lastError
 }
 
 Export-ModuleMember -Function @(
@@ -3495,5 +3570,6 @@ Export-ModuleMember -Function @(
     'Get-OpenPathFlatEdgeBoundaryFailureContract',
     'Invoke-StudentExecutableTaskProbe',
     'Invoke-OpenPathEdgeBoundaryDiagnostic',
-    'Assert-InstalledOpenPathBrowserBoundaryAppControl'
+    'Assert-InstalledOpenPathBrowserBoundaryAppControl',
+    'Wait-InstalledOpenPathBrowserBoundaryActive'
 )

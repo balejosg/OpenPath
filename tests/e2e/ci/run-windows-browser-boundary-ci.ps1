@@ -510,7 +510,7 @@ function Get-OpenPathNegativeHealthRestoration {
         [AllowNull()][object]$ApplicationCatalog
     )
 
-    Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $OpenPathRoot
+    Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot $OpenPathRoot
     $watchdogHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
     $appControlHealth = Get-OpenPathNonAdminAppControlHealth `
         -Mode $Mode `
@@ -881,7 +881,11 @@ New-Item -ItemType Directory -Path $studentArtifacts -Force | Out-Null
 New-Item -ItemType Directory -Path $adminArtifacts -Force | Out-Null
 
 $installedOpenPathRoot = 'C:\OpenPath'
-Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $installedOpenPathRoot
+# Phase 5 A3: the student-policy flow starts OpenPath-Watchdog seconds before
+# this step; a repair transaction in flight makes any AppControl health query
+# report recovery-required. The bounded wait re-runs the same assert-only check
+# until the boundary settles (or surfaces the last detailed error).
+Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot $installedOpenPathRoot
 $watchdogRuntimePath = Initialize-OpenPathNegativeHealthRuntime -OpenPathRoot $installedOpenPathRoot
 . $watchdogRuntimePath
 Assert-OpenPathNegativeHealthRuntimeCommands

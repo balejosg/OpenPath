@@ -2055,21 +2055,29 @@ if ($result.status -ne 'imported') { exit 1 }
             New-Item -ItemType Directory -Path $libDir -Force | Out-Null
             Set-Content -LiteralPath (Join-Path $libDir "AppControl.psm1") -Value @"
 function Test-OpenPathNonAdminAppControlActive { param(`$Mode, `$ApprovedBrowsers) return `$global:mockAppControlActive }
+function Get-OpenPathNonAdminAppControlHealth {
+    param(`$Mode, `$ApprovedBrowsers, `$Profile, `$ApplicationCatalog)
+    if (`$global:mockAppControlHealth) { return `$global:mockAppControlHealth }
+    return [pscustomobject]@{ Healthy = `$global:mockAppControlActive; ReasonCodes = @(); Observed = [pscustomobject]@{} }
+}
 function Set-OpenPathNonAdminAppControl { param(`$OpenPathRoot, `$Mode, `$ApprovedBrowsers) `$global:mockSetAppControlCalled = `$true; return `$true }
-Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPathNonAdminAppControl
+Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Get-OpenPathNonAdminAppControlHealth, Set-OpenPathNonAdminAppControl
 "@
             $global:mockAppControlActive = $true
+            $global:mockAppControlHealth = $null
             $global:mockSetAppControlCalled = $false
         }
 
         AfterEach {
             Remove-Variable -Name mockAppControlActive -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name mockAppControlHealth -Scope Global -ErrorAction SilentlyContinue
             Remove-Variable -Name mockSetAppControlCalled -Scope Global -ErrorAction SilentlyContinue
             Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
         }
 
         AfterAll {
             Remove-Variable -Name mockAppControlActive -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name mockAppControlHealth -Scope Global -ErrorAction SilentlyContinue
             Remove-Variable -Name mockSetAppControlCalled -Scope Global -ErrorAction SilentlyContinue
             Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
             $realAppControl = Join-Path $PSScriptRoot ".." "lib" "AppControl.psm1"
@@ -2173,6 +2181,52 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
             {
                 Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $script:probeRoot
             } | Should -Not -Throw
+        }
+
+        It "Names the structured health reason codes when the boundary is inactive" {
+            # Phase 5 A3: a bare boolean cannot be diagnosed after a red run.
+            $config = [pscustomobject]@{
+                installState = 'complete'
+                appControlCommitState = 'committed'
+                enableNonAdminAppControl = $true
+                nonAdminAppControlMode = 'Enforced'
+                approvedStudentBrowsers = @('Firefox')
+            }
+            $config | ConvertTo-Json | Set-Content (Join-Path $script:probeRoot "data\config.json")
+            $global:mockAppControlHealth = [pscustomobject]@{
+                Healthy     = $false
+                ReasonCodes = @('appcontrol_recovery_required')
+                Observed    = [pscustomobject]@{ TransactionState = 'apply-attempted' }
+            }
+
+            Mock Get-ScheduledTask { [pscustomobject]@{ TaskName = 'OpenPath-Watchdog' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-LocalGroup { [pscustomobject]@{ Name = 'OpenPath-Restricted' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-Service { [pscustomobject]@{ Status = 'Running' } } -ModuleName BrowserBoundaryProbe
+
+            {
+                Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $script:probeRoot
+            } | Should -Throw "*reasonCodes=appcontrol_recovery_required*"
+        }
+
+        It "Waits for the boundary to settle and never repairs it" {
+            $script:waitAttempts = 0
+            $assert = {
+                param($Root)
+                $script:waitAttempts++
+                if ($script:waitAttempts -lt 3) {
+                    throw "OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed. reasonCodes=appcontrol_recovery_required"
+                }
+            }
+            $result = Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot 'C:\OpenPath' -TimeoutSeconds 60 -PollSeconds 1 -Assert $assert
+            $result | Should -BeTrue
+            $script:waitAttempts | Should -Be 3
+        }
+
+        It "Surfaces the last detailed error when the boundary never settles" {
+            $assert = { param($Root) throw 'OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed. reasonCodes=appcontrol_effective_policy_invalid' }
+            {
+                Wait-InstalledOpenPathBrowserBoundaryActive -OpenPathRoot 'C:\OpenPath' -TimeoutSeconds 1 -PollSeconds 1 -Assert $assert
+            } | Should -Throw "*reasonCodes=appcontrol_effective_policy_invalid*"
         }
     }
 
