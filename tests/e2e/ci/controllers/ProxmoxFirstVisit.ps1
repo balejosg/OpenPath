@@ -14,6 +14,9 @@ $script:OpenPathFirstVisitRefreshSettleSeconds = 30
 $script:OpenPathFirstVisitObserveSettleSeconds = 15
 $script:OpenPathFirstVisitHotWindowSeconds = 300
 $script:OpenPathFirstVisitHotSecondSettleSeconds = 20
+# Phase 5 A2: per-phase step trace (step, elapsed, source, status). Append-only
+# and persisted after every step so a killed controller can still be measured.
+$script:OpenPathFirstVisitStepTrace = $null
 
 function Get-OpenPathFirstVisitHarnessSourcePath {
     return (Join-Path (Split-Path -Parent $PSScriptRoot) 'first-visit\Invoke-OpenPathFirstVisitGuest.ps1')
@@ -236,6 +239,100 @@ function Read-OpenPathFirstVisitGuestText {
     return $trimmed
 }
 
+function Resolve-OpenPathFirstVisitResultParts {
+    <#
+    .SYNOPSIS
+    Replaces firstVisitPart descriptors in a guest result with their content.
+    .DESCRIPTION
+    Phase 5 A2: values too large for the inline result JSON travel as part files
+    next to it. This reads each referenced part from the guest, archives it in
+    the run artifacts and assigns it back into the parsed result so consumers
+    see the original value. Best-effort: a missing part leaves the descriptor
+    and the caller's guards treat it as absent.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$Harness,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [Parameter(Mandatory = $true)][string]$Step,
+        [Parameter(Mandatory = $true)][string]$ArtifactsRoot
+    )
+    $body = Get-OpenPathLabField -InputObject $Harness -Name 'body'
+    $partMap = Get-OpenPathLabField -InputObject $body -Name 'resultParts'
+    if (-not $partMap) { return }
+    $guestPartsDir = $Paths.GuestDir.TrimEnd('\') + "\result-$Phase-$Step.json.parts"
+    foreach ($entry in @($partMap.PSObject.Properties)) {
+        $flatKey = [string]$entry.Name
+        $partName = [string]$entry.Value
+        if ([string]::IsNullOrWhiteSpace($flatKey) -or [string]::IsNullOrWhiteSpace($partName)) { continue }
+        $segments = @($flatKey -split '\.')
+        if ($segments.Count -lt 3 -or $segments[0] -ne 'body' -or $segments[1] -ne 'state') { continue }
+        $text = Read-OpenPathFirstVisitGuestText -Transport $Transport -Vmid $Vmid -GuestPath ($guestPartsDir + '\' + $partName) -TimeoutSeconds 120
+        if (-not $text) { continue }
+        try { $value = $text | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        try { [IO.File]::WriteAllText((Join-Path $ArtifactsRoot "guest-$Phase-$Step.part-$partName"), $text, [Text.UTF8Encoding]::new($false)) } catch { }
+        $node = Get-OpenPathLabField -InputObject $Harness -Name 'body'
+        $node = Get-OpenPathLabField -InputObject $node -Name 'state'
+        for ($index = 2; $index -lt ($segments.Count - 1); $index++) {
+            if ($null -eq $node) { break }
+            $node = Get-OpenPathLabField -InputObject $node -Name $segments[$index]
+        }
+        if ($null -eq $node) { continue }
+        $leaf = [string]$segments[-1]
+        try {
+            if ($node -is [System.Collections.IDictionary]) { $node[$leaf] = $value }
+            elseif ($node.PSObject.Properties[$leaf]) { $node.$leaf = $value }
+        }
+        catch {
+            Write-Warning "first-visit part merge failed for $flatKey : $($_.Exception.Message)"
+        }
+    }
+}
+
+function Get-OpenPathFirstVisitStringArray {
+    <#
+    .SYNOPSIS
+    Returns only the string elements of a collect value.
+    .DESCRIPTION
+    The guest serializer may deliver a missing array as an empty string or as a
+    part descriptor object; binding either into [string[]] without filtering
+    aborted the whole phase. Never throws.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Value = $null)
+    if ($null -eq $Value) { return @() }
+    if ($Value -is [string]) { if ($Value) { return @($Value) } return @() }
+    if ($Value -is [System.Collections.IEnumerable]) { return @($Value | Where-Object { $_ -is [string] -and $_ }) }
+    return @()
+}
+
+function Add-OpenPathFirstVisitStepTrace {
+    <#
+    .SYNOPSIS
+    Records one guest step timing entry and persists the trace next to the run
+    artifacts so a killed controller still explains where the time went.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$Entry,
+        [AllowNull()][string]$ArtifactsRoot = '',
+        [AllowNull()][string]$Phase = ''
+    )
+    if (-not $script:OpenPathFirstVisitStepTrace) {
+        $script:OpenPathFirstVisitStepTrace = New-Object System.Collections.ArrayList
+    }
+    $null = $script:OpenPathFirstVisitStepTrace.Add($Entry)
+    if ([string]::IsNullOrWhiteSpace($ArtifactsRoot) -or [string]::IsNullOrWhiteSpace($Phase)) { return }
+    try {
+        $path = Join-Path $ArtifactsRoot "$Phase-step-trace.json"
+        [IO.File]::WriteAllText($path, (@($script:OpenPathFirstVisitStepTrace) | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    }
+    catch { }
+}
+
 function Send-OpenPathFirstVisitStep {
     param(
         [Parameter(Mandatory = $true)][object]$Payload,
@@ -257,8 +354,23 @@ function Send-OpenPathFirstVisitStep {
         # of throwing, so partial evidence still reaches the caller.
         [switch]$AllowFailed
     )
-    Update-OpenPathLabActiveHeartbeat
-    $resultPath = $Paths.GuestDir.TrimEnd('\') + "\result-$Phase-$Step.json"
+    $stepStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $stepEntry = [ordered]@{
+        phase          = $Phase
+        step           = $Step
+        startedAt      = [DateTime]::UtcNow.ToString('o')
+        endedAt        = ''
+        elapsedMs      = -1
+        timeoutSeconds = $TimeoutSeconds
+        attempts       = 0
+        resultSource   = ''
+        status         = ''
+        failures       = @()
+    }
+    $artifactsRoot = ''
+    try {
+        Update-OpenPathLabActiveHeartbeat
+        $resultPath = $Paths.GuestDir.TrimEnd('\') + "\result-$Phase-$Step.json"
     $statePath = $Paths.GuestDir.TrimEnd('\') + '\guest-state.json'
     $arguments = @(
         '& powershell.exe -NoProfile -ExecutionPolicy Bypass -File ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $HarnessGuestPath),
@@ -323,6 +435,11 @@ function Send-OpenPathFirstVisitStep {
         catch { }
         throw "first-visit-guest-result-invalid-$Phase-$Step"
     }
+    # Phase 5 A2: restore values that traveled as part files and archive them.
+    try {
+        Resolve-OpenPathFirstVisitResultParts -Harness $harness -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase $Phase -Step $Step -ArtifactsRoot $artifactsRoot
+    }
+    catch { Write-Warning "first-visit result part resolution failed: $($_.Exception.Message)" }
     $resultArchive = Join-Path $artifactsRoot "guest-$Phase-$Step.json"
     try { [IO.File]::WriteAllText($resultArchive, $resolved.json, [Text.UTF8Encoding]::new($false)) } catch { }
     try { [IO.File]::WriteAllText((Join-Path $artifactsRoot "guest-$Phase-$Step.result-source.txt"), ([string]$resolved.source + " stdoutValid=$($resolved.stdoutValid) fileValid=$($resolved.fileValid)"), [Text.UTF8Encoding]::new($false)) } catch { }
@@ -335,13 +452,32 @@ function Send-OpenPathFirstVisitStep {
     # When the result came from the file, the exit marker may be missing or
     # belong to a killed stdout: the file is the harness' own write and wins.
     $exitMismatch = ($resolved.source -ne 'result-file') -and $exitKnown -and $exitCode -ne 0
+    $stepEntry.attempts = [int]$attempt
+    $stepEntry.resultSource = [string]$resolved.source
     if ([string]$harness.status -ne 'passed' -or $exitMismatch) {
+        $stepEntry.status = [string]$harness.status
+        $stepEntry.failures = @($harness.failures)
         if ($AllowFailed) { return $harness }
         $failures = @($harness.failures) -join ','
         $bodyJson = ($harness.body | ConvertTo-Json -Depth 6 -Compress)
         throw "first-visit-guest-step-failed-$Phase-$Step-$failures body=$bodyJson"
     }
+    $stepEntry.status = [string]$harness.status
     return $harness
+    }
+    catch {
+        # keep the step trace on any control-flow error so a failed phase (or a
+        # killed controller, via the on-disk trace) names the step and the time.
+        $stepEntry.status = 'error'
+        $stepEntry.failures = @([string]$_.Exception.Message)
+        throw
+    }
+    finally {
+        $stepStopwatch.Stop()
+        $stepEntry.endedAt = [DateTime]::UtcNow.ToString('o')
+        $stepEntry.elapsedMs = $stepStopwatch.ElapsedMilliseconds
+        Add-OpenPathFirstVisitStepTrace -Entry $stepEntry -ArtifactsRoot $artifactsRoot -Phase $Phase
+    }
 }
 
 function Write-OpenPathFirstVisitGuestFixtureInfo {
@@ -923,7 +1059,7 @@ function Invoke-OpenPathFirstVisitObserve {
         throw 'first-visit-fixture-served-no-requests'
     }
     $collect = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'collect' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowRetry
-    $mozExtract = @(Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'mozExtract')
+    $mozExtract = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'mozExtract'))
     if ($mozExtract.Count -gt 0) {
         [IO.File]::WriteAllLines((Join-Path $evidenceDir 'moz-extract.txt'), $mozExtract, [Text.UTF8Encoding]::new($false))
     }
@@ -937,15 +1073,17 @@ function Invoke-OpenPathFirstVisitObserve {
     $plan = $state.plan
     $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario -RepairReloads $repairReloads
     $workerStateJson = [string](Get-OpenPathLabField -InputObject $collect.body.state.collect -Name 'workerState')
+    if ($workerStateJson -and -not $workerStateJson.StartsWith('{')) { $workerStateJson = '' }
     $metricsFixture = if ($fixtureState) {
         [pscustomobject]@{ requests = [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests'); browserRequests = $browserRequests; workerStateJson = $workerStateJson }
     }
     else { [pscustomobject]@{ requests = 0; browserRequests = 0; workerStateJson = $workerStateJson } }
     $collectState = $collect.body.state.collect
     $collectDiagnostics = Get-OpenPathLabField -InputObject $collectState -Name 'diagnostics'
-    $diagnosticLines = @(Get-OpenPathLabField -InputObject $collectDiagnostics -Name 'all')
-    if ($null -eq $collectDiagnostics) { $diagnosticLines = @() }
-    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles @($collectState.startupProfiles) -FixtureState $metricsFixture -Verdict $verdict -LogLines @(Get-OpenPathLabField -InputObject $collectState -Name 'openpathTail') -Diagnostics $collectDiagnostics -PrepareState $state
+    $diagnosticLines = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectDiagnostics -Name 'all'))
+    $startupProfiles = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'startupProfiles'))
+    $openpathTail = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'openpathTail'))
+    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles $startupProfiles -FixtureState $metricsFixture -Verdict $verdict -LogLines $openpathTail -Diagnostics $collectDiagnostics -PrepareState $state
     $metricsPath = Join-Path $artifactsRoot 'metrics.json'
     [IO.File]::WriteAllText($metricsPath, ($metrics | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
     $studentUser = [string]$settings.StudentUserName

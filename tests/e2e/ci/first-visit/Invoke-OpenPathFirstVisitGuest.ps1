@@ -490,7 +490,7 @@ function Save-PartialResult {
         $payload.status = 'partial'
         $payload.savedAt = [DateTime]::UtcNow.ToString('o')
         $json = ''
-        if ($script:ResultModuleLoaded) { $json = ConvertTo-FirstVisitResultJson -Payload $payload }
+        if ($script:ResultModuleLoaded) { $json = ConvertTo-FirstVisitResultJson -Payload $payload -PartsDirectory "$ResultPath.parts" }
         if (-not $json) { try { $json = $payload | ConvertTo-Json -Depth 12 -Compress } catch { $json = '' } }
         if ($json) {
             New-Dir (Split-Path -Parent $ResultPath)
@@ -506,7 +506,7 @@ function Complete-Step {
     $payload = Get-StepResultPayload -Status $Status
     $json = ''
     if ($script:ResultModuleLoaded) {
-        try { $json = ConvertTo-FirstVisitResultJson -Payload $payload } catch { $json = '' }
+        try { $json = ConvertTo-FirstVisitResultJson -Payload $payload -PartsDirectory "$ResultPath.parts" } catch { $json = '' }
     }
     if (-not $json) {
         try { $json = $payload | ConvertTo-Json -Depth 12 -Compress } catch { $json = '' }

@@ -1282,7 +1282,24 @@ function Invoke-OpenPathDisposableWindowsController {
         if (-not $process.Start()) { throw 'controller-start-failed' }
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             try { $process.Kill($true) } catch { try { $process.Kill() } catch {} }
-            throw 'controller-timeout'
+            # Phase 5 A2: the phase script writes a per-step trace next to the
+            # artifacts after every step; a killed controller still names the
+            # step that consumed the time instead of a bare timeout.
+            $timeoutDetail = 'controller-timeout'
+            try {
+                $phaseName = Get-OpenPathDisposableCanonicalPhase -Mode $Mode
+                $scenarioRoot = Join-Path (Join-Path (Join-Path $ArtifactsRoot $RunId) ([string]$RunAttempt)) $ScenarioId
+                $tracePath = Join-Path $scenarioRoot "$phaseName-step-trace.json"
+                if (Test-Path -LiteralPath $tracePath -PathType Leaf) {
+                    $trace = @(Get-Content -LiteralPath $tracePath -Raw | ConvertFrom-Json)
+                    if ($trace.Count -gt 0) {
+                        $last = $trace[-1]
+                        $timeoutDetail = ('controller-timeout: last-step={0} elapsedMs={1} timeoutSeconds={2} status={3} source={4}' -f [string]$last.step, [string]$last.elapsedMs, [string]$last.timeoutSeconds, [string]$last.status, [string]$last.resultSource)
+                    }
+                }
+            }
+            catch { }
+            throw $timeoutDetail
         }
         $stdout = $process.StandardOutput.ReadToEnd()
         $stderr = $process.StandardError.ReadToEnd()
@@ -1298,6 +1315,21 @@ function Invoke-OpenPathDisposableWindowsController {
             # failed phase only reported a bare exit code.
             $stderrTail = ([string]$stderr).Trim()
             if ($stderrTail.Length -gt 700) { $stderrTail = $stderrTail.Substring($stderrTail.Length - 700) }
+            # Phase 5 A2: the controller writes the full error chain next to its
+            # output file. The stderr tail alone truncated multi-line causes
+            # (observed as a bare 'The'), so the detail file is authoritative.
+            $errorDetailPath = "$outputPath.error.txt"
+            if (Test-Path -LiteralPath $errorDetailPath -PathType Leaf) {
+                try {
+                    $errorDetail = ([IO.File]::ReadAllText($errorDetailPath)).Trim()
+                    if ($errorDetail) {
+                        if ($errorDetail.Length -gt 4000) { $errorDetail = $errorDetail.Substring(0, 4000) }
+                        $stderrTail = (($stderrTail + "`n" + $errorDetail).Trim())
+                        if ($stderrTail.Length -gt 4000) { $stderrTail = $stderrTail.Substring(0, 4000) }
+                    }
+                }
+                catch { }
+            }
             throw ('controller-exit-{0}: {1}' -f $process.ExitCode, $stderrTail)
         }
         # Do not report a successful child exit until the phase output is

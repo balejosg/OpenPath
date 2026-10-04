@@ -56,6 +56,9 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
         category    = 'UNKNOWN'
         reasons     = @('no-metrics')
         error       = ''
+        observeStatus = 'missing'
+        observeReasonCode = ''
+        cleanupError = ''
         reloads     = -1
         waveTimesMs = $null
         visitDelaySeconds = -1
@@ -72,6 +75,38 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
         try {
             $prepare = Get-Content -LiteralPath $preparePath -Raw | ConvertFrom-Json
             if ([string]$prepare.status -ne 'passed') { $row.error = [string]$prepare.error }
+        }
+        catch { }
+    }
+    $observePath = Join-Path $scenarioDir.FullName 'observe.json'
+    if (Test-Path -LiteralPath $observePath) {
+        try {
+            $observe = Get-Content -LiteralPath $observePath -Raw | ConvertFrom-Json
+            $row.observeStatus = if ([string]$observe.status) { [string]$observe.status } else { 'unknown' }
+            $row.observeReasonCode = if ($observe.PSObject.Properties['reasonCode']) { [string]$observe.reasonCode } else { '' }
+            if ([string]$observe.status -ne 'passed') {
+                # Phase 5 A2: the observe failure reason is the scene failure
+                # reason. Previously only prepare.json errors were read, so a
+                # failed observe left 'unknown/no-metrics' with an empty error.
+                $observeError = if ($observe.PSObject.Properties['error']) { [string]$observe.error } else { '' }
+                if (-not $observeError) {
+                    $observeError = "observe-$($row.observeStatus)"
+                    if ($row.observeReasonCode) { $observeError += ":$($row.observeReasonCode)" }
+                }
+                if (-not $row.error) { $row.error = $observeError }
+                if ($row.reasons -notcontains 'observe-failed') { $row.reasons += 'observe-failed' }
+            }
+        }
+        catch { }
+    }
+    $cleanupPath = Join-Path $scenarioDir.FullName 'cleanup.json'
+    if (Test-Path -LiteralPath $cleanupPath) {
+        try {
+            $cleanup = Get-Content -LiteralPath $cleanupPath -Raw | ConvertFrom-Json
+            if ([string]$cleanup.status -ne 'passed') {
+                $cleanupMessage = if ($cleanup.PSObject.Properties['error']) { [string]$cleanup.error } else { 'cleanup-not-passed' }
+                $row.cleanupError = if ($cleanupMessage) { $cleanupMessage } else { 'cleanup-not-passed' }
+            }
         }
         catch { }
     }
@@ -101,6 +136,13 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
         # preconditions, timeouts, lost results and lab transport failures are
         # never green by design (Phase 3A.3 policy).
         $row.category = 'INFRA'
+    }
+    else {
+        # Phase 5 A2: a scene with no verdict and no recorded error is still
+        # never UNKNOWN. It is INFRA with an explicit cause.
+        $row.category = 'INFRA'
+        $row.error = 'no-metrics-no-error'
+        if ($row.reasons -notcontains 'no-metrics-no-error') { $row.reasons += 'no-metrics-no-error' }
     }
     if (Test-Path -LiteralPath $observePath) {
         try {
@@ -178,7 +220,7 @@ $summary = [ordered]@{
     scenarios     = $rows
     baselines     = $baselines
 }
-$statusOverall = if (@($rows | Where-Object { $_.verdict -ne 'passed' -or @($_.productReasons).Count -gt 0 }).Count -gt 0) { 'failed' } else { 'passed' }
+$statusOverall = if (@($rows | Where-Object { $_.category -ne 'PASS' }).Count -gt 0) { 'failed' } else { 'passed' }
 $summary.status = $statusOverall
 
 if ($SummaryJsonPath) { [IO.File]::WriteAllText($SummaryJsonPath, ($summary | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false)) }
@@ -187,12 +229,14 @@ $lines = @(
     '',
     "Run: $RunId attempt $RunAttempt - overall: $statusOverall",
     '',
-    '| scenario | verdict | category | reasons | product reasons | reloads | wave1 ms | visit delay s |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |'
+    '| scenario | verdict | category | observe | reasons | error | product reasons | reloads | wave1 ms | visit delay s |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
 )
 foreach ($row in $rows) {
     $wave1 = if ($row.waveTimesMs) { [string]$row.waveTimesMs.wave1 } else { '' }
-    $lines += "| $($row.scenario) | $($row.verdict) | $($row.category) | $(@($row.reasons) -join ',') | $(@($row.productReasons) -join ',') | $($row.reloads) | $wave1 | $($row.visitDelaySeconds) |"
+    $errorText = ([string]$row.error) -replace '\|', '/'
+    if ($errorText.Length -gt 240) { $errorText = $errorText.Substring(0, 240) + '...' }
+    $lines += "| $($row.scenario) | $($row.verdict) | $($row.category) | $($row.observeStatus) | $(@($row.reasons) -join ',') | $errorText | $(@($row.productReasons) -join ',') | $($row.reloads) | $wave1 | $($row.visitDelaySeconds) |"
 }
 $lines += ''
 $lines += '## Baselines (median / max, one clock per segment)'

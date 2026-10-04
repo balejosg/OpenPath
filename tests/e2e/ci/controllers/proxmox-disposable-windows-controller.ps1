@@ -91,8 +91,27 @@ try {
 }
 catch {
     $message = ([string]$_.Exception.Message).Trim()
+    # Phase 5 A2: the adapter only gets the last bytes of stderr, so the full
+    # failing error (message plus the exception chain) is written next to the
+    # phase output. The adapter reads it back and keeps the cause literal.
+    $errorDetail = $message
+    try {
+        $chain = New-Object System.Collections.Generic.List[string]
+        $chain.Add($message) | Out-Null
+        $exception = $_.Exception
+        while ($exception.InnerException) {
+            $exception = $exception.InnerException
+            $chain.Add(('inner: ' + [string]$exception.Message)) | Out-Null
+        }
+        $chain.Add(('script: ' + [string]$_.InvocationInfo.PositionMessage)) | Out-Null
+        $errorDetail = ($chain -join "`n")
+    }
+    catch { }
+    try { [IO.File]::WriteAllText("$OutputPath.error.txt", $errorDetail, [Text.UTF8Encoding]::new($false)) } catch { }
     $code = $message
     if ($message -match '^([a-z0-9][a-z0-9-]*)') { $code = $Matches[1] }
+    $singleLine = ($message -replace '\s+', ' ')
+    if ($singleLine.Length -gt 2000) { $singleLine = $singleLine.Substring(0, 2000) }
     if (Test-OpenPathLabBlockedErrorCode -Code $code) {
         $blocked = [pscustomobject][ordered]@{
             schemaVersion    = 2
@@ -108,6 +127,6 @@ catch {
         [Console]::Error.WriteLine("BLOCKED_PLATFORM_VALIDATION: $code")
         exit 2
     }
-    [Console]::Error.WriteLine("CONTROLLER_PHASE_FAILED: $code")
+    [Console]::Error.WriteLine("CONTROLLER_PHASE_FAILED: $singleLine")
     exit 1
 }

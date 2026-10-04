@@ -34,19 +34,52 @@ function Test-FirstVisitSerializableValue {
     }
 }
 
+function Get-FirstVisitSerializationError {
+    <#
+    .SYNOPSIS
+    Returns '' when a value serializes on its own, or the exception type and
+    message when it does not.
+    .DESCRIPTION
+    Phase 5 A2: the previous contract only kept the failing key name, so a
+    serializer failure could not be explained from the evidence. The error text
+    travels in serializationDiagnostics.
+    #>
+    param([AllowNull()][object]$Value, [int]$Depth = 12)
+    try {
+        $probe = [ordered]@{ value = $Value }
+        $json = $probe | ConvertTo-Json -Depth $Depth -Compress
+        if ([string]::IsNullOrWhiteSpace($json)) { return 'empty-serialization' }
+        return ''
+    }
+    catch {
+        $type = $_.Exception.GetType().Name
+        $message = ([string]$_.Exception.Message) -replace '\s+', ' '
+        if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+        return ("{0}: {1}" -f $type, $message)
+    }
+}
+
 function ConvertTo-FirstVisitResultJson {
     <#
     .SYNOPSIS
     Serializes a harness result payload without ever returning empty.
     .DESCRIPTION
-    First tries the whole payload. On failure it keeps every key whose subtree
-    serializes on its own (body.state key-by-key included) and records the keys
-    that failed under `bodySerializationFailures`, so the rest of the result
-    still reaches the controller.
+    The whole payload is attempted first. On failure (or when it exceeds the
+    inline cap) it is reduced key by key: every value that serializes on its own
+    is kept (body.state key-by-key included), values over the per-value cap move
+    to a part file next to the result, and the keys that could not serialize are
+    named under `bodySerializationFailures` with their error text under
+    `serializationDiagnostics`. The reduced payload is always small enough to
+    serialize; the last-resort payload carries only plain strings.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][object]$Payload,
+        # Per-value inline cap; values above it are written to PartsDirectory.
+        # 0 disables splitting (used by callers that consume one message only).
+        [int]$MaxInlineBytes = 49152,
+        # When set, oversized values are written here as <flat-key>.json.
+        [AllowNull()][string]$PartsDirectory = $null,
         # Test seam: a custom probe forces the key-by-key path so the contract
         # ('the failing key is named, the rest arrives') is deterministic on
         # every PowerShell version.
@@ -56,21 +89,81 @@ function ConvertTo-FirstVisitResultJson {
     if (-not $customProbe) {
         try {
             $json = $Payload | ConvertTo-Json -Depth 12 -Compress
-            if (-not [string]::IsNullOrWhiteSpace($json)) { return [string]$json }
+            if (-not [string]::IsNullOrWhiteSpace($json) -and ($MaxInlineBytes -le 0 -or -not $PartsDirectory -or $json.Length -le $MaxInlineBytes)) { return [string]$json }
         }
         catch { }
     }
     $probe = if ($customProbe) { $SerializableProbe } else { { param($Value) Test-FirstVisitSerializableValue -Value $Value } }
     $failures = New-Object System.Collections.Generic.List[string]
+    $diagnostics = [ordered]@{}
+    $parts = [ordered]@{}
+    $writePart = {
+        param([string]$FlatKey, [object]$Value, [AllowNull()][string]$PrecomputedJson = $null)
+        if (-not $PartsDirectory) { return $false }
+        try {
+            $valueJson = $PrecomputedJson
+            if (-not $valueJson) { $valueJson = $Value | ConvertTo-Json -Depth 12 -Compress }
+            if ([string]::IsNullOrWhiteSpace($valueJson)) { return $false }
+            if ($MaxInlineBytes -gt 0 -and $valueJson.Length -le $MaxInlineBytes) { return $false }
+            if (-not (Test-Path -LiteralPath $PartsDirectory)) { New-Item -ItemType Directory -Path $PartsDirectory -Force | Out-Null }
+            $partName = ($FlatKey -replace '[^A-Za-z0-9._-]', '_') + '.json'
+            [IO.File]::WriteAllText((Join-Path $PartsDirectory $partName), $valueJson, [Text.UTF8Encoding]::new($false))
+            return $partName
+        }
+        catch {
+            return $false
+        }
+    }
+    $encode = {
+        param([string]$FlatKey, [object]$Value, [int]$Depth = 0)
+        # Returns the inline value, a part descriptor, or $null when rejected.
+        if (-not (& $probe $Value)) {
+            if ($customProbe) { $diagnostics[$FlatKey] = 'custom-probe-rejected' }
+            else { $diagnostics[$FlatKey] = (Get-FirstVisitSerializationError -Value $Value) }
+            return $null
+        }
+        $valueJson = $null
+        if ($MaxInlineBytes -gt 0 -and $PartsDirectory) {
+            try { $valueJson = $Value | ConvertTo-Json -Depth 12 -Compress } catch { $valueJson = $null }
+        }
+        $oversized = ($valueJson -and $valueJson.Length -gt $MaxInlineBytes)
+        if ($oversized -and $Depth -lt 3 -and ($Value -is [System.Collections.IDictionary])) {
+            # Split the big value by its own keys first: the result keeps the
+            # small keys inline and moves only the oversized ones to part files.
+            $child = [ordered]@{}
+            $childComplete = $true
+            foreach ($childKey in @($Value.Keys)) {
+                $childValue = Get-FirstVisitResultField -InputObject $Value -Name $childKey
+                $encodedChild = & $encode ("$FlatKey.$childKey") $childValue ($Depth + 1)
+                if ($null -eq $encodedChild) {
+                    $childComplete = $false
+                    $failures.Add("$FlatKey.$childKey")
+                    continue
+                }
+                $child[[string]$childKey] = $encodedChild
+            }
+            if ($childComplete) { return $child }
+        }
+        $partName = & $writePart $FlatKey $Value $valueJson
+        if ($partName) {
+            $count = -1
+            if ($Value -is [System.Collections.ICollection]) { $count = $Value.Count }
+            $parts[$FlatKey] = [string]$partName
+            $sha = ''
+            try {
+                $sha = (Get-FileHash -LiteralPath (Join-Path $PartsDirectory $partName) -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            catch { }
+            return [ordered]@{ firstVisitPart = [string]$partName; bytes = 0; count = $count; sha256 = $sha }
+        }
+        return $Value
+    }
     $reduced = [ordered]@{}
     foreach ($key in @($Payload.Keys)) {
         if ($key -eq 'body') { continue }
-        if (& $probe $Payload[$key]) {
-            $reduced[[string]$key] = $Payload[$key]
-        }
-        else {
-            $failures.Add([string]$key)
-        }
+        $encoded = & $encode ([string]$key) $Payload[$key]
+        if ($null -ne $encoded) { $reduced[[string]$key] = $encoded }
+        else { $failures.Add([string]$key) }
     }
     $body = Get-FirstVisitResultField -InputObject $Payload -Name 'body'
     $reducedBody = [ordered]@{}
@@ -79,20 +172,24 @@ function ConvertTo-FirstVisitResultJson {
         foreach ($key in @($body.Keys)) {
             if ($key -eq 'state') { continue }
             $value = Get-FirstVisitResultField -InputObject $body -Name $key
-            if (& $probe $value) { $reducedBody[[string]$key] = $value }
+            $encoded = & $encode ("body.$key") $value
+            if ($null -ne $encoded) { $reducedBody[[string]$key] = $encoded }
             else { $failures.Add("body.$key") }
         }
         $stateObject = Get-FirstVisitResultField -InputObject $body -Name 'state'
-        if ($stateObject) {
+        if ($stateObject -and ($stateObject -is [System.Collections.IDictionary] -or $stateObject.PSObject)) {
             foreach ($key in @($stateObject.Keys)) {
                 $value = Get-FirstVisitResultField -InputObject $stateObject -Name $key
-                if (& $probe $value) { $state[[string]$key] = $value }
+                $encoded = & $encode ("body.state.$key") $value
+                if ($null -ne $encoded) { $state[[string]$key] = $encoded }
                 else { $failures.Add("body.state.$key") }
             }
         }
     }
     $reducedBody['state'] = $state
     $reducedBody['bodySerializationFailures'] = @($failures.ToArray())
+    if ($diagnostics.Count -gt 0) { $reducedBody['serializationDiagnostics'] = $diagnostics }
+    if ($parts.Count -gt 0) { $reducedBody['resultParts'] = $parts }
     $reduced['body'] = $reducedBody
     if (-not $reduced.Contains('status')) { $reduced['status'] = [string](Get-FirstVisitResultField -InputObject $Payload -Name 'status') }
     if (-not $reduced.Contains('step')) { $reduced['step'] = [string](Get-FirstVisitResultField -InputObject $Payload -Name 'step') }
@@ -102,6 +199,14 @@ function ConvertTo-FirstVisitResultJson {
         if (-not [string]::IsNullOrWhiteSpace($fallbackJson)) { return [string]$fallbackJson }
     }
     catch { }
+    # Last resort: only plain strings and string arrays, so it always serializes.
+    $minimal = [ordered]@{
+        status   = [string](Get-FirstVisitResultField -InputObject $Payload -Name 'status')
+        step     = [string](Get-FirstVisitResultField -InputObject $Payload -Name 'step')
+        failures = @($failures | ForEach-Object { "serialization-failed:$_" })
+        body     = [ordered]@{ state = [ordered]@{}; bodySerializationFailures = @($failures.ToArray()) }
+    }
+    try { return [string]($minimal | ConvertTo-Json -Depth 6 -Compress) } catch { }
     return '{"status":"failed","step":"unknown","failures":["result-serialization-failed"],"body":{"state":{}}}'
 }
 
@@ -169,4 +274,4 @@ function Resolve-FirstVisitGuestResult {
     return [pscustomobject][ordered]@{ json = $null; source = ''; stdoutValid = $false; fileValid = $false; error = 'first-visit-guest-result-missing' }
 }
 
-Export-ModuleMember -Function ConvertTo-FirstVisitResultJson, Get-FirstVisitResultFromOutput, Resolve-FirstVisitGuestResult, Test-FirstVisitSerializableValue
+Export-ModuleMember -Function ConvertTo-FirstVisitResultJson, Get-FirstVisitResultFromOutput, Resolve-FirstVisitGuestResult, Test-FirstVisitSerializableValue, Get-FirstVisitSerializationError

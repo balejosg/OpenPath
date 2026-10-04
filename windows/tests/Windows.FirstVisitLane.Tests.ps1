@@ -430,6 +430,47 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:observe/session'
             @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:observe/visit'
         }
+
+        It 'Restores collect values that traveled as part files' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
+            $transport = New-FirstVisitTestTransport -State $state
+            $preparePayload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized
+            Invoke-OpenPathProxmoxControllerPhase -Payload $preparePayload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            $state.ReportJson = New-FirstVisitReportJson
+            # The collect result references one oversized key as a part file.
+            $state.ResponseOverrides['observe/collect'] = '{"status":"passed","body":{"state":{"collect":{"diagnostics":{"lines":1,"all":{"firstVisitPart":"body_state_collect_diagnostics_all.json","count":1}},"startupProfiles":[]}},"resultParts":{"body.state.collect.diagnostics.all":"body_state_collect_diagnostics_all.json"},"session":""}}'
+            $partPath = 'C:\Windows\Temp\openpath-desktop-survival\12345-1-first-visit-settled-r1\result-observe-collect.json.parts\body_state_collect_diagnostics_all.json'
+            $state.GuestFiles[$partPath] = '["stage=extension-diagnostic {\"kind\":\"reload-decision\",\"reason\":\"reloaded\"}"]'
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Phase 'observe'
+            $result = Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport
+            $result.status | Should -Be 'passed'
+            @($state.Calls | Where-Object { $_ -like "ReadGuestFile:*$partPath" }).Count | Should -BeGreaterThan 0
+            # The part was merged back before the metrics consumed it.
+            $result.observation.state.metrics.diagnosticLines | Should -Be 1
+            $result.observation.state.metrics.reloadReasons | Should -Contain 'reloaded'
+            (Test-Path -LiteralPath (Join-Path $script:FirstVisitArtifacts 'guest-observe-collect.part-body_state_collect_diagnostics_all.json')) | Should -BeTrue
+        }
+
+        It 'Writes a per-step trace with timings for every guest step' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
+            $transport = New-FirstVisitTestTransport -State $state
+            $preparePayload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized
+            Invoke-OpenPathProxmoxControllerPhase -Payload $preparePayload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            $state.ReportJson = New-FirstVisitReportJson
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Phase 'observe'
+            Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            foreach ($phase in @('prepare', 'observe')) {
+                $stepName = if ($phase -eq 'prepare') { 'verify-warmup' } else { 'collect' }
+                $tracePath = Join-Path $script:FirstVisitArtifacts "$phase-step-trace.json"
+                (Test-Path -LiteralPath $tracePath) | Should -BeTrue -Because $phase
+                $trace = @(Get-Content -LiteralPath $tracePath -Raw | ConvertFrom-Json)
+                $entries = @($trace | Where-Object { $_.phase -eq $phase -and $_.step -eq $stepName })
+                $entries.Count | Should -BeGreaterThan 0 -Because $phase
+                $entry = $entries[-1]
+                $entry.elapsedMs | Should -BeGreaterThan -1
+                $entry.status | Should -Be 'passed'
+            }
+        }
     }
 
     Context 'Metrics extraction' {
@@ -687,6 +728,60 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             $parsed.body.state.good | Should -Be 'kept'
             $parsed.body.state.hostDiagnostics.manifestPath | Should -Be 'C:\x\whitelist_native_host.json'
             ($parsed.body.bodySerializationFailures -join ',') | Should -Match 'body\.state\.bad'
+            # Phase 5 A2: the failing key also carries the serializer error text.
+            $parsed.body.serializationDiagnostics.'body.state.bad' | Should -Be 'custom-probe-rejected'
+        }
+
+        It 'Splits oversized values into part files so a large collect still arrives' {
+            $partsDir = Join-Path ([System.IO.Path]::GetTempPath()) ('first-visit-parts-' + [guid]::NewGuid().ToString('N'))
+            try {
+                $payload = [ordered]@{
+                    status   = 'passed'
+                    step     = 'collect'
+                    failures = @()
+                    body     = [ordered]@{
+                        state = [ordered]@{
+                            collect = [ordered]@{
+                                diagnostics = [ordered]@{ lines = 10; all = @(1..10 | ForEach-Object { "line-$_ " + ('x' * 20) }) }
+                                workerState = '{"heartbeatEpochMs":1}'
+                            }
+                        }
+                        session = ''
+                    }
+                }
+                # Tiny cap forces the split; the default probe stays real.
+                $json = ConvertTo-FirstVisitResultJson -Payload $payload -MaxInlineBytes 32 -PartsDirectory $partsDir
+                $parsed = $json | ConvertFrom-Json
+                # The big dictionary is split by its own keys: only diagnostics.all
+                # exceeds the cap, the other keys stay inline.
+                $parsed.body.state.collect.PSObject.Properties['firstVisitPart'] | Should -BeNullOrEmpty
+                $parsed.body.state.collect.diagnostics.lines | Should -Be 10
+                $parsed.body.state.collect.workerState | Should -Be '{"heartbeatEpochMs":1}'
+                $parsed.body.state.collect.diagnostics.all.firstVisitPart | Should -Be 'body.state.collect.diagnostics.all.json'
+                $parsed.body.resultParts.PSObject.Properties['body.state.collect.diagnostics.all'].Value | Should -Be 'body.state.collect.diagnostics.all.json'
+                (Test-Path -LiteralPath (Join-Path $partsDir 'body.state.collect.diagnostics.all.json')) | Should -BeTrue
+                $partValue = Get-Content -LiteralPath (Join-Path $partsDir 'body.state.collect.diagnostics.all.json') -Raw | ConvertFrom-Json
+                $partValue.Count | Should -Be 10
+                # The inline result stays small: no unbounded value travels whole.
+                $json.Length | Should -BeLessThan 2048
+            }
+            finally {
+                Remove-Item -LiteralPath $partsDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'Reports the serializer error text through the serialization diagnostics' {
+            # Get-FirstVisitSerializationError returns '' for values that
+            # serialize (the real engine error text is captured when a value
+            # throws; pwsh and PS 5.1 differ on what throws).
+            (Get-FirstVisitSerializationError -Value 'plain') | Should -Be ''
+            (Get-FirstVisitSerializationError -Value @('a', 'b')) | Should -Be ''
+            # The reducer path records the diagnostic with the custom probe.
+            $probe = { param($value) return $false }
+            $payload = [ordered]@{ status = 'failed'; step = 'collect'; failures = @(); body = [ordered]@{ state = [ordered]@{ collect = [ordered]@{ bad = 'x' } }; session = '' } }
+            $parsed = (ConvertTo-FirstVisitResultJson -Payload $payload -SerializableProbe $probe) | ConvertFrom-Json
+            $parsed.body.serializationDiagnostics.'body.state.collect' | Should -Be 'custom-probe-rejected'
+            ($parsed.body.bodySerializationFailures -join ',') | Should -Match 'body\.state\.collect'
         }
     }
 
@@ -914,6 +1009,68 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             $controller | Should -Match 'Read-OpenPathFirstVisitGuestText'
             $controller | Should -Match 'first-visit-precondition-failed'
             $controller | Should -Match 'Get-FirstVisitHostSignalsVerdict'
+        }
+    }
+
+    Context 'Aggregator honesty (Phase 5 A2)' {
+        It 'Classifies an observe failure as INFRA with the literal controller error' {
+            $root = Join-Path $TestDrive ('aggregate-' + [guid]::NewGuid().ToString('N'))
+            $scenarioDir = Join-Path (Join-Path (Join-Path $root '12345') '1') 'first-visit-settled-r1'
+            New-Item -ItemType Directory -Path $scenarioDir -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'prepare.json'), '{"status":"passed","error":""}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'observe.json'), '{"status":"failed","reasonCode":"CONTROLLER_PHASE_FAILED","error":"controller-exit-1: CONTROLLER_PHASE_FAILED: first-visit-guest-step-failed-observe-collect-result-serialization-failed"}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'cleanup.json'), '{"status":"passed","error":""}')
+            $summaryJson = Join-Path $root 'summary.json'
+            $hostExe = (Get-Process -Id $PID).Path
+            $aggregate = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\aggregate-windows-first-visit.ps1'
+            $hostArguments = @('-NoProfile')
+            if ([IO.Path]::GetFileName($hostExe) -ieq 'powershell.exe') { $hostArguments += @('-ExecutionPolicy', 'Bypass') }
+            & $hostExe @hostArguments -File $aggregate -RunId '12345' -RunAttempt 1 -EvidenceRoot $root -SummaryJsonPath $summaryJson | Out-Null
+            $LASTEXITCODE | Should -Be 1
+            $summary = Get-Content -LiteralPath $summaryJson -Raw | ConvertFrom-Json
+            $row = $summary.scenarios[0]
+            $row.category | Should -Be 'INFRA'
+            $row.error | Should -Match 'first-visit-guest-step-failed-observe-collect-result-serialization-failed'
+            $row.observeStatus | Should -Be 'failed'
+            ($row.reasons -join ',') | Should -Match 'observe-failed'
+        }
+
+        It 'Never leaves a scene without a verdict or a literal cause' {
+            $root = Join-Path $TestDrive ('aggregate-' + [guid]::NewGuid().ToString('N'))
+            $scenarioDir = Join-Path (Join-Path (Join-Path $root '12345') '1') 'first-visit-hot-r1'
+            New-Item -ItemType Directory -Path $scenarioDir -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'prepare.json'), '{"status":"passed","error":""}')
+            $summaryJson = Join-Path $root 'summary.json'
+            $hostExe = (Get-Process -Id $PID).Path
+            $aggregate = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\aggregate-windows-first-visit.ps1'
+            $hostArguments = @('-NoProfile')
+            if ([IO.Path]::GetFileName($hostExe) -ieq 'powershell.exe') { $hostArguments += @('-ExecutionPolicy', 'Bypass') }
+            & $hostExe @hostArguments -File $aggregate -RunId '12345' -RunAttempt 1 -EvidenceRoot $root -SummaryJsonPath $summaryJson | Out-Null
+            $LASTEXITCODE | Should -Be 1
+            $row = (Get-Content -LiteralPath $summaryJson -Raw | ConvertFrom-Json).scenarios[0]
+            $row.category | Should -Be 'INFRA'
+            $row.category | Should -Not -Be 'UNKNOWN'
+            $row.error | Should -Not -Be ''
+        }
+
+        It 'Classifies a measured passing verdict as PASS (control)' {
+            $root = Join-Path $TestDrive ('aggregate-' + [guid]::NewGuid().ToString('N'))
+            $scenarioDir = Join-Path (Join-Path (Join-Path $root '12345') '1') 'first-visit-control-r1'
+            New-Item -ItemType Directory -Path $scenarioDir -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'prepare.json'), '{"status":"passed","error":""}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'observe.json'), '{"status":"passed","error":""}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'cleanup.json'), '{"status":"passed","error":""}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'metrics.json'), '{"verdict":"passed","reasons":[],"reloads":0,"waveTimesMs":{"wave1":1000},"warmup":{"productReasons":[]}}')
+            $summaryJson = Join-Path $root 'summary.json'
+            $hostExe = (Get-Process -Id $PID).Path
+            $aggregate = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\aggregate-windows-first-visit.ps1'
+            $hostArguments = @('-NoProfile')
+            if ([IO.Path]::GetFileName($hostExe) -ieq 'powershell.exe') { $hostArguments += @('-ExecutionPolicy', 'Bypass') }
+            & $hostExe @hostArguments -File $aggregate -RunId '12345' -RunAttempt 1 -EvidenceRoot $root -SummaryJsonPath $summaryJson | Out-Null
+            $LASTEXITCODE | Should -Be 0
+            $row = (Get-Content -LiteralPath $summaryJson -Raw | ConvertFrom-Json).scenarios[0]
+            $row.category | Should -Be 'PASS'
+            $row.verdict | Should -Be 'passed'
         }
     }
 }
