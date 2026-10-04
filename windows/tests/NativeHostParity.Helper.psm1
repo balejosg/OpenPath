@@ -1,0 +1,438 @@
+# Phase 5 B1: parity harness for the native messaging host.
+#
+# Builds a fixture native-host root (staged support files + state + whitelist +
+# config + overlay), runs a framed request sequence against the PowerShell
+# reference host and (when csc.exe is available) against the compiled C# host,
+# and compares the parsed responses semantically.
+#
+# Every request/response goes through the real 4-byte little-endian framing so
+# the persistent port, id echo, malformed JSON and oversized frames are covered
+# by construction.
+
+function Get-NativeHostParityStagedFiles {
+    # returns repo-relative source paths for every staged support file.
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+    $scriptFiles = @(
+        'windows\scripts\OpenPath-NativeHost.ps1',
+        'windows\scripts\OpenPath-NativeHost.cmd',
+        'windows\native-host\OpenPathNativeHost.cs'
+    )
+    $internalFiles = @(
+        'CapabilityStorage.ps1',
+        'Common.Redaction.ps1',
+        'Common.Whitelist.Sections.ps1',
+        'Common.Domains.Catalog.ps1',
+        'RuntimeDependency.Protocol.ps1',
+        'RuntimeDependency.Policy.ps1',
+        'RuntimeDependency.Queue.ps1',
+        'RuntimeDependency.Overlay.ps1',
+        'CaptivePortal.RecoveryTransition.ps1',
+        'CaptivePortal.StateFiles.ps1',
+        'NativeHost.CaptivePortalRecoveryQueue.ps1',
+        'TaskRunner.ps1',
+        'NativeHost.State.ps1',
+        'NativeHost.Protocol.ps1',
+        'NativeHost.Actions.ps1',
+        'NativeHost.Actions.Bootstrap.ps1',
+        'NativeHost.Actions.Shared.ps1',
+        'NativeHost.Actions.RuntimeDependency.ps1',
+        'NativeHost.Actions.CaptivePortal.ps1',
+        'NativeHost.Actions.MessageDispatch.ps1'
+    )
+    $paths = @()
+    foreach ($relative in $scriptFiles) { $paths += (Join-Path $RepoRoot $relative) }
+    foreach ($name in $internalFiles) { $paths += (Join-Path $RepoRoot ('windows\lib\internal\' + $name)) }
+    $paths += (Join-Path $RepoRoot 'windows\lib\RequestSetup.State.psm1')
+    return $paths
+}
+
+function New-NativeHostParityFixture {
+    <#
+    .SYNOPSIS
+        Creates one fixture root with the staged host and deterministic state.
+    .DESCRIPTION
+        The whole windows/lib tree is staged so the reference host can lazily
+        import CaptivePortal.psm1 + Common.psm1 exactly like a production
+        install (configured captive-portal domains and protected hosts come from
+        the same config the compiled host reads directly).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
+    $native = Join-Path $Root 'browser-extension\firefox\native'
+    New-Item -ItemType Directory -Path $native -Force | Out-Null
+    foreach ($source in @(Get-NativeHostParityStagedFiles -RepoRoot $RepoRoot)) {
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "native-host-parity-source-missing:$source" }
+        Copy-Item -LiteralPath $source -Destination (Join-Path $native (Split-Path -Leaf $source)) -Force
+    }
+    # Production-layout lib tree for the lazy CaptivePortal/Common import.
+    $libSource = Join-Path $RepoRoot 'windows\lib'
+    $libTarget = Join-Path $Root 'lib'
+    Copy-Item -LiteralPath $libSource -Destination $libTarget -Recurse -Force
+    $data = Join-Path $Root 'data'
+    New-Item -ItemType Directory -Path $data -Force | Out-Null
+
+    $state = [ordered]@{
+        machineName             = 'parity-machine'
+        whitelistUrl            = 'https://api.parity.invalid/w/tok12345678/whitelist.txt'
+        apiUrl                  = 'https://api.parity.invalid'
+        requestApiUrl           = 'https://api.parity.invalid'
+        classroom               = 'parity-class'
+        classroomId             = 'parity-class-id'
+        version                 = '9.9.9'
+        syncedAt                = '2026-01-01T00:00:00.0000000Z'
+        captivePortalDomains    = @('portal.parity.invalid')
+        runtimeDependencyDomains = @('exactdep.parity.invalid')
+    }
+    [IO.File]::WriteAllText((Join-Path $native 'native-state.json'), ($state | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+
+    $whitelist = @(
+        '## WHITELIST',
+        'anchor1.parity.invalid',
+        'depwhitelisted.parity.invalid',
+        '## BLOCKED-SUBDOMAINS',
+        'blocked9.parity.invalid',
+        '## BLOCKED-PATHS',
+        'anchor1.parity.invalid/blocked',
+        '## ALLOWED-PATHS',
+        'anchor1.parity.invalid/allowed'
+    ) -join "`r`n"
+    [IO.File]::WriteAllText((Join-Path $native 'whitelist.txt'), $whitelist + "`r`n", [Text.UTF8Encoding]::new($false))
+
+    $config = [ordered]@{
+        apiUrl                                     = 'https://api.parity.invalid'
+        requestApiUrl                              = 'https://api.parity.invalid'
+        whitelistUrl                               = 'https://api.parity.invalid/w/tok12345678/whitelist.txt'
+        captivePortalDomains                       = @('portal.parity.invalid')
+        runtimeDependencyPersistentTransportDisabled = $false
+        extensionDiagnosticsDisabled               = $false
+    }
+    [IO.File]::WriteAllText((Join-Path $data 'config.json'), ($config | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+
+    $overlay = [ordered]@{
+        version           = 1
+        generation        = 2
+        appliedGeneration = 2
+        entries           = @(
+            [ordered]@{ dependencyHost = 'overlaydep.parity.invalid'; anchorHost = 'anchor1.parity.invalid'; requestType = 'script'; generation = 1; expiresAt = '2099-01-01T00:00:00.0000000Z' },
+            [ordered]@{ dependencyHost = 'pendingdep.parity.invalid'; anchorHost = 'anchor1.parity.invalid'; requestType = 'script'; generation = 3; expiresAt = '2099-01-01T00:00:00.0000000Z' }
+        )
+    }
+    [IO.File]::WriteAllText((Join-Path $data 'runtime-dependency-overlay.json'), ($overlay | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+
+    $workerState = [ordered]@{ heartbeatEpochMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    [IO.File]::WriteAllText((Join-Path $data 'runtime-dependency-worker-state.json'), ($workerState | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+
+    foreach ($directory in @('runtime-dependency-queue', 'captive-portal-recovery-queue', 'captive-portal-recovery-result', 'captive-portal-recovery-progress')) {
+        New-Item -ItemType Directory -Path (Join-Path $data $directory) -Force | Out-Null
+    }
+
+    # Recent active marker: drives the marker signal in check and the
+    # RecentSuccess recovery path. Written last so it is inside the 30s window.
+    $marker = [ordered]@{
+        active         = $true
+        mode           = 'limited'
+        limitedModeReady = $true
+        allowedHosts   = @('portal.parity.invalid')
+        expiresAt      = '2099-01-01T00:00:00.0000000Z'
+        state          = 'Portal'
+    }
+    [IO.File]::WriteAllText((Join-Path $data 'captive-portal-active.json'), ($marker | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+
+    return [pscustomobject]@{ Root = $Root; Native = $native; Data = $data }
+}
+
+function New-NativeHostParitySequence {
+    <#
+    .SYNOPSIS
+        Deterministic request sequence covering every action and error shape.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $cases = @(
+        @{ name = 'ping'; message = @{ action = 'ping' } },
+        @{ name = 'ping-id-number'; message = @{ action = 'ping'; id = 42 } },
+        @{ name = 'ping-id-string'; message = @{ action = 'ping'; id = 'client-7' } },
+        @{ name = 'get-hostname'; message = @{ action = 'get-hostname' } },
+        @{ name = 'get-machine-token'; message = @{ action = 'get-machine-token' } },
+        @{ name = 'get-config'; message = @{ action = 'get-config' } },
+        @{ name = 'get-blocked-paths'; message = @{ action = 'get-blocked-paths' } },
+        @{ name = 'get-allowed-paths'; message = @{ action = 'get-allowed-paths' } },
+        @{ name = 'get-blocked-subdomains'; message = @{ action = 'get-blocked-subdomains' } },
+        @{ name = 'get-policy-version'; message = @{ action = 'get-policy-version' } },
+        @{ name = 'check'; message = @{ action = 'check'; domains = @('anchor1.parity.invalid', 'depwhitelisted.parity.invalid', 'blocked9.parity.invalid', 'exactdep.parity.invalid', 'portal.parity.invalid', 'unlisted1.parity.invalid') } },
+        @{ name = 'update-whitelist-noop'; message = @{ action = 'update-whitelist'; domains = @('depwhitelisted.parity.invalid') } },
+        @{ name = 'dependency-invalid-payload'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid' } },
+        @{ name = 'dependency-same-host'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'anchor1.parity.invalid'; requestType = 'script' } },
+        @{ name = 'dependency-anchor-not-whitelisted'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'unlisted1.parity.invalid'; dependencyHost = 'dep2.parity.invalid'; requestType = 'script' } },
+        @{ name = 'dependency-protected'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'login.microsoftonline.com'; requestType = 'script' } },
+        @{ name = 'dependency-blocked'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'blocked9.parity.invalid'; requestType = 'script' } },
+        @{ name = 'dependency-already-whitelisted'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'depwhitelisted.parity.invalid'; requestType = 'script' } },
+        @{ name = 'dependency-overlay-ready'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'overlaydep.parity.invalid'; requestType = 'script' } },
+        @{ name = 'dependency-overlay-pending'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'pendingdep.parity.invalid'; requestType = 'script' } },
+        @{ name = 'dependency-sensitive-field'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'dep3.parity.invalid'; requestType = 'script'; url = 'https://example.invalid/' } },
+        @{ name = 'dependency-main-frame'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'dep4.parity.invalid'; requestType = 'main_frame' } },
+        @{ name = 'dependency-invalid-mode'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'dep5.parity.invalid'; requestType = 'script'; mode = 'weird' } },
+        @{ name = 'dependency-enqueue-ready'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'overlaydep.parity.invalid'; requestType = 'script'; mode = 'enqueue' } },
+        @{ name = 'dependency-enqueue-pending'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'newdep1.parity.invalid'; requestType = 'script'; mode = 'enqueue' } },
+        @{ name = 'dependency-batch-enqueue'; message = @{ action = 'allow-local-runtime-dependency-batch'; mode = 'enqueue'; entries = @(
+                    @{ anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'anchor1.parity.invalid'; requestType = 'script' },
+                    @{ anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'depwhitelisted.parity.invalid'; requestType = 'script' },
+                    @{ anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'blocked9.parity.invalid'; requestType = 'script' },
+                    @{ anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'newdep2.parity.invalid'; requestType = 'script' }
+                ) } },
+        @{ name = 'dependency-batch-empty'; message = @{ action = 'allow-local-runtime-dependency-batch'; entries = @() } },
+        @{ name = 'check-local-single-ready'; message = @{ action = 'check-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'overlaydep.parity.invalid' } },
+        @{ name = 'check-local-single-pending'; message = @{ action = 'check-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'pendingdep.parity.invalid' } },
+        @{ name = 'check-local-batch'; message = @{ action = 'check-local-runtime-dependency'; entries = @(
+                    @{ anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'overlaydep.parity.invalid' },
+                    @{ anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'pendingdep.parity.invalid' },
+                    @{ anchorHost = 'bad host'; dependencyHost = 'x' }
+                ) } },
+        @{ name = 'report-extension-diagnostics'; message = @{ action = 'report-extension-diagnostics'; events = @(
+                    @{ ts = 1791000000000; kind = 'transport'; tabId = 7; type = 'script'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'overlaydep.parity.invalid'; outcome = 'released'; ms = 12.3456; committed = $true },
+                    @{ ts = 1791000000001; kind = 'reload-decision'; reason = 'reloaded'; url = 'https://example.invalid/private' },
+                    @{ ts = 1791000000002; kind = 'unknown-field'; secretField = 'should-drop' },
+                    @{ ts = 1791000000003; kind = ('k' * 200) }
+                ) } },
+        @{ name = 'unknown-action'; message = @{ action = 'not-a-real-action' } },
+        @{ name = 'recover-invalid-host'; message = @{ action = 'recover-captive-portal-navigation'; operation = 'open' } },
+        @{ name = 'recover-recent-success'; message = @{ action = 'recover-captive-portal-navigation'; operation = 'open'; triggerHost = 'portal.parity.invalid' } }
+    )
+    return $cases
+}
+
+function Get-NativeHostParityMaskedKeys {
+    # Response keys whose values legitimately differ between the two hosts or
+    # between runs (timings, generated ids, live task scheduler state).
+    return @(
+        'requestPath', 'queueWriteMs', 'updateTriggerMs', 'updateWaitMs', 'updateElapsedMs',
+        'elapsedMs', 'taskState', 'taskLastResult', 'taskLastResultHex', 'taskLastRunTime',
+        'taskNextRunTime', 'taskNumberOfMissedRuns', 'taskDiagnosticsError',
+        'queuePath', 'resultPath', 'progressPath', 'pendingRequestIds'
+    )
+}
+
+function Start-NativeHostParityProcess {
+    <#
+    .SYNOPSIS
+        Starts a host process with framed stdin/stdout.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    return [System.Diagnostics.Process]::Start($startInfo)
+}
+
+function Write-NativeHostParityFrame {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)][string]$Json
+    )
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Json)
+    $Process.StandardInput.BaseStream.Write([System.BitConverter]::GetBytes([int]$bytes.Length), 0, 4)
+    $Process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+    $Process.StandardInput.BaseStream.Flush()
+}
+
+function Read-NativeHostParityFrame {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+        [int]$TimeoutSeconds = 30
+    )
+    $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
+    $lengthBuffer = New-Object byte[] 4
+    $read = 0
+    while ($read -lt 4 -and (Get-Date) -lt $deadline) {
+        $remaining = [Math]::Max(1, [int](($deadline - (Get-Date)).TotalMilliseconds))
+        $task = $Process.StandardOutput.BaseStream.ReadAsync($lengthBuffer, $read, 4 - $read)
+        if ($task.Wait($remaining) -and $task.Result -gt 0) { $read += $task.Result }
+        elseif ((Get-Date) -ge $deadline) { break }
+    }
+    if ($read -lt 4) { return $null }
+    $length = [System.BitConverter]::ToInt32($lengthBuffer, 0)
+    if ($length -le 0 -or $length -gt 4MB) { return $null }
+    $payload = New-Object byte[] $length
+    $offset = 0
+    while ($offset -lt $length -and (Get-Date) -lt $deadline) {
+        $remaining = [Math]::Max(1, [int](($deadline - (Get-Date)).TotalMilliseconds))
+        $task = $Process.StandardOutput.BaseStream.ReadAsync($payload, $offset, $length - $offset)
+        if ($task.Wait($remaining) -and $task.Result -gt 0) { $offset += $task.Result }
+        elseif ((Get-Date) -ge $deadline) { break }
+    }
+    if ($offset -lt $length) { return $null }
+    return ([System.Text.Encoding]::UTF8.GetString($payload) | ConvertFrom-Json)
+}
+
+function Invoke-NativeHostParitySession {
+    <#
+    .SYNOPSIS
+        Runs the full sequence against one host and returns parsed responses.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @(),
+        [Parameter(Mandatory = $true)][object[]]$Cases,
+        [int]$PerMessageTimeoutSeconds = 30
+    )
+    $process = Start-NativeHostParityProcess -FilePath $FilePath -Arguments $Arguments
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $responses = @()
+    try {
+        foreach ($case in $Cases) {
+            $second = (Get-Date).Second
+            $json = if ($case.ContainsKey('raw')) { [string]$case.raw } else { ($case.message | ConvertTo-Json -Depth 10 -Compress) }
+            Write-NativeHostParityFrame -Process $process -Json $json
+            $response = Read-NativeHostParityFrame -Process $process -TimeoutSeconds $PerMessageTimeoutSeconds
+            $responses += [pscustomobject]@{ name = $case.name; response = $response }
+        }
+    }
+    finally {
+        try { $process.StandardInput.Close() } catch { }
+        if (-not $process.WaitForExit(10000)) {
+            try { $process.Kill($true) } catch { try { $process.Kill() } catch { } }
+        }
+        $process.Dispose()
+    }
+    return $responses
+}
+
+function Compare-NativeHostParityValue {
+    <#
+    .SYNOPSIS
+        Returns '' when the two values are equivalent, or a human description.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Reference,
+        [AllowNull()][object]$Candidate,
+        [string]$Path = '$',
+        [string[]]$MaskedKeys = @(),
+        [string]$KeyName = ''
+    )
+
+    if ($KeyName -and $MaskedKeys -contains $KeyName) {
+        # Presence must match; the value is allowed to differ.
+        return ''
+    }
+    if ($KeyName -eq 'resolved_ip') {
+        # DNS answers may differ between the two host runs; require presence.
+        return ''
+    }
+    $referenceNull = $null -eq $Reference
+    $candidateNull = $null -eq $Candidate
+    if ($referenceNull -and $candidateNull) { return '' }
+    if ($referenceNull -or $candidateNull) { return "$Path reference=$Reference candidate=$Candidate" }
+
+    $referenceObject = $Reference -is [System.Management.Automation.PSCustomObject] -or $Reference -is [System.Collections.IDictionary]
+    $candidateObject = $Candidate -is [System.Management.Automation.PSCustomObject] -or $Candidate -is [System.Collections.IDictionary]
+    if ($referenceObject -and $candidateObject) {
+        $referenceKeys = @($Reference.PSObject.Properties | ForEach-Object { $_.Name })
+        $candidateKeys = @($Candidate.PSObject.Properties | ForEach-Object { $_.Name })
+        $missing = @($referenceKeys | Where-Object { $candidateKeys -notcontains $_ })
+        $extra = @($candidateKeys | Where-Object { $referenceKeys -notcontains $_ })
+        if ($missing.Count -gt 0 -or $extra.Count -gt 0) {
+            return "$Path keys reference=[$(($referenceKeys | Sort-Object) -join ',')] candidate=[$(($candidateKeys | Sort-Object) -join ',')]"
+        }
+        foreach ($key in $referenceKeys) {
+            $child = Compare-NativeHostParityValue -Reference $Reference.$key -Candidate $Candidate.$key -Path "$Path.$key" -MaskedKeys $MaskedKeys -KeyName $key
+            if ($child) { return $child }
+        }
+        return ''
+    }
+    $referenceArray = $Reference -is [System.Collections.IEnumerable] -and -not ($Reference -is [string])
+    $candidateArray = $Candidate -is [System.Collections.IEnumerable] -and -not ($Candidate -is [string])
+    if ($referenceArray -and $candidateArray) {
+        $referenceItems = @($Reference)
+        $candidateItems = @($Candidate)
+        if ($referenceItems.Count -ne $candidateItems.Count) {
+            return "$Path count reference=$($referenceItems.Count) candidate=$($candidateItems.Count)"
+        }
+        for ($index = 0; $index -lt $referenceItems.Count; $index++) {
+            $child = Compare-NativeHostParityValue -Reference $referenceItems[$index] -Candidate $candidateItems[$index] -Path "$Path[$index]" -MaskedKeys $MaskedKeys
+            if ($child) { return $child }
+        }
+        return ''
+    }
+    if ($Reference -is [bool] -or $Candidate -is [bool]) {
+        if ([bool]$Reference -ne [bool]$Candidate) { return "$Path reference=$Reference candidate=$Candidate" }
+        return ''
+    }
+    $referenceNumber = $Reference -is [int] -or $Reference -is [long] -or $Reference -is [double] -or $Reference -is [decimal]
+    $candidateNumber = $Candidate -is [int] -or $Candidate -is [long] -or $Candidate -is [double] -or $Candidate -is [decimal]
+    if ($referenceNumber -and $candidateNumber) {
+        if ([double]$Reference -ne [double]$Candidate) { return "$Path reference=$Reference candidate=$Candidate" }
+        return ''
+    }
+    if ([string]$Reference -ne [string]$Candidate) {
+        return "$Path reference='$Reference' candidate='$Candidate'"
+    }
+    return ''
+}
+
+function Get-NativeHostParityCompiler {
+    # returns the in-box csc.exe path on Windows, or '' anywhere else.
+    if ($env:OS -ne 'Windows_NT' -and -not $IsWindows) { return '' }
+    $windowsDirectory = if ($env:WINDIR) { $env:WINDIR } else { $env:SystemRoot }
+    if (-not $windowsDirectory) { return '' }
+    foreach ($candidate in @(
+            (Join-Path $windowsDirectory 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
+            (Join-Path $windowsDirectory 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
+        )) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return ''
+}
+
+function Build-NativeHostParityExecutable {
+    # compiles the fixture source next to the fixture host; returns the exe path or ''.
+    param(
+        [Parameter(Mandatory = $true)][string]$NativeRoot,
+        [Parameter(Mandatory = $true)][string]$CompilerPath
+    )
+    $source = Join-Path $NativeRoot 'OpenPathNativeHost.cs'
+    $output = Join-Path $NativeRoot 'OpenPath-NativeHost.exe'
+    $compileOutput = & $CompilerPath /nologo /target:exe /optimize+ /r:System.dll /out:$output $source 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $output -PathType Leaf)) {
+        Write-Host "parity compile failed: $compileOutput"
+        return ''
+    }
+    return $output
+}
+
+function Get-NativeHostParityHostCommand {
+    # resolves the interpreter used to run the PowerShell reference host.
+    $current = Get-Process -Id $PID
+    $path = $current.Path
+    return [pscustomobject]@{ FilePath = $path; Arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File') }
+}
+
+Export-ModuleMember -Function @(
+    'New-NativeHostParityFixture',
+    'New-NativeHostParitySequence',
+    'Get-NativeHostParityMaskedKeys',
+    'Start-NativeHostParityProcess',
+    'Write-NativeHostParityFrame',
+    'Read-NativeHostParityFrame',
+    'Invoke-NativeHostParitySession',
+    'Compare-NativeHostParityValue',
+    'Get-NativeHostParityCompiler',
+    'Build-NativeHostParityExecutable',
+    'Get-NativeHostParityHostCommand',
+    'Get-NativeHostParityStagedFiles'
+)
