@@ -124,6 +124,17 @@ Describe 'Native host parity (Phase 5 B1)' {
             $script:ParityCandidateResponses.Count | Should -Be $script:ParityCases.Count
         }
 
+        It 'Matches the reference: <ParityName>' -TestCases (@($script:ParityCases | ForEach-Object { @{ ParityCase = $_; ParityName = $_.name } })) -Skip:(-not $script:ParityCompilerAvailable) {
+            param($ParityCase)
+            $reference = @($script:ParityReferenceResponses | Where-Object { $_.name -eq $ParityCase.name })
+            $candidate = @($script:ParityCandidateResponses | Where-Object { $_.name -eq $ParityCase.name })
+            $reference.Count | Should -Be 1
+            $candidate.Count | Should -Be 1
+            $candidate[0].response | Should -Not -BeNullOrEmpty -Because $ParityCase.name
+            $difference = Compare-NativeHostParityValue -Reference $reference[0].response -Candidate $candidate[0].response -MaskedKeys $script:ParityMaskedKeys
+            $difference | Should -Be '' -Because $ParityCase.name
+        }
+
         It 'Fails closed on malformed JSON like the reference' -Skip:(-not $script:ParityCompilerAvailable) {
             $process = Start-NativeHostParityProcess -FilePath $script:ParityCompiledExecutable
             try {
@@ -137,18 +148,6 @@ Describe 'Native host parity (Phase 5 B1)' {
                 try { $process.StandardInput.Close() } catch { }
                 if (-not $process.WaitForExit(10000)) { try { $process.Kill($true) } catch { } }
                 $process.Dispose()
-            }
-        }
-
-        foreach ($case in $script:ParityCases) {
-            It "Matches the reference: $($case.name)" -Skip:(-not $script:ParityCompilerAvailable) {
-                $reference = @($script:ParityReferenceResponses | Where-Object { $_.name -eq $case.name })
-                $candidate = @($script:ParityCandidateResponses | Where-Object { $_.name -eq $case.name })
-                $reference.Count | Should -Be 1
-                $candidate.Count | Should -Be 1
-                $candidate[0].response | Should -Not -BeNullOrEmpty -Because $case.name
-                $difference = Compare-NativeHostParityValue -Reference $reference[0].response -Candidate $candidate[0].response -MaskedKeys $script:ParityMaskedKeys
-                $difference | Should -Be '' -Because $case.name
             }
         }
 

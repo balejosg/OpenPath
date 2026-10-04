@@ -158,6 +158,28 @@ Describe 'Compiled native host (Phase 5)' {
             @($resolution.Missing).Count | Should -Be 0
             $resolution.Sources['OpenPathNativeHost.cs'] | Should -Be (Join-Path $script:RepoRoot 'windows\native-host')
         }
+
+        It 'Treats the C# source as an optional build input and stages it in the install root' {
+            . $script:CatalogPath
+            (Test-OpenPathNativeHostBuildInput -Name 'OpenPathNativeHost.cs') | Should -BeTrue
+            (Test-OpenPathNativeHostBuildInput -Name 'OpenPath-NativeHost.ps1') | Should -BeFalse
+
+            # A sync on an updated machine must not fail when only the build
+            # input is missing; the existing host stays registered.
+            $syncText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\lib\Browser.FirefoxNativeHost.psm1') -Raw
+            $syncText | Should -Match 'Test-OpenPathNativeHostBuildInput'
+            $syncText | Should -Match 'keeping the existing host'
+
+            # The installer stages native-host/ at the install root, keeps it
+            # across reinstalls and the offline path requires it.
+            $stagingText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\lib\install\Installer.Staging.ps1') -Raw
+            $stagingText | Should -Match "Join-Path \`$ScriptDir 'native-host'"
+            $stagingText | Should -Match "Join-Path \`$OpenPathRoot 'native-host'"
+            $cleanupText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\lib\install\Installer.Cleanup.ps1') -Raw
+            $cleanupText | Should -Match "'native-host'"
+            $directStagingText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\windows-direct-runtime-staging.ps1') -Raw
+            $directStagingText | Should -Match 'windows\\native-host'
+        }
     }
 
     Context 'Registration contract' {

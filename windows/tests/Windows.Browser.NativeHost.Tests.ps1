@@ -168,15 +168,15 @@ Describe "Browser Module - Native Host" {
                 $nativeFiles = @(Get-OpenPathNativeHostArtifactNames)
                 $nativeFiles | Should -Contain "RuntimeDependency.Protocol.ps1"
 
-                foreach ($nativeFile in $nativeFiles) {
-                    $sourcePath = Join-Path $repoWindowsRoot "scripts\$nativeFile"
-                    if (-not (Test-Path $sourcePath)) {
-                        $sourcePath = Join-Path $repoWindowsRoot "lib\internal\$nativeFile"
-                    }
-                    if (-not (Test-Path $sourcePath)) {
-                        $sourcePath = Join-Path $repoWindowsRoot "lib\$nativeFile"
-                    }
+                # Phase 5: resolve sources exactly like the installer/update path
+                # (scripts, lib, lib\internal and native-host candidates).
+                $artifactResolution = Resolve-OpenPathNativeHostArtifactSources `
+                    -ArtifactNames $nativeFiles `
+                    -CandidateRoots @(Get-OpenPathNativeHostArtifactCandidateRoots -SourceRoot (Join-Path $repoWindowsRoot "scripts") -NativeRoot $nativeRoot)
+                @($artifactResolution.Missing).Count | Should -Be 0
 
+                foreach ($nativeFile in $nativeFiles) {
+                    $sourcePath = Join-Path $artifactResolution.Sources[$nativeFile] $nativeFile
                     Copy-Item $sourcePath -Destination (Join-Path $nativeRoot $nativeFile) -Force
                 }
 

@@ -257,10 +257,12 @@ function Copy-OpenPathInstallerRuntime {
     $nativeHostArtifactResolution = Resolve-OpenPathNativeHostArtifactSources -ArtifactNames $nativeHostArtifacts -CandidateRoots $nativeHostSourceRoots
     $nativeHostArtifactSources = $nativeHostArtifactResolution.Sources
     $missingNativeHostArtifacts = @($nativeHostArtifactResolution.Missing)
+    $missingRequiredNativeHostArtifacts = @($missingNativeHostArtifacts | Where-Object { -not (Test-OpenPathNativeHostBuildInput -Name $_) })
 
-    if ($missingNativeHostArtifacts.Count -eq 0) {
+    if ($missingRequiredNativeHostArtifacts.Count -eq 0) {
         New-Item -ItemType Directory -Path $firefoxNativeHostTarget -Force | Out-Null
         foreach ($nativeHostArtifact in $nativeHostArtifacts) {
+            if (-not $nativeHostArtifactSources.ContainsKey($nativeHostArtifact)) { continue }
             Copy-Item (Join-Path $nativeHostArtifactSources[$nativeHostArtifact] $nativeHostArtifact) `
                 -Destination (Join-Path $firefoxNativeHostTarget $nativeHostArtifact) `
                 -Force
@@ -269,10 +271,26 @@ function Copy-OpenPathInstallerRuntime {
         Write-InstallerVerbose "  Firefox native host assets staged in $OpenPathRoot\browser-extension\firefox\native"
     }
     elseif ($RequireCompleteStaging) {
-        throw "Offline installs require staged Firefox native host artifacts ($($missingNativeHostArtifacts -join ', ') missing)"
+        throw "Offline installs require staged Firefox native host artifacts ($($missingRequiredNativeHostArtifacts -join ', ') missing)"
     }
     else {
-        Write-InstallerWarning "  WARNING: Firefox native host artifacts missing ($($missingNativeHostArtifacts -join ', '))"
+        Write-InstallerWarning "  WARNING: Firefox native host artifacts missing ($($missingRequiredNativeHostArtifacts -join ', '))"
+    }
+
+    # Phase 5: stage the compiled-host source in its canonical install-root
+    # directory so the build step and the native-host sync resolve it from the
+    # installed tree (the reinstall snapshot includes it too). The .cs can live
+    # only in native-host/, which is why it travels separately from the runtime
+    # support files.
+    $nativeHostSourceDir = Join-Path $ScriptDir 'native-host'
+    $installedNativeHostDir = Join-Path $OpenPathRoot 'native-host'
+    if (Test-Path -LiteralPath $nativeHostSourceDir -PathType Container) {
+        New-Item -ItemType Directory -Path $installedNativeHostDir -Force | Out-Null
+        Copy-Item -Path (Join-Path $nativeHostSourceDir '*') -Destination $installedNativeHostDir -Recurse -Force -ErrorAction Stop
+        Write-InstallerVerbose "  Compiled native host source staged in $installedNativeHostDir"
+    }
+    elseif ($RequireCompleteStaging -and $nativeHostArtifacts -contains 'OpenPathNativeHost.cs' -and -not (Test-Path (Join-Path $installedNativeHostDir 'OpenPathNativeHost.cs'))) {
+        throw 'Offline installs require the compiled native host source (native-host\OpenPathNativeHost.cs missing)'
     }
 
     $firefoxReleaseCandidates = @(

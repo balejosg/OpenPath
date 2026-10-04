@@ -101,11 +101,19 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
     $artifactSources = $artifactResolution.Sources
     $missingArtifacts = @($artifactResolution.Missing)
 
+    $missingRequired = @($missingArtifacts | Where-Object { -not (Test-OpenPathNativeHostBuildInput -Name $_) })
+    if ($missingRequired.Count -gt 0) {
+        throw "Firefox native host artifacts not found in ${SourceRoot}: $($missingRequired -join ', ')"
+    }
     if ($missingArtifacts.Count -gt 0) {
-        throw "Firefox native host artifacts not found in ${SourceRoot}: $($missingArtifacts -join ', ')"
+        # An updated machine may not have the C# source yet; the compiled host
+        # build step reports SourceMissing and the existing host (compiled or
+        # cmd fallback) stays registered.
+        Write-OpenPathLog "Compiled native host build inputs not found in ${SourceRoot} ($($missingArtifacts -join ', ')); keeping the existing host." -Level WARN
     }
 
     foreach ($artifactName in $artifactNames) {
+        if (-not $artifactSources.ContainsKey($artifactName)) { continue }
         $sourcePath = Join-Path $artifactSources[$artifactName] $artifactName
         $destinationPath = Join-Path $nativeRoot $artifactName
         if (-not [string]::Equals($sourcePath, $destinationPath, [System.StringComparison]::OrdinalIgnoreCase)) {

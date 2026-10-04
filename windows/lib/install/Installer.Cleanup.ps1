@@ -143,7 +143,7 @@ function Copy-OpenPathInstallerSourceForReinstall {
     $snapshotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-reinstall-source-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $snapshotRoot -Force | Out-Null
 
-    foreach ($directoryName in @('lib', 'scripts', 'browser-extension', 'runtime')) {
+    foreach ($directoryName in @('lib', 'scripts', 'native-host', 'browser-extension', 'runtime')) {
         $sourceDirectory = Join-Path $ScriptDir $directoryName
         if (Test-Path $sourceDirectory) {
             Copy-Item $sourceDirectory -Destination $snapshotRoot -Recurse -Force -ErrorAction Stop

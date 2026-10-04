@@ -30,6 +30,22 @@ function Get-OpenPathNativeHostArtifactNames {
     )
 }
 
+function Get-OpenPathNativeHostBuildInputNames {
+    # Phase 5: build inputs are needed to compile the host but the runtime can
+    # work without them (the cmd/PowerShell host stays registered until a
+    # health-checked build exists), so a sync must not fail when only these are
+    # missing on an updated machine.
+    return @(
+        'OpenPathNativeHost.cs'
+    )
+}
+
+function Test-OpenPathNativeHostBuildInput {
+    # returns true when the artifact is a compiled-host build input
+    param([Parameter(Mandatory = $true)][string]$Name)
+    return (@(Get-OpenPathNativeHostBuildInputNames) -contains $Name)
+}
+
 function Get-OpenPathNativeHostArtifactCandidateRoots {
     # builds a deduplicated list of directory paths to search for artifacts, including $SourceRoot siblings and $NativeRoot.
     param(

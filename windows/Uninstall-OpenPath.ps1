@@ -407,6 +407,9 @@ foreach ($artifactPath in $firefoxNativeHostArtifacts) {
     }
 }
 
+# Phase 5: the compiled-host source directory in the install root.
+Remove-Item (Join-Path $OpenPathRoot 'native-host') -Recurse -Force -ErrorAction SilentlyContinue
+
 # Chrome/Edge registry
 $regPaths = @(
     "HKLM:\SOFTWARE\Policies\Google\Chrome\URLBlocklist",

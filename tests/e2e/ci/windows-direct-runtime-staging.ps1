@@ -9,7 +9,8 @@ function Copy-OpenPathDirectRunnerNativeArtifact {
     $candidateRoots = @(
         (Join-Path $RepoRoot 'windows\scripts'),
         (Join-Path $RepoRoot 'windows\lib'),
-        (Join-Path $RepoRoot 'windows\lib\internal')
+        (Join-Path $RepoRoot 'windows\lib\internal'),
+        (Join-Path $RepoRoot 'windows\native-host')
     )
     $sourcePath = $candidateRoots |
         ForEach-Object { Join-Path $_ $ArtifactName } |
