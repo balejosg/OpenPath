@@ -24,21 +24,25 @@ Describe 'Native host parity (Phase 5 B1)' {
         $script:ParityHostCommand = Get-NativeHostParityHostCommand
         $script:ParityReferenceFixture = New-NativeHostParityFixture -RepoRoot $script:ParityRepoRoot -Root (Join-Path $TestDrive 'parity-reference')
         $script:ParityCandidateFixture = New-NativeHostParityFixture -RepoRoot $script:ParityRepoRoot -Root (Join-Path $TestDrive 'parity-candidate')
+        $referenceTouch = @{ 'recover-recent-success' = (Join-Path $script:ParityReferenceFixture.Data 'captive-portal-active.json') }
         $script:ParityReferenceResponses = @(Invoke-NativeHostParitySession `
                 -FilePath $script:ParityHostCommand.FilePath `
                 -Arguments (@($script:ParityHostCommand.Arguments) + (Join-Path $script:ParityReferenceFixture.Native 'OpenPath-NativeHost.ps1')) `
                 -Cases $script:ParityCases `
-                -PerMessageTimeoutSeconds 60)
+                -PerMessageTimeoutSeconds 60 `
+                -TouchFilesByCase $referenceTouch)
         $script:ParityCompiledExecutable = ''
         if ($script:ParityCompilerAvailable) {
             $script:ParityCompiledExecutable = Build-NativeHostParityExecutable -NativeRoot $script:ParityCandidateFixture.Native -CompilerPath (Get-NativeHostParityCompiler)
         }
         $script:ParityCandidateResponses = @()
         if ($script:ParityCompiledExecutable) {
+            $candidateTouch = @{ 'recover-recent-success' = (Join-Path $script:ParityCandidateFixture.Data 'captive-portal-active.json') }
             $script:ParityCandidateResponses = @(Invoke-NativeHostParitySession `
                     -FilePath $script:ParityCompiledExecutable `
                     -Cases $script:ParityCases `
-                    -PerMessageTimeoutSeconds 60)
+                    -PerMessageTimeoutSeconds 60 `
+                    -TouchFilesByCase $candidateTouch)
         }
     }
 
@@ -118,6 +122,22 @@ Describe 'Native host parity (Phase 5 B1)' {
 
         It 'Answers the same persistent session as the PowerShell host' {
             $script:ParityCandidateResponses.Count | Should -Be $script:ParityCases.Count
+        }
+
+        It 'Fails closed on malformed JSON like the reference' -Skip:(-not $script:ParityCompilerAvailable) {
+            $process = Start-NativeHostParityProcess -FilePath $script:ParityCompiledExecutable
+            try {
+                Write-NativeHostParityFrame -Process $process -Json '{"action":"ping",'
+                $response = Read-NativeHostParityFrame -Process $process -TimeoutSeconds 30
+                $response | Should -Not -BeNullOrEmpty
+                $response.success | Should -BeFalse
+                ([string]$response.error).Length | Should -BeGreaterThan 0
+            }
+            finally {
+                try { $process.StandardInput.Close() } catch { }
+                if (-not $process.WaitForExit(10000)) { try { $process.Kill($true) } catch { } }
+                $process.Dispose()
+            }
         }
 
         foreach ($case in $script:ParityCases) {

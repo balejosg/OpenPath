@@ -123,7 +123,9 @@ function New-NativeHostParityFixture {
     }
     [IO.File]::WriteAllText((Join-Path $data 'runtime-dependency-overlay.json'), ($overlay | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 
-    $workerState = [ordered]@{ heartbeatEpochMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    # Ten minutes in the future: outside the freshness window (-30s tolerance),
+    # so both hosts deterministically take the non-fresh trigger path.
+    $workerState = [ordered]@{ heartbeatEpochMs = [DateTimeOffset]::UtcNow.AddMinutes(10).ToUnixTimeMilliseconds() }
     [IO.File]::WriteAllText((Join-Path $data 'runtime-dependency-worker-state.json'), ($workerState | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
 
     foreach ($directory in @('runtime-dependency-queue', 'captive-portal-recovery-queue', 'captive-portal-recovery-result', 'captive-portal-recovery-progress')) {
@@ -213,7 +215,10 @@ function Get-NativeHostParityMaskedKeys {
         'requestPath', 'queueWriteMs', 'updateTriggerMs', 'updateWaitMs', 'updateElapsedMs',
         'elapsedMs', 'taskState', 'taskLastResult', 'taskLastResultHex', 'taskLastRunTime',
         'taskNextRunTime', 'taskNumberOfMissedRuns', 'taskDiagnosticsError',
-        'queuePath', 'resultPath', 'progressPath', 'pendingRequestIds'
+        'queuePath', 'resultPath', 'progressPath', 'pendingRequestIds',
+        # The two fixture roots are separate directories, so file mtimes differ
+        # by construction; presence still must match.
+        'mtime'
     )
 }
 
@@ -288,14 +293,24 @@ function Invoke-NativeHostParitySession {
         [Parameter(Mandatory = $true)][string]$FilePath,
         [string[]]$Arguments = @(),
         [Parameter(Mandatory = $true)][object[]]$Cases,
-        [int]$PerMessageTimeoutSeconds = 30
+        [int]$PerMessageTimeoutSeconds = 30,
+        # Case name -> file path: touched right before that case so time-window
+        # checks (recent portal success) are deterministic in both sessions.
+        [hashtable]$TouchFilesByCase = @{}
     )
     $process = Start-NativeHostParityProcess -FilePath $FilePath -Arguments $Arguments
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $responses = @()
     try {
         foreach ($case in $Cases) {
-            $second = (Get-Date).Second
+            if ($TouchFilesByCase.ContainsKey($case.name)) {
+                $touchPath = [string]$TouchFilesByCase[$case.name]
+                if (Test-Path -LiteralPath $touchPath) {
+                    $touchItem = Get-Item -LiteralPath $touchPath
+                    $contents = [IO.File]::ReadAllBytes($touchPath)
+                    [IO.File]::WriteAllBytes($touchPath, $contents)
+                }
+            }
             $json = if ($case.ContainsKey('raw')) { [string]$case.raw } else { ($case.message | ConvertTo-Json -Depth 10 -Compress) }
             Write-NativeHostParityFrame -Process $process -Json $json
             $response = Read-NativeHostParityFrame -Process $process -TimeoutSeconds $PerMessageTimeoutSeconds
@@ -333,6 +348,14 @@ function Compare-NativeHostParityValue {
     if ($KeyName -eq 'resolved_ip') {
         # DNS answers may differ between the two host runs; require presence.
         return ''
+    }
+    if ($KeyName -eq 'source') {
+        # Path responses echo the fixture path (different roots); constant
+        # source values ('firefox-webrequest-local') still must match.
+        $referenceText = [string]$Reference
+        $candidateText = [string]$Candidate
+        $looksLikePath = { param($text) $text -match '^[A-Za-z]:[\\/]' -or $text -match '^/' }
+        if ((& $looksLikePath $referenceText) -and (& $looksLikePath $candidateText)) { return '' }
     }
     $referenceNull = $null -eq $Reference
     $candidateNull = $null -eq $Candidate

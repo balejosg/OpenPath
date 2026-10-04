@@ -1017,7 +1017,8 @@ namespace OpenPathNativeHost
         {
             public string Decision = "blocked";
             public string Reason = "default-deny";
-            public bool Active = true;
+            // Null when the policy snapshot is unknown (PowerShell emits null).
+            public bool? Active = true;
             public bool InWhitelist;
             public string Version = "";
         }
@@ -1026,12 +1027,12 @@ namespace OpenPathNativeHost
         {
             PolicyDecision decision = new PolicyDecision();
             bool known = sections.PolicyKnown;
-            string version = string.IsNullOrEmpty(sections.PolicyVersion) ? "legacy-snapshot" : sections.PolicyVersion;
+            string version = sections.PolicyVersion == null ? "" : sections.PolicyVersion;
             if (!known || version.Length == 0)
             {
                 decision.Decision = "unknown";
                 decision.Reason = "policy-unavailable";
-                decision.Active = false;
+                decision.Active = null;
                 decision.InWhitelist = false;
                 decision.Version = "";
                 return decision;
@@ -1400,7 +1401,7 @@ namespace OpenPathNativeHost
                 result.Add("domain", domain);
                 result.Add("in_whitelist", inWhitelist);
                 result.Add("resolved_ip", resolvedIp);
-                result.Add("policy_active", decision.Active);
+                result.Add("policy_active", decision.Active.HasValue ? (object)decision.Active.Value : null);
                 result.Add("policy_decision", decision.Decision);
                 result.Add("policy_reason", decision.Reason);
                 result.Add("policy_version", decision.Version);
