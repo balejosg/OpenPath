@@ -1190,20 +1190,43 @@ function Invoke-OpenPathLabQgaScript {
         [Parameter(Mandatory = $true)][int]$Vmid,
         [Parameter(Mandatory = $true)][string]$PowerShell,
         [int]$TimeoutSeconds = 120,
-        [int]$Attempts = 4
+        [int]$Attempts = 4,
+        # Phase 5.3 B2: a timed-out guest command keeps running; kill its tree
+        # before returning. Tests can disable it to observe the raw shape.
+        [bool]$KillTimedOutProcess = $true
     )
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($PowerShell))
     $arguments = @('qm', 'guest', 'exec', [string]$Vmid, '--timeout', [string]$TimeoutSeconds, '--', 'powershell.exe', '-NoProfile', '-EncodedCommand', $encoded)
     # The guest agent is briefly unavailable while a requested reboot is still
-    # settling. Retry transient query failures instead of failing the phase.
+    # settling. Retry only transport failures (no process started): a timeout
+    # or a completed run must never relaunch the step (Phase 5.3 B2; four
+    # collect retries spent ~500 s in Phase 5.2).
     $lastError = $null
     for ($attempt = 1; $attempt -le [Math]::Max(1, $Attempts); $attempt++) {
         try {
             $raw = Invoke-OpenPathLabSsh -SshCommand $SshCommand -SshHost $SshHost -ArgumentList $arguments
             $result = ConvertFrom-OpenPathLabJsonText -Text $raw
             $exitCode = Get-OpenPathLabField -InputObject $result -Name 'exitcode'
+            $guestProcessId = Get-OpenPathLabField -InputObject $result -Name 'pid'
             $guestError = Format-OpenPathLabGuestErrorDetail -Text ([string](Get-OpenPathLabField -InputObject $result -Name 'err-data'))
-            if ($null -ne $exitCode -and [int]$exitCode -ne 0) {
+            if ($null -eq $exitCode) {
+                # `qm guest exec --timeout` answered with the started pid and no
+                # exit code: the process is still alive in the guest.
+                $killResult = 'not-requested'
+                if ($KillTimedOutProcess) {
+                    $killResult = 'failed'
+                    if ($null -ne $guestProcessId) {
+                        try {
+                            Invoke-OpenPathLabSsh -SshCommand $SshCommand -SshHost $SshHost -ArgumentList @('qm', 'guest', 'exec', [string]$Vmid, '--', 'taskkill', '/PID', [string]$guestProcessId, '/T', '/F') | Out-Null
+                            $killResult = 'ok'
+                        }
+                        catch { $killResult = 'failed' }
+                    }
+                    else { $killResult = 'no-pid' }
+                }
+                throw "desktop-lab-guest-query-timeout pid=$guestProcessId kill=$killResult timeout=$TimeoutSeconds"
+            }
+            if ([int]$exitCode -ne 0) {
                 throw "desktop-lab-guest-query-failed exitcode=$([int]$exitCode) err=$guestError"
             }
             $output = Get-OpenPathLabField -InputObject $result -Name 'out-data'
@@ -1214,6 +1237,11 @@ function Invoke-OpenPathLabQgaScript {
         }
         catch {
             $lastError = $_
+            $message = [string]$_.Exception.Message
+            # Terminal shapes: the process started (timeout or a real exit
+            # code) or the output shape is wrong. Only transport failures with
+            # no started process are retried.
+            if ($message -like '*guest-query-timeout*' -or $message -like '*exitcode=*') { throw }
             if ($attempt -lt $Attempts) { Start-Sleep -Seconds (3 * $attempt) }
         }
     }
@@ -1546,6 +1574,13 @@ test -s "$dump"
     $transport.InvokeGuestPowerShell = {
         param($Vmid, $Script, $TimeoutSeconds, $Attempts = 4)
         $text = & $h.Qga $lab.SshCommand $lab.SshHost -Vmid ([int]$Vmid) -PowerShell ([string]$Script) -TimeoutSeconds ([int]$TimeoutSeconds) -Attempts ([int]$Attempts)
+        return [string]$text
+    }.GetNewClosure()
+    # Phase 5.3 B2: side-effect steps must never be relaunched. One attempt
+    # only; a timeout is terminal and the guest process tree is killed.
+    $transport.InvokeGuestPowerShellOnce = {
+        param($Vmid, $Script, $TimeoutSeconds)
+        $text = & $h.Qga $lab.SshCommand $lab.SshHost -Vmid ([int]$Vmid) -PowerShell ([string]$Script) -TimeoutSeconds ([int]$TimeoutSeconds) -Attempts 1
         return [string]$text
     }.GetNewClosure()
     return $transport

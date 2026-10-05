@@ -13,14 +13,14 @@ with the generic rules.
 
 ## What it runs
 
-| Scenario | Name                     | What happens                                                                  |
-| -------- | ------------------------ | ----------------------------------------------------------------------------- |
-| W        | `first-visit-settled`    | settled install; a fresh Firefox opens anchor 1                               |
-| W2       | `first-visit-hot`        | same Firefox stays open >=5 min; a new window opens anchor 2                  |
-| B        | `first-visit-class-boot` | install, warm-up + clean close, reboot, autologon, Firefox <=60 s after logon |
-| C        | `first-visit-control`    | like W but the dependency hosts are pre-whitelisted (the floor)               |
+| Scenario | Name                     | What happens                                                                                        |
+| -------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
+| W        | `first-visit-settled`    | settled install; a fresh Firefox opens anchor 1                                                     |
+| W2       | `first-visit-hot`        | same Firefox stays open >=5 min; a new window opens anchor 2                                        |
+| B        | `first-visit-class-boot` | install, warm-up + clean close, reboot, autologon, Firefox <=60 s after logon                       |
+| F        | `first-visit-floor`      | like W but the dependency hosts are pre-whitelisted (the environment floor; `control` is the alias) |
 
-W also runs the security checks (`first-visit-settled`/`first-visit-control`):
+W also runs the security checks (`first-visit-settled`/`first-visit-floor`):
 the never-learnable host stays blocked, the unlisted host does not resolve, the
 whitelist never changes and the overlay contains exactly the learned hosts.
 
@@ -38,12 +38,16 @@ are `<role><n>-<token>.<ip>.sslip.io`, unique per run:
 The page self-reports to `POST /__report`: computed style, executed scripts,
 painted API, font/image load, navigation type, in-page reload counter and
 per-wave times from `navigationStart`. The server records every request and
-report as JSONL. The DNS fixture (`dns_fixture.py`) answers the `sslip.io`
-names locally (the lab upstream blocks them) and forwards everything else to
-the lab resolver, so a dependency resolves **only after the product learns it**.
+report as JSONL. The DNS fixture (`dns_fixture.py`) answers `sslip.io` queries
+with the embedded IPv4 and forwards everything else; the product's AcrylicHosts
+renderer resolves whitelisted/learned sslip names with a static hosts entry and
+Acrylic's affinity mask only forwards learnt domains upstream, so a dependency
+resolves **only after the product learns it** (Phase 5.3 B5; see the fixture
+docstring for the exact path).
 
-The served whitelist contains only the two anchors; the never-learnable host is
-listed under `## BLOCKED-SUBDOMAINS`. `tests/e2e/ci/first-visit/test_fixture.py`
+The served whitelist contains only the two anchors (plus every dependency host
+in the `floor` scenario, Phase 5.3 B4); the never-learnable host is listed under
+`## BLOCKED-SUBDOMAINS`. `tests/e2e/ci/first-visit/test_fixture.py`
 covers the plan, routing, report and log contracts, and
 `windows/tests/Windows.FirstVisitLane.Tests.ps1` proves the fixture-shaped hosts
 are learnable (and the never-learnable one is not) under
@@ -141,7 +145,7 @@ gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
 #   firefox-extension/src/**, firefox-extension/native/**, windows/lib/**,
 #   windows/scripts/**, tests/e2e/ci/first-visit/** or the lane itself
 #   (an undeterminable range fails open): W and B, one repetition each;
-# - nightly (02:17): settled, hot, class-boot and control with two repetitions;
+# - nightly (02:17): settled, hot, class-boot and floor with two repetitions;
 # - dispatch: exactly the scenarios/repetitions requested.
 ```
 

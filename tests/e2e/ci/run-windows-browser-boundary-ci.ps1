@@ -485,6 +485,41 @@ function Assert-OpenPathNegativeHealthProbe {
     }
 }
 
+function Wait-OpenPathNegativeHealthProbe {
+    <#
+    .SYNOPSIS
+    Bounded poll for an expected unhealthy state after a policy mutation.
+    .DESCRIPTION
+    Phase 5.3 C2: `Set-AppLockerPolicy` returns before the effective policy
+    converges, so an immediate negative read can still see the old healthy
+    policy. Poll until the expected reason code appears; the final error names
+    the observed codes.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Probe,
+        [Parameter(Mandatory = $true)][string[]]$ExpectedReasonCodes,
+        [int]$TimeoutSeconds = 45,
+        [int]$PollSeconds = 3
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastError = ''
+    while ($true) {
+        $health = $null
+        try {
+            $health = & $Probe
+            return (Assert-OpenPathNegativeHealthProbe -Name $Name -Health $health -ExpectedReasonCodes $ExpectedReasonCodes)
+        }
+        catch {
+            $observed = ''
+            if ($health -and $health.PSObject.Properties['ReasonCodes']) { $observed = @($health.ReasonCodes | ForEach-Object { [string]$_ }) -join ',' }
+            $lastError = "$([string]$_.Exception.Message) observed=$observed"
+        }
+        if ((Get-Date) -ge $deadline) { throw $lastError }
+        Start-Sleep -Seconds $PollSeconds
+    }
+}
+
 function Assert-OpenPathRestoredHealth {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -492,14 +527,53 @@ function Assert-OpenPathRestoredHealth {
     )
 
     if (-not $Health -or -not $Health.PSObject.Properties['Healthy'] -or -not [bool]$Health.Healthy) {
-        throw "$Name restoration did not return to a healthy state"
+        $reasonCodes = ''
+        if ($Health -and $Health.PSObject.Properties['ReasonCodes']) { $reasonCodes = (@($Health.ReasonCodes | ForEach-Object { [string]$_ }) -join ',') }
+        throw "$Name restoration did not return to a healthy state; reasonCodes=$reasonCodes"
     }
     # Inventory degradation is diagnostic-only after the exact-SID runtime
     # decisions have already made the health snapshot authoritative.
     $blockingReasonCodes = @($Health.ReasonCodes | Where-Object { [string]$_ -ne 'appcontrol_browser_inventory_degraded' })
     if ($blockingReasonCodes.Count -gt 0) {
-        throw "$Name restoration returned health reason codes"
+        throw "$Name restoration returned health reason codes: $($blockingReasonCodes -join ',')"
     }
+}
+
+function Wait-OpenPathRestoredHealth {
+    <#
+    .SYNOPSIS
+    Bounded poll for a healthy state after a policy mutation.
+    .DESCRIPTION
+    Phase 5.3 C2: `Set-AppLockerPolicy` returns before the effective policy
+    converges, so an immediate health read can see the old/damaged policy. Poll
+    until healthy or the window expires and name the reason codes observed.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Probe,
+        [int]$TimeoutSeconds = 60,
+        [int]$PollSeconds = 5
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastReasonCodes = @()
+    $attempts = 0
+    while ($true) {
+        $attempts++
+        $health = & $Probe
+        if ($health -and $health.PSObject.Properties['Healthy'] -and [bool]$health.Healthy) {
+            $blocking = @($health.ReasonCodes | ForEach-Object { [string]$_ } | Where-Object { $_ -and $_ -ne 'appcontrol_browser_inventory_degraded' })
+            if ($blocking.Count -eq 0) {
+                return [pscustomobject][ordered]@{ Healthy = $true; Attempts = $attempts; ReasonCodes = @() }
+            }
+            $lastReasonCodes = $blocking
+        }
+        elseif ($health -and $health.PSObject.Properties['ReasonCodes']) {
+            $lastReasonCodes = @($health.ReasonCodes | ForEach-Object { [string]$_ })
+        }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Seconds $PollSeconds
+    }
+    throw "$Name restoration did not return to a healthy state within ${TimeoutSeconds}s; reasonCodes=$($lastReasonCodes -join ',')"
 }
 
 function Get-OpenPathNegativeHealthRestoration {
@@ -581,11 +655,11 @@ function Invoke-OpenPathNegativeHealthProbes {
         if ($watchdogMutationApplied) {
             try {
                 Enable-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop | Out-Null
-                $restoredWatchdogHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
-                Assert-OpenPathRestoredHealth -Name 'Watchdog scheduled task' -Health $restoredWatchdogHealth
+                # Phase 5.3 C2: bounded poll; the task state converges asynchronously.
+                $null = Wait-OpenPathRestoredHealth -Name 'Watchdog scheduled task' -Probe { Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot }
             }
             catch {
-                throw 'Watchdog task restoration failed'
+                throw "Watchdog task restoration failed: $($_.Exception.Message)"
             }
         }
     }
@@ -629,15 +703,9 @@ function Invoke-OpenPathNegativeHealthProbes {
         Set-AppLockerPolicy -XMLPolicy $damagedPolicyPath -ErrorAction Stop
         Remove-Item -LiteralPath $damagedPolicyPath -Force -ErrorAction SilentlyContinue
         $appControlPolicyMutationApplied = $true
-        $removedPolicyHealth = Get-OpenPathNonAdminAppControlHealth `
-            -Mode $mode `
-            -ApprovedBrowsers $approvedBrowsers `
-            -Profile $profile `
-            -ApplicationCatalog $applicationCatalog `
-            -TargetSid $TargetSid
-        [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
+        [void]$probeResults.Add((Wait-OpenPathNegativeHealthProbe `
                 -Name 'OpenPath AppControl policy removed' `
-                -Health $removedPolicyHealth `
+                -Probe { Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers -Profile $profile -ApplicationCatalog $applicationCatalog -TargetSid $TargetSid } `
                 -ExpectedReasonCodes @(
                     'appcontrol_local_policy_absent',
                     'appcontrol_local_policy_invalid',
@@ -649,16 +717,14 @@ function Invoke-OpenPathNegativeHealthProbes {
         if ($appControlPolicyMutationApplied) {
             try {
                 Set-AppLockerPolicy -XMLPolicy $originalAppControlPolicyPath -ErrorAction Stop
-                $restoredPolicyHealth = Get-OpenPathNonAdminAppControlHealth `
-                    -Mode $mode `
-                    -ApprovedBrowsers $approvedBrowsers `
-                    -Profile $profile `
-                    -ApplicationCatalog $applicationCatalog `
-                    -TargetSid $TargetSid
-                Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl policy' -Health $restoredPolicyHealth
+                # Phase 5.3 C2: Set-AppLockerPolicy returns before the effective
+                # policy converges; poll with the observed reason codes.
+                $null = Wait-OpenPathRestoredHealth -Name 'OpenPath AppControl policy' -Probe {
+                    Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers -Profile $profile -ApplicationCatalog $applicationCatalog -TargetSid $TargetSid
+                }
             }
             catch {
-                throw 'OpenPath AppControl policy restoration failed'
+                throw "OpenPath AppControl policy restoration failed: $($_.Exception.Message)"
             }
         }
         Remove-Item -LiteralPath $damagedPolicyPath -Force -ErrorAction SilentlyContinue
@@ -803,16 +869,13 @@ function Invoke-OpenPathNegativeHealthProbes {
         if ($repairPolicyMutationApplied) {
             try {
                 Set-AppLockerPolicy -XMLPolicy $repairOriginalPolicyPath -ErrorAction Stop
-                $restoredRepairHealth = Get-OpenPathNonAdminAppControlHealth `
-                    -Mode $mode `
-                    -ApprovedBrowsers $approvedBrowsers `
-                    -Profile $profile `
-                    -ApplicationCatalog $applicationCatalog `
-                    -TargetSid $TargetSid
-                Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl repair' -Health $restoredRepairHealth
+                # Phase 5.3 C2: bounded convergence poll after the policy restore.
+                $null = Wait-OpenPathRestoredHealth -Name 'OpenPath AppControl repair' -Probe {
+                    Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers -Profile $profile -ApplicationCatalog $applicationCatalog -TargetSid $TargetSid
+                }
             }
             catch {
-                throw 'OpenPath AppControl repair restoration failed'
+                throw "OpenPath AppControl repair restoration failed: $($_.Exception.Message)"
             }
         }
         Remove-Item -LiteralPath $repairDamagedPolicyPath -Force -ErrorAction SilentlyContinue

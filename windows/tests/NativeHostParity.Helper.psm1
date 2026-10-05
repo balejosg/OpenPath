@@ -446,6 +446,75 @@ function Get-NativeHostParityCompiler {
     return ''
 }
 
+function Get-NativeHostParityWindowsPowerShellPath {
+    # returns Windows PowerShell 5.1 (the shell every agent scheduled task
+    # uses), or '' anywhere else. The producers must run under 5.1: that is
+    # what turns `Set-Content -Encoding UTF8` into UTF-8 with a BOM.
+    if ($env:OS -ne 'Windows_NT' -and -not $IsWindows) { return '' }
+    $windowsDirectory = if ($env:WINDIR) { $env:WINDIR } else { $env:SystemRoot }
+    if (-not $windowsDirectory) { return '' }
+    $candidate = Join-Path $windowsDirectory 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    return ''
+}
+
+function Set-NativeHostParityProducerFiles {
+    <#
+    .SYNOPSIS
+        Generates the parity fixture files with the real agent producers under
+        Windows PowerShell 5.1 and returns their metadata.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [switch]$AddBomVariants
+    )
+    $windowsPowerShell = Get-NativeHostParityWindowsPowerShellPath
+    if (-not $windowsPowerShell) { throw 'native-host-parity-powershell51-unavailable' }
+    $scriptPath = Join-Path $RepoRoot 'windows\tests\NativeHostParity.Producers.ps1'
+    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "native-host-parity-producer-script-missing:$scriptPath" }
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-RepoRoot', $RepoRoot, '-Root', $Root)
+    if ($AddBomVariants) { $arguments += '-AddBomVariants' }
+    $output = (& $windowsPowerShell @arguments 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "native-host-parity-producers-failed: $output" }
+    $jsonLine = @($output -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
+    if (-not $jsonLine) { throw "native-host-parity-producers-no-metadata: $output" }
+    return ([string]$jsonLine | ConvertFrom-Json)
+}
+
+function New-NativeHostParityProducerSequence {
+    <#
+    .SYNOPSIS
+        Focused request sequence for the producer-encoded fixture.
+    .DESCRIPTION
+        The base sequence assumes the hand-written fixture (future heartbeat,
+        no BOM). This sequence exercises the files the real producers write:
+        a ready + pending overlay, a fresh worker state, a queued request, a
+        recent captive marker and the whitelist mirror, so the compiled host
+        answers exactly like the reference on production encodings.
+    #>
+    [CmdletBinding()]
+    param()
+    return @(
+        @{ name = 'probe-ping'; message = @{ action = 'ping' } },
+        @{ name = 'probe-dependency-overlay-ready'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'overlaydep.parity.invalid'; requestType = 'script' } },
+        @{ name = 'probe-dependency-overlay-pending'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'pendingdep.parity.invalid'; requestType = 'script' } },
+        @{ name = 'probe-check-local-single-ready'; message = @{ action = 'check-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'overlaydep.parity.invalid' } },
+        @{ name = 'probe-check-local-single-pending'; message = @{ action = 'check-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'pendingdep.parity.invalid' } },
+        @{ name = 'probe-check-local-batch'; message = @{ action = 'check-local-runtime-dependency'; entries = @(
+                    @{ anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'overlaydep.parity.invalid' },
+                    @{ anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'pendingdep.parity.invalid' }
+                ) } },
+        @{ name = 'probe-dependency-enqueue-pending'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'freshdep7.parity.invalid'; requestType = 'script'; mode = 'enqueue' } },
+        @{ name = 'probe-dependency-queue-dedup'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'queueddep.parity.invalid'; requestType = 'script'; mode = 'enqueue' } },
+        @{ name = 'probe-dependency-fresh-worker-blocking'; message = @{ action = 'allow-local-runtime-dependency'; anchorHost = 'anchor1.parity.invalid'; dependencyHost = 'freshdep8.parity.invalid'; requestType = 'script' } },
+        @{ name = 'probe-check'; message = @{ action = 'check'; domains = @('anchor1.parity.invalid', 'depwhitelisted.parity.invalid', 'blocked9.parity.invalid', 'portal.parity.invalid') } },
+        @{ name = 'probe-recover-recent-success'; message = @{ action = 'recover-captive-portal-navigation'; operation = 'open'; triggerHost = 'portal.parity.invalid' } }
+    )
+}
+
+
 function Build-NativeHostParityExecutable {
     # compiles the fixture source next to the fixture host; returns the exe path or ''.
     param(
@@ -472,6 +541,8 @@ function Get-NativeHostParityHostCommand {
 Export-ModuleMember -Function @(
     'New-NativeHostParityFixture',
     'New-NativeHostParitySequence',
+    'New-NativeHostParityProducerSequence',
+    'Set-NativeHostParityProducerFiles',
     'Get-NativeHostParityMaskedKeys',
     'Start-NativeHostParityProcess',
     'Write-NativeHostParityFrame',
@@ -479,6 +550,7 @@ Export-ModuleMember -Function @(
     'Invoke-NativeHostParitySession',
     'Compare-NativeHostParityValue',
     'Get-NativeHostParityCompiler',
+    'Get-NativeHostParityWindowsPowerShellPath',
     'Build-NativeHostParityExecutable',
     'Get-NativeHostParityHostCommand',
     'Get-NativeHostParityStagedFiles'

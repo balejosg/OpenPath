@@ -45,7 +45,7 @@ describe('first-visit lane contract', () => {
     assert.match(planModule, /'settled,class-boot'; repetitions = 1; source = 'workflow_run'/u);
     assert.match(
       planModule,
-      /'settled,hot,class-boot,control'; repetitions = 2; source = 'schedule'/u
+      /'settled,hot,class-boot,floor'; repetitions = 2; source = 'schedule'/u
     );
     assert.match(workflow, /actions\/upload-artifact@v7/u);
   });

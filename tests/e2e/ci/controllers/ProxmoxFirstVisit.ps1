@@ -59,12 +59,16 @@ function Start-OpenPathFirstVisitFixture {
         [Parameter(Mandatory = $true)][object]$Config,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
         [Parameter(Mandatory = $true)][string]$RunId,
-        [Parameter(Mandatory = $true)][string]$ArtifactsRoot
+        [Parameter(Mandatory = $true)][string]$ArtifactsRoot,
+        [string]$Scenario = 'first-visit-settled'
     )
     $stagingRoot = [string](Get-OpenPathLabField -InputObject $Config -Name 'hostStagingRoot')
     if ([string]::IsNullOrWhiteSpace($stagingRoot)) { $stagingRoot = '/var/tmp/openpath-first-visit' }
     $staging = "$stagingRoot/$RunId".Replace('//', '/')
-    $settings = Get-OpenPathFirstVisitSettings -Payload ([pscustomobject]@{ firstVisit = [pscustomobject]@{ scenario = 'first-visit-settled' } }) -Config $Config
+    # Phase 5.3 B4: the scenario selects the served whitelist (floor
+    # pre-whitelists every dependency host). `control` is the historical alias.
+    $fixtureScenario = if ($Scenario -eq 'first-visit-control') { 'floor' } elseif ($Scenario -eq 'first-visit-floor') { 'floor' } else { 'settled' }
+    $settings = Get-OpenPathFirstVisitSettings -Payload ([pscustomobject]@{ firstVisit = [pscustomobject]@{ scenario = $Scenario } }) -Config $Config
     $localFixtures = Get-OpenPathFirstVisitFixturesRoot
 
     & $Transport.InvokeHostCommand @('mkdir', '-p', "$staging/state") '' | Out-Null
@@ -76,7 +80,7 @@ function Start-OpenPathFirstVisitFixture {
     # The bracket form keeps pkill from matching its own ssh command line.
     & $Transport.InvokeHostCommand @('bash', '-lc', "pkill -f 'fixture[_]server.py --state-dir' || true; pkill -f 'dns[_]fixture.py --state-dir' || true; sleep 2; echo cleared") '' | Out-Null
     $startCommand = "setsid nohup python3 $staging/dns_fixture.py --state-dir $staging/state --upstream $($settings.DnsUpstream) > $staging/dns.log 2>&1 < /dev/null & sleep 1; " +
-    "setsid nohup python3 $staging/fixture_server.py --state-dir $staging/state --port 80 --run-id $RunId --ip $($settings.HostAddress) > $staging/fixture.log 2>&1 < /dev/null & sleep 2; echo started"
+    "setsid nohup python3 $staging/fixture_server.py --state-dir $staging/state --port 80 --run-id $RunId --ip $($settings.HostAddress) --scenario $fixtureScenario > $staging/fixture.log 2>&1 < /dev/null & sleep 2; echo started"
     $startOutput = (& $Transport.InvokeHostCommand @('bash', '-lc', $startCommand) '').Trim()
     $planText = ''
     $httpDeadline = (Get-Date).AddSeconds(60)
@@ -355,6 +359,32 @@ function Add-OpenPathFirstVisitStepTrace {
     catch { }
 }
 
+function Get-OpenPathFirstVisitHarnessProcessCount {
+    <#
+    .SYNOPSIS
+        Counts guest powershell.exe processes still running the first-visit
+        harness by command line. -1 when the query itself failed.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid
+    )
+    $script = "try { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { `$_.Name -eq 'powershell.exe' -and `$_.CommandLine -like '*Invoke-OpenPathFirstVisitGuest*' }).Count } catch { -1 }"
+    try {
+        if ($Transport.Contains('InvokeGuestPowerShellOnce')) {
+            $output = & $Transport.InvokeGuestPowerShellOnce $Vmid $script 30
+        }
+        else {
+            $output = & $Transport.InvokeGuestPowerShell $Vmid $script 30
+        }
+        $text = ([string]$output).Trim()
+        if ($text -match '(-?\d+)\s*$') { return [int]$Matches[1] }
+    }
+    catch { }
+    return -1
+}
+
 function Send-OpenPathFirstVisitStep {
     param(
         [Parameter(Mandatory = $true)][object]$Payload,
@@ -419,9 +449,30 @@ function Send-OpenPathFirstVisitStep {
     $fileText = ''
     $exitCode = -999
     $exitKnown = $false
+    $timedOut = $false
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-        try { $output = & $Transport.InvokeGuestPowerShell $Vmid $script $attemptTimeout }
-        catch { $output = '' }
+        try {
+            if ($Transport.Contains('InvokeGuestPowerShellOnce')) {
+                $output = & $Transport.InvokeGuestPowerShellOnce $Vmid $script $attemptTimeout
+            }
+            else {
+                $output = & $Transport.InvokeGuestPowerShell $Vmid $script $attemptTimeout
+            }
+        }
+        catch {
+            # Phase 5.3 B2: a timeout leaves a live guest process; the transport
+            # killed its tree and this step is over, never relaunched.
+            $invokeError = [string]$_.Exception.Message
+            if ($invokeError -like '*guest-query-timeout*') {
+                $timedOut = $true
+                $pidMatch = [regex]::Match($invokeError, 'pid=([0-9]+)')
+                $killMatch = [regex]::Match($invokeError, 'kill=([A-Za-z-]+)')
+                if ($pidMatch.Success) { $stepEntry.killedPid = [int]$pidMatch.Groups[1].Value }
+                $stepEntry.killReason = 'step-timeout'
+                $stepEntry.killResult = if ($killMatch.Success) { [string]$killMatch.Groups[1].Value } else { 'unknown' }
+            }
+            $output = ''
+        }
         $exitMatch = [regex]::Match([string]$output, '__HARNESS_EXIT__=(-?\d+)')
         if ($exitMatch.Success) {
             $exitCode = [int]$exitMatch.Groups[1].Value
@@ -436,7 +487,9 @@ function Send-OpenPathFirstVisitStep {
             $fileText = Read-OpenPathFirstVisitGuestText -Transport $Transport -Vmid $Vmid -GuestPath ($resultPath + '.partial.json') -TimeoutSeconds 120
         }
         if ($fileText) { break }
-        if ($attempt -ge $maxAttempts) { break }
+        # A killed attempt is terminal even for read-only steps: the result file
+        # lookup above covers the evidence and a relaunch would double the step.
+        if ($timedOut -or $attempt -ge $maxAttempts) { break }
         Update-OpenPathLabActiveHeartbeat
         Start-Sleep -Seconds 15
     }
@@ -500,6 +553,12 @@ function Send-OpenPathFirstVisitStep {
         $stepStopwatch.Stop()
         $stepEntry.endedAt = [DateTime]::UtcNow.ToString('o')
         $stepEntry.elapsedMs = $stepStopwatch.ElapsedMilliseconds
+        # Phase 5.3 B2: record that no harness process from previous steps is
+        # still alive in the guest (command-line count).
+        try {
+            $stepEntry.harnessProcessesAfter = [int](Get-OpenPathFirstVisitHarnessProcessCount -Transport $Transport -Vmid $Vmid)
+        }
+        catch { $stepEntry.harnessProcessesAfter = -1 }
         Add-OpenPathFirstVisitStepTrace -Entry $stepEntry -ArtifactsRoot $artifactsRoot -Phase $Phase
     }
 }
@@ -523,31 +582,62 @@ Write-Output 'fixture-info-written'
 }
 
 function Copy-OpenPathFirstVisitGuestFile {
+    <#
+    .SYNOPSIS
+        Copies a bounded tail of a guest file to the evidence directory.
+    .DESCRIPTION
+    Phase 5.3 B8: `C:\OpenPath\logs\openpath.log` does not exist (the agent log
+    is `data\logs\openpath.log`), so the copy silently failed and no worker
+    trace reached the artifacts. The guest reads the last $MaxBytes with shared
+    access, the result names the path/bytes/error, and the caller records it.
+    #>
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
         [Parameter(Mandatory = $true)][int]$Vmid,
         [Parameter(Mandatory = $true)][string]$GuestPath,
         [Parameter(Mandatory = $true)][string]$LocalPath,
-        [int]$MaxBytes = 2000000
+        [int]$MaxBytes = 262144,
+        [string]$Reason = ''
     )
+    $literal = ConvertTo-OpenPathLabPowerShellLiteral -Value $GuestPath
     $script = @"
-if (Test-Path -LiteralPath '$GuestPath') {
-    `$bytes = [IO.File]::ReadAllBytes('$GuestPath')
-    if (`$bytes.Length -gt $MaxBytes) { `$bytes = `$bytes[(`$bytes.Length - $MaxBytes)..(`$bytes.Length - 1)] }
-    [Convert]::ToBase64String(`$bytes)
-} else { 'MISSING' }
+`$path = $literal
+`$result = [ordered]@{ path = `$path; exists = `$false; bytes = 0; base64 = ''; error = '' }
+if (Test-Path -LiteralPath `$path -PathType Leaf) {
+    `$result.exists = `$true
+    try {
+        `$stream = [IO.File]::Open(`$path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            `$length = `$stream.Length
+            if (`$length -gt $MaxBytes) { `$stream.Seek(`$length - $MaxBytes, [IO.SeekOrigin]::Begin) | Out-Null }
+            `$reader = New-Object IO.StreamReader(`$stream)
+            `$text = `$reader.ReadToEnd()
+            `$result.bytes = `$text.Length
+            `$result.base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(`$text))
+        }
+        finally { `$stream.Dispose() }
+    }
+    catch { `$result.error = [string]`$_.Exception.Message }
+}
+`$result | ConvertTo-Json -Compress
 "@
     $output = (& $Transport.InvokeGuestPowerShell $Vmid $script 300 | Out-String).Trim()
-    $lines = @($output -split "`r?`n" | Where-Object { $_ -and $_ -notmatch '^(VERBOSE|WARNING|DEBUG)' })
-    $base64 = $lines[-1]
-    if ($base64 -eq 'MISSING' -or -not $base64) { return $false }
-    try {
-        [IO.File]::WriteAllBytes($LocalPath, [Convert]::FromBase64String($base64))
-        return $true
+    $jsonLine = @($output -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
+    $result = $null
+    if ($jsonLine) {
+        try { $result = [string]$jsonLine | ConvertFrom-Json } catch { $result = $null }
     }
-    catch {
-        return $false
+    if ($result -and $result.base64) {
+        try {
+            [IO.File]::WriteAllBytes($LocalPath, [Convert]::FromBase64String([string]$result.base64))
+            return [pscustomobject][ordered]@{ ok = $true; reason = $Reason; path = $GuestPath; bytes = [int]$result.bytes; error = '' }
+        }
+        catch {
+            return [pscustomobject][ordered]@{ ok = $false; reason = $Reason; path = $GuestPath; bytes = 0; error = "local-write-failed: $($_.Exception.Message)" }
+        }
     }
+    $errorText = if ($result -and $result.error) { [string]$result.error } elseif ($result -and -not $result.exists) { 'guest-path-missing' } else { 'guest-copy-unparsable' }
+    return [pscustomobject][ordered]@{ ok = $false; reason = $Reason; path = $GuestPath; bytes = 0; error = $errorText }
 }
 
 function Get-OpenPathFirstVisitReportVerdict {
@@ -792,6 +882,8 @@ function Invoke-OpenPathFirstVisitPrepare {
     )
     $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
     $firstVisit = Get-OpenPathFirstVisitSettings -Payload $Payload -Config $Config
+    # Phase 5.3 B4: `control` is the historical alias of the floor scenario.
+    $scenarioNormalized = if ($firstVisit.Scenario -eq 'first-visit-control') { 'first-visit-floor' } else { $firstVisit.Scenario }
     # Phase 5.2 C3: each phase owns its step trace.
     $script:OpenPathFirstVisitStepTrace = $null
     # A transport dry-run lab cannot produce a first-visit verdict; report
@@ -828,7 +920,7 @@ Write-Output 'launcher-staged'
         if ($guestHash -and ($guestHash.ToLowerInvariant() -ne $localHash)) { throw "first-visit-helper-hash-mismatch-$moduleName" }
     }
     try { & $Transport.RemoveHostStaging $Paths.StagingDir | Out-Null } catch { }
-    $fixture = Start-OpenPathFirstVisitFixture -Config $Config -Transport $Transport -RunId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId')) -ArtifactsRoot ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot'))
+    $fixture = Start-OpenPathFirstVisitFixture -Config $Config -Transport $Transport -RunId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId')) -ArtifactsRoot ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) -Scenario $scenarioNormalized
     Write-OpenPathFirstVisitGuestFixtureInfo -Transport $Transport -Vmid $Vmid -Settings $fixture.Settings -Plan $fixture.Plan
     $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
     $configure = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'configure' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
@@ -909,6 +1001,26 @@ Write-Output 'autologon-on'
         $hostSignalsBody = $hostSignalsStep.body.state.hostSignals
     }
     catch { $hostEvidenceError = [string]$_.Exception.Message }
+    # Phase 5.3 B5: persist the DNS topology evidence (guest view + host
+    # dns.jsonl correlation for the fresh probe name).
+    $dnsTopology = $null
+    try {
+        $hostSignalsState = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostSignalsStep -Name 'body') -Name 'state'
+        $dnsTopology = Get-OpenPathLabField -InputObject $hostSignalsState -Name 'dnsTopology'
+    }
+    catch { }
+    try {
+        $dnsEvidence = [ordered]@{ schemaVersion = 1; guest = $dnsTopology; host = [ordered]@{ staging = ''; stats = '' } }
+        $stagingRootForDns = [string](Get-OpenPathLabField -InputObject $Config -Name 'hostStagingRoot')
+        if ([string]::IsNullOrWhiteSpace($stagingRootForDns)) { $stagingRootForDns = '/var/tmp/openpath-first-visit' }
+        $stagingForDns = "$stagingRootForDns/$([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId'))".Replace('//', '/')
+        $dnsEvidence.host.staging = $stagingForDns
+        $correlateHost = [string](Get-OpenPathLabField -InputObject $dnsTopology -Name 'correlateHost')
+        $statsCommand = "f='$stagingForDns/state/dns.jsonl'; if [ -f `"`$f`" ]; then echo total=`$(wc -l < `"`$f`"); echo sslip-answer=`$(grep -c sslip-answer `"`$f`"); echo correlate=`$(grep -c '$correlateHost' `"`$f`"); grep sslip-answer `"`$f`" | head -3; else echo total=0; echo sslip-answer=0; echo correlate=0; fi"
+        $dnsEvidence.host.stats = ([string](& $Transport.InvokeHostCommand @('bash', '-lc', $statsCommand) '')).Trim()
+        [IO.File]::WriteAllText((Join-Path ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) 'dns-topology.json'), ($dnsEvidence | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    }
+    catch { Write-Warning "dns topology evidence failed: $($_.Exception.Message)" }
     try {
         $hostEventsStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'host-events' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300 -AllowRetry -AllowFailed
         $hostEventsBody = $hostEventsStep.body.state.hostEvents
@@ -939,6 +1051,17 @@ Write-Output 'autologon-on'
     if ($templateXpiSha -and $xpiServedSha -and ($xpiServedSha -ne $templateXpiSha)) {
         throw "first-visit-xpi-served-sha-mismatch served=$xpiServedSha template=$templateXpiSha"
     }
+    # Phase 5.3 B7: never persist the guest secret. Its SHA-256 keeps the state
+    # correlatable without leaking the credential into the public artifact.
+    $guestSecretHash = ''
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $guestSecretHash = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes([string]$settings.GuestSecret)) | ForEach-Object { $_.ToString('x2') })
+        }
+        finally { $sha.Dispose() }
+    }
+    catch { $guestSecretHash = '' }
     $state = [ordered]@{
         phase               = 'prepared'
         scenarioId          = [string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId')
@@ -946,10 +1069,12 @@ Write-Output 'autologon-on'
         bootIdLatest        = $bootId
         harnessGuestPath    = $setup.HarnessGuestPath
         personalizedGuestPath = $setup.PersonalizedGuestPath
-        guestSecret         = $settings.GuestSecret
+        guestSecret         = '<redacted>'
+        guestSecretSha256   = $guestSecretHash
         fixtureUrl          = $firstVisit.FixtureUrl
         dnsIp               = $firstVisit.DnsIp
         plan                = $fixture.Plan
+        dnsTopology         = $dnsTopology
         install             = $install.body.state.install
         configured          = [bool]$configure.body.state.registered
         passwordReset       = ($passwordReset -match 'done')
@@ -1028,6 +1153,7 @@ function Invoke-OpenPathFirstVisitObserve {
     $script:OpenPathFirstVisitStepTrace = $null
     $scenario = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'scenario') } else { 'first-visit-settled' }
     if (-not $scenario) { $scenario = 'first-visit-settled' }
+    if ($scenario -eq 'first-visit-control') { $scenario = 'first-visit-floor' }
     if ([string](Get-OpenPathLabField -InputObject $Config -Name 'mode') -ne 'acceptance') {
         throw 'first-visit-requires-acceptance-lab-config'
     }
@@ -1156,9 +1282,20 @@ function Invoke-OpenPathFirstVisitObserve {
     # Phase 5.2: copy the guest logs right after the verdict, before the heavy
     # collect/probe. A later failure then still explains the visit from the
     # visit-time native-host.log (extension diagnostics, E1 decisions).
+    # Phase 5.3 B8: the agent log lives at data\logs\openpath.log; every copy
+    # result is recorded so a silent failure can never hide again.
     $studentUserEarly = [string]$settings.StudentUserName
-    Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath "C:\Users\$studentUserEarly\AppData\Local\OpenPath\native-host.log" -LocalPath (Join-Path $evidenceDir 'native-host.log') | Out-Null
-    Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath 'C:\OpenPath\logs\openpath.log' -LocalPath (Join-Path $evidenceDir 'openpath.log') | Out-Null
+    $copyEvidencePath = Join-Path $evidenceDir 'copies.json'
+    $copyEvidence = New-Object System.Collections.ArrayList
+    foreach ($copy in @(
+            @{ Path = "C:\Users\$studentUserEarly\AppData\Local\OpenPath\native-host.log"; Name = 'native-host.log'; Reason = 'after-verdict' },
+            @{ Path = 'C:\OpenPath\data\logs\openpath.log'; Name = 'openpath.log'; Reason = 'after-verdict' }
+        )) {
+        $copyResult = Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath $copy.Path -LocalPath (Join-Path $evidenceDir $copy.Name) -Reason $copy.Reason
+        $null = $copyEvidence.Add($copyResult)
+        if (-not $copyResult.ok) { Write-Warning "guest log copy failed [$($copy.Reason)/$($copy.Name)]: $($copyResult.error)" }
+    }
+    try { [IO.File]::WriteAllText($copyEvidencePath, (@($copyEvidence) | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false)) } catch { }
 
     # 4) Collect: bounded (<=120 s controller budget) and best-effort. Its
     #    failure is recorded literally and never changes the persisted verdict.
@@ -1199,7 +1336,7 @@ function Invoke-OpenPathFirstVisitObserve {
     if (-not $hostProbeError) {
         $hostProbeError = [string](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostProbeState -Name 'hostProbe') -Name 'error')
     }
-    if ($scenario -in @('first-visit-settled', 'first-visit-control')) {
+    if ($scenario -in @('first-visit-settled', 'first-visit-floor')) {
         try {
             $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300 -AllowRetry
         }
@@ -1234,8 +1371,15 @@ function Invoke-OpenPathFirstVisitObserve {
     $metricsPath = Join-Path $artifactsRoot 'metrics.json'
     [IO.File]::WriteAllText($metricsPath, ($metrics | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
     $studentUser = [string]$settings.StudentUserName
-    Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath "C:\Users\$studentUser\AppData\Local\OpenPath\native-host.log" -LocalPath (Join-Path $evidenceDir 'native-host.log') | Out-Null
-    Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath 'C:\OpenPath\logs\openpath.log' -LocalPath (Join-Path $evidenceDir 'openpath.log') | Out-Null
+    foreach ($copy in @(
+            @{ Path = "C:\Users\$studentUser\AppData\Local\OpenPath\native-host.log"; Name = 'native-host.log'; Reason = 'final' },
+            @{ Path = 'C:\OpenPath\data\logs\openpath.log'; Name = 'openpath.log'; Reason = 'final' }
+        )) {
+        $copyResult = Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath $copy.Path -LocalPath (Join-Path $evidenceDir $copy.Name) -Reason $copy.Reason
+        $null = $copyEvidence.Add($copyResult)
+        if (-not $copyResult.ok) { Write-Warning "guest log copy failed [$($copy.Reason)/$($copy.Name)]: $($copyResult.error)" }
+    }
+    try { [IO.File]::WriteAllText($copyEvidencePath, (@($copyEvidence) | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false)) } catch { }
     $body = [ordered]@{
         state = [ordered]@{
             scenario          = $scenario

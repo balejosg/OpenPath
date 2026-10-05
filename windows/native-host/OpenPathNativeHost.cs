@@ -185,7 +185,10 @@ namespace OpenPathNativeHost
             while (index < text.Length)
             {
                 char c = text[index];
-                if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { index++; }
+                // A leading UTF-8/UTF-16 BOM that reached this parser directly
+                // (file readers strip it in DecodeAgentText) is skipped only at
+                // the document start; U+FEFF elsewhere is data.
+                if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || (index == 0 && c == '\uFEFF')) { index++; }
                 else { break; }
             }
         }
@@ -453,14 +456,51 @@ namespace OpenPathNativeHost
             }
         }
 
+        // Decodes a file the agent wrote. PowerShell 5.1 writes UTF-8 *with* a
+        // BOM from Set-Content -Encoding UTF8 (overlay, worker state, queue,
+        // captive portal, whitelist mirror), so the UTF-8 decode must strip the
+        // preamble instead of leaving U+FEFF as the first character of the JSON
+        // (which made every JsonParse fail closed). UTF-16 BOMs are decoded
+        // explicitly and documented; the caller keeps the raw bytes for the
+        // policy hash, so this only affects the text view.
+        internal static string DecodeAgentText(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0) { return ""; }
+            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+            {
+                return Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
+            }
+            if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+            {
+                return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
+            }
+            int offset = 0;
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) { offset = 3; }
+            string text = Encoding.UTF8.GetString(bytes, offset, bytes.Length - offset);
+            if (text.Length > 0 && text[0] == '\uFEFF') { text = text.Substring(1); }
+            return text;
+        }
+
         internal static string ReadAllTextShared(string path)
         {
             try
             {
                 if (!File.Exists(path)) { return ""; }
-                return Encoding.UTF8.GetString(ReadAllBytesShared(path));
+                return DecodeAgentText(ReadAllBytesShared(path));
             }
             catch { return ""; }
+        }
+
+        // One-line exception detail for the host log, matching the PowerShell
+        // host that logs $_: type + message, newlines collapsed and bounded.
+        // WriteCompatLog applies the token redaction on top.
+        internal static string DescribeException(Exception exception)
+        {
+            if (exception == null) { return "unknown exception"; }
+            string message = exception.Message == null ? "" : exception.Message;
+            message = System.Text.RegularExpressions.Regex.Replace(message, "\\s+", " ").Trim();
+            if (message.Length > 240) { message = message.Substring(0, 240) + "..."; }
+            return exception.GetType().Name + ": " + message;
         }
 
         internal static void WriteAllTextUtf8(string path, string text)
@@ -754,9 +794,9 @@ namespace OpenPathNativeHost
                 JsonObject obj = parsed as JsonObject;
                 return obj == null ? new JsonObject() : obj;
             }
-            catch
+            catch (Exception exception)
             {
-                WriteCompatLog("Failed to parse native state");
+                WriteCompatLog("Failed to parse native state: " + DescribeException(exception));
                 return new JsonObject();
             }
         }
@@ -805,7 +845,7 @@ namespace OpenPathNativeHost
             try
             {
                 byte[] whitelistBytes = ReadAllBytesShared(path);
-                string text = Encoding.UTF8.GetString(whitelistBytes);
+                string text = DecodeAgentText(whitelistBytes);
                 WhitelistSections sections = ParseWhitelistLines(text.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None));
                 byte[] stateBytes = new byte[0];
                 if (File.Exists(GetStatePath())) { stateBytes = ReadAllBytesShared(GetStatePath()); }
@@ -1484,9 +1524,9 @@ namespace OpenPathNativeHost
                 snapshot.Entries = entries == null ? new List<object>() : entries;
                 return snapshot;
             }
-            catch
+            catch (Exception exception)
             {
-                WriteCompatLog("Failed to inspect runtime dependency overlay");
+                WriteCompatLog("Failed to inspect runtime dependency overlay: " + DescribeException(exception));
                 return snapshot;
             }
         }
@@ -2098,9 +2138,9 @@ namespace OpenPathNativeHost
                 TaskRunResult run = RunScheduledTask("OpenPath-RuntimeDependencyApply");
                 return run.Success;
             }
-            catch
+            catch (Exception exception)
             {
-                WriteStageLog("enqueue-trigger-failed", null, "", 0, FieldObject("error", "schtasks"));
+                WriteStageLog("enqueue-trigger-failed", null, "", 0, FieldObject("error", DescribeException(exception)));
                 return false;
             }
         }
@@ -3863,7 +3903,7 @@ namespace OpenPathNativeHost
                 }
                 catch (Exception exception)
                 {
-                    WriteCompatLog("Fatal protocol error: " + exception.Message);
+                    WriteCompatLog("Fatal protocol error: " + DescribeException(exception));
                     try
                     {
                         JsonObject failure = new JsonObject();

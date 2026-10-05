@@ -57,7 +57,7 @@ PIXEL_PNG = bytes.fromhex(
 )
 
 
-def build_plan(run_id: str, seed: int, ip: str, token: str) -> dict:
+def build_plan(run_id: str, seed: int, ip: str, token: str, scenario: str = "settled") -> dict:
     rng = random.Random(seed)
     suffix = f"{ip}.sslip.io"
 
@@ -91,6 +91,11 @@ def build_plan(run_id: str, seed: int, ip: str, token: str) -> dict:
         "seed": seed,
         "ip": ip,
         "token": token,
+        # Phase 5.3 B4: the floor scenario pre-whitelists every dependency host
+        # so the three waves are an environment control (fixture + DNS + warm
+        # session). It is never a product measurement.
+        "scenario": scenario,
+        "floorMode": scenario == "floor",
         "roles": list(ROLES),
         "anchors": anchors,
         "controlDependencies": control_dependencies,
@@ -108,8 +113,11 @@ def build_plan(run_id: str, seed: int, ip: str, token: str) -> dict:
 
 
 def whitelist_body(plan: dict) -> str:
+    hosts = list(plan["whitelistHosts"])
+    if plan.get("floorMode"):
+        hosts = sorted(set(hosts) | set(plan.get("controlDependencies", [])))
     lines = ["## WHITELIST"]
-    lines.extend(plan["whitelistHosts"])
+    lines.extend(hosts)
     lines.append("## BLOCKED-SUBDOMAINS")
     lines.extend(plan["blockedSubdomains"])
     lines.append("## BLOCKED-PATHS")
@@ -219,29 +227,6 @@ window.__firstVisit = {{
     }} catch (e) {{}}
   }}
   window.__firstVisitSend = send;
-  // Phase 5.2: the first visit holds unknown dependency requests for the
-  // product's learning budget; the compiled host answers the learning batch,
-  // but the held requests may already have been cancelled. Nudge every
-  // dependency host once (so the batch learns them all) and then recover the
-  // visit with a single repair reload after the learning window. This is the
-  // fixture's "the page may recover via its own effort" path.
-  function learningNudge(host) {{
-    try {{ fetch('http://' + host + '/__ping', {{ mode: 'no-cors', cache: 'no-store' }}).catch(function () {{}}); }} catch (e) {{}}
-  }}
-  learningNudge(fv.roles.styles);
-  learningNudge(fv.roles.core);
-  learningNudge(fv.roles.deferred);
-  learningNudge(fv.roles.font);
-  learningNudge(fv.roles.image);
-  learningNudge(fv.roles.api);
-  try {{
-    if (!sessionStorage.getItem('firstVisitRecovery')) {{
-      setTimeout(function () {{
-        try {{ sessionStorage.setItem('firstVisitRecovery', '1'); }} catch (e) {{}}
-        location.reload();
-      }}, 20000);
-    }}
-  }} catch (e) {{}}
   probeBlockedPath();
   setTimeout(probeBlockedPath, 2000);
   setTimeout(probeBlockedPath, 4000);
@@ -570,14 +555,18 @@ def main() -> int:
     parser.add_argument("--run-id", default=os.environ.get("OPENPATH_FIRST_VISIT_RUN_ID", "local"))
     parser.add_argument("--ip", default=os.environ.get("OPENPATH_FIRST_VISIT_IP", "192.168.1.150"))
     parser.add_argument("--token", default="phase3a")
+    # Phase 5.3 B4: scenario drives the served whitelist (floor pre-whitelists
+    # every dependency host). `control` is accepted as the historical alias.
+    parser.add_argument("--scenario", default="settled")
     parser.add_argument(
         "--font",
         default="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     )
     args = parser.parse_args()
 
+    scenario = "floor" if args.scenario == "control" else args.scenario
     seed = args.seed if args.seed is not None else int(time.time() * 1000) % 2_000_000_000
-    plan = build_plan(args.run_id, seed, args.ip, args.token)
+    plan = build_plan(args.run_id, seed, args.ip, args.token, scenario)
     state = FixtureState(pathlib.Path(args.state_dir), plan, args.font)
     server = ThreadingHTTPServer((args.listen, args.port), FixtureHandler)
     server.state = state  # type: ignore[attr-defined]

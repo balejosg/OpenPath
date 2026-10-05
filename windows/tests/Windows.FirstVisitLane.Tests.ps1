@@ -914,6 +914,87 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             $json.Length | Should -BeLessThan 40000
         }
 
+        It 'Drops the Get-Content ETS wrapper from strings (Phase 5.3 B1)' {
+            # Get-Content -Raw returns a string wrapped with PSPath/PSDrive/
+            # PSProvider note properties; the PS 5.1 serializer walked that
+            # wrapper in the collect wedge. The limiter must return a plain
+            # string and keep the size cap.
+            $wrapped = 'payload'
+            $wrapped | Add-Member -MemberType NoteProperty -Name 'PSPath' -Value 'Microsoft.PowerShell.Core\FileSystem::C:\x' -Force
+            $wrapped | Add-Member -MemberType NoteProperty -Name 'PSDrive' -Value 'C' -Force
+            $limited = Limit-FirstVisitResultValue -Value ([ordered]@{ state = $wrapped }) -MaxStringChars 4
+            ($limited.state -is [string]) | Should -BeTrue
+            $limited.state | Should -Be 'payl...truncated'
+            $limited.state.PSObject.Properties['PSPath'] | Should -BeNull
+            # A parsed JSON object (pscustomobject) is evidence, not poison:
+            # it must survive as a property bag.
+            $probe = '{"compiledHostPresent":false,"deniedPowershell":true}' | ConvertFrom-Json
+            $limitedProbe = Limit-FirstVisitResultValue -Value ([ordered]@{ result = $probe })
+            $limitedProbe.result.compiledHostPresent | Should -BeFalse
+            $limitedProbe.result.deniedPowershell | Should -BeTrue
+        }
+
+        It 'Serializes a Get-Content -Raw payload as a plain string under PowerShell 5.1 (Phase 5.3 B1)' {
+            $wrapped = Get-Content -LiteralPath $PSCommandPath -Raw
+            # 1) Fixed path: the limiter + serializer stay bounded and the value
+            #    arrives as a plain JSON string.
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            $json = ConvertTo-FirstVisitResultJson -Payload ([ordered]@{
+                    status = 'passed'; step = 'collect'; failures = @()
+                    body   = [ordered]@{ state = [ordered]@{ collect = [ordered]@{ workerState = $wrapped } } }
+                }) -MaxInlineBytes 0
+            $watch.Stop()
+            $watch.Elapsed.TotalSeconds | Should -BeLessThan 2
+            $json | Should -Not -Match 'PSPath|PSDrive|PSProvider'
+            $parsed = $json | ConvertFrom-Json
+            ($parsed.body.state.collect.workerState -is [string]) | Should -BeTrue
+            # 2) Measurement under Windows PowerShell 5.1 (the shell the guest
+            #    harness runs): Get-Content -Raw vs [IO.File]::ReadAllText.
+            #    A pathological result is reported, never allowed to hang the
+            #    suite: the child is killed after 45 s.
+            $windowsPowerShell = ''
+            if ($env:WINDIR) {
+                $candidate = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+                if (Test-Path -LiteralPath $candidate) { $windowsPowerShell = $candidate }
+            }
+            if (-not $windowsPowerShell) {
+                Write-Host 'B1 measurement skipped: Windows PowerShell 5.1 not available in this environment.'
+                return
+            }
+            $driver = @"
+`$file = Join-Path `$env:TEMP ('phase53-b1-' + [guid]::NewGuid().ToString('N') + '.txt')
+[IO.File]::WriteAllText(`$file, (('line ' * 200) + "``n") * 200)
+`$wrapped = Get-Content -LiteralPath `$file -Raw
+`$w1 = [System.Diagnostics.Stopwatch]::StartNew()
+try { `$json1 = [ordered]@{ s = `$wrapped } | ConvertTo-Json -Depth 12 -Compress } catch { `$json1 = '' }
+`$w1.Stop()
+`$plain = [IO.File]::ReadAllText(`$file)
+`$w2 = [System.Diagnostics.Stopwatch]::StartNew()
+try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress } catch { `$json2 = '' }
+`$w2.Stop()
+`$shape = if (`$json1 -match 'PSPath|PSDrive|PSProvider') { 'ets-object' } else { 'plain-string' }
+[ordered]@{ getContentMs = [int]`$w1.ElapsedMilliseconds; readAllTextMs = [int]`$w2.ElapsedMilliseconds; shape = `$shape; length = `$wrapped.Length } | ConvertTo-Json -Compress
+"@
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($driver))
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $windowsPowerShell
+            $startInfo.Arguments = '-NoProfile -EncodedCommand ' + $encoded
+            $startInfo.UseShellExecute = $false
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $process = [System.Diagnostics.Process]::Start($startInfo)
+            $completed = $process.WaitForExit(45000)
+            if (-not $completed) {
+                try { $process.Kill($true) } catch { }
+                Write-Host 'B1 measurement: the Get-Content stack did not complete within 45 s under PowerShell 5.1 (pathological case recorded).'
+            }
+            else {
+                $measurement = $process.StandardOutput.ReadToEnd().Trim()
+                Write-Host "B1 measurement (PowerShell 5.1): $measurement"
+            }
+            $process.Dispose()
+        }
+
         It 'Splits an unserializable dictionary so healthy children still arrive' {
             $probe = {
                 param($value)
@@ -1066,7 +1147,7 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
 
         It 'Plans scenarios per trigger' {
             $schedule = Get-OpenPathFirstVisitScenarioPlan -EventName 'schedule'
-            $schedule.scenarios | Should -Be 'settled,hot,class-boot,control'
+            $schedule.scenarios | Should -Be 'settled,hot,class-boot,floor'
             $schedule.repetitions | Should -Be 2
             $afterRel = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_run'
             $afterRel.scenarios | Should -Be 'settled,class-boot'

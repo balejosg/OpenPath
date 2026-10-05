@@ -22,15 +22,39 @@ function Get-FirstVisitResultField {
     return $property.Value
 }
 
+function ConvertTo-FirstVisitPlainString {
+    <#
+    .SYNOPSIS
+    Returns a fresh plain string (or a bounded ToString) with no ETS wrapper.
+    .DESCRIPTION
+    Phase 5.3 B1: strings that came out of `Get-Content -Raw` carry ETS
+    properties (PSPath, PSDrive, PSProvider) on their PowerShell wrapper; that
+    wrapper is what the PS 5.1 serializer walked in the Phase 5.2 collect
+    wedge. `.ToString()` returns the raw .NET string, which PowerShell wraps
+    again without those properties.
+    #>
+    param([AllowNull()][object]$Value, [int]$MaxChars = 8192)
+    if ($null -eq $Value) { return $null }
+    # A wrapped string keeps its ETS properties through a cast; ToString()
+    # returns the raw .NET value that PowerShell re-wraps clean.
+    $text = if ($Value -is [string]) { $Value.ToString() } else { [string]$Value }
+    if ($text.Length -gt $MaxChars) { return $text.Substring(0, $MaxChars) + '...truncated' }
+    return $text
+}
+
 function Limit-FirstVisitResultValue {
     <#
     .SYNOPSIS
     Bounds strings and collections before serialization.
     .DESCRIPTION
-    Phase 5.2: the Phase 5.2 acceptance runs spent >500 s inside the PS 5.1
-    serializer on an unbounded collect body (extension diagnostics). Every
-    value that reaches ConvertTo-FirstVisitResultJson is capped here so the
-    serializer cost is linear and bounded.
+    Phase 5.2: the acceptance runs spent >500 s inside the PS 5.1 serializer on
+    an unbounded collect body. Phase 5.3: every string is returned as a fresh
+    plain string (Get-Content ETS properties are dropped) and any object that
+    is not a dictionary, a property bag, an enumerable or a primitive is
+    reduced to its trimmed ToString(). PowerShell property bags
+    ([pscustomobject]) are recursed as dictionaries instead of being flattened,
+    because the harness payload legitimately stores parsed JSON objects (the
+    student probe result) that must reach the evidence.
     #>
     [CmdletBinding()]
     param(
@@ -39,10 +63,11 @@ function Limit-FirstVisitResultValue {
         [int]$MaxItems = 2000,
         [int]$Depth = 0
     )
-    if ($null -eq $Value -or $Depth -gt 8) { return $Value }
+    if ($null -eq $Value) { return $null }
+    if ($Depth -gt 8) { return ConvertTo-FirstVisitPlainString -Value $Value -MaxChars $MaxStringChars }
     if ($Value -is [string]) {
-        if ($Value.Length -gt $MaxStringChars) { return $Value.Substring(0, $MaxStringChars) + '...truncated' }
-        return $Value
+        # Force a fresh wrapper (ETS dropped) and keep the size cap.
+        return ConvertTo-FirstVisitPlainString -Value $Value -MaxChars $MaxStringChars
     }
     if ($Value -is [System.Collections.IDictionary]) {
         $limited = [ordered]@{}
@@ -54,6 +79,17 @@ function Limit-FirstVisitResultValue {
             $limited[[string]$key] = Limit-FirstVisitResultValue -Value $childValue -MaxStringChars $MaxStringChars -MaxItems $MaxItems -Depth ($Depth + 1)
         }
         return $limited
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $properties = [ordered]@{}
+        foreach ($property in @($Value.PSObject.Properties)) {
+            if (-not $property.IsGettable) { continue }
+            if ($property.MemberType -notin @('NoteProperty', 'Property', 'AliasProperty', 'ScriptProperty')) { continue }
+            $childValue = $null
+            try { $childValue = $property.Value } catch { continue }
+            $properties[[string]$property.Name] = Limit-FirstVisitResultValue -Value $childValue -MaxStringChars $MaxStringChars -MaxItems $MaxItems -Depth ($Depth + 1)
+        }
+        return $properties
     }
     if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
         $items = New-Object System.Collections.ArrayList
@@ -68,10 +104,16 @@ function Limit-FirstVisitResultValue {
         $array = [object[]]$items.ToArray()
         return ,$array
     }
-    return $Value
+    $type = $Value.GetType()
+    if ($type.IsPrimitive -or $type.IsEnum -or $Value -is [datetime] -or $Value -is [datetimeoffset] -or $Value -is [timespan] -or $Value -is [guid] -or $Value -is [decimal]) {
+        return $Value
+    }
+    # Everything else: a bounded ToString(), never its hidden object graph.
+    return ConvertTo-FirstVisitPlainString -Value $Value -MaxChars $MaxStringChars
 }
 
-function Test-FirstVisitSerializableValue {    param([AllowNull()][object]$Value, [int]$Depth = 12)
+function Test-FirstVisitSerializableValue {
+    param([AllowNull()][object]$Value, [int]$Depth = 12)
     try {
         $probe = [ordered]@{ value = $Value }
         $json = $probe | ConvertTo-Json -Depth $Depth -Compress
@@ -330,4 +372,4 @@ function Resolve-FirstVisitGuestResult {
     return [pscustomobject][ordered]@{ json = $null; source = ''; stdoutValid = $false; fileValid = $false; error = 'first-visit-guest-result-missing' }
 }
 
-Export-ModuleMember -Function ConvertTo-FirstVisitResultJson, Get-FirstVisitResultFromOutput, Resolve-FirstVisitGuestResult, Test-FirstVisitSerializableValue, Get-FirstVisitSerializationError, Limit-FirstVisitResultValue
+Export-ModuleMember -Function ConvertTo-FirstVisitResultJson, Get-FirstVisitResultFromOutput, Resolve-FirstVisitGuestResult, Test-FirstVisitSerializableValue, Get-FirstVisitSerializationError, Limit-FirstVisitResultValue, ConvertTo-FirstVisitPlainString

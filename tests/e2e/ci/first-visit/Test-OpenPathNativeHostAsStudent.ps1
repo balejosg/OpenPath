@@ -47,14 +47,36 @@ $result = [ordered]@{
 }
 
 function Read-NativeHost8004Count {
-    $query = @'
-$events = wevtutil.exe qe 'Microsoft-Windows-AppLocker/EXE and DLL' "/q:*[System[(EventID=8004)]]" /c:200 /rd:true /f:text 2>$null
-$count = 0
-foreach ($line in @($events)) { if ($line -match 'WINDOWSPOWERSHELL|POWERSHELL\.EXE') { $count++ } }
-$count
-'@
-    $count = & powershell.exe -NoProfile -Command $query 2>$null | Select-Object -Last 1
-    return [int]$count
+    # Phase 5.3 B6: query the AppLocker log directly. The old version passed a
+    # multi-line script through a nested `powershell.exe -Command`; PowerShell
+    # 5.1 escapes the embedded quotes on the native command line, the inner
+    # parse broke and the count silently stayed 0 (the control probe measured
+    # 0 events while the prepare had already captured the deny).
+    try {
+        $events = @(& wevtutil.exe qe 'Microsoft-Windows-AppLocker/EXE and DLL' '/q:*[System[(EventID=8004)]]' /c:100 /rd:true /f:text 2>$null)
+    }
+    catch {
+        return [pscustomobject]@{ count = -1; sample = @() }
+    }
+    $matches = @($events | Where-Object { $_ -match 'powershell\.exe|pwsh\.exe' })
+    return [pscustomobject]@{
+        count  = $matches.Count
+        sample = @($matches | Select-Object -Last 2)
+    }
+}
+
+function Read-FileTailPlain {
+    param([Parameter(Mandatory = $true)][string]$Path, [int]$Lines = 12, [int]$MaxBytes = 1048576)
+    try {
+        $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            if ($stream.Length -gt $MaxBytes) { $stream.Seek($stream.Length - $MaxBytes, [IO.SeekOrigin]::Begin) | Out-Null }
+            $reader = New-Object IO.StreamReader($stream)
+            return @($reader.ReadToEnd() -split "`r?`n" | Where-Object { $_ -ne '' } | Select-Object -Last $Lines)
+        }
+        finally { $stream.Dispose() }
+    }
+    catch { return @() }
 }
 
 try {
@@ -135,28 +157,42 @@ try {
                 try { $result.responses += ($json | ConvertFrom-Json) } catch { $result.responses += @{ parseError = $json } }
             }
         }
-        if (Test-Path -LiteralPath $errorPath) { $result.studentStderr = (Get-Content -LiteralPath $errorPath -Raw) }
+        if (Test-Path -LiteralPath $errorPath) { $result.studentStderr = [IO.File]::ReadAllText($errorPath) }
         $result.pingResponded = [bool](@($result.responses | Where-Object { $_.action -eq 'ping' -and $_.success -eq $true }).Count -gt 0)
         $result.readsResponded = [bool](@($result.responses | Where-Object { $_.action -in @('get-hostname', 'get-machine-token', 'get-blocked-paths', 'get-allowed-paths', 'get-blocked-subdomains') -and $_.success -eq $true }).Count -ge 5)
         $result.portalProtocolResponded = [bool](@($result.responses | Where-Object { $_.action -eq 'recover-captive-portal-navigation' }).Count -gt 0)
     }
 
-    # 4) powershell.exe must still be denied for the student (new 8004 events).
-    $before = Read-NativeHost8004Count
-    $psCommandLine = '"C:\Windows\System32\cmd.exe" /c "powershell.exe -NoProfile -Command exit 0"'
+    # 4) powershell.exe must still be denied for the student. This check runs
+    #    in every scene, with or without a compiled host.
+    $beforeResult = Read-NativeHost8004Count
+    $before = $beforeResult.count
+    $psCommandLine = '"C:\Windows\System32\cmd.exe" /c "powershell.exe -NoProfile -Command exit 0 > ' + (Join-Path $WorkDir 'b6-deny-out.txt') + ' 2>&1"'
     $psEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($psCommandLine))
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $LauncherPath -CommandLineBase64 $psEncoded 2>&1 | Out-Null
-    Start-Sleep -Seconds 10
-    $after = Read-NativeHost8004Count
+    $denyPath = Join-Path $WorkDir 'b6-deny-out.txt'
+    Remove-Item -LiteralPath $denyPath -Force -ErrorAction SilentlyContinue
+    $denyLaunch = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $LauncherPath -CommandLineBase64 $psEncoded 2>&1 | Out-String
+    $result.powershellDenyLaunchOutput = ([string]$denyLaunch).Trim()
+    if (Test-Path -LiteralPath $denyPath) { $result.powershellDenyOutput = [IO.File]::ReadAllText($denyPath) }
+    # Bounded poll: AppLocker writes the 8004 event a moment after the block.
+    $afterResult = $beforeResult
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline -and $afterResult.count -le $before) {
+        Start-Sleep -Seconds 3
+        $afterResult = Read-NativeHost8004Count
+    }
     $result.events8004Before = $before
-    $result.events8004After = $after
-    $result.deniedPowershell = ($after -gt $before)
+    $result.events8004After = $afterResult.count
+    $result.events8004Measured = ($before -ge 0 -and $afterResult.count -ge 0)
+    $result.events8004Sample = @($afterResult.sample)
+    $result.deniedPowershell = ($result.events8004Measured -and $afterResult.count -gt $before)
 
-    # 5) Student host log.
+    # 5) Student host log (plain, share-safe reads: no ETS strings in the
+    #    result payload).
     $logPath = "C:\Users\$StudentUserName\AppData\Local\OpenPath\native-host.log"
     if (Test-Path -LiteralPath $logPath) {
         $result.hostLogBytes = (Get-Item -LiteralPath $logPath).Length
-        $result.hostLogInit = @(Get-Content -LiteralPath $logPath -Tail 400 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'initialization completed' } | Select-Object -Last 3)
+        $result.hostLogInit = @(Read-FileTailPlain -Path $logPath -Lines 400 | Where-Object { $_ -match 'initialization completed' } | Select-Object -Last 3)
     }
 }
 catch {

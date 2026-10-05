@@ -1354,8 +1354,9 @@ test('required Windows CI runs Pester in an untracked child host without success
     'the isolated Pester runner should load the testable shard plan module'
   );
   assert.ok(
-    windowsPesterRunner.includes('$config.Run.Path = $suitePaths'),
-    'the isolated Pester runner should point at the discovered leaf suite paths instead of the whole directory'
+    windowsPesterRunner.includes('$config.Run.Path = @($SuiteFile)') &&
+      windowsPesterRunner.includes('Get-WindowsPesterShardPlan'),
+    'the isolated Pester runner should run the discovered leaf suite paths one file at a time'
   );
   assert.ok(
     windowsPesterRunner.includes(
@@ -1499,8 +1500,10 @@ test('required Windows CI runs Pester in an untracked child host without success
     'ci.yml should not query Windows marker-step metadata to recover a cancelled lane'
   );
   assert.ok(
-    !ciWorkflow.includes('actions/upload-artifact@v7'),
-    'ci.yml should avoid artifact uploads inside the Windows lane'
+    ciWorkflow.split('actions/upload-artifact@v7').length - 1 === 2 &&
+      ciWorkflow.includes('name: windows-pester-progress-${{ matrix.shard }}') &&
+      ciWorkflow.includes('name: windows-hosted-pester-progress-${{ matrix.shard }}'),
+    'ci.yml may upload only the Phase 5.3 Windows Pester progress artifacts inside the Windows lane'
   );
   assert.ok(
     !ciWorkflow.includes('actions/download-artifact@v4'),

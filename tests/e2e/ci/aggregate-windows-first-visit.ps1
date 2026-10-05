@@ -166,7 +166,8 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
     }
     $outcome = Get-OpenPathFirstVisitSceneOutcome -VerdictFile $verdictFile -Metrics $metricsObject `
         -ObserveStatus ([string]$row.observeStatus) -ObserveError ([string]$row.error) `
-        -ObserveReasonCode ([string]$row.observeReasonCode) -PrepareError $prepareError
+        -ObserveReasonCode ([string]$row.observeReasonCode) -PrepareError $prepareError `
+        -Scenario ([string]$row.scenario)
     $row.verdict = $outcome.verdict
     $row.category = $outcome.category
     if (@($outcome.reasons).Count -gt 0) { $row.reasons = @($outcome.reasons) }

@@ -36,8 +36,8 @@ function Get-OpenPathFirstVisitScenarioPlan {
     Scenarios and repetitions for the current trigger.
     .DESCRIPTION
     workflow_run (after a successful REL): W and B, each with the X pass in the
-    same session.  schedule (nightly): W, W2, B and C with X, two repetitions.
-    workflow_dispatch: whatever the caller asked for.
+    same session.  schedule (nightly): W, W2, B and the floor control with X,
+    two repetitions.  workflow_dispatch: whatever the caller asked for.
     #>
     [CmdletBinding()]
     param(
@@ -47,7 +47,7 @@ function Get-OpenPathFirstVisitScenarioPlan {
     )
     switch ($EventName) {
         'schedule' {
-            return [pscustomobject]@{ scenarios = 'settled,hot,class-boot,control'; repetitions = 2; source = 'schedule' }
+            return [pscustomobject]@{ scenarios = 'settled,hot,class-boot,floor'; repetitions = 2; source = 'schedule' }
         }
         'workflow_dispatch' {
             $scenarios = if ([string]::IsNullOrWhiteSpace($RequestedScenarios)) { 'settled,class-boot' } else { $RequestedScenarios.Trim() }

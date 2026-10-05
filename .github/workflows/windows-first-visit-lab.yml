@@ -24,7 +24,7 @@ on:
         required: false
         type: string
       scenarios:
-        description: 'comma-separated scenarios (settled,hot,class-boot,control)'
+        description: 'comma-separated scenarios (settled,hot,class-boot,floor; control is the floor alias)'
         required: false
         default: 'settled,class-boot'
         type: string

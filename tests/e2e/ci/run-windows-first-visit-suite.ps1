@@ -8,7 +8,8 @@
       first-visit-settled    W  settled system, fresh Firefox -> anchor 1
       first-visit-hot        W2 same Firefox open >=5 min -> anchor 2
       first-visit-class-boot B  install, warm-up, reboot, autologon, Firefox <=60 s
-      first-visit-control    C  like W but with the dependency hosts pre-whitelisted (floor)
+      first-visit-floor      C  like W but with the dependency hosts pre-whitelisted
+                                (environment floor; `control` is accepted as alias)
 
     Each repetition creates a fresh run/attempt/scenario artifact boundary. The
     verdict comes from the page self-report; the caller aggregates metrics.
@@ -52,6 +53,9 @@ try {
 catch { $templateXpiSha = '' }
 foreach ($repetition in 1..$Repetitions) {
     foreach ($scenario in $Scenarios) {
+        # Phase 5.3 B4: floor is the real environment control; `control` was
+        # the old name and stays accepted as an alias.
+        if ($scenario -eq 'control') { $scenario = 'floor' }
         $scenarioId = "first-visit-$scenario-r$repetition"
         $scenarioRoot = Join-Path (Join-Path (Join-Path $ArtifactsRoot $RunId) ([string]$RunAttempt)) $scenarioId
         New-Item -ItemType Directory -Path $scenarioRoot -Force | Out-Null

@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """sslip.io DNS fixture for the first-visit lane (Phase 3A).
 
-The lab upstream resolver blocks ``sslip.io`` names, so the fixture hostnames
-(``<role>-<token>.<ip>.sslip.io``) would never resolve after the product learns
-them. This resolver mirrors the public sslip.io service for the lab:
+This resolver answers ``*.sslip.io`` A queries with the IPv4 address embedded
+in the name (TTL 60) and forwards every other query to the lab resolver
+(default 192.168.1.133) with a bounded timeout. It runs on the Proxmox host
+(where UDP/53 is free) and is the product's configured upstream for the lab
+guest (configure sets ``primaryDNS``/``secondaryDNS`` to the lab host address).
 
-  * ``*.sslip.io`` A queries are answered locally with the IPv4 address embedded
-    in the name (TTL 60);
-  * every other query is forwarded verbatim to the lab resolver (default
-    192.168.1.133) with a bounded timeout.
-
-It runs on the Proxmox host (where UDP/53 is free) and is used as the product's
-configured DNS upstream for the lab guest, so a dependency host resolves only
-after the product learns it (before learning the client's Acrylic answers
-NXDOMAIN and never reaches this resolver).
+Phase 5.3 B5: on the lab path the fixture hosts never reach this resolver. The
+product's AcrylicHosts renderer resolves any sslip.io whitelisted/learned name
+with a static hosts entry built from the embedded IPv4
+(``windows/lib/internal/AcrylicHostsModel.ps1::Get-AcrylicForwardRules``), and
+Acrylic's domain affinity mask only forwards whitelisted/runtime-dependency
+domains upstream. A dependency host therefore resolves only after the product
+learns it (before learning the name is not in the mask and Acrylic answers
+NXDOMAIN locally; after learning the static hosts entry answers first), and
+``dns.jsonl`` holds no answer entries for the anchors. The fixture's roles are:
+serving the harness's direct INFRA probe (``Resolve-DnsName -Server <lab>``)
+and forwarding everything that is not a fixture hostname.
 
 Usage:
   dns_fixture.py --state-dir DIR [--listen 0.0.0.0] [--port 53]

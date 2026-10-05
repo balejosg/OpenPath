@@ -80,6 +80,23 @@ class PlanTests(unittest.TestCase):
         for rule in plan["blockedPaths"]:
             self.assertIn(rule, body)
 
+    def test_floor_whitelists_every_dependency_host(self) -> None:
+        # Phase 5.3 B4: the floor is an environment control; it serves the
+        # anchors plus every dependency host so the three waves must load.
+        floor = fixture_server.build_plan("unit-run", 42, "192.168.1.150", "unit-token", "floor")
+        self.assertTrue(floor["floorMode"])
+        floor_body = fixture_server.whitelist_body(floor)
+        self.assertEqual(floor_body.splitlines()[0], "## WHITELIST")
+        for host in floor["controlDependencies"]:
+            self.assertIn(host, floor_body)
+        # The measurement scenarios keep the dependencies out (learning is the
+        # signal the lane exists to capture).
+        settled = fixture_server.build_plan("unit-run", 42, "192.168.1.150", "unit-token", "settled")
+        self.assertFalse(settled["floorMode"])
+        settled_body = fixture_server.whitelist_body(settled)
+        for host in settled["controlDependencies"]:
+            self.assertNotIn(host, settled_body)
+
 
 class FixtureServerTests(unittest.TestCase):
     @classmethod
@@ -130,10 +147,12 @@ class FixtureServerTests(unittest.TestCase):
         self.assertIn("/blocked-path/probe.bin", text)
         self.assertIn("blockedPathEnforced", text)
         self.assertIn("blockedPathFinal", text)
-        # Phase 5.2: the dependency learning nudge + single repair reload.
-        self.assertIn("learningNudge", text)
-        self.assertIn("firstVisitRecovery", text)
-        self.assertIn("location.reload()", text)
+        # Phase 5.3 B3: the fixture behaves like a real SPA that does not
+        # recover on its own. The push-3 learning nudge and the 20 s repair
+        # reload changed what the lane measures and are reverted.
+        self.assertNotIn("learningNudge", text)
+        self.assertNotIn("firstVisitRecovery", text)
+        self.assertNotIn("location.reload()", text)
 
     def test_blocked_path_probe_is_served_so_only_enforcement_can_stop_it(self) -> None:
         host = self.plan["anchors"]["a1"]["host"]

@@ -43,8 +43,12 @@ function Get-OpenPathFirstVisitSceneOutcome {
         [string]$ObserveStatus = '',
         [string]$ObserveError = '',
         [string]$ObserveReasonCode = '',
-        [string]$PrepareError = ''
+        [string]$PrepareError = '',
+        # Phase 5.3 B4: the floor scenario is the environment control. Its
+        # failures are fixture/DNS evidence, never a product verdict.
+        [string]$Scenario = ''
     )
+    $isFloor = ($Scenario -match 'first-visit-floor')
     $outcome = [ordered]@{
         category            = 'UNKNOWN'
         verdict             = 'unknown'
@@ -98,6 +102,13 @@ function Get-OpenPathFirstVisitSceneOutcome {
             elseif ($ObserveError) { $outcome.error = $ObserveError }
             else { $outcome.error = 'evidence-incomplete' }
         }
+        if ($isFloor -and $outcome.category -eq 'PRODUCT') {
+            # The floor is an environment control: a red floor means the
+            # fixture/DNS/warm-session path could not deliver the waves, not a
+            # product regression.
+            $outcome.category = 'INFRA'
+            $outcome.error = 'floor-not-green: ' + [string]$outcome.error
+        }
         return [pscustomobject]$outcome
     }
     if ($Metrics) {
@@ -115,6 +126,10 @@ function Get-OpenPathFirstVisitSceneOutcome {
             $outcome.error = if ($ObserveError) { $ObserveError } else { 'evidence-incomplete' }
         }
         else { $outcome.category = 'PASS' }
+        if ($isFloor -and $outcome.category -eq 'PRODUCT') {
+            $outcome.category = 'INFRA'
+            $outcome.error = 'floor-not-green: ' + [string]$outcome.error
+        }
         return [pscustomobject]$outcome
     }
     $outcome.category = 'INFRA'

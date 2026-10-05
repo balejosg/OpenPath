@@ -441,6 +441,25 @@ function Get-LogTail {
     return @($lines | Select-Object -Last $Tail)
 }
 
+function Get-FileTextSafe {
+    # Whole-file read with ReadWrite sharing: the resident worker keeps its
+    # state file open while writing. Returns '' on any failure and never
+    # produces the ETS-wrapped strings `Get-Content -Raw` returns (Phase 5.3
+    # B1: that wrapper is what the PS 5.1 serializer walked in the collect).
+    param([Parameter(Mandatory = $true)][string]$Path, [int]$MaxBytes = 262144)
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+    try {
+        $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            if ($stream.Length -gt $MaxBytes) { $stream.Seek($stream.Length - $MaxBytes, [IO.SeekOrigin]::Begin) | Out-Null }
+            $reader = New-Object IO.StreamReader($stream)
+            return $reader.ReadToEnd()
+        }
+        finally { $stream.Dispose() }
+    }
+    catch { return '' }
+}
+
 function Resolve-Probe {
     param([string]$HostName)
     try {
@@ -1008,11 +1027,12 @@ switch ($Step) {
         $skippedBlocks = New-Object System.Collections.Generic.List[string]
         $budgetExceeded = { $collectWatch.Elapsed.TotalSeconds -gt $collectBudgetSeconds }
         $openpath = @()
-        if (& $budgetExceeded) { $skippedBlocks.Add('openpath') | Out-Null } else { $openpath = Get-LogTail -Path "$OpenPathRoot\logs\openpath.log" -Tail 300; & $lap 'openpathMs' }
+        if (& $budgetExceeded) { $skippedBlocks.Add('openpath') | Out-Null } else { $openpath = Get-LogTail -Path "$OpenPathRoot\data\logs\openpath.log" -Tail 300; & $lap 'openpathMs' }
         $workerState = ''
         if (& $budgetExceeded) { $skippedBlocks.Add('workerState') | Out-Null }
         elseif (Test-Path -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json") {
-            $workerState = Get-Content -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json" -Raw
+            # Phase 5.3 B1: share-safe read without ETS properties.
+            $workerState = Get-FileTextSafe -Path "$OpenPathRoot\data\runtime-dependency-worker-state.json"
         }
         & $lap 'workerStateMs'
         $moz = [ordered]@{ lines = @(); files = 0; totalFiles = 0; truncated = $true }
@@ -1062,6 +1082,23 @@ switch ($Step) {
         $script:Body.collect.overlayHosts = @($overlayHosts | Select-Object -First 100)
         $script:Body.collect.whitelistMirror = @($whitelistMirror | Select-Object -First 40 | ForEach-Object { & $truncateLine $_ 160 })
         $script:Body.collect.firefoxProcesses = @($firefoxProcesses | Select-Object -First 20)
+        # Phase 5.3 B1: name the key if a single value ever wedges the PS 5.1
+        # serializer again. Every probe saves a partial naming the key in
+        # progress, and the probe is bounded so the step still completes.
+        $serializeKeyMs = [ordered]@{}
+        $keyProbeWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        foreach ($key in @('diagnostics', 'addonsLog', 'mozExtract', 'diagnosticSample', 'startupProfiles', 'nativeHostTail', 'openpathTail', 'workerState', 'overlayHosts', 'whitelistMirror', 'firefoxProcesses')) {
+            if (-not $script:Body.collect.Contains($key)) { continue }
+            if ($keyProbeWatch.Elapsed.TotalSeconds -gt 30) { $serializeKeyMs['budgetExceeded'] = $true; break }
+            $script:Body.collect.timings.serializeKeyCurrent = $key
+            Save-PartialResult
+            $keyWatch = [System.Diagnostics.Stopwatch]::StartNew()
+            try { $null = ($script:Body.collect[$key] | ConvertTo-Json -Depth 12 -Compress) } catch { }
+            $keyWatch.Stop()
+            $serializeKeyMs[$key] = [int]$keyWatch.ElapsedMilliseconds
+        }
+        $serializeKeyMs['probeMs'] = [int]$keyProbeWatch.ElapsedMilliseconds
+        $script:Body.collect.timings.serializeKeyMs = $serializeKeyMs
         # Time one reduced serialization of the payload; the real serialization
         # in Complete-Step then runs with the measured value included.
         $pending = Get-StepResultPayload
@@ -1082,6 +1119,8 @@ switch ($Step) {
         # as the restricted student, the still-denied powershell.exe (new 8004)
         # and the student's native-host log line. Older templates without the
         # exe record compiledHostPresent=false plus the deny evidence instead.
+        # Phase 5.3 B6: the step is failed when the probe result or the deny
+        # evidence is missing; it never reports passed without them.
         Save-PartialResult
         $probeScript = Join-Path $PSScriptRoot 'Test-OpenPathNativeHostAsStudent.ps1'
         $probeWork = 'C:\OpenPathLab\phase5\b6'
@@ -1111,6 +1150,14 @@ switch ($Step) {
             result      = $probeResult
             raw         = if ($probeError) { $probeOutput.Substring(0, [Math]::Min(2000, $probeOutput.Length)) } else { '' }
         }
+        if (-not $probeResult) {
+            $script:Failures.Add('student-host-probe-result-missing') | Out-Null
+        }
+        else {
+            if ($probeResult.error) { $script:Failures.Add('student-host-probe-error') | Out-Null }
+            if ($probeResult.events8004Measured -ne $true) { $script:Failures.Add('student-host-probe-8004-unmeasured') | Out-Null }
+            elseif ($probeResult.deniedPowershell -ne $true) { $script:Failures.Add('student-host-probe-powershell-not-denied') | Out-Null }
+        }
         Complete-Step
     }
     'host-signals' {
@@ -1118,6 +1165,62 @@ switch ($Step) {
         # File/registry/native-command reads only; the controller runs this with
         # a short timeout and never lets its failure abort the run.
         Save-PartialResult
+        # Phase 5.3 B5: DNS topology evidence. Where does the guest resolve the
+        # fixture names through, and which upstreams does Acrylic use? The
+        # controller correlates the fresh-probe name with the host dns.jsonl.
+        $dnsTopology = [ordered]@{}
+        try {
+            $dnsTopology.adapters = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ interface = [string]$_.InterfaceAlias; servers = @($_.ServerAddresses) } })
+        }
+        catch { }
+        try {
+            $acrylicIni = ''
+            foreach ($candidate in @(
+                    (Join-Path ${env:ProgramFiles(x86)} 'Acrylic DNS Proxy\AcrylicConfiguration.ini'),
+                    (Join-Path $env:ProgramFiles 'Acrylic DNS Proxy\AcrylicConfiguration.ini')
+                )) {
+                if ($candidate -and (Test-Path -LiteralPath $candidate)) { $acrylicIni = $candidate; break }
+            }
+            if (-not $acrylicIni) {
+                try {
+                    $cfg = Get-Content -LiteralPath "$OpenPathRoot\data\config.json" -Raw | ConvertFrom-Json
+                    $configured = [string]$cfg.acrylicPath
+                    if ($configured -and (Test-Path -LiteralPath (Join-Path $configured 'AcrylicConfiguration.ini'))) { $acrylicIni = Join-Path $configured 'AcrylicConfiguration.ini' }
+                }
+                catch { }
+            }
+            if ($acrylicIni) {
+                $dnsTopology.acrylicIniPath = $acrylicIni
+                $acrylic = [ordered]@{}
+                foreach ($line in @(Get-FileTailSafe -Path $acrylicIni -Lines 500)) {
+                    if ($line -match '^\s*(PrimaryServerAddress|SecondaryServerAddress|UseWindowsHostsFile|Enable)\s*=\s*(.*)$') {
+                        $acrylic[$Matches[1]] = $Matches[2].Trim()
+                    }
+                }
+                $dnsTopology.acrylic = $acrylic
+                $acrylicHostsPath = Join-Path (Split-Path $acrylicIni -Parent) 'AcrylicHosts.txt'
+                if (Test-Path -LiteralPath $acrylicHostsPath) {
+                    # Non-secret preview only: the whitelist hosts are lab fixtures.
+                    $dnsTopology.acrylicHostsPreview = @(Get-FileTailSafe -Path $acrylicHostsPath -Lines 2000 | Select-Object -First 20)
+                }
+            }
+        }
+        catch { }
+        try {
+            $dnsIp = ''
+            $infoFile = 'C:\OpenPathLab\first-visit\fixture.json'
+            if (Test-Path -LiteralPath $infoFile) { try { $dnsIp = [string](Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json).dnsIp } catch { } }
+            $planForDns = Get-FixturePlan
+            $anchorHost = [string]$planForDns.anchors.a1.host
+            $dnsTopology.anchorProbe = [ordered]@{ host = $anchorHost; result = (Resolve-Probe -HostName $anchorHost) }
+            if ($dnsIp) {
+                $correlateHost = 'correlate-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.' + $dnsIp + '.sslip.io'
+                $dnsTopology.correlateHost = $correlateHost
+                $dnsTopology.correlateResult = Resolve-Probe -HostName $correlateHost
+            }
+        }
+        catch { $dnsTopology.correlateError = [string]$_ }
+        $script:Body.dnsTopology = $dnsTopology
         $nativeLog = Get-NativeHostLogPath
         $lines = @(Get-LogTail -Path $nativeLog -Tail 1200)
         $live = Get-WarmupLiveSignals -Lines $lines

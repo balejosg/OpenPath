@@ -224,11 +224,15 @@ jobs:
 
       - name: Run Windows Unit Tests
         id: run-windows-unit-tests
+        # Phase 5.3 C1: a hung suite must not eat the whole job; the per-file
+        # progress artifact names the file and test that wedged.
+        timeout-minutes: 20
         shell: pwsh
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-pester-isolated.ps1 `
             -RepoRoot (Get-Location).Path `
             -ResultsPath windows-test-results-${{ matrix.shard }}.xml `
+            -ProgressPath windows-pester-progress-${{ matrix.shard }}.json `
             -TimeoutSeconds 840 `
             -ShardIndex ${{ matrix.shard }} `
             -ShardCount 5
@@ -253,6 +257,14 @@ jobs:
         shell: pwsh
         run: |
           "tests_passed=$env:TESTS_PASSED" >> $env:GITHUB_OUTPUT
+
+      - name: Upload Windows Pester progress
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-pester-progress-${{ matrix.shard }}
+          path: windows-pester-progress-${{ matrix.shard }}.json
+          if-no-files-found: warn
 
       - name: Restore self-hosted Windows runner state
         if: always()
@@ -286,11 +298,15 @@ jobs:
 
       - name: Run Windows Unit Tests
         id: run-windows-unit-tests
+        # Phase 5.3 C1: a hung suite must not eat the whole job; the per-file
+        # progress artifact names the file and test that wedged.
+        timeout-minutes: 16
         shell: pwsh
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-pester-isolated.ps1 `
             -RepoRoot (Get-Location).Path `
             -ResultsPath windows-hosted-results-${{ matrix.shard }}.xml `
+            -ProgressPath windows-hosted-pester-progress-${{ matrix.shard }}.json `
             -TimeoutSeconds 840 `
             -ShardIndex ${{ matrix.shard }} `
             -ShardCount 5
@@ -328,6 +344,14 @@ jobs:
         shell: pwsh
         run: |
           "tests_passed=$env:TESTS_PASSED" >> $env:GITHUB_OUTPUT
+
+      - name: Upload hosted Windows Pester progress
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-hosted-pester-progress-${{ matrix.shard }}
+          path: windows-hosted-pester-progress-${{ matrix.shard }}.json
+          if-no-files-found: warn
 
   # ============================================
   # Job 3: Firefox Delivery Contracts

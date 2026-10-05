@@ -592,6 +592,44 @@ function Write-OpenPathLabTestConfigFile {
         }
     }
 
+    It 'kills the guest process and never relaunches a timed-out step (Phase 5.3 B2)' {
+        InModuleScope ProxmoxWindowsLab {
+            $script:qgaCalls = New-Object System.Collections.ArrayList
+            Mock Start-Sleep { }
+            Mock Invoke-OpenPathLabSsh {
+                param($SshCommand, $SshHost, $ArgumentList, $InputText)
+                $line = ($ArgumentList -join ' ')
+                $null = $script:qgaCalls.Add($line)
+                if ($line -like '*taskkill*') { return '{"exitcode":0}' }
+                return '{"pid":4242}'
+            }
+            { Invoke-OpenPathLabQgaScript -SshCommand 'ssh' -SshHost 'lab' -Vmid 111 -PowerShell 'write-host x' -TimeoutSeconds 5 -Attempts 4 } |
+                Should -Throw '*guest-query-timeout*pid=4242 kill=ok*'
+            # Exactly two SSH calls: the timed-out exec and the taskkill. The
+            # four attempt budget must not rerun the step.
+            @($script:qgaCalls).Count | Should -Be 2
+            ($script:qgaCalls[1] -join ' ') | Should -Match 'taskkill'
+            ($script:qgaCalls[1] -join ' ') | Should -Match '/PID 4242'
+            ($script:qgaCalls[1] -join ' ') | Should -Match '/T'
+        }
+    }
+
+    It 'retries only when the guest process never started (Phase 5.3 B2)' {
+        InModuleScope ProxmoxWindowsLab {
+            $script:sshAttempts = 0
+            Mock Start-Sleep { }
+            Mock Invoke-OpenPathLabSsh {
+                param($SshCommand, $SshHost, $ArgumentList, $InputText)
+                $script:sshAttempts++
+                return 'guest agent not running: qm guest exec failed'
+            }
+            { Invoke-OpenPathLabQgaScript -SshCommand 'ssh' -SshHost 'lab' -Vmid 111 -PowerShell 'write-host x' -TimeoutSeconds 5 -Attempts 3 } |
+                Should -Throw '*guest-query-failed*'
+            # The transport error (no JSON, no pid) keeps the retry budget.
+            $script:sshAttempts | Should -Be 3
+        }
+    }
+
     It 'acceptance mode runs the matrix step sequence and emits release-eligible evidence' {
         $artifacts = New-OpenPathLabTestArtifacts -Root $TestDrive
         $harnessSource = (Resolve-Path (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\desktop-survival\Invoke-OpenPathDesktopSurvivalGuest.ps1')).Path
