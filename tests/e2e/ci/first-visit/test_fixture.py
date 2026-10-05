@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zlib
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -123,13 +124,17 @@ class FixtureServerTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def fetch(self, host: str, path: str) -> tuple[int, bytes]:
+        status, body, _headers = self.fetch_with_headers(host, path)
+        return status, body
+
+    def fetch_with_headers(self, host: str, path: str) -> tuple[int, bytes, object]:
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")
         request.add_header("Host", host)
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
-                return response.status, response.read()
+                return response.status, response.read(), response.headers
         except urllib.error.HTTPError as error:  # type: ignore[attr-defined]
-            return error.code, error.read()
+            return error.code, error.read(), error.headers
 
     def test_anchor_page_embeds_the_run_hosts_and_waves(self) -> None:
         host = self.plan["anchors"]["a1"]["host"]
@@ -153,6 +158,60 @@ class FixtureServerTests(unittest.TestCase):
         self.assertNotIn("learningNudge", text)
         self.assertNotIn("firstVisitRecovery", text)
         self.assertNotIn("location.reload()", text)
+
+
+    def test_anchor_initializes_state_before_the_synchronous_core_script(self) -> None:
+        # Phase 5.3 P2: core.js runs synchronously in <head>; __firstVisit must
+        # already exist or its first line throws and waves 1-2 never happen.
+        host = self.plan["anchors"]["a1"]["host"]
+        status, body = self.fetch(host, "/")
+        self.assertEqual(status, 200)
+        text = body.decode("utf-8")
+        init_index = text.index("window.__firstVisit = {")
+        core_index = text.index("/core.js")
+        self.assertLess(init_index, core_index, "the state init must precede core.js")
+        # The DOM-dependent half stays after the body elements exist.
+        self.assertGreater(text.index("getElementById('probe')"), text.index("<body>"))
+
+    def test_dependency_responses_carry_cors_headers(self) -> None:
+        # Phase 5.3 P2: a real CDN sends Access-Control-Allow-Origin. Without it
+        # the api.json fetch (wave 3) and the cross-origin font always failed.
+        roles = self.plan["anchors"]["a1"]["roles"]
+        for host, path in (
+            (roles["core"], "/core.js"),
+            (roles["deferred"], "/deferred.js"),
+            (roles["api"], "/api.json"),
+            (roles["font"], "/fixture-font.ttf"),
+            (roles["styles"], "/first-visit.css"),
+        ):
+            status, _body, headers = self.fetch_with_headers(host, path)
+            self.assertIn(status, (200, 503), f"{path} status")
+            self.assertEqual(
+                headers.get("Access-Control-Allow-Origin"),
+                "*",
+                f"{path} must carry Access-Control-Allow-Origin",
+            )
+
+
+    def test_pixel_asset_is_a_valid_png(self) -> None:
+        # Phase 5.3 P2: the previous pixel had a bad IDAT CRC and a truncated
+        # stream; Firefox decoded it as complete with naturalWidth=0.
+        data = fixture_server.PIXEL_PNG
+        self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+        pos = 8
+        saw_end = False
+        while pos + 12 <= len(data):
+            length = int.from_bytes(data[pos : pos + 4], "big")
+            ctype = data[pos + 4 : pos + 8]
+            chunk = data[pos + 8 : pos + 8 + length]
+            crc = int.from_bytes(data[pos + 8 + length : pos + 12 + length], "big")
+            self.assertEqual(crc, zlib.crc32(ctype + chunk) & 0xFFFFFFFF, ctype)
+            pos += 12 + length
+            if ctype == b"IEND":
+                saw_end = True
+                break
+        self.assertTrue(saw_end)
+        self.assertEqual(pos, len(data))
 
     def test_blocked_path_probe_is_served_so_only_enforcement_can_stop_it(self) -> None:
         host = self.plan["anchors"]["a1"]["host"]

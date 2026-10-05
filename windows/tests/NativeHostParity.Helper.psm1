@@ -362,12 +362,32 @@ function Compare-NativeHostParityValue {
         [AllowNull()][object]$Candidate,
         [string]$Path = '$',
         [string[]]$MaskedKeys = @(),
+        # List-shaped response keys where Windows PowerShell 5.1 references
+        # serialize an empty collection as '' while the compiled host uses [].
+        # The comparator only equates the two when BOTH sides are empty.
+        [string[]]$ListFields = @(),
         [string]$KeyName = ''
     )
 
     if ($KeyName -and $MaskedKeys -contains $KeyName) {
         # Presence must match; the value is allowed to differ.
         return ''
+    }
+    if ($KeyName -and $ListFields -contains $KeyName) {
+        # Windows PowerShell 5.1 renders an empty collection as '' or {} in
+        # different code paths; the compiled host always uses []. Only when BOTH
+        # sides are empty is the difference structural, not behavioural.
+        $referenceListEmpty = ($null -eq $Reference) -or
+            ($Reference -is [string] -and [string]$Reference -eq '') -or
+            (($Reference -is [System.Collections.IDictionary]) -and $Reference.Count -eq 0) -or
+            (($Reference -is [System.Management.Automation.PSCustomObject]) -and @($Reference.PSObject.Properties).Count -eq 0) -or
+            (($Reference -is [System.Collections.IEnumerable]) -and -not ($Reference -is [string]) -and @($Reference).Count -eq 0)
+        $candidateListEmpty = ($null -eq $Candidate) -or
+            ($Candidate -is [string] -and [string]$Candidate -eq '') -or
+            (($Candidate -is [System.Collections.IDictionary]) -and $Candidate.Count -eq 0) -or
+            (($Candidate -is [System.Management.Automation.PSCustomObject]) -and @($Candidate.PSObject.Properties).Count -eq 0) -or
+            (($Candidate -is [System.Collections.IEnumerable]) -and -not ($Candidate -is [string]) -and @($Candidate).Count -eq 0)
+        if ($referenceListEmpty -and $candidateListEmpty) { return '' }
     }
     if ($KeyName -eq 'resolved_ip') {
         # DNS answers may differ between the two host runs; require presence.
@@ -417,7 +437,7 @@ function Compare-NativeHostParityValue {
             return "$Path key-diff reference-only=[$(($missing | Sort-Object) -join ',')] candidate-only=[$(($extra | Sort-Object) -join ',')]"
         }
         foreach ($key in $referenceKeys) {
-            $child = Compare-NativeHostParityValue -Reference $Reference.$key -Candidate $Candidate.$key -Path "$Path.$key" -MaskedKeys $MaskedKeys -KeyName $key
+            $child = Compare-NativeHostParityValue -Reference $Reference.$key -Candidate $Candidate.$key -Path "$Path.$key" -MaskedKeys $MaskedKeys -ListFields $ListFields -KeyName $key
             if ($child) { return $child }
         }
         return ''
@@ -429,7 +449,7 @@ function Compare-NativeHostParityValue {
             return "$Path count reference=$($referenceItems.Count) candidate=$($candidateItems.Count)"
         }
         for ($index = 0; $index -lt $referenceItems.Count; $index++) {
-            $child = Compare-NativeHostParityValue -Reference $referenceItems[$index] -Candidate $candidateItems[$index] -Path "$Path[$index]" -MaskedKeys $MaskedKeys
+            $child = Compare-NativeHostParityValue -Reference $referenceItems[$index] -Candidate $candidateItems[$index] -Path "$Path[$index]" -MaskedKeys $MaskedKeys -ListFields $ListFields
             if ($child) { return $child }
         }
         return ''
@@ -521,6 +541,37 @@ function Set-NativeHostParityWorkerState {
     return
 }
 
+function New-NativeHostParityWorkerStateHook {
+    <#
+    .SYNOPSIS
+        Returns a BeforeCaseScripts closure that refreshes the worker state.
+    .DESCRIPTION
+        Phase 5.3 P1: do not capture `$script:` variables inside GetNewClosure;
+        the closure lives in a dynamic module with its own script scope, so it
+        only sees copies of local variables. The function parameters below are
+        locals and therefore captured correctly.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+    return ({ Set-NativeHostParityWorkerState -RepoRoot $RepoRoot -Root $Root }).GetNewClosure()
+}
+
+function Get-NativeHostParityListFields {
+    # Response keys whose empty value may serialize as '' on Windows
+    # PowerShell 5.1 references and as []/null on the compiled host. The
+    # comparator only equates the two when BOTH sides are empty (never a
+    # populated list against '').
+    return @(
+        'bootstrapHosts', 'allowedHosts', 'redirectHosts', 'resourceHosts',
+        'observedRuntimeHosts', 'pendingRuntimeHosts', 'portalRecoveryHosts',
+        'configuredCaptivePortalDomains', 'effectiveExactHosts', 'hostPids',
+        'results', 'entries', 'domains', 'requestTypes', 'ipAddresses'
+    )
+}
+
 function New-NativeHostParityProducerSequence {
     <#
     .SYNOPSIS
@@ -582,6 +633,8 @@ Export-ModuleMember -Function @(
     'New-NativeHostParityProducerSequence',
     'Set-NativeHostParityProducerFiles',
     'Set-NativeHostParityWorkerState',
+    'New-NativeHostParityWorkerStateHook',
+    'Get-NativeHostParityListFields',
     'Get-NativeHostParityMaskedKeys',
     'Start-NativeHostParityProcess',
     'Write-NativeHostParityFrame',

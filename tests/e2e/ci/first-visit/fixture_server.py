@@ -51,9 +51,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROLES = ("styles", "core", "deferred", "font", "image", "api")
 
 PIXEL_PNG = bytes.fromhex(
+    # Phase 5.3 P2: the previous bytes carried an invalid IDAT CRC and a
+    # truncated stream; PIL tolerated it but Firefox decoded "complete" with
+    # naturalWidth=0, so wave 1 could never report imageLoaded.
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
-    "890000000d49444154789c626001000000ffff03000006000557bfabd4000000"
-    "0049454e44ae426082"
+    "890000000d49444154789c63606462fe0f0001140106d6b9a645000000004945"
+    "4e44ae426082"
 )
 
 
@@ -130,6 +133,28 @@ def anchor_html(plan: dict, anchor_key: str) -> str:
     roles = entry["roles"]
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>first-visit {anchor_key}</title>
+<script>
+// Phase 5.3 P2: window.__firstVisit must exist BEFORE the synchronous core.js
+// below runs (it used to be created by the body script, so core.js threw a
+// TypeError and waves 1-2 were impossible). DOM-free state only here.
+window.__firstVisit = {{
+  schemaVersion: 1,
+  anchor: {json.dumps(anchor_key)},
+  anchorHost: {json.dumps(entry['host'])},
+  reportUrl: 'http://' + location.host + '/__report',
+  roles: {json.dumps(roles)},
+  blockedHost: {json.dumps(plan['neverLearnable'])},
+  waves: {{ cssApplied: false, fontLoaded: false, imageLoaded: false, coreExecuted: false, deferredExecuted: false, apiPainted: false, blockedCssFailed: false }},
+  blockedPath: {{ attempts: [], enforced: null, final: false }},
+  marks: {{ start: performance.now(), core: 0, deferred: 0, api: 0, load: 0 }},
+  loads: 0
+}};
+try {{
+  var fvInit = window.__firstVisit;
+  fvInit.loads = (parseInt(sessionStorage.getItem('firstVisitLoads') || '0', 10) || 0) + 1;
+  sessionStorage.setItem('firstVisitLoads', String(fvInit.loads));
+}} catch (e) {{ try {{ window.__firstVisit.loads = 1; }} catch (e2) {{}} }}
+</script>
 <link rel="stylesheet" href="http://{roles['styles']}/first-visit.css">
 <link rel="stylesheet" href="http://{plan['neverLearnable']}/never-learnable.css">
 <script src="http://{roles['core']}/core.js"></script>
@@ -142,21 +167,8 @@ def anchor_html(plan: dict, anchor_key: str) -> str:
 <img id="px" alt="" src="http://{roles['image']}/pixel.png" width="64" height="64">
 <div id="api-out">pending</div>
 <script>
-window.__firstVisit = {{
-  schemaVersion: 1,
-  anchor: {json.dumps(anchor_key)},
-  anchorHost: {json.dumps(entry['host'])},
-  reportUrl: 'http://' + location.host + '/__report',
-  roles: {json.dumps(roles)},
-  blockedHost: {json.dumps(plan['neverLearnable'])},
-  waves: {{ cssApplied: false, fontLoaded: false, imageLoaded: false, coreExecuted: false, deferredExecuted: false, apiPainted: false, blockedCssFailed: false }},
-  blockedPath: {{ attempts: [], enforced: null, final: false }},
-  marks: {{ start: 0, core: 0, deferred: 0, api: 0, load: 0 }},
-  loads: 0
-}};
 (function () {{
   var fv = window.__firstVisit;
-  fv.marks.start = performance.now();
   // Phase 5.2 E3: probe the blocked path on this allowed anchor. The request
   // type is enforced by background-path-rules.ts; only the native host can
   // supply the rules, so this is a generic host-driven path signal (DNS cannot
@@ -184,10 +196,6 @@ window.__firstVisit = {{
       setTimeout(function () {{ location.href = 'http://' + hot + '/?from=hot'; }}, after);
     }}
   }} catch (e) {{}}
-  try {{
-    fv.loads = (parseInt(sessionStorage.getItem('firstVisitLoads') || '0', 10) || 0) + 1;
-    sessionStorage.setItem('firstVisitLoads', String(fv.loads));
-  }} catch (e) {{ fv.loads = 1; }}
   function resourceEnd(haystack) {{
     var entries = performance.getEntriesByType('resource') || [];
     for (var i = 0; i < entries.length; i++) {{
@@ -370,6 +378,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # Phase 5.3 P2: a real CDN serves dependency assets with CORS enabled.
+        # Without this header the api.json fetch (wave 3) and the cross-origin
+        # web font failed on every report since Phase 3A.
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)

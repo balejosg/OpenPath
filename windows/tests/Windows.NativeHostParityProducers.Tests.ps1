@@ -19,6 +19,7 @@ $script:ProducerCases = @(New-NativeHostParityProducerSequence)
 $script:ProducerCompilerAvailable = [bool](Get-NativeHostParityCompiler)
 $script:ProducerPowerShellAvailable = [bool](Get-NativeHostParityWindowsPowerShellPath)
 $script:ProducerMaskedKeys = @(Get-NativeHostParityMaskedKeys)
+        $script:ProducerListFields = @(Get-NativeHostParityListFields)
 
 Describe 'Native host parity on producer files (Phase 5.3 A4)' {
     BeforeAll {
@@ -26,6 +27,7 @@ Describe 'Native host parity on producer files (Phase 5.3 A4)' {
         $script:ProducerCompilerAvailable = [bool](Get-NativeHostParityCompiler)
         $script:ProducerPowerShellAvailable = [bool](Get-NativeHostParityWindowsPowerShellPath)
         $script:ProducerMaskedKeys = @(Get-NativeHostParityMaskedKeys)
+        $script:ProducerListFields = @(Get-NativeHostParityListFields)
         $script:ProducerRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
         # 1) Sentinel scheduled task with the apply task name, created only when
@@ -56,11 +58,14 @@ Describe 'Native host parity on producer files (Phase 5.3 A4)' {
             # The worker freshness window is 10 s: refresh the heartbeat with the
             # real writer right before every case that depends on it, in both
             # sessions (the sessions run minutes apart).
+            # Phase 5.3 P1: capture the values as function parameters, never
+            # `$script:` inside a closure (dynamic module scope).
+            $parityRepoRoot = $script:ProducerRepoRoot
+            $parityReferenceRoot = $script:ProducerReferenceFixture.Root
+            $parityCandidateRoot = $script:ProducerCandidateFixture.Root
             $script:ProducerFreshCases = @{}
             foreach ($caseName in @('probe-dependency-enqueue-pending', 'probe-dependency-queue-dedup', 'probe-dependency-fresh-worker-blocking')) {
-                $script:ProducerFreshCases[$caseName] = {
-                    Set-NativeHostParityWorkerState -RepoRoot $script:ProducerRepoRoot -Root $script:ProducerReferenceFixture.Root
-                }.GetNewClosure()
+                $script:ProducerFreshCases[$caseName] = New-NativeHostParityWorkerStateHook -RepoRoot $parityRepoRoot -Root $parityReferenceRoot
             }
             $script:ProducerReferenceResponses = @(Invoke-NativeHostParitySession `
                     -FilePath $script:ProducerHostCommand.FilePath `
@@ -78,9 +83,7 @@ Describe 'Native host parity on producer files (Phase 5.3 A4)' {
                 $candidateTouch = @{ 'probe-recover-recent-success' = (Join-Path $script:ProducerCandidateFixture.Data 'captive-portal-active.json') }
                 $candidateFreshCases = @{}
                 foreach ($caseName in @('probe-dependency-enqueue-pending', 'probe-dependency-queue-dedup', 'probe-dependency-fresh-worker-blocking')) {
-                    $candidateFreshCases[$caseName] = {
-                        Set-NativeHostParityWorkerState -RepoRoot $script:ProducerRepoRoot -Root $script:ProducerCandidateFixture.Root
-                    }.GetNewClosure()
+                    $candidateFreshCases[$caseName] = New-NativeHostParityWorkerStateHook -RepoRoot $parityRepoRoot -Root $parityCandidateRoot
                 }
                 $script:ProducerCandidateResponses = @(Invoke-NativeHostParitySession `
                         -FilePath $script:ProducerCompiledExecutable `
@@ -139,7 +142,7 @@ Describe 'Native host parity on producer files (Phase 5.3 A4)' {
             $reference.Count | Should -Be 1
             $candidate.Count | Should -Be 1
             $candidate[0].response | Should -Not -BeNullOrEmpty -Because $ParityCase.name
-            $difference = Compare-NativeHostParityValue -Reference $reference[0].response -Candidate $candidate[0].response -MaskedKeys $script:ProducerMaskedKeys
+            $difference = Compare-NativeHostParityValue -Reference $reference[0].response -Candidate $candidate[0].response -MaskedKeys $script:ProducerMaskedKeys -ListFields $script:ProducerListFields
             if ($difference) {
                 Write-Host ("PARITY-DIFF " + $ParityCase.name + " :: " + $difference)
                 Write-Host ("PARITY-REF " + $ParityCase.name + " :: " + (($reference[0].response | ConvertTo-Json -Depth 10 -Compress)))

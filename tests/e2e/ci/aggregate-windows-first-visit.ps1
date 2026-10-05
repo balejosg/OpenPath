@@ -45,6 +45,22 @@ function Format-FirstVisitMeasure {
 
 $attemptRoot = Join-Path (Join-Path $EvidenceRoot $RunId) ([string]$RunAttempt)
 if (-not (Test-Path -LiteralPath $attemptRoot -PathType Container)) { throw 'first-visit-evidence-root-missing' }
+# Phase 5.3 P3: the template SHA travels in every phase file (sourceCommitSha).
+$templateSha = ''
+foreach ($templateScenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | Sort-Object Name)) {
+    if ($templateSha) { break }
+    foreach ($phaseName in @('prepare.json', 'observe.json')) {
+        $phaseCandidate = Join-Path $templateScenarioDir.FullName $phaseName
+        if (-not (Test-Path -LiteralPath $phaseCandidate -PathType Leaf)) { continue }
+        try {
+            $phaseObject = Get-Content -LiteralPath $phaseCandidate -Raw | ConvertFrom-Json
+            $candidateSha = [string](Get-FirstVisitProperty -InputObject $phaseObject -Name 'sourceCommitSha' -Default '')
+            if ($candidateSha) { $templateSha = $candidateSha; break }
+        }
+        catch { }
+    }
+}
+$templateLag = if ($env:OPENPATH_TEMPLATE_LAG -match '^[0-9]+$') { [int]$env:OPENPATH_TEMPLATE_LAG } else { -1 }
 $rows = @()
 foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | Sort-Object Name)) {
     $metricsPath = Join-Path $scenarioDir.FullName 'metrics.json'
@@ -251,6 +267,8 @@ $summary = [ordered]@{
     runId         = $RunId
     runAttempt    = $RunAttempt
     generatedAt   = [DateTime]::UtcNow.ToString('o')
+    templateSha   = $templateSha
+    templateLag   = $templateLag
     scenarios     = $rows
     baselines     = $baselines
 }
@@ -262,6 +280,8 @@ $lines = @(
     '# First-visit lane summary',
     '',
     "Run: $RunId attempt $RunAttempt - overall: $statusOverall",
+    '',
+    "- Template: $templateSha (lag $templateLag successful main RELs)",
     '',
     '| scenario | verdict | category | observe | evidence | blocked path | probe | reasons | error | product reasons | reloads | wave1 ms | visit delay s |',
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'

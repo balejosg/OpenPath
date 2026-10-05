@@ -1041,13 +1041,18 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
         }
 
         It 'Reads id (not database_id) and skips candidates without the template artifact' {
-            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":111,"database_id":null,"head_sha":"sha-111"},{"id":222,"database_id":null,"head_sha":"sha-222"}]}' | ConvertFrom-Json
-            $script:FirstVisitTemplateArtifacts111 = '{"artifacts":[{"name":"windows-personalized-exe"}]}' | ConvertFrom-Json
+            # Phase 5.3 P3: completed listing + client-side conclusion filter.
+            $script:FirstVisitTemplateListing = '{"workflow_runs":[
+                {"id":111,"database_id":null,"head_sha":"sha-111","conclusion":"failure"},
+                {"id":112,"database_id":null,"head_sha":"sha-112","conclusion":"success"},
+                {"id":222,"database_id":null,"head_sha":"sha-222","conclusion":"success"}
+            ]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateArtifacts112 = '{"artifacts":[{"name":"windows-personalized-exe"}]}' | ConvertFrom-Json
             $script:FirstVisitTemplateArtifacts222 = '{"artifacts":[{"name":"windows-offline-template"}]}' | ConvertFrom-Json
             $api = {
                 param($url)
-                if ($url -match '/release-scripts\.yml/runs\?branch=main&status=success') { return $script:FirstVisitTemplateListing }
-                if ($url -match '/runs/111/artifacts') { return $script:FirstVisitTemplateArtifacts111 }
+                if ($url -match '/release-scripts\.yml/runs\?branch=main&per_page=50') { return $script:FirstVisitTemplateListing }
+                if ($url -match '/runs/112/artifacts') { return $script:FirstVisitTemplateArtifacts112 }
                 if ($url -match '/runs/222/artifacts') { return $script:FirstVisitTemplateArtifacts222 }
                 throw "unexpected-url:$url"
             }
@@ -1055,16 +1060,20 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
             $resolved.runId | Should -Be '222'
             $resolved.templateSha | Should -Be 'sha-222'
             $resolved.candidates | Should -Be 2
+            # 112 is a newer success without the artifact: the resolved run is
+            # one successful run behind the newest.
+            $resolved.lag | Should -Be 1
+            $resolved.newestSuccessRunId | Should -Be '112'
         }
 
         It 'Resolves a dispatch by run id and by target SHA' {
             $script:FirstVisitTemplateRun = '{"id":777,"head_sha":"sha-777"}' | ConvertFrom-Json
-            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":777,"head_sha":"sha-777"}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":777,"head_sha":"sha-777","conclusion":"success"}]}' | ConvertFrom-Json
             $script:FirstVisitTemplateArtifacts = '{"artifacts":[{"name":"windows-offline-template"}]}' | ConvertFrom-Json
             $api = {
                 param($url)
                 if ($url -match '/actions/runs/777$') { return $script:FirstVisitTemplateRun }
-                if ($url -match 'head_sha=sha-777&status=success') { return $script:FirstVisitTemplateListing }
+                if ($url -match 'head_sha=sha-777&per_page=50') { return $script:FirstVisitTemplateListing }
                 if ($url -match '/runs/777/artifacts') { return $script:FirstVisitTemplateArtifacts }
                 throw "unexpected-url:$url"
             }
@@ -1077,7 +1086,7 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
         }
 
         It 'Fails with a clear INFRA code when no candidate keeps the artifact' {
-            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":9,"database_id":null}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":9,"database_id":null,"conclusion":"success"}]}' | ConvertFrom-Json
             $script:FirstVisitTemplateArtifacts = '{"artifacts":[]}' | ConvertFrom-Json
             $api = {
                 param($url)

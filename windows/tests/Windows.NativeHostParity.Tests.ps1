@@ -13,6 +13,7 @@ Import-Module (Join-Path $PSScriptRoot 'NativeHostParity.Helper.psm1') -Force
 $script:ParityCases = @(New-NativeHostParitySequence)
 $script:ParityCompilerAvailable = [bool](Get-NativeHostParityCompiler)
 $script:ParityMaskedKeys = @(Get-NativeHostParityMaskedKeys)
+$script:ParityListFields = @(Get-NativeHostParityListFields)
 
 Describe 'Native host parity (Phase 5 B1)' {
     BeforeAll {
@@ -20,6 +21,7 @@ Describe 'Native host parity (Phase 5 B1)' {
         $script:ParityCases = @(New-NativeHostParitySequence)
         $script:ParityCompilerAvailable = [bool](Get-NativeHostParityCompiler)
         $script:ParityMaskedKeys = @(Get-NativeHostParityMaskedKeys)
+$script:ParityListFields = @(Get-NativeHostParityListFields)
         $script:ParityRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
         $script:ParityHostCommand = Get-NativeHostParityHostCommand
         $script:ParityReferenceFixture = New-NativeHostParityFixture -RepoRoot $script:ParityRepoRoot -Root (Join-Path $TestDrive 'parity-reference')
@@ -115,12 +117,47 @@ Describe 'Native host parity (Phase 5 B1)' {
         }
     }
 
+    Context 'Hook mechanism (Phase 5.3 P1)' {
+        It 'Runs BeforeCaseScripts before the matching case on every platform' {
+            # The mechanism must be exercised on Linux too: the producer suite
+            # (which needs powershell.exe) used to hide this until CI.
+            $hookFixture = New-NativeHostParityFixture -RepoRoot $script:ParityRepoRoot -Root (Join-Path $TestDrive 'hook-fixture')
+            $statePath = Join-Path $hookFixture.Native 'native-state.json'
+            $cases = @(
+                @{ name = 'hook-before'; message = @{ action = 'get-config' } },
+                @{ name = 'hook-after'; message = @{ action = 'get-config' } }
+            )
+            $hooks = @{}
+            $hooks['hook-after'] = { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }.GetNewClosure()
+            $responses = @(Invoke-NativeHostParitySession `
+                    -FilePath $script:ParityHostCommand.FilePath `
+                    -Arguments (@($script:ParityHostCommand.Arguments) + (Join-Path $hookFixture.Native 'OpenPath-NativeHost.ps1')) `
+                    -Cases $cases `
+                    -PerMessageTimeoutSeconds 60 `
+                    -BeforeCaseScripts $hooks)
+            $responses[0].response.success | Should -BeTrue -Because 'the state is still present before the hook'
+            $responses[1].response.success | Should -BeFalse -Because 'the hook removed native-state.json before the second case'
+            ([string]$responses[1].response.error) | Should -Match 'not configured'
+        }
+    }
+
     Context 'Comparison rules' {
         It 'Treats a single-element array and its element as equivalent' {
             (Compare-NativeHostParityValue -Reference @('one') -Candidate 'one') | Should -Be ''
             (Compare-NativeHostParityValue -Reference 'one' -Candidate @('one')) | Should -Be ''
             (Compare-NativeHostParityValue -Reference @('one', 'two') -Candidate 'one') | Should -Not -Be ''
             (Compare-NativeHostParityValue -Reference 'one' -Candidate 'two') | Should -Not -Be ''
+        }
+
+        It 'Equates an empty string, empty object and empty list on list fields only (Phase 5.3 P1)' {
+            $listFields = @(Get-NativeHostParityListFields)
+            (Compare-NativeHostParityValue -Reference '' -Candidate @() -KeyName 'bootstrapHosts' -ListFields $listFields) | Should -Be ''
+            (Compare-NativeHostParityValue -Reference @() -Candidate $null -KeyName 'bootstrapHosts' -ListFields $listFields) | Should -Be ''
+            # Windows PowerShell 5.1 renders empty recovery lists as {}.
+            (Compare-NativeHostParityValue -Reference ('{}' | ConvertFrom-Json) -Candidate @() -KeyName 'bootstrapHosts' -ListFields $listFields) | Should -Be ''
+            (Compare-NativeHostParityValue -Reference ('{}' | ConvertFrom-Json) -Candidate 'portal.parity.invalid' -KeyName 'bootstrapHosts' -ListFields $listFields) | Should -Not -Be ''
+            (Compare-NativeHostParityValue -Reference '' -Candidate @('x') -KeyName 'bootstrapHosts' -ListFields $listFields) | Should -Not -Be ''
+            (Compare-NativeHostParityValue -Reference '' -Candidate @() -KeyName 'someOtherField' -ListFields $listFields) | Should -Not -Be ''
         }
 
         It 'Treats null and an empty array as equivalent but not a value' {
@@ -152,7 +189,7 @@ Describe 'Native host parity (Phase 5 B1)' {
             $reference.Count | Should -Be 1
             $candidate.Count | Should -Be 1
             $candidate[0].response | Should -Not -BeNullOrEmpty -Because $ParityCase.name
-            $difference = Compare-NativeHostParityValue -Reference $reference[0].response -Candidate $candidate[0].response -MaskedKeys $script:ParityMaskedKeys
+            $difference = Compare-NativeHostParityValue -Reference $reference[0].response -Candidate $candidate[0].response -MaskedKeys $script:ParityMaskedKeys -ListFields $script:ParityListFields
             if ($difference) {
                 # Full evidence in the job log: the assertion message is budget-capped.
                 Write-Host ("PARITY-DIFF " + $ParityCase.name + " :: " + $difference)

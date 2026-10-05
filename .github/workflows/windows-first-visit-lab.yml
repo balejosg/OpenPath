@@ -141,11 +141,24 @@ jobs:
             Write-Error "INFRA: no successful release-scripts run with windows-offline-template ($($_.Exception.Message))."
             exit 2
           }
+          # Phase 5.3 P3: the latest mode must pick the newest successful main
+          # run; anything newer without the template is a real lag and makes
+          # the lane INFRA (the old branch+status=success query returned stale
+          # runs and the lane measured a product from 2026-10-03).
+          $lag = 0
+          if ($resolved.PSObject.Properties['lag']) { $lag = [int]$resolved.lag }
+          Write-Host "Template resolver: mode=$($resolved.mode) run=$($resolved.runId) sha=$($resolved.templateSha) lag=$lag newest_success=$($resolved.newestSuccessRunId)"
+          if ($plan.mode -eq 'latest' -and $lag -gt 0) {
+            Write-Error "INFRA: the newest successful main release-scripts run is $($resolved.newestSuccessRunId); resolved $($resolved.runId) is $lag successful run(s) behind."
+            exit 2
+          }
           # The live-signal capabilities must be derived from the template's own
           # SHA, not from the checkout: a red build cannot emit signals it never
           # shipped (Phase 3A.2 K1 gating).
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "run_id=$($resolved.runId)"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "template_sha=$($resolved.templateSha)"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "template_lag=$lag"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Template: $($resolved.runId) sha $($resolved.templateSha) (mode $($resolved.mode), lag $lag)"
           Write-Host "Using release-scripts run $($resolved.runId) (template sha $($resolved.templateSha), mode $($resolved.mode))"
 
       - name: Download exact candidate artifacts
@@ -220,6 +233,8 @@ jobs:
       - name: Aggregate results
         if: always() && steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'
         shell: pwsh
+        env:
+          OPENPATH_TEMPLATE_LAG: ${{ steps.template.outputs.template_lag }}
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'openpath-first-visit'
           $summaryJson = Join-Path $root 'first-visit-summary.json'

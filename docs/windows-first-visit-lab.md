@@ -47,7 +47,26 @@ docstring for the exact path).
 
 The served whitelist contains only the two anchors (plus every dependency host
 in the `floor` scenario, Phase 5.3 B4); the never-learnable host is listed under
-`## BLOCKED-SUBDOMAINS`. `tests/e2e/ci/first-visit/test_fixture.py`
+`## BLOCKED-SUBDOMAINS`.
+
+### Browser logic check (mandatory local verification, Phase 5.3 P2)
+
+`tests/e2e/ci/first-visit/test_fixture_browser.mjs` loads the fixture page in
+floor mode with Playwright Firefox (every fixture hostname is routed back to
+the local fixture with the original `Host` header, and the real CDN
+`Access-Control-Allow-Origin` responses are exercised) and requires all three
+waves plus `fontLoaded`. There is no Firefox job in CI, so run it before any
+change to the fixture:
+
+```bash
+node tests/e2e/ci/first-visit/test_fixture_browser.mjs
+```
+
+It exits non-zero and prints the observed flags when a wave is missing. The
+Phase 5.3 red reference is the `dec79a43` fixture (`coreExecuted`,
+`deferredExecuted`, `apiPainted` and `imageLoaded` all false: the synchronous
+`core.js` ran before the page defined `window.__firstVisit` and the image PNG
+had an invalid CRC). `tests/e2e/ci/first-visit/test_fixture.py`
 covers the plan, routing, report and log contracts, and
 `windows/tests/Windows.FirstVisitLane.Tests.ps1` proves the fixture-shaped hosts
 are learnable (and the never-learnable one is not) under

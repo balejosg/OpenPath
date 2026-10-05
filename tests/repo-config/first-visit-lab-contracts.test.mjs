@@ -129,6 +129,17 @@ describe('first-visit lane contract', () => {
     assert.doesNotMatch(templateCode, /database_id/u);
     assert.match(templateCode, /Get-FirstVisitTemplateField -InputObject \$RunEntry -Name 'id'/u);
     assert.match(template, /first-visit-template-not-found/u);
+    // Phase 5.3 P3: never the combined branch/head_sha + status=success listing
+    // (it returned stale runs); filter conclusion=success client-side and
+    // enforce the lag.
+    assert.doesNotMatch(templateCode, /status=success/u);
+    assert.match(templateCode, /branch=main&per_page=50/u);
+    assert.match(templateCode, /conclusion/u);
+    assert.match(workflow, /template_lag/u);
+    assert.match(workflow, /successful run\(s\) behind/u);
+    const aggregate = read('tests/e2e/ci/aggregate-windows-first-visit.ps1');
+    assert.match(aggregate, /templateSha/u);
+    assert.match(aggregate, /Template: \$templateSha \(lag \$templateLag/u);
   });
 
   test('no guest step can lose its result', () => {

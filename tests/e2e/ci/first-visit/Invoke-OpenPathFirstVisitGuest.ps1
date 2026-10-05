@@ -1193,10 +1193,17 @@ switch ($Step) {
             }
             if ($acrylicIni) {
                 $dnsTopology.acrylicIniPath = $acrylicIni
+                # Phase 5.3 P4: capture the upstreams (primary, secondary and the
+                # optional portal ones) AND the domain affinity masks, not only
+                # the keys that happened to exist. Values are non-secret lab
+                # addresses/domain masks.
                 $acrylic = [ordered]@{}
                 foreach ($line in @(Get-FileTailSafe -Path $acrylicIni -Lines 500)) {
-                    if ($line -match '^\s*(PrimaryServerAddress|SecondaryServerAddress|UseWindowsHostsFile|Enable)\s*=\s*(.*)$') {
-                        $acrylic[$Matches[1]] = $Matches[2].Trim()
+                    if ($line -match '^\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+                        $key = $Matches[1]
+                        if ($key -match 'ServerAddress$|DomainNameAffinityMask$|QueryTypeAffinityMask$|UseWindowsHostsFile$|^Enable$|AddressCache') {
+                            $acrylic[$key] = ([string]$Matches[2]).Trim()
+                        }
                     }
                 }
                 $dnsTopology.acrylic = $acrylic
@@ -1215,10 +1222,25 @@ switch ($Step) {
             $planForDns = Get-FixturePlan
             $anchorHost = [string]$planForDns.anchors.a1.host
             $dnsTopology.anchorProbe = [ordered]@{ host = $anchorHost; result = (Resolve-Probe -HostName $anchorHost) }
+            # Phase 5.3 P4: the anchor resolves through the static AcrylicHosts
+            # entry (embedded IPv4); show the line when present.
+            if ($dnsTopology.acrylicHostsPreview) {
+                $dnsTopology.anchorStaticHostLine = @($dnsTopology.acrylicHostsPreview | Where-Object { $_ -match [regex]::Escape($anchorHost) } | Select-Object -First 2)
+            }
             if ($dnsIp) {
                 $correlateHost = 'correlate-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.' + $dnsIp + '.sslip.io'
                 $dnsTopology.correlateHost = $correlateHost
-                $dnsTopology.correlateResult = Resolve-Probe -HostName $correlateHost
+                # Direct query to the fixture (the only path that must appear in
+                # dns.jsonl); the system-resolver result is recorded separately
+                # and is expected to stay unresolved (not in the affinity mask).
+                $direct = [ordered]@{ resolves = $false; ips = @() }
+                try {
+                    $answers = @(Resolve-DnsName -Name $correlateHost -Server $dnsIp -Type A -DnsOnly -ErrorAction Stop | Where-Object { $_.Type -eq 'A' })
+                    if ($answers.Count -gt 0) { $direct.resolves = $true; $direct.ips = @($answers | ForEach-Object { $_.IPAddress }) }
+                }
+                catch { $direct.error = [string]$_ }
+                $dnsTopology.correlateDirect = $direct
+                $dnsTopology.correlateSystem = Resolve-Probe -HostName $correlateHost
             }
         }
         catch { $dnsTopology.correlateError = [string]$_ }

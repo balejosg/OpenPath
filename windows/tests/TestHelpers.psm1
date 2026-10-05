@@ -1,6 +1,8 @@
 # Shared OpenPath Windows Pester helpers
 
-$script:modulePath = Join-Path $PSScriptRoot ".." "lib"
+# Phase 5.3: nested 2-argument Join-Path (Windows PowerShell 5.1 has no
+# multi-path overload; the lab run executes this suite under 5.1).
+$script:modulePath = Join-Path (Join-Path $PSScriptRoot "..") "lib"
 
 # Must be at module scope so -Skip checks can use the helpers during discovery.
 function Test-FunctionExists {
@@ -120,7 +122,7 @@ function Get-ContractFixturePath {
         [string]$FileName
     )
 
-    $contractsDir = Join-Path $PSScriptRoot '..' '..' 'tests' 'contracts'
+    $contractsDir = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') '..') 'tests') 'contracts'
     $fixturePath = Join-Path $contractsDir $FileName
 
     if (-not (Test-Path $fixturePath)) {
