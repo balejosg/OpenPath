@@ -900,6 +900,20 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             @($parsed.body.bodySerializationFailures).Count | Should -Be 0
         }
 
+        It 'Bounds huge strings and arrays before serializing (Phase 5.2)' {
+            $big = 'x' * 20000
+            $many = @(1..5000 | ForEach-Object { "item-$_" })
+            $limited = Limit-FirstVisitResultValue -Value ([ordered]@{ big = $big; many = $many; keep = 'ok' }) -MaxStringChars 100 -MaxItems 10
+            $limited.big.Length | Should -BeLessOrEqual 113
+            $limited.big | Should -Match 'truncated'
+            @($limited.many).Count | Should -Be 10
+            $limited.keep | Should -Be 'ok'
+            # The serialized payload stays small (the PS 5.1 serializer wedged
+            # for >500 s on the unbounded collect body in the acceptance runs).
+            $json = ConvertTo-FirstVisitResultJson -Payload ([ordered]@{ status = 'passed'; step = 'collect'; failures = @(); body = [ordered]@{ state = [ordered]@{ big = $big; many = $many } } }) -MaxInlineBytes 0
+            $json.Length | Should -BeLessThan 40000
+        }
+
         It 'Splits an unserializable dictionary so healthy children still arrive' {
             $probe = {
                 param($value)

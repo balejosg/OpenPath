@@ -22,8 +22,56 @@ function Get-FirstVisitResultField {
     return $property.Value
 }
 
-function Test-FirstVisitSerializableValue {
-    param([AllowNull()][object]$Value, [int]$Depth = 12)
+function Limit-FirstVisitResultValue {
+    <#
+    .SYNOPSIS
+    Bounds strings and collections before serialization.
+    .DESCRIPTION
+    Phase 5.2: the Phase 5.2 acceptance runs spent >500 s inside the PS 5.1
+    serializer on an unbounded collect body (extension diagnostics). Every
+    value that reaches ConvertTo-FirstVisitResultJson is capped here so the
+    serializer cost is linear and bounded.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Value,
+        [int]$MaxStringChars = 8192,
+        [int]$MaxItems = 2000,
+        [int]$Depth = 0
+    )
+    if ($null -eq $Value -or $Depth -gt 8) { return $Value }
+    if ($Value -is [string]) {
+        if ($Value.Length -gt $MaxStringChars) { return $Value.Substring(0, $MaxStringChars) + '...truncated' }
+        return $Value
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $limited = [ordered]@{}
+        foreach ($key in @($Value.Keys)) {
+            # Read the child directly: Get-FirstVisitResultField (and an
+            # if-statement RHS) unrolls an empty array to no output, which
+            # would turn [] into null here.
+            $childValue = $Value[$key]
+            $limited[[string]$key] = Limit-FirstVisitResultValue -Value $childValue -MaxStringChars $MaxStringChars -MaxItems $MaxItems -Depth ($Depth + 1)
+        }
+        return $limited
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $items = New-Object System.Collections.ArrayList
+        $count = 0
+        foreach ($item in $Value) {
+            if ($count -ge $MaxItems) { break }
+            $null = $items.Add((Limit-FirstVisitResultValue -Value $item -MaxStringChars $MaxStringChars -MaxItems $MaxItems -Depth ($Depth + 1)))
+            $count += 1
+        }
+        # Preserve empty arrays as empty arrays (a plain 'return @()' unrolls to
+        # no output and the caller would store $null, changing [] into null).
+        $array = [object[]]$items.ToArray()
+        return ,$array
+    }
+    return $Value
+}
+
+function Test-FirstVisitSerializableValue {    param([AllowNull()][object]$Value, [int]$Depth = 12)
     try {
         $probe = [ordered]@{ value = $Value }
         $json = $probe | ConvertTo-Json -Depth $Depth -Compress
@@ -86,6 +134,8 @@ function ConvertTo-FirstVisitResultJson {
         [scriptblock]$SerializableProbe = $null
     )
     $customProbe = $null -ne $SerializableProbe
+    # Phase 5.2: bound the payload before any ConvertTo-Json attempt.
+    $Payload = Limit-FirstVisitResultValue -Value $Payload
     if (-not $customProbe) {
         try {
             $json = $Payload | ConvertTo-Json -Depth 12 -Compress
@@ -280,4 +330,4 @@ function Resolve-FirstVisitGuestResult {
     return [pscustomobject][ordered]@{ json = $null; source = ''; stdoutValid = $false; fileValid = $false; error = 'first-visit-guest-result-missing' }
 }
 
-Export-ModuleMember -Function ConvertTo-FirstVisitResultJson, Get-FirstVisitResultFromOutput, Resolve-FirstVisitGuestResult, Test-FirstVisitSerializableValue, Get-FirstVisitSerializationError
+Export-ModuleMember -Function ConvertTo-FirstVisitResultJson, Get-FirstVisitResultFromOutput, Resolve-FirstVisitGuestResult, Test-FirstVisitSerializableValue, Get-FirstVisitSerializationError, Limit-FirstVisitResultValue

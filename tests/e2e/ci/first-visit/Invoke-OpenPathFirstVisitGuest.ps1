@@ -1030,6 +1030,12 @@ switch ($Step) {
         $firefoxProcesses = @()
         if (& $budgetExceeded) { $skippedBlocks.Add('firefoxProcesses') | Out-Null } else { $firefoxProcesses = @(Get-FirefoxProcesses); & $lap 'processesMs' }
         $timings.skippedBlocks = @($skippedBlocks.ToArray())
+        $truncateLine = {
+            param([AllowNull()][string]$Line, [int]$Max = 600)
+            if ($null -eq $Line) { return '' }
+            if ($Line.Length -gt $Max) { return $Line.Substring(0, $Max) + '...' }
+            return $Line
+        }
         $script:Body.collect.diagnostics = [ordered]@{
             lines                = $diagnostics.Count
             hostStarted          = $liveCollect.hostStarted
@@ -1039,19 +1045,23 @@ switch ($Step) {
             holdOutcomes         = @($diagnostics | Where-Object { $_ -match 'kind":"hold-outcome' }).Count
             reloadDecisions      = @($diagnostics | Where-Object { $_ -match 'kind":"reload-decision' }).Count
             reloadReasons        = $reloadReasons
-            all                  = @($diagnostics | Select-Object -First 1000)
+            # Phase 5.2: the payload is bounded so the PS 5.1 serializer can
+            # never wedge on a big diagnostic set (the acceptance runs spent
+            # >500 s serializing an unbounded collect body).
+            all                  = @($diagnostics | Select-Object -First 120 | ForEach-Object { & $truncateLine $_ 600 })
         }
-        $script:Body.collect.addonsLog = @($addonsLog | Select-Object -First 30)
-        $script:Body.collect.mozExtract = @($mozExtract | Select-Object -First 600)
+        $script:Body.collect.addonsLog = @($addonsLog | Select-Object -First 30 | ForEach-Object { & $truncateLine $_ 300 })
+        $script:Body.collect.mozExtract = @($mozExtract | Select-Object -First 200 | ForEach-Object { & $truncateLine $_ 300 })
         $script:Body.collect.diagnosticLines = $diagnostics.Count
-        $script:Body.collect.diagnosticSample = @($diagnostics | Select-Object -First 40)
-        $script:Body.collect.startupProfiles = @($profiles | Select-Object -Last 8)
-        $script:Body.collect.nativeHostTail = @($nativeHost | Select-Object -Last 120)
-        $script:Body.collect.openpathTail = @($openpath | Select-Object -Last 80)
+        $script:Body.collect.diagnosticSample = @($diagnostics | Select-Object -First 20 | ForEach-Object { & $truncateLine $_ 600 })
+        $script:Body.collect.startupProfiles = @($profiles | Select-Object -Last 8 | ForEach-Object { & $truncateLine $_ 600 })
+        $script:Body.collect.nativeHostTail = @($nativeHost | Select-Object -Last 40 | ForEach-Object { & $truncateLine $_ 600 })
+        $script:Body.collect.openpathTail = @($openpath | Select-Object -Last 30 | ForEach-Object { & $truncateLine $_ 600 })
+        if ($workerState -and $workerState.Length -gt 16384) { $workerState = $workerState.Substring(0, 16384) + '...truncated' }
         $script:Body.collect.workerState = $workerState
-        $script:Body.collect.overlayHosts = @($overlayHosts)
-        $script:Body.collect.whitelistMirror = @($whitelistMirror)
-        $script:Body.collect.firefoxProcesses = @($firefoxProcesses)
+        $script:Body.collect.overlayHosts = @($overlayHosts | Select-Object -First 100)
+        $script:Body.collect.whitelistMirror = @($whitelistMirror | Select-Object -First 40 | ForEach-Object { & $truncateLine $_ 160 })
+        $script:Body.collect.firefoxProcesses = @($firefoxProcesses | Select-Object -First 20)
         # Time one reduced serialization of the payload; the real serialization
         # in Complete-Step then runs with the measured value included.
         $pending = Get-StepResultPayload

@@ -130,6 +130,10 @@ class FixtureServerTests(unittest.TestCase):
         self.assertIn("/blocked-path/probe.bin", text)
         self.assertIn("blockedPathEnforced", text)
         self.assertIn("blockedPathFinal", text)
+        # Phase 5.2: the dependency learning nudge + single repair reload.
+        self.assertIn("learningNudge", text)
+        self.assertIn("firstVisitRecovery", text)
+        self.assertIn("location.reload()", text)
 
     def test_blocked_path_probe_is_served_so_only_enforcement_can_stop_it(self) -> None:
         host = self.plan["anchors"]["a1"]["host"]

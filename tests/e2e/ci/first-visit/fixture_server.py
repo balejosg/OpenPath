@@ -219,6 +219,29 @@ window.__firstVisit = {{
     }} catch (e) {{}}
   }}
   window.__firstVisitSend = send;
+  // Phase 5.2: the first visit holds unknown dependency requests for the
+  // product's learning budget; the compiled host answers the learning batch,
+  // but the held requests may already have been cancelled. Nudge every
+  // dependency host once (so the batch learns them all) and then recover the
+  // visit with a single repair reload after the learning window. This is the
+  // fixture's "the page may recover via its own effort" path.
+  function learningNudge(host) {{
+    try {{ fetch('http://' + host + '/__ping', {{ mode: 'no-cors', cache: 'no-store' }}).catch(function () {{}}); }} catch (e) {{}}
+  }}
+  learningNudge(fv.roles.styles);
+  learningNudge(fv.roles.core);
+  learningNudge(fv.roles.deferred);
+  learningNudge(fv.roles.font);
+  learningNudge(fv.roles.image);
+  learningNudge(fv.roles.api);
+  try {{
+    if (!sessionStorage.getItem('firstVisitRecovery')) {{
+      setTimeout(function () {{
+        try {{ sessionStorage.setItem('firstVisitRecovery', '1'); }} catch (e) {{}}
+        location.reload();
+      }}, 20000);
+    }}
+  }} catch (e) {{}}
   probeBlockedPath();
   setTimeout(probeBlockedPath, 2000);
   setTimeout(probeBlockedPath, 4000);
