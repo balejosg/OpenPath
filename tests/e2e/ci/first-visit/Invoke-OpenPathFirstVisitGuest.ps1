@@ -475,7 +475,9 @@ function Resolve-Probe {
 function Get-OverlayHosts {
     try {
         Import-Module "$OpenPathRoot\lib\Common.psm1" -Force -Global -ErrorAction SilentlyContinue
-        $path = Get-OpenPathCapabilityStoragePath
+        # Phase 5.3: Get-OpenPathCapabilityStoragePath without -Name fails
+        # ValidateSet and returned an empty list; the data dir is the root.
+        $path = Get-OpenPathCapabilityStorageRoot
         $overlayFile = Join-Path $path 'runtime-dependency-overlay.json'
         if (-not (Test-Path -LiteralPath $overlayFile)) { return @() }
         $overlay = Get-Content -LiteralPath $overlayFile -Raw | ConvertFrom-Json

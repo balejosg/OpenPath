@@ -1,3 +1,5 @@
+Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
+
 Describe "Platform script composition" {
     It "Routes update runtime helpers through the shared module" {
         $updateScriptPath = Join-Path $PSScriptRoot ".." "scripts" "Update-OpenPath.ps1"

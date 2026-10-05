@@ -1,3 +1,5 @@
+Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
+
 Describe "DNS Module - Install Contracts" {
     BeforeAll {
         $modulePath = Join-Path $PSScriptRoot ".." "lib"

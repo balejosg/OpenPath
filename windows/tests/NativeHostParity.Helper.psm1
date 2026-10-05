@@ -240,7 +240,19 @@ function Start-NativeHostParityProcess {
     )
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
-    foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+    if ($startInfo.PSObject.Properties['ArgumentList']) {
+        # .NET Core / PowerShell 7.
+        foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
+    }
+    else {
+        # Windows PowerShell 5.1 (.NET Framework): no ArgumentList property.
+        # Quote only arguments containing whitespace; fixture paths with spaces
+        # are the only reason this needs care.
+        $startInfo.Arguments = (@($Arguments | ForEach-Object {
+                    $text = [string]$_
+                    if ($text -match '\s') { '"' + ($text -replace '"', '\"') + '"' } else { $text }
+                }) -join ' ')
+    }
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardInput = $true
@@ -302,13 +314,19 @@ function Invoke-NativeHostParitySession {
         [int]$PerMessageTimeoutSeconds = 30,
         # Case name -> file path: touched right before that case so time-window
         # checks (recent portal success) are deterministic in both sessions.
-        [hashtable]$TouchFilesByCase = @{}
+        [hashtable]$TouchFilesByCase = @{},
+        # Case name -> scriptblock run right before that case (e.g. refresh the
+        # worker heartbeat so the 10 s freshness window covers the request).
+        [hashtable]$BeforeCaseScripts = @{}
     )
     $process = Start-NativeHostParityProcess -FilePath $FilePath -Arguments $Arguments
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $responses = @()
     try {
         foreach ($case in $Cases) {
+            if ($BeforeCaseScripts.ContainsKey($case.name)) {
+                & $BeforeCaseScripts[$case.name]
+            }
             if ($TouchFilesByCase.ContainsKey($case.name)) {
                 $touchPath = [string]$TouchFilesByCase[$case.name]
                 if (Test-Path -LiteralPath $touchPath) {
@@ -483,6 +501,26 @@ function Set-NativeHostParityProducerFiles {
     return ([string]$jsonLine | ConvertFrom-Json)
 }
 
+function Set-NativeHostParityWorkerState {
+    <#
+    .SYNOPSIS
+        Refreshes the fixture worker heartbeat with the real writer under
+        Windows PowerShell 5.1 (the freshness window is only 10 s).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+    $windowsPowerShell = Get-NativeHostParityWindowsPowerShellPath
+    if (-not $windowsPowerShell) { throw 'native-host-parity-powershell51-unavailable' }
+    $scriptPath = Join-Path $RepoRoot 'windows\tests\NativeHostParity.Producers.ps1'
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-RepoRoot', $RepoRoot, '-Root', $Root, '-WorkerOnly')
+    $output = (& $windowsPowerShell @arguments 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "native-host-parity-worker-refresh-failed: $output" }
+    return
+}
+
 function New-NativeHostParityProducerSequence {
     <#
     .SYNOPSIS
@@ -543,6 +581,7 @@ Export-ModuleMember -Function @(
     'New-NativeHostParitySequence',
     'New-NativeHostParityProducerSequence',
     'Set-NativeHostParityProducerFiles',
+    'Set-NativeHostParityWorkerState',
     'Get-NativeHostParityMaskedKeys',
     'Start-NativeHostParityProcess',
     'Write-NativeHostParityFrame',

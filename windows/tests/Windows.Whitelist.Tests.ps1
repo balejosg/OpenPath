@@ -1,3 +1,5 @@
+Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
+
 Describe "Whitelist Validation" {
     Context "Content validation" {
         It "Common module validates minimum domain count" {

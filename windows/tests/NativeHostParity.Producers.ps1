@@ -32,7 +32,11 @@
 param(
     [Parameter(Mandatory = $true)][string]$RepoRoot,
     [Parameter(Mandatory = $true)][string]$Root,
-    [switch]$AddBomVariants
+    [switch]$AddBomVariants,
+    # Refresh only the worker heartbeat (real writer). The freshness window is
+    # 10 s, so a parity case that needs a fresh worker regenerates it right
+    # before the request instead of relying on the fixture build time.
+    [switch]$WorkerOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,6 +78,14 @@ function Invoke-Producer {
 }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+if ($WorkerOnly) {
+    $workerStatePathOnly = $env:OPENPATH_RUNTIME_DEPENDENCY_WORKER_STATE_PATH
+    Write-OpenPathRuntimeDependencyWorkerState -State @{ status = 'idle'; queueDepth = 0 } -StatePath $workerStatePathOnly -SkipReadAccess | Out-Null
+    Add-Meta -Name 'worker-state' -Producer 'Write-OpenPathRuntimeDependencyWorkerState' -Path $workerStatePathOnly
+    Write-Output ($meta | ConvertTo-Json -Depth 8 -Compress)
+    return
+}
 
 # 1) Whitelist source + mirror. The update task writes data\whitelist.txt with
 # Set-Content -Encoding UTF8 (UTF-8 with BOM under PowerShell 5.1); the native

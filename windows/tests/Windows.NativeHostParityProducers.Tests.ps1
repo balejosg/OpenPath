@@ -47,16 +47,28 @@ Describe 'Native host parity on producer files (Phase 5.3 A4)' {
         if ($script:ProducerPowerShellAvailable) {
             $script:ProducerReferenceFixture = New-NativeHostParityFixture -RepoRoot $script:ProducerRepoRoot -Root (Join-Path $TestDrive 'producer-reference')
             $script:ProducerCandidateFixture = New-NativeHostParityFixture -RepoRoot $script:ProducerRepoRoot -Root (Join-Path $TestDrive 'producer-candidate')
-            $script:ProducerReferenceMeta = Set-NativeHostParityProducerFiles -RepoRoot $script:ProducerRepoRoot -Root $script:ProducerReferenceFixture.Root
+            # Both fixtures carry the same real-producer encodings (including the
+            # explicit BOM variants), so the policy hash stays comparable.
+            $script:ProducerReferenceMeta = Set-NativeHostParityProducerFiles -RepoRoot $script:ProducerRepoRoot -Root $script:ProducerReferenceFixture.Root -AddBomVariants
             $script:ProducerCandidateMeta = Set-NativeHostParityProducerFiles -RepoRoot $script:ProducerRepoRoot -Root $script:ProducerCandidateFixture.Root -AddBomVariants
             $script:ProducerHostCommand = Get-NativeHostParityHostCommand
             $referenceTouch = @{ 'probe-recover-recent-success' = (Join-Path $script:ProducerReferenceFixture.Data 'captive-portal-active.json') }
+            # The worker freshness window is 10 s: refresh the heartbeat with the
+            # real writer right before every case that depends on it, in both
+            # sessions (the sessions run minutes apart).
+            $script:ProducerFreshCases = @{}
+            foreach ($caseName in @('probe-dependency-enqueue-pending', 'probe-dependency-queue-dedup', 'probe-dependency-fresh-worker-blocking')) {
+                $script:ProducerFreshCases[$caseName] = {
+                    Set-NativeHostParityWorkerState -RepoRoot $script:ProducerRepoRoot -Root $script:ProducerReferenceFixture.Root
+                }.GetNewClosure()
+            }
             $script:ProducerReferenceResponses = @(Invoke-NativeHostParitySession `
                     -FilePath $script:ProducerHostCommand.FilePath `
                     -Arguments (@($script:ProducerHostCommand.Arguments) + (Join-Path $script:ProducerReferenceFixture.Native 'OpenPath-NativeHost.ps1')) `
                     -Cases $script:ProducerCases `
                     -PerMessageTimeoutSeconds 60 `
-                    -TouchFilesByCase $referenceTouch)
+                    -TouchFilesByCase $referenceTouch `
+                    -BeforeCaseScripts $script:ProducerFreshCases)
             $script:ProducerCompiledExecutable = ''
             if ($script:ProducerCompilerAvailable) {
                 $script:ProducerCompiledExecutable = Build-NativeHostParityExecutable -NativeRoot $script:ProducerCandidateFixture.Native -CompilerPath (Get-NativeHostParityCompiler)
@@ -64,11 +76,18 @@ Describe 'Native host parity on producer files (Phase 5.3 A4)' {
             $script:ProducerCandidateResponses = @()
             if ($script:ProducerCompiledExecutable) {
                 $candidateTouch = @{ 'probe-recover-recent-success' = (Join-Path $script:ProducerCandidateFixture.Data 'captive-portal-active.json') }
+                $candidateFreshCases = @{}
+                foreach ($caseName in @('probe-dependency-enqueue-pending', 'probe-dependency-queue-dedup', 'probe-dependency-fresh-worker-blocking')) {
+                    $candidateFreshCases[$caseName] = {
+                        Set-NativeHostParityWorkerState -RepoRoot $script:ProducerRepoRoot -Root $script:ProducerCandidateFixture.Root
+                    }.GetNewClosure()
+                }
                 $script:ProducerCandidateResponses = @(Invoke-NativeHostParitySession `
                         -FilePath $script:ProducerCompiledExecutable `
                         -Cases $script:ProducerCases `
                         -PerMessageTimeoutSeconds 60 `
-                        -TouchFilesByCase $candidateTouch)
+                        -TouchFilesByCase $candidateTouch `
+                        -BeforeCaseScripts $candidateFreshCases)
             }
         }
     }
@@ -89,6 +108,7 @@ Describe 'Native host parity on producer files (Phase 5.3 A4)' {
             }
             foreach ($name in @('config-bom', 'native-state-bom')) {
                 $script:ProducerCandidateMeta.producers.$name.bom | Should -BeTrue -Because $name
+                $script:ProducerReferenceMeta.producers.$name.bom | Should -BeTrue -Because "reference $name"
             }
             foreach ($name in @('overlay-ready', 'worker-state', 'queue-request', 'captive-marker')) {
                 $script:ProducerCandidateMeta.producers.$name.bom | Should -BeTrue -Because "$name must carry the PowerShell 5.1 BOM"
@@ -146,8 +166,9 @@ Describe 'Native host parity on producer files (Phase 5.3 A4)' {
         It 'Deduplicates a queue request written by the PowerShell host' {
             $queueDir = Join-Path $script:ProducerCandidateFixture.Data 'runtime-dependency-queue'
             $queueFiles = @(Get-ChildItem -LiteralPath $queueDir -Filter '*.json' -File)
-            $queueFiles.Count | Should -Be 1 -Because 'the C# host must find the BOM-prefixed request the PowerShell host queued'
-            $queueFiles[0].Name | Should -Be 'parity-fixed-request.json'
+            $queueddepFiles = @($queueFiles | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'queueddep\.parity\.invalid' })
+            $queueddepFiles.Count | Should -Be 1 -Because 'the C# host must find the BOM-prefixed request the PowerShell host queued'
+            $queueddepFiles[0].Name | Should -Be 'parity-fixed-request.json'
             $candidate = @($script:ProducerCandidateResponses | Where-Object { $_.name -eq 'probe-dependency-queue-dedup' })[0].response
             if ($candidate) {
                 ([string]$candidate.requestPath) | Should -BeLike '*parity-fixed-request.json'
