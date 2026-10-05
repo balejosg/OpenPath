@@ -118,8 +118,9 @@ try {
         $launch = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $LauncherPath -CommandLineBase64 $encoded 2>&1 | Out-String
         $result.launchOutput = $launch.Trim()
 
-        # 3) Poll and parse the framed responses.
-        $deadline = (Get-Date).AddSeconds(60)
+        # 3) Poll and parse the framed responses (30 s: the compiled host answers
+        #    in milliseconds; a longer wait only burns the observe budget).
+        $deadline = (Get-Date).AddSeconds(30)
         while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $responsePath -PathType Leaf)) { Start-Sleep -Seconds 2 }
         Start-Sleep -Seconds 2
         if (Test-Path -LiteralPath $responsePath -PathType Leaf) {

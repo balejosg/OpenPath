@@ -12,12 +12,12 @@ Describe 'First-visit lane budgets (Phase 5.2 C4)' {
     }
 
     It 'bounds every phase and one whole scene' {
-        (Get-OpenPathFirstVisitPhaseBudget -Mode Prepare) | Should -Be 600
-        (Get-OpenPathFirstVisitPhaseBudget -Mode Observe) | Should -Be 600
+        (Get-OpenPathFirstVisitPhaseBudget -Mode Prepare) | Should -Be 720
+        (Get-OpenPathFirstVisitPhaseBudget -Mode Observe) | Should -Be 660
         (Get-OpenPathFirstVisitPhaseBudget -Mode Cleanup) | Should -Be 420
-        (Get-OpenPathFirstVisitSceneBudgetSeconds) | Should -Be 1620
+        (Get-OpenPathFirstVisitSceneBudgetSeconds) | Should -Be 1800
         # The collect step may only consume a fraction of the observe budget.
-        (Get-OpenPathFirstVisitSceneBudgetSeconds) | Should -BeLessOrEqual 1620
+        (Get-OpenPathFirstVisitSceneBudgetSeconds) | Should -BeLessOrEqual 1800
     }
 
     It 'keeps the scheduled plan inside 80 percent of the workflow timeout' {

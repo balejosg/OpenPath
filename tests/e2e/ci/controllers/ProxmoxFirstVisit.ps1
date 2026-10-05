@@ -1153,6 +1153,12 @@ function Invoke-OpenPathFirstVisitObserve {
     }
     $verdictPath = Join-Path $artifactsRoot 'observe-verdict.json'
     [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+    # Phase 5.2: copy the guest logs right after the verdict, before the heavy
+    # collect/probe. A later failure then still explains the visit from the
+    # visit-time native-host.log (extension diagnostics, E1 decisions).
+    $studentUserEarly = [string]$settings.StudentUserName
+    Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath "C:\Users\$studentUserEarly\AppData\Local\OpenPath\native-host.log" -LocalPath (Join-Path $evidenceDir 'native-host.log') | Out-Null
+    Copy-OpenPathFirstVisitGuestFile -Transport $Transport -Vmid $Vmid -GuestPath 'C:\OpenPath\logs\openpath.log' -LocalPath (Join-Path $evidenceDir 'openpath.log') | Out-Null
 
     # 4) Collect: bounded (<=120 s controller budget) and best-effort. Its
     #    failure is recorded literally and never changes the persisted verdict.

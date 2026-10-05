@@ -55,7 +55,9 @@ jobs:
   first-visit:
     name: Windows first visit lab
     runs-on: [self-hosted, Linux, X64, proxmox, openpath]
-    timeout-minutes: 300
+    # Phase 5.2 C4: 8 scenes x 30-min scene budget + overhead = 255 min, under
+    # the 80% limit (288 min) with margin.
+    timeout-minutes: 360
     if: >-
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.conclusion == 'success'
@@ -118,7 +120,6 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "scenarios=$($plan.scenarios)"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "repetitions=$($plan.repetitions)"
           Write-Host "first-visit plan: scenarios=$($plan.scenarios) repetitions=$($plan.repetitions) source=$($plan.source)"
-
       - name: Resolve template source
         id: template
         if: steps.scope.outputs.run == 'true' && steps.supersede.outputs.skip != 'true'

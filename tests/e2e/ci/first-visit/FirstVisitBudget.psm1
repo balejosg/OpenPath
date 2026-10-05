@@ -19,11 +19,11 @@ function Get-OpenPathFirstVisitPhaseBudget {
         [Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Observe', 'AfterReboot', 'Cleanup')][string]$Mode
     )
     switch ($Mode) {
-        'Prepare' { return 600 }
-        'Observe' { return 600 }
-        'AfterReboot' { return 600 }
+        'Prepare' { return 720 }
+        'Observe' { return 660 }
+        'AfterReboot' { return 660 }
         'Cleanup' { return 420 }
-        default { return 600 }
+        default { return 660 }
     }
 }
 

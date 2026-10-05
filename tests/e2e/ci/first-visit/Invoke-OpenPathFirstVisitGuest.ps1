@@ -973,13 +973,19 @@ switch ($Step) {
             param([string]$Name)
             $timings[$Name] = [int]$collectWatch.ElapsedMilliseconds
             $collectWatch.Restart()
+            # Phase 5.2: persist after every block so an interrupted collect
+            # names the block it was in (the Phase-5.2 acceptance runs only had
+            # the initial partial and could not explain the hang).
+            Save-PartialResult
         }
         $script:Body.collect = [ordered]@{ timings = $timings }
         Save-PartialResult
         $addonsLog = @()
         $addonsPath = Join-Path $script:VisitRoot 'moz\addons.log'
         if (Test-Path -LiteralPath $addonsPath) {
-            $addonsLog = @(Get-Content -LiteralPath $addonsPath -Tail 80 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'addon|Addon|install|xpi|policy' } | Select-Object -First 30)
+            # Share-safe tail: Get-Content -Tail can wait on a log the browser
+            # still holds open (the Phase 5.2 collect hang).
+            $addonsLog = @(Get-FileTailSafe -Path $addonsPath -Lines 200 | Where-Object { $_ -match 'addon|Addon|install|xpi|policy' } | Select-Object -First 30)
         }
         & $lap 'addonsMs'
         # No extensions.json read here: the authoritative warm-up state signal
@@ -996,25 +1002,34 @@ switch ($Step) {
         & $lap 'nativeHostMs'
         $profiles = @($nativeHost | Where-Object { $_ -match 'stage=startup-profile' })
         & $lap 'profilesMs'
-        $openpath = Get-LogTail -Path "$OpenPathRoot\logs\openpath.log" -Tail 300
-        & $lap 'openpathMs'
+        # Phase 5.2: optional blocks are skipped once the step has spent its
+        # budget (the mandatory diagnostics/log reads above already ran).
+        $collectBudgetSeconds = 100
+        $skippedBlocks = New-Object System.Collections.Generic.List[string]
+        $budgetExceeded = { $collectWatch.Elapsed.TotalSeconds -gt $collectBudgetSeconds }
+        $openpath = @()
+        if (& $budgetExceeded) { $skippedBlocks.Add('openpath') | Out-Null } else { $openpath = Get-LogTail -Path "$OpenPathRoot\logs\openpath.log" -Tail 300; & $lap 'openpathMs' }
         $workerState = ''
-        if (Test-Path -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json") {
+        if (& $budgetExceeded) { $skippedBlocks.Add('workerState') | Out-Null }
+        elseif (Test-Path -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json") {
             $workerState = Get-Content -LiteralPath "$OpenPathRoot\data\runtime-dependency-worker-state.json" -Raw
         }
         & $lap 'workerStateMs'
-        $moz = Get-BoundedMozMatches -Directories @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz'))
+        $moz = [ordered]@{ lines = @(); files = 0; totalFiles = 0; truncated = $true }
+        if (& $budgetExceeded) { $skippedBlocks.Add('moz') | Out-Null }
+        else { $moz = Get-BoundedMozMatches -Directories @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz')); $mozExtract = @($moz.lines) }
         $mozExtract = @($moz.lines)
         & $lap 'mozScanMs'
         $timings.mozFiles = $moz.files
         $timings.mozFilesTotal = $moz.totalFiles
         $timings.mozTruncated = $moz.truncated
-        $overlayHosts = @(Get-OverlayHosts)
-        & $lap 'overlayHostsMs'
-        $whitelistMirror = @(Get-LogTail -Path "$OpenPathRoot\data\whitelist.txt" -Tail 40)
-        & $lap 'whitelistMs'
-        $firefoxProcesses = @(Get-FirefoxProcesses)
-        & $lap 'processesMs'
+        $overlayHosts = @()
+        if (& $budgetExceeded) { $skippedBlocks.Add('overlayHosts') | Out-Null } else { $overlayHosts = @(Get-OverlayHosts); & $lap 'overlayHostsMs' }
+        $whitelistMirror = @()
+        if (& $budgetExceeded) { $skippedBlocks.Add('whitelistMirror') | Out-Null } else { $whitelistMirror = @(Get-LogTail -Path "$OpenPathRoot\data\whitelist.txt" -Tail 40); & $lap 'whitelistMs' }
+        $firefoxProcesses = @()
+        if (& $budgetExceeded) { $skippedBlocks.Add('firefoxProcesses') | Out-Null } else { $firefoxProcesses = @(Get-FirefoxProcesses); & $lap 'processesMs' }
+        $timings.skippedBlocks = @($skippedBlocks.ToArray())
         $script:Body.collect.diagnostics = [ordered]@{
             lines                = $diagnostics.Count
             hostStarted          = $liveCollect.hostStarted
