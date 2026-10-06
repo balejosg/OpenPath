@@ -1027,6 +1027,10 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
     Context 'Template resolution (Phase 3A.3 L1)' {
         BeforeAll {
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitTemplateSource.psm1') -Force
+            # Phase 5.3 P5: the resolver contrasts the listing with main HEAD
+            # (GET commits/main, then runs?head_sha=<sha>).
+            $script:FirstVisitTemplateHead = '{"sha":"sha-head"}' | ConvertFrom-Json
+            $script:FirstVisitTemplateHeadRuns = '{"workflow_runs":[{"id":999,"head_sha":"sha-head","head_branch":"main","event":"push","status":"completed","conclusion":"failure"}]}' | ConvertFrom-Json
         }
 
         It 'Uses the completing run id directly on a workflow_run trigger (no lookup)' {
@@ -1043,15 +1047,15 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
         It 'Reads id (not database_id) and skips candidates without the template artifact' {
             # Phase 5.3 P3: completed listing + client-side conclusion filter.
             $script:FirstVisitTemplateListing = '{"workflow_runs":[
-                {"id":111,"database_id":null,"head_sha":"sha-111","conclusion":"failure"},
-                {"id":112,"database_id":null,"head_sha":"sha-112","conclusion":"success"},
-                {"id":222,"database_id":null,"head_sha":"sha-222","conclusion":"success"}
+                {"id":111,"database_id":null,"head_sha":"sha-111","head_branch":"main","event":"push","conclusion":"failure"},
+                {"id":112,"database_id":null,"head_sha":"sha-112","head_branch":"main","event":"push","conclusion":"success"},
+                {"id":222,"database_id":null,"head_sha":"sha-222","head_branch":"main","event":"push","conclusion":"success"}
             ]}' | ConvertFrom-Json
             $script:FirstVisitTemplateArtifacts112 = '{"artifacts":[{"name":"windows-personalized-exe"}]}' | ConvertFrom-Json
             $script:FirstVisitTemplateArtifacts222 = '{"artifacts":[{"name":"windows-offline-template"}]}' | ConvertFrom-Json
             $api = {
                 param($url)
-                if ($url -match '/release-scripts\.yml/runs\?branch=main&per_page=50') { return $script:FirstVisitTemplateListing }
+                if ($url -match '/release-scripts\.yml/runs\?per_page=50') { return $script:FirstVisitTemplateListing }
                 if ($url -match '/runs/112/artifacts') { return $script:FirstVisitTemplateArtifacts112 }
                 if ($url -match '/runs/222/artifacts') { return $script:FirstVisitTemplateArtifacts222 }
                 throw "unexpected-url:$url"
@@ -1068,7 +1072,7 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
 
         It 'Resolves a dispatch by run id and by target SHA' {
             $script:FirstVisitTemplateRun = '{"id":777,"head_sha":"sha-777"}' | ConvertFrom-Json
-            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":777,"head_sha":"sha-777","conclusion":"success"}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":777,"head_sha":"sha-777","head_branch":"main","event":"push","conclusion":"success"}]}' | ConvertFrom-Json
             $script:FirstVisitTemplateArtifacts = '{"artifacts":[{"name":"windows-offline-template"}]}' | ConvertFrom-Json
             $api = {
                 param($url)
@@ -1085,8 +1089,76 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
             (Get-FirstVisitTemplateSourcePlan -EventName 'workflow_dispatch').mode | Should -Be 'latest'
         }
 
+        It 'Marks a stale listing as stale when main HEAD has a newer successful REL (Phase 5.3 P5)' {
+            # Recorded 2026-10-06 06:18 staleness: the unfiltered listing does
+            # not contain the newest main REL; resolving the old one silently
+            # would measure an outdated product.
+            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":90,"head_sha":"sha-old","head_branch":"main","event":"push","status":"completed","conclusion":"success"}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateHead = '{"sha":"sha-new"}' | ConvertFrom-Json
+            $script:FirstVisitTemplateHeadRuns = '{"workflow_runs":[{"id":100,"head_sha":"sha-new","head_branch":"main","event":"push","status":"completed","conclusion":"success"}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateArtifacts = '{"artifacts":[{"name":"windows-offline-template"}]}' | ConvertFrom-Json
+            $api = {
+                param($url)
+                if ($url -match '/commits/main$') { return $script:FirstVisitTemplateHead }
+                if ($url -match 'head_sha=sha-new') { return $script:FirstVisitTemplateHeadRuns }
+                if ($url -match '/release-scripts\.yml/runs\?per_page=50') { return $script:FirstVisitTemplateListing }
+                if ($url -match '/runs/90/artifacts') { return $script:FirstVisitTemplateArtifacts }
+                throw "unexpected-url:$url"
+            }
+            $resolved = Resolve-FirstVisitTemplateRun -Plan (Get-FirstVisitTemplateSourcePlan -EventName 'schedule') -Repository 'o/r' -ApiGet $api
+            $resolved.runId | Should -Be '90'
+            $resolved.stale | Should -BeTrue -Because 'the workflow turns this into INFRA, never a silent old template'
+            $resolved.headSha | Should -Be 'sha-new'
+            $resolved.headRelRunId | Should -Be '100'
+            $resolved.headRelStatus | Should -Be 'completed'
+        }
+
+        It 'Uses the last successful main REL while the HEAD REL is still running (Phase 5.3 P5)' {
+            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":90,"head_sha":"sha-old","head_branch":"main","event":"push","status":"completed","conclusion":"success"}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateHead = '{"sha":"sha-new"}' | ConvertFrom-Json
+            $script:FirstVisitTemplateHeadRuns = '{"workflow_runs":[{"id":100,"head_sha":"sha-new","head_branch":"main","event":"push","status":"in_progress","conclusion":null}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateArtifacts = '{"artifacts":[{"name":"windows-offline-template"}]}' | ConvertFrom-Json
+            $api = {
+                param($url)
+                if ($url -match '/commits/main$') { return $script:FirstVisitTemplateHead }
+                if ($url -match 'head_sha=sha-new') { return $script:FirstVisitTemplateHeadRuns }
+                if ($url -match '/release-scripts\.yml/runs\?per_page=50') { return $script:FirstVisitTemplateListing }
+                if ($url -match '/runs/90/artifacts') { return $script:FirstVisitTemplateArtifacts }
+                throw "unexpected-url:$url"
+            }
+            $resolved = Resolve-FirstVisitTemplateRun -Plan (Get-FirstVisitTemplateSourcePlan -EventName 'schedule') -Repository 'o/r' -ApiGet $api
+            $resolved.runId | Should -Be '90'
+            $resolved.stale | Should -BeFalse
+            $resolved.headRelStatus | Should -Be 'in_progress'
+            $resolved.headRelRunId | Should -Be '100'
+        }
+
+        It 'Ignores non-main, non-push and unsuccessful runs in the unfiltered listing (Phase 5.3 P5)' {
+            $script:FirstVisitTemplateListing = '{"workflow_runs":[
+                {"id":1,"head_sha":"s1","head_branch":"feature","event":"push","status":"completed","conclusion":"success"},
+                {"id":2,"head_sha":"s2","head_branch":"main","event":"schedule","status":"completed","conclusion":"success"},
+                {"id":3,"head_sha":"s3","head_branch":"main","event":"push","status":"completed","conclusion":"failure"},
+                {"id":4,"head_sha":"s4","head_branch":"main","event":"push","status":"completed","conclusion":"success"}
+            ]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateHead = '{"sha":"s4"}' | ConvertFrom-Json
+            $script:FirstVisitTemplateHeadRuns = '{"workflow_runs":[{"id":4,"head_sha":"s4","head_branch":"main","event":"push","status":"completed","conclusion":"success"}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateArtifacts = '{"artifacts":[{"name":"windows-offline-template"}]}' | ConvertFrom-Json
+            $api = {
+                param($url)
+                if ($url -match '/commits/main$') { return $script:FirstVisitTemplateHead }
+                if ($url -match 'head_sha=s4') { return $script:FirstVisitTemplateHeadRuns }
+                if ($url -match '/release-scripts\.yml/runs\?per_page=50') { return $script:FirstVisitTemplateListing }
+                if ($url -match '/runs/4/artifacts') { return $script:FirstVisitTemplateArtifacts }
+                throw "unexpected-url:$url"
+            }
+            $resolved = Resolve-FirstVisitTemplateRun -Plan (Get-FirstVisitTemplateSourcePlan -EventName 'schedule') -Repository 'o/r' -ApiGet $api
+            $resolved.runId | Should -Be '4'
+            $resolved.candidates | Should -Be 1
+            $resolved.stale | Should -BeFalse
+        }
+
         It 'Fails with a clear INFRA code when no candidate keeps the artifact' {
-            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":9,"database_id":null,"conclusion":"success"}]}' | ConvertFrom-Json
+            $script:FirstVisitTemplateListing = '{"workflow_runs":[{"id":9,"database_id":null,"head_sha":"sha-9","head_branch":"main","event":"push","conclusion":"success"}]}' | ConvertFrom-Json
             $script:FirstVisitTemplateArtifacts = '{"artifacts":[]}' | ConvertFrom-Json
             $api = {
                 param($url)

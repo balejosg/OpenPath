@@ -137,6 +137,10 @@ function Resolve-FirstVisitTemplateRun {
             candidates          = 0
             lag                 = 0
             newestSuccessRunId  = [string](Get-FirstVisitTemplateField -InputObject $Plan -Name 'runId')
+            headSha             = [string](Get-FirstVisitTemplateField -InputObject $Plan -Name 'sha')
+            headRelRunId        = [string](Get-FirstVisitTemplateField -InputObject $Plan -Name 'runId')
+            headRelStatus       = 'triggering-run'
+            stale               = $false
         }
     }
 
@@ -151,18 +155,25 @@ function Resolve-FirstVisitTemplateRun {
             candidates          = 0
             lag                 = 0
             newestSuccessRunId  = $runId
+            headSha             = $headSha
+            headRelRunId        = $runId
+            headRelStatus       = 'explicit-run'
+            stale               = $false
         }
     }
 
-    # Phase 5.3 P3: never combine branch/head_sha with status=success. The REST
-    # listing with that filter returns stale runs (the nightly of 2026-10-05
-    # resolved a 2026-10-03 template). List completed runs and filter
-    # conclusion=success on the client, which also lets us report the lag
-    # against the newest successful main run.
-    $query = if ($mode -eq 'sha') { 'head_sha=' + [string](Get-FirstVisitTemplateField -InputObject $Plan -Name 'sha') + '&per_page=50' } else { 'branch=main&per_page=50' }
+    # Phase 5.3 P5: no branch filter at all. The GitHub runs listing can be
+    # stale (on 2026-10-06 06:18 it returned a 2026-10-03 run first and was up
+    # to date a minute later), so the client filters main+push+success AND
+    # contrasts the result with the current main HEAD.
+    $query = if ($mode -eq 'sha') { 'head_sha=' + [string](Get-FirstVisitTemplateField -InputObject $Plan -Name 'sha') + '&per_page=50' } else { 'per_page=50' }
     $listing = & $ApiGet "$ApiBase/repos/$Repository/actions/workflows/release-scripts.yml/runs?$query"
     $runs = @(Get-FirstVisitTemplateField -InputObject $listing -Name 'workflow_runs')
-    $successful = @($runs | Where-Object { [string](Get-FirstVisitTemplateField -InputObject $_ -Name 'conclusion') -eq 'success' })
+    $successful = @($runs | Where-Object {
+            [string](Get-FirstVisitTemplateField -InputObject $_ -Name 'head_branch') -eq 'main' -and
+            [string](Get-FirstVisitTemplateField -InputObject $_ -Name 'event') -eq 'push' -and
+            [string](Get-FirstVisitTemplateField -InputObject $_ -Name 'conclusion') -eq 'success'
+        })
     $newestSuccessRunId = if ($successful.Count -gt 0) { [string](Get-FirstVisitTemplateRunIdFromResponse -RunEntry $successful[0]) } else { '' }
     $successIndex = 0
     $candidates = 0
@@ -173,6 +184,39 @@ function Resolve-FirstVisitTemplateRun {
         $candidates += 1
         $artifacts = & $ApiGet "$ApiBase/repos/$Repository/actions/runs/$runId/artifacts?per_page=100"
         if (-not (Test-FirstVisitTemplateArtifact -ArtifactsResponse $artifacts -ArtifactName $ArtifactName)) { $successIndex += 1; continue }
+        # Contrast with main HEAD: if the REL of the current head finished
+        # successfully and is not this run, the listing was stale and the lane
+        # must not silently measure an outdated product (the workflow makes
+        # stale a latest-mode INFRA).
+        $headSha = ''
+        $headRelRunId = ''
+        $headRelStatus = 'unknown'
+        $headRelConclusion = ''
+        $stale = $false
+        try {
+            $head = & $ApiGet "$ApiBase/repos/$Repository/commits/main"
+            $headSha = [string](Get-FirstVisitTemplateField -InputObject $head -Name 'sha')
+            if ($headSha) {
+                $headListing = & $ApiGet "$ApiBase/repos/$Repository/actions/workflows/release-scripts.yml/runs?head_sha=$headSha&per_page=50"
+                $headRuns = @(Get-FirstVisitTemplateField -InputObject $headListing -Name 'workflow_runs' |
+                        Where-Object { [string](Get-FirstVisitTemplateField -InputObject $_ -Name 'head_sha') -eq $headSha })
+                $headRun = @($headRuns | Where-Object { [string](Get-FirstVisitTemplateField -InputObject $_ -Name 'event') -eq 'push' } | Select-Object -First 1)
+                if ($headRun.Count -eq 0) { $headRun = @($headRuns | Select-Object -First 1) }
+                if ($headRun.Count -gt 0) {
+                    $headRelRunId = Get-FirstVisitTemplateRunIdFromResponse -RunEntry $headRun[0]
+                    $headRelStatus = [string](Get-FirstVisitTemplateField -InputObject $headRun[0] -Name 'status')
+                    $headRelConclusion = [string](Get-FirstVisitTemplateField -InputObject $headRun[0] -Name 'conclusion')
+                    if ($headRelStatus -eq 'completed' -and $headRelConclusion -eq 'success' -and $headRelRunId -ne $runId) {
+                        $stale = $true
+                    }
+                }
+            }
+        }
+        catch {
+            # The contrast is best-effort: a REST hiccup must not hide the
+            # template, but it is recorded as unknown in the resolver line.
+            $headRelStatus = "unknown:$($_.Exception.Message)"
+        }
         return [pscustomobject][ordered]@{
             runId               = $runId
             templateSha         = [string](Get-FirstVisitTemplateField -InputObject $run -Name 'head_sha')
@@ -180,6 +224,10 @@ function Resolve-FirstVisitTemplateRun {
             candidates          = $candidates
             lag                 = if ($mode -eq 'latest') { $successIndex } else { 0 }
             newestSuccessRunId  = $newestSuccessRunId
+            headSha             = $headSha
+            headRelRunId        = $headRelRunId
+            headRelStatus       = $headRelStatus
+            stale               = $stale
         }
     }
     throw 'first-visit-template-not-found'

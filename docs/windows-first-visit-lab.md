@@ -38,11 +38,12 @@ are `<role><n>-<token>.<ip>.sslip.io`, unique per run:
 The page self-reports to `POST /__report`: computed style, executed scripts,
 painted API, font/image load, navigation type, in-page reload counter and
 per-wave times from `navigationStart`. The server records every request and
-report as JSONL. The DNS fixture (`dns_fixture.py`) answers `sslip.io` queries
-with the embedded IPv4 and forwards everything else; the product's AcrylicHosts
-renderer resolves whitelisted/learned sslip names with a static hosts entry and
-Acrylic's affinity mask only forwards learnt domains upstream, so a dependency
-resolves **only after the product learns it** (Phase 5.3 B5; see the fixture
+report as JSONL. The product's AcrylicHosts renderer maps **whitelisted** sslip names
+(the anchors) to a static `<ip> <domain>` line (`Get-AcrylicForwardRules`), so
+anchor queries never reach the DNS fixture; **learned runtime dependencies** use
+an exact forward rule (`Get-AcrylicExactForwardRule`) and _are_ forwarded to the
+fixture (visible as `sslip-answer` in `dns.jsonl`). A dependency therefore
+resolves **only after the product learns it** (Phase 5.3 P5; see the fixture
 docstring for the exact path).
 
 The served whitelist contains only the two anchors (plus every dependency host

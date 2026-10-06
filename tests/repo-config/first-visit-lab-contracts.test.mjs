@@ -94,6 +94,13 @@ describe('first-visit lane contract', () => {
     assert.match(harness, /if \(\$plan\.floorMode\)/u);
     assert.match(harness, /floor-dependency-does-not-resolve-before-visit/u);
     assert.match(harness, /floor-anchor-does-not-resolve-before-visit/u);
+    // Phase 5.3 P5: the topology evidence reads the WHOLE Acrylic INI (the
+    // tail cut PrimaryServerAddress) and searches the whole AcrylicHosts plus
+    // drivers\etc\hosts for the anchor line.
+    assert.match(harness, /Get-FileTextSafe -Path \$acrylicIni/u);
+    assert.doesNotMatch(harness, /Get-FileTailSafe -Path \$acrylicIni/u);
+    assert.match(harness, /System32\\drivers\\etc\\hosts/u);
+    assert.match(harness, /anchorStaticHostLine/u);
   });
 
   test('the guest harness never rewrites the browser policy', () => {
@@ -135,12 +142,20 @@ describe('first-visit lane contract', () => {
     assert.doesNotMatch(templateCode, /database_id/u);
     assert.match(templateCode, /Get-FirstVisitTemplateField -InputObject \$RunEntry -Name 'id'/u);
     assert.match(template, /first-visit-template-not-found/u);
-    // Phase 5.3 P3: never the combined branch/head_sha + status=success listing
-    // (it returned stale runs); filter conclusion=success client-side and
-    // enforce the lag.
+    // Phase 5.3 P5: no branch filter on the listing; filter main+push+success
+    // on the client and contrast the result with main HEAD, so a stale listing
+    // can never silently resolve an outdated template.
     assert.doesNotMatch(templateCode, /status=success/u);
-    assert.match(templateCode, /branch=main&per_page=50/u);
-    assert.match(templateCode, /conclusion/u);
+    assert.doesNotMatch(templateCode, /branch=main&per_page=50/u);
+    assert.match(templateCode, /per_page=50/u);
+    assert.doesNotMatch(templateCode, /branch=main/u);
+    assert.match(templateCode, /head_branch/u);
+    assert.match(templateCode, /commits\/main/u);
+    assert.match(templateCode, /head_sha=\$headSha/u);
+    assert.match(templateCode, /stale = \$true|stale {15}= \$true/u);
+    assert.match(workflow, /Template resolver: mode=/u);
+    assert.match(workflow, /headSha=\$headSha/u);
+    assert.match(workflow, /newer successful release-scripts run/u);
     assert.match(workflow, /template_lag/u);
     assert.match(workflow, /successful run\(s\) behind/u);
     const aggregate = read('tests/e2e/ci/aggregate-windows-first-visit.ps1');

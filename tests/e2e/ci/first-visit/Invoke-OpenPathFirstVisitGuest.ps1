@@ -1203,24 +1203,29 @@ switch ($Step) {
             }
             if ($acrylicIni) {
                 $dnsTopology.acrylicIniPath = $acrylicIni
-                # Phase 5.3 P4: capture the upstreams (primary, secondary and the
-                # optional portal ones) AND the domain affinity masks, not only
-                # the keys that happened to exist. Values are non-secret lab
-                # addresses/domain masks.
+                # Phase 5.3 P5: read the WHOLE INI (the tail cut the primary
+                # address) and keep the section-qualified upstreams and affinity
+                # masks. Values are non-secret lab addresses/domain masks.
                 $acrylic = [ordered]@{}
-                foreach ($line in @(Get-FileTailSafe -Path $acrylicIni -Lines 500)) {
+                $section = ''
+                foreach ($line in @((Get-FileTextSafe -Path $acrylicIni -MaxBytes 262144) -split "`r?`n")) {
+                    if ($line -match '^\s*\[(.+)\]\s*$') { $section = $Matches[1].Trim(); continue }
                     if ($line -match '^\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.*)$') {
                         $key = $Matches[1]
                         if ($key -match 'ServerAddress$|DomainNameAffinityMask$|QueryTypeAffinityMask$|UseWindowsHostsFile$|^Enable$|AddressCache') {
-                            $acrylic[$key] = ([string]$Matches[2]).Trim()
+                            $qualified = if ($section) { "$section.$key" } else { $key }
+                            $acrylic[$qualified] = ([string]$Matches[2]).Trim()
                         }
                     }
                 }
                 $dnsTopology.acrylic = $acrylic
                 $acrylicHostsPath = Join-Path (Split-Path $acrylicIni -Parent) 'AcrylicHosts.txt'
                 if (Test-Path -LiteralPath $acrylicHostsPath) {
+                    $acrylicHostsText = Get-FileTextSafe -Path $acrylicHostsPath -MaxBytes 262144
                     # Non-secret preview only: the whitelist hosts are lab fixtures.
-                    $dnsTopology.acrylicHostsPreview = @(Get-FileTailSafe -Path $acrylicHostsPath -Lines 2000 | Select-Object -First 20)
+                    $dnsTopology.acrylicHostsPreview = @($acrylicHostsText -split "`r?`n" | Where-Object { $_ -ne '' } | Select-Object -First 20)
+                    $dnsTopology.anchorStaticHostLines = @()  # filled after the plan is read
+                    $dnsTopology.acrylicHostsAllLines = @($acrylicHostsText -split "`r?`n" | Where-Object { $_ -ne '' })
                 }
             }
         }
@@ -1232,10 +1237,16 @@ switch ($Step) {
             $planForDns = Get-FixturePlan
             $anchorHost = [string]$planForDns.anchors.a1.host
             $dnsTopology.anchorProbe = [ordered]@{ host = $anchorHost; result = (Resolve-Probe -HostName $anchorHost) }
-            # Phase 5.3 P4: the anchor resolves through the static AcrylicHosts
-            # entry (embedded IPv4); show the line when present.
-            if ($dnsTopology.acrylicHostsPreview) {
-                $dnsTopology.anchorStaticHostLine = @($dnsTopology.acrylicHostsPreview | Where-Object { $_ -match [regex]::Escape($anchorHost) } | Select-Object -First 2)
+            # Phase 5.3 P5: the anchor resolves through the static AcrylicHosts
+            # entry (embedded IPv4); search the WHOLE hosts file (and the OS
+            # hosts file) instead of a short preview.
+            if ($dnsTopology.Contains('acrylicHostsAllLines')) {
+                $dnsTopology.anchorStaticHostLine = @($dnsTopology.acrylicHostsAllLines | Where-Object { $_ -match [regex]::Escape($anchorHost) } | Select-Object -First 3)
+            }
+            $osHostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+            if (Test-Path -LiteralPath $osHostsPath) {
+                $osHostsText = Get-FileTextSafe -Path $osHostsPath -MaxBytes 131072
+                $dnsTopology.osHostsAnchorLine = @($osHostsText -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($anchorHost) } | Select-Object -First 3)
             }
             if ($dnsIp) {
                 $correlateHost = 'correlate-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.' + $dnsIp + '.sslip.io'

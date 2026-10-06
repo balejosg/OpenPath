@@ -275,7 +275,9 @@ CORE_JS = """/* wave 2: the core script injects the deferred script from another
   var deferred = document.createElement('script');
   deferred.src = 'http://' + window.__firstVisit.roles.deferred + '/deferred.js';
   document.head.appendChild(deferred);
-  window.__firstVisitSend();
+  // Phase 5.3 P5: the state init now lives in <head>, but the send helper is
+  // defined by the body script; guard the early call instead of throwing.
+  if (typeof window.__firstVisitSend === 'function') { window.__firstVisitSend(); }
 })();
 """
 
