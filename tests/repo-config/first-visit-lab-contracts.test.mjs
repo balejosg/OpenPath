@@ -88,6 +88,12 @@ describe('first-visit lane contract', () => {
     const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
     assert.match(harness, /Get-FixturePlan/u);
     assert.doesNotMatch(harness, /reddit|bbc|youtube/iu);
+    // Phase 5.3: the floor pre-whitelists the dependency hosts, so the
+    // before-visit DNS precondition is inverted for it (the first floor
+    // dispatch failed with dependency-resolves-before-visit).
+    assert.match(harness, /if \(\$plan\.floorMode\)/u);
+    assert.match(harness, /floor-dependency-does-not-resolve-before-visit/u);
+    assert.match(harness, /floor-anchor-does-not-resolve-before-visit/u);
   });
 
   test('the guest harness never rewrites the browser policy', () => {

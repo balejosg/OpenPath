@@ -741,8 +741,18 @@ switch ($Step) {
             Resolve-Probe -HostName ([string]$plan.anchors.a1.host)
             Resolve-Probe -HostName ([string]$plan.anchors.a1.roles.styles)
         )
-        if (-not $script:Body.dnsBefore[0].resolves) { $script:Failures.Add('anchor-does-not-resolve-before-visit') }
-        if ($script:Body.dnsBefore[1].resolves) { $script:Failures.Add('dependency-resolves-before-visit') }
+        # Phase 5.3 (floor): the floor pre-whitelists every dependency host, so
+        # the environment control REQUIRES the dependency to resolve before the
+        # visit. The measurement scenarios keep the inverse precondition (a
+        # dependency only resolves after the product learns it).
+        if ($plan.floorMode) {
+            if (-not $script:Body.dnsBefore[0].resolves) { $script:Failures.Add('floor-anchor-does-not-resolve-before-visit') }
+            if (-not $script:Body.dnsBefore[1].resolves) { $script:Failures.Add('floor-dependency-does-not-resolve-before-visit') }
+        }
+        else {
+            if (-not $script:Body.dnsBefore[0].resolves) { $script:Failures.Add('anchor-does-not-resolve-before-visit') }
+            if ($script:Body.dnsBefore[1].resolves) { $script:Failures.Add('dependency-resolves-before-visit') }
+        }
         Complete-Step
     }
     'session' {
