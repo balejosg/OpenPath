@@ -19,6 +19,7 @@ with the generic rules.
 | W2       | `first-visit-hot`        | same Firefox stays open >=5 min; a new window opens anchor 2                                        |
 | B        | `first-visit-class-boot` | install, warm-up + clean close, reboot, autologon, Firefox <=60 s after logon                       |
 | F        | `first-visit-floor`      | like W but the dependency hosts are pre-whitelisted (the environment floor; `control` is the alias) |
+| S        | `first-visit-site`       | Phase 6 C: real-site canary, dispatch only (see below)                                              |
 
 W also runs the security checks (`first-visit-settled`/`first-visit-floor`):
 the never-learnable host stays blocked, the unlisted host does not resolve, the
@@ -172,6 +173,65 @@ gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
 The lane serializes with the desktop-survival suite through the same lab lock
 (see below) and never signs in AMO: it consumes the `windows-offline-template`
 and `windows-personalized-exe` artifacts of the exact release-scripts run.
+
+## Smart App Control simulation (Phase 6 B)
+
+`smart_app_control: unchanged` is the default. With `smart_app_control: on`
+(class-boot only; any other scenario is rejected before the lab), the lane
+simulates an installed machine to which Windows turns SAC on:
+
+1. install + warm-up run with SAC=2 (evaluation, the lab baseline);
+2. `VerifiedAndReputablePolicyState=1` is written under
+   `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy` and `CiTool.exe -r` runs
+   when present (`sac-apply` step, records the previous/applied value);
+3. the class-boot reboot applies it; after the boot the lane reads the registry
+   value and `(Get-MpComputerStatus).SmartAppControlState` (`sac-state` step).
+   Not On means the dispatch could not create the risk scenario: the scene is
+   INFRA `sac-not-enforced` and stops there.
+
+Every scene (SAC=2 too) collects bounded CodeIntegrity/Operational events
+(ids 3033, 3034, 3076, 3077, 3089), the harness `LanguageMode`, constrained-
+language lines from `openpath.log` and the post-boot agent state (Acrylic
+service, anchor DNS, OpenPath-\* tasks). When the harness itself runs under
+`ConstrainedLanguage`, the affected steps fall back to a minimal cmd/wevtutil
+collection and the evidence says so. A Code Integrity event naming the native
+host (or the browser) with the host not started adds the product signal
+`native-host-blocked-by-smart-app-control`.
+
+## Real-site canary (Phase 6 C)
+
+`site` runs **only by dispatch** (never in the auto-run or the nightly) with two
+inputs: `site_url` (required) and `site_whitelist` (comma-separated domains).
+The real URL is the anchor, the served whitelist contains only those domains and
+there is no fixture dependency precondition; the real site learns its own CDN
+hosts through the product. MOZ_LOG (`timestamp,nsHostResolver:5`, rotated at
+4 MiB per file) is enabled only for this scenario and the collect reads at most
+four files/4 MiB each (<= 16 MiB). The page self-report does not exist, so the
+verdict is CANARY:
+
+- metrics: holds and their outcomes (ready/cancelled/error), ready retention
+  p50/max, last ready relative to the navigation, E1 reloads and reasons,
+  learned hosts, negative lookups (or `NS_ERROR_UNKNOWN_HOST`) for a learned
+  host **after** its ready, service-worker holds (tabId < 0) and worker
+  stamp->ready gaps over 2 s;
+- CANARY-PASS requires every hold to end in `ready`, zero negative lookups
+  after ready and at most one reload. CANARY-RED is evidence, never a run
+  failure: only INFRA fails the run.
+
+The captures `t005..t060` are described manually (blank / unstyled / complete).
+
+## Smart App Control and canary runbooks
+
+```bash
+# SAC simulation (class-boot only), template from the push's REL run:
+gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
+  -f scenarios=class-boot -f repetitions=1 -f smart_app_control=on
+
+# Real-site canary (base URL + domains only; never committed to the repo):
+gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
+  -f scenarios=site -f repetitions=1 \
+  -f site_url=https://example.invalid/ -f site_whitelist=example.invalid
+```
 
 Requirements on the self-hosted runner: the lab inventory
 (`OPENPATH_DESKTOP_LAB_CONFIG`, default

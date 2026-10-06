@@ -1393,4 +1393,201 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
             $row.verdict | Should -Be 'passed'
         }
     }
+
+    Context 'Acrylic INI parsing (Phase 6 A)' -Tag 'Phase6' {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitDnsTopology.psm1') -Force
+            $iniSample = @'
+; Acrylic sample with sections, upstreams and masks
+[GlobalSection]
+PrimaryServerAddress=192.0.2.10
+SecondaryServerAddress=192.0.2.11
+TertiaryServerAddress=192.0.2.12
+QuaternaryServerAddress=
+DenaryServerAddress=192.0.2.19
+AddressCacheDomainNameAffinityMask=example.com,example.org
+AddressCacheQueryTypeAffinityMask=1,28
+; PrimaryServerAddress=9.9.9.9
+UseWindowsHostsFile=True
+[AdditionalSection]
+PrimaryServerAddress=198.51.100.7
+'@
+        }
+
+        It 'Keeps the literal GlobalSection upstream values and affinity masks' {
+            $parsed = ConvertFrom-OpenPathAcrylicIniText -Text $iniSample
+            $parsed['GlobalSection.PrimaryServerAddress'] | Should -Be '192.0.2.10'
+            $parsed['GlobalSection.SecondaryServerAddress'] | Should -Be '192.0.2.11'
+            $parsed['GlobalSection.TertiaryServerAddress'] | Should -Be '192.0.2.12'
+            $parsed['GlobalSection.AddressCacheDomainNameAffinityMask'] | Should -Be 'example.com,example.org'
+            $parsed['GlobalSection.AddressCacheQueryTypeAffinityMask'] | Should -Be '1,28'
+            $parsed['AdditionalSection.PrimaryServerAddress'] | Should -Be '198.51.100.7'
+        }
+
+        It 'Ignores commented keys and keeps empty values empty' {
+            $parsed = ConvertFrom-OpenPathAcrylicIniText -Text $iniSample
+            $parsed['GlobalSection.PrimaryServerAddress'] | Should -Not -Be '9.9.9.9'
+            $parsed.Contains('GlobalSection.PrimaryServerAddress') | Should -BeTrue
+            $parsed['GlobalSection.QuaternaryServerAddress'] | Should -Be ''
+        }
+
+        It 'Parses a CRLF file and returns an empty map for empty text' {
+            $crlf = ($iniSample -replace "`n", "`r`n")
+            $parsed = ConvertFrom-OpenPathAcrylicIniText -Text $crlf
+            $parsed['GlobalSection.PrimaryServerAddress'] | Should -Be '192.0.2.10'
+            (ConvertFrom-OpenPathAcrylicIniText -Text '').Keys.Count | Should -Be 0
+        }
+    }
+
+    Context 'Real-site canary metrics (Phase 6 C)' -Tag 'Phase6' {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitSiteCanary.psm1') -Force
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitWarmup.psm1') -Force
+            function ConvertTo-DiagLine {
+                param([hashtable]$Event)
+                return '2026-10-06 12:00:00 [INFO] [NativeHost] [PID:1] stage=extension-diagnostic ' + (($Event | ConvertTo-Json -Compress))
+            }
+            $script:canaryLines = @(
+                (ConvertTo-DiagLine @{ ts = 1000; kind = 'navigation'; source = 'onBeforeNavigate'; host = 'www.reddit.com' }),
+                (ConvertTo-DiagLine @{ ts = 1200; kind = 'hold'; dependencyHost = 'a.redditstatic.com'; tabId = 5; type = 'script' }),
+                (ConvertTo-DiagLine @{ ts = 2000; kind = 'hold-outcome'; dependencyHost = 'a.redditstatic.com'; outcome = 'ready'; ms = 800; tabId = 5 }),
+                (ConvertTo-DiagLine @{ ts = 2500; kind = 'hold'; dependencyHost = 'b.redditstatic.com'; tabId = -1; type = 'image' }),
+                (ConvertTo-DiagLine @{ ts = 7700; kind = 'hold-outcome'; dependencyHost = 'b.redditstatic.com'; outcome = 'cancelled-budget'; ms = 5200; tabId = -1 }),
+                (ConvertTo-DiagLine @{ ts = 8000; kind = 'reload-decision'; reason = 'ready-adopted-document'; tabId = 5 }),
+                'not a diagnostic line'
+            )
+        }
+
+        It 'Aggregates hold outcomes, ready times, reloads and service-worker holds' {
+            $metrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $script:canaryLines
+            $metrics.holds | Should -Be 2
+            $metrics.outcomeCounts.ready | Should -Be 1
+            $metrics.outcomeCounts.'cancelled-budget' | Should -Be 1
+            $metrics.readyP50Ms | Should -Be 800
+            $metrics.readyMaxMs | Should -Be 800
+            $metrics.lastReadyFromNavigationMs | Should -Be 1000
+            $metrics.reloads | Should -Be 1
+            ($metrics.reloadReasons -join ',') | Should -Be 'ready-adopted-document'
+            $metrics.serviceWorkerHolds | Should -Be 1
+        }
+
+        It 'Fails the canary when any hold is not ready, a negative follow-up appears or reloads exceed one' {
+            $metrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $script:canaryLines
+            $verdict = Get-OpenPathFirstVisitCanaryVerdict -Metrics $metrics -MozResult ([pscustomobject]@{ negativeCount = 0 })
+            $verdict.status | Should -Be 'CANARY-RED'
+            ($verdict.reasons -join ',') | Should -Match 'holds-not-ready:1'
+
+            $okLines = @(
+                (ConvertTo-DiagLine @{ ts = 1200; kind = 'hold'; dependencyHost = 'a.redditstatic.com'; tabId = 5 }),
+                (ConvertTo-DiagLine @{ ts = 2000; kind = 'hold-outcome'; dependencyHost = 'a.redditstatic.com'; outcome = 'ready'; ms = 800; tabId = 5 })
+            )
+            $okMetrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $okLines
+            (Get-OpenPathFirstVisitCanaryVerdict -Metrics $okMetrics -MozResult ([pscustomobject]@{ negativeCount = 0 })).status | Should -Be 'CANARY-PASS'
+            (Get-OpenPathFirstVisitCanaryVerdict -Metrics $okMetrics -MozResult ([pscustomobject]@{ negativeCount = 2 })).status | Should -Be 'CANARY-RED'
+            $manyReloads = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines ($okLines + (ConvertTo-DiagLine @{ ts = 3000; kind = 'reload-decision'; reason = 'a' }) + (ConvertTo-DiagLine @{ ts = 4000; kind = 'reload-decision'; reason = 'b' }))
+            (Get-OpenPathFirstVisitCanaryVerdict -Metrics $manyReloads -MozResult ([pscustomobject]@{ negativeCount = 0 })).status | Should -Be 'CANARY-RED'
+        }
+
+        It 'Only counts MOZ negatives for learned hosts after their ready time' {
+            $readyTs = [long]([datetimeoffset]::ParseExact('2026-10-06 12:00:10.000000', 'yyyy-MM-dd HH:mm:ss.ffffff', [System.Globalization.CultureInfo]::InvariantCulture)).ToUnixTimeMilliseconds()
+            $beforeTs = $readyTs - 5000
+            $afterTs = $readyTs + 5000
+            $format = { param([long]$Ts) ([datetimeoffset]::FromUnixTimeMilliseconds($Ts)).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss.ffffff') }
+            $mozLines = @(
+                ((& $format $beforeTs) + ' UTC - [1:1]: D/nsHostResolver DNS lookup for a.redditstatic.com'),
+                ((& $format $afterTs) + ' UTC - [1:1]: D/nsHostResolver DNS lookup for a.redditstatic.com'),
+                ((& $format $afterTs) + ' UTC - [1:1]: E/nsHostResolver failed for a.redditstatic.com NS_ERROR_UNKNOWN_HOST'),
+                ((& $format $afterTs) + ' UTC - [1:1]: D/nsHostResolver something for unrelated.example')
+            )
+            $result = Select-OpenPathFirstVisitMozHostLines -MozLines $mozLines -Hosts @('a.redditstatic.com') -ReadyTimes ([pscustomobject]@{ 'a.redditstatic.com' = $readyTs })
+            $result.negativeCount | Should -Be 1
+            @($result.linesByHost['a.redditstatic.com']).Count | Should -Be 3
+        }
+
+        It 'Measures worker stamp to ready gaps over two seconds' {
+            $stampText = '2026-10-06 12:00:00 [INFO] [Update.Runtime.psm1] [PID:9] Runtime dependency fast apply overlay generation stamped: appliedGeneration=3'
+            $stampEpoch = [long]([datetimeoffset]::ParseExact('2026-10-06 12:00:00', 'yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)).ToUnixTimeMilliseconds()
+            $readyEvents = @(
+                [pscustomobject]@{ dependencyHost = 'slow.example'; ts = $stampEpoch + 3200 },
+                [pscustomobject]@{ dependencyHost = 'fast.example'; ts = $stampEpoch + 500 }
+            )
+            $gaps = @(Get-OpenPathFirstVisitStampGaps -OpenPathLines @($stampText) -ReadyEvents $readyEvents)
+            $gaps.Count | Should -Be 1
+            $gaps[0].host | Should -Be 'slow.example'
+            $gaps[0].gapMs | Should -Be 3200
+        }
+
+        It 'Names a Smart App Control block from the CodeIntegrity events' {
+            $codeIntegrity = [ordered]@{
+                codeIntegrity = @(
+                    'Event[0]:',
+                    '  Date: 2026-10-06T12:30:00.1234567Z',
+                    '  Event ID: 3033',
+                    '  Description:',
+                    '  Code Integrity determined that a process (C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.exe) attempted to load a file that did not meet the Microsoft signing level requirements.',
+                    'Event[1]:',
+                    '  Date: 2026-10-06T12:30:01.1234567Z',
+                    '  Event ID: 3077',
+                    '  Description:',
+                    '  Code Integrity would have blocked notepad.exe (audit).'
+                )
+            }
+            $hostVerdict = Get-FirstVisitHostSignalsVerdict -Live ([pscustomobject]@{ hostStarted = $false }) -Events $null -Capabilities 'native-host-log' -CodeIntegrityEvents $codeIntegrity -SmartAppControlState 'On'
+            $hostVerdict.status | Should -Be 'failed'
+            $hostVerdict.productReasons | Should -Contain 'native-host-blocked-by-smart-app-control'
+            $hostVerdict.blockedBySmartAppControl | Should -BeTrue
+            $hostVerdict.signals.smartAppControlState | Should -Be 'On'
+            $hostVerdict.smartAppControlEvidence[0].eventId | Should -Be 3033
+            # Audit-only events for unrelated binaries never produce the signal.
+            $auditOnly = [ordered]@{ codeIntegrity = @('Event[0]:', '  Event ID: 3077', '  notepad.exe (audit)') }
+            (Get-FirstVisitHostSignalsVerdict -Live ([pscustomobject]@{ hostStarted = $false }) -Events $null -Capabilities 'native-host-log' -CodeIntegrityEvents $auditOnly).blockedBySmartAppControl | Should -BeFalse
+        }
+
+        It 'Validates the site and smart_app_control dispatch inputs before touching the lab' {
+            $config = [pscustomobject]@{ hostAddress = '192.168.1.150' }
+            function New-FirstVisitPayload {
+                param([hashtable]$FirstVisit)
+                return [pscustomobject]@{ firstVisit = [pscustomobject]$FirstVisit }
+            }
+            $site = Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site'; siteUrl = 'https://example.invalid/'; siteWhitelist = 'example.invalid' }) -Config $config
+            $site.SiteMode | Should -BeTrue
+            $site.SiteUrl | Should -Be 'https://example.invalid/'
+            $site.SiteDomains | Should -Contain 'example.invalid'
+            { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site' }) -Config $config } | Should -Throw '*first-visit-site-url-required*'
+            { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site'; siteUrl = 'https://example.invalid/a b' }) -Config $config } | Should -Throw '*first-visit-site-url-invalid*'
+            { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site'; siteUrl = 'https://example.invalid/'; siteWhitelist = 'bad_domain!' }) -Config $config } | Should -Throw '*first-visit-site-domain-invalid*'
+            $sac = Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-class-boot'; smartAppControl = 'on' }) -Config $config
+            $sac.SmartAppControl | Should -Be 'on'
+            { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-settled'; smartAppControl = 'on' }) -Config $config } | Should -Throw '*requires-class-boot*'
+            { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-class-boot'; smartAppControl = 'maybe' }) -Config $config } | Should -Throw '*smart-app-control-invalid*'
+        }
+
+        It 'Classifies a canary scene as CANARY-PASS/CANARY-RED and only INFRA fails the run' {
+            $root = Join-Path $TestDrive ('aggregate-' + [guid]::NewGuid().ToString('N'))
+            $scenarioDir = Join-Path (Join-Path (Join-Path $root '12345') '1') 'first-visit-site-r1'
+            New-Item -ItemType Directory -Path $scenarioDir -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'prepare.json'), '{"status":"passed","error":""}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'observe.json'), '{"status":"passed","error":""}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'cleanup.json'), '{"status":"passed","error":""}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'observe-verdict.json'), '{"schemaVersion":1,"scenario":"first-visit-site","source":"canary","canary":true,"canaryStatus":"CANARY-RED","canaryReasons":["holds-not-ready:1"],"reportPresent":false,"verdict":{"status":"canary-red","reasons":["holds-not-ready:1"]},"productReasons":[],"evidenceIncomplete":false}')
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'metrics.json'), '{"scenario":"first-visit-site","verdict":"canary-red","reasons":["holds-not-ready:1"],"reloads":0,"warmup":{"productReasons":[]},"canary":{"status":"CANARY-RED","metrics":{"holds":2,"readyP50Ms":800,"readyMaxMs":900,"reloads":1},"negativeCount":0}}')
+            $summaryJson = Join-Path $root 'summary.json'
+            $hostExe = (Get-Process -Id $PID).Path
+            $aggregate = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\aggregate-windows-first-visit.ps1'
+            $hostArguments = @('-NoProfile')
+            if ([IO.Path]::GetFileName($hostExe) -ieq 'powershell.exe') { $hostArguments += @('-ExecutionPolicy', 'Bypass') }
+            & $hostExe @hostArguments -File $aggregate -RunId '12345' -RunAttempt 1 -EvidenceRoot $root -SummaryJsonPath $summaryJson | Out-Null
+            $LASTEXITCODE | Should -Be 0
+            $row = (Get-Content -LiteralPath $summaryJson -Raw | ConvertFrom-Json).scenarios[0]
+            $row.category | Should -Be 'CANARY-RED'
+            $row.canaryStatus | Should -Be 'CANARY-RED'
+            # An incomplete canary is INFRA and does fail the run.
+            [IO.File]::WriteAllText((Join-Path $scenarioDir 'observe-verdict.json'), '{"schemaVersion":1,"scenario":"first-visit-site","source":"canary","canary":true,"canaryStatus":"CANARY-PASS","reportPresent":false,"verdict":{"status":"canary-pass","reasons":[]},"productReasons":[],"evidenceIncomplete":true,"collectError":"collect-timeout"}')
+            & $hostExe @hostArguments -File $aggregate -RunId '12345' -RunAttempt 1 -EvidenceRoot $root -SummaryJsonPath $summaryJson | Out-Null
+            $LASTEXITCODE | Should -Be 1
+            $row = (Get-Content -LiteralPath $summaryJson -Raw | ConvertFrom-Json).scenarios[0]
+            $row.category | Should -Be 'INFRA'
+            $row.error | Should -Be 'collect-timeout'
+        }
+    }
 }

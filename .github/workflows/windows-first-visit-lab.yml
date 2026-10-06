@@ -24,7 +24,7 @@ on:
         required: false
         type: string
       scenarios:
-        description: 'comma-separated scenarios (settled,hot,class-boot,floor; control is the floor alias)'
+        description: 'comma-separated scenarios (settled,hot,class-boot,floor,site; control is the floor alias; site only by dispatch and never in auto-run/nightly)'
         required: false
         default: 'settled,class-boot'
         type: string
@@ -32,6 +32,19 @@ on:
         description: 'repetitions per scenario'
         required: false
         default: '1'
+        type: string
+      smart_app_control:
+        description: 'class-boot Smart App Control simulation: unchanged (default) or on'
+        required: false
+        default: 'unchanged'
+        type: string
+      site_url:
+        description: 'real-site canary URL (site scenario only; provided per dispatch, never stored in the repo)'
+        required: false
+        type: string
+      site_whitelist:
+        description: 'comma-separated domains for the site canary whitelist'
+        required: false
         type: string
       lab_scenario:
         description: 'lab inventory scenario that provides the VM id and baseline snapshot'
@@ -234,10 +247,14 @@ jobs:
           $scenarios = '${{ steps.plan.outputs.scenarios }}'
           if (-not $scenarios) { $scenarios = 'settled,class-boot' }
           $repetitions = [int]('${{ steps.plan.outputs.repetitions }}' -replace '^$', '1')
+          $smartAppControl = '${{ inputs.smart_app_control || 'unchanged' }}'
+          $siteUrl = '${{ inputs.site_url }}'
+          $siteWhitelist = '${{ inputs.site_whitelist }}'
           & (Resolve-Path 'tests/e2e/ci/run-windows-first-visit-suite.ps1') `
             -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') `
             -ArtifactsRoot $root -TemplatePath $template -PersonalizedExePath $personalized `
-            -ControllerCommand $controller -Scenarios ($scenarios -split ',') -Repetitions $repetitions
+            -ControllerCommand $controller -Scenarios ($scenarios -split ',') -Repetitions $repetitions `
+            -SmartAppControl $smartAppControl -SiteUrl $siteUrl -SiteWhitelist $siteWhitelist
           exit $LASTEXITCODE
 
       - name: Aggregate results

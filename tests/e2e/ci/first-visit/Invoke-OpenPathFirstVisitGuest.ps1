@@ -49,6 +49,20 @@ if (Test-Path -LiteralPath $resultModulePath) {
     try { Import-Module -Name $resultModulePath -Force -ErrorAction Stop; $script:ResultModuleLoaded = $true }
     catch { $script:ModuleLoadError = (($script:ModuleLoadError + " result: $($_.Exception.Message)").Trim()) }
 }
+# Phase 6 A/C: the Acrylic INI parser and the real-site canary metrics live in
+# tested modules staged next to the harness.
+$script:DnsTopologyModuleLoaded = $false
+$script:CanaryModuleLoaded = $false
+$dnsModulePath = Join-Path $PSScriptRoot 'FirstVisitDnsTopology.psm1'
+if (Test-Path -LiteralPath $dnsModulePath) {
+    try { Import-Module -Name $dnsModulePath -Force -ErrorAction Stop; $script:DnsTopologyModuleLoaded = $true }
+    catch { $script:ModuleLoadError = (($script:ModuleLoadError + " dns: $($_.Exception.Message)").Trim()) }
+}
+$canaryModulePath = Join-Path $PSScriptRoot 'FirstVisitSiteCanary.psm1'
+if (Test-Path -LiteralPath $canaryModulePath) {
+    try { Import-Module -Name $canaryModulePath -Force -ErrorAction Stop; $script:CanaryModuleLoaded = $true }
+    catch { $script:ModuleLoadError = (($script:ModuleLoadError + " canary: $($_.Exception.Message)").Trim()) }
+}
 $OpenPathRoot = 'C:\OpenPath'
 $LabRoot = 'C:\OpenPathLab'
 $script:VisitRoot = 'C:\OpenPath\lab\first-visit'
@@ -339,16 +353,31 @@ function Start-VisitRefresh {
 }
 
 function Write-CleanFirefoxCmd {
-    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Tag)
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Tag,
+        # Phase 6 C: MOZ_LOG nsHostResolver capture is enabled ONLY for the
+        # real-site canary. Rotation is capped per file; the collect reads at
+        # most 4 files x 4 MiB (<= 16 MiB, under the 20 MB budget).
+        [bool]$MozLog = $false
+    )
     $firefox = Get-FirefoxInstallPath
     if (-not $firefox) { throw 'firefox.exe not found' }
     Initialize-VisitRoot | Out-Null
     $root = $script:VisitRoot
     $cmdPath = Join-Path $root ("ff-$Tag.cmd")
+    $mozLines = ''
+    if ($MozLog) {
+        $mozLines = @"
+set MOZ_LOG=timestamp,nsHostResolver:5
+set MOZ_LOG_FILE=$root\moz\hostresolver.log
+set MOZ_LOG_FILE_MAX_SIZE=4194304
+"@
+    }
     $body = @"
 @echo off
 echo launch %DATE% %TIME% user=%USERNAME% tag=$Tag >> "$root\logs\launch.log"
-"$firefox" -new-window "$Url" >> "$root\logs\firefox-$Tag.log" 2>&1
+$mozLines"$firefox" -new-window "$Url" >> "$root\logs\firefox-$Tag.log" 2>&1
 echo exit %ERRORLEVEL% >> "$root\logs\launch.log"
 "@
     [IO.File]::WriteAllText($cmdPath, $body, [Text.UTF8Encoding]::new($false))
@@ -501,7 +530,8 @@ function Start-InSessionVisit {
     # break it.
     param(
         [Parameter(Mandatory = $true)][string]$Url,
-        [string]$Tag = 'visit'
+        [string]$Tag = 'visit',
+        [bool]$MozLog = $false
     )
     $firefox = Get-FirefoxInstallPath
     if (-not $firefox) { throw 'firefox.exe not found' }
@@ -514,7 +544,7 @@ function Start-InSessionVisit {
     if (-not (Test-Path -LiteralPath $launcher)) { throw "session launcher missing at $launcher" }
     # Phase 2E proved this launch shape on the same image: a cmd wrapper (stdout
     # captured, launch/exit markers) started through the session launcher.
-    $cmdPath = Write-CleanFirefoxCmd -Url $Url -Tag $Tag
+    $cmdPath = Write-CleanFirefoxCmd -Url $Url -Tag $Tag -MozLog:$MozLog
     $target = '"C:\Windows\System32\cmd.exe" /c "' + $cmdPath + '"'
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target))
     $out = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher -CommandLineBase64 $b64 2>&1 | Out-String).Trim()
@@ -737,15 +767,21 @@ switch ($Step) {
         catch { $fixtureDnsOk = $false }
         $script:Body.fixtureDnsOk = $fixtureDnsOk
         if (-not $fixtureDnsOk) { $script:Failures.Add('first-visit-dns-fixture-unavailable') }
-        $script:Body.dnsBefore = @(
-            Resolve-Probe -HostName ([string]$plan.anchors.a1.host)
-            Resolve-Probe -HostName ([string]$plan.anchors.a1.roles.styles)
-        )
+        $siteMode = [bool]$plan.siteMode
+        $script:Body.siteMode = $siteMode
+        $dnsBeforeList = @(Resolve-Probe -HostName ([string]$plan.anchors.a1.host))
+        if (-not $siteMode) { $dnsBeforeList += Resolve-Probe -HostName ([string]$plan.anchors.a1.roles.styles) }
+        $script:Body.dnsBefore = $dnsBeforeList
         # Phase 5.3 (floor): the floor pre-whitelists every dependency host, so
         # the environment control REQUIRES the dependency to resolve before the
         # visit. The measurement scenarios keep the inverse precondition (a
         # dependency only resolves after the product learns it).
-        if ($plan.floorMode) {
+        if ($siteMode) {
+            # Phase 6 C: the canary anchor is a real site; the only resolvability
+            # precondition is the anchor itself (real DNS through the product).
+            if (-not $dnsBeforeList[0].resolves) { $script:Failures.Add('site-anchor-does-not-resolve') }
+        }
+        elseif ($plan.floorMode) {
             if (-not $script:Body.dnsBefore[0].resolves) { $script:Failures.Add('floor-anchor-does-not-resolve-before-visit') }
             if (-not $script:Body.dnsBefore[1].resolves) { $script:Failures.Add('floor-dependency-does-not-resolve-before-visit') }
         }
@@ -824,21 +860,25 @@ switch ($Step) {
     }
     'visit' {
         $plan = Get-FixturePlan
+        $siteMode = [bool]$plan.siteMode
         $anchorHost = [string]$plan.anchors.a1.host
-        $url = "http://$anchorHost/"
+        # Phase 6 C: the canary navigates the real site URL; every other
+        # scenario keeps the fixture anchor.
+        if ($siteMode -and [string]$plan.siteUrl) { $url = [string]$plan.siteUrl } else { $url = "http://$anchorHost/" }
         $script:Body.anchor = 'a1'
         $script:Body.anchorUrl = $url
+        $script:Body.siteMode = $siteMode
         if ($ScenarioId -eq 'first-visit-class-boot') {
             # Class boot: arm the wrapper for the next logon (the run key is what
             # starts the browser in this lab) and reboot; the host waits for the
             # new logon and measures the class-boot window.
-            $cmdPath = Write-CleanFirefoxCmd -Url $url -Tag 'visit'
+            $cmdPath = Write-CleanFirefoxCmd -Url $url -Tag 'visit' -MozLog:$siteMode
             Clear-VisitRunKey | Out-Null
             Set-VisitRunKey -CmdPath $cmdPath
             $script:Body.arm = [ordered]@{ mode = 'reboot'; cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'reboot') }
         }
         else {
-            $launch = Start-InSessionVisit -Url $url -Tag 'visit'
+            $launch = Start-InSessionVisit -Url $url -Tag 'visit' -MozLog:$siteMode
             $script:Body.launchOut = $launch.out
             $script:Body.arm = [ordered]@{ mode = 'in-session'; firefox = @($launch.firefox) }
         }
@@ -972,6 +1012,13 @@ switch ($Step) {
     }
     'security' {
         $plan = Get-FixturePlan
+        # Phase 6 C: the real-site canary has no fixture blocked-host probe;
+        # the controller never calls this step for site, and if it ever does,
+        # fixture-only expectations must not run against a real page.
+        if ($plan.siteMode) {
+            $script:Body.securitySkipped = 'site-canary'
+            Complete-Step
+        }
         $overlayHosts = @(Get-OverlayHosts)
         $script:Body.overlayHosts = $overlayHosts
         $expected = @($plan.controlDependencies | Where-Object { $_ -ne $plan.neverLearnable })
@@ -1047,16 +1094,30 @@ switch ($Step) {
             $workerState = Get-FileTextSafe -Path "$OpenPathRoot\data\runtime-dependency-worker-state.json"
         }
         & $lap 'workerStateMs'
+        # Phase 6 C: the site canary extracts ONLY the learned overlay hosts
+        # from the bounded MOZ_LOG scan (and every other scenario keeps the
+        # generic nsHostResolver|nsHttp filter).
+        $collectPlan = $null
+        try { $collectPlan = Get-FixturePlan } catch { }
+        $collectSiteMode = [bool]($collectPlan -and $collectPlan.siteMode)
+        $earlyOverlayHosts = @()
+        if ($collectSiteMode) { $earlyOverlayHosts = @(Get-OverlayHosts) }
+        $mozPattern = 'nsHostResolver|nsHttp'
+        if ($collectSiteMode -and $earlyOverlayHosts.Count -gt 0) {
+            $mozPattern = (@($earlyOverlayHosts) | ForEach-Object { [regex]::Escape([string]$_) }) -join '|'
+        }
         $moz = [ordered]@{ lines = @(); files = 0; totalFiles = 0; truncated = $true }
         if (& $budgetExceeded) { $skippedBlocks.Add('moz') | Out-Null }
-        else { $moz = Get-BoundedMozMatches -Directories @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz')); $mozExtract = @($moz.lines) }
+        else { $moz = Get-BoundedMozMatches -Directories @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz')) -Pattern $mozPattern; $mozExtract = @($moz.lines) }
         $mozExtract = @($moz.lines)
         & $lap 'mozScanMs'
         $timings.mozFiles = $moz.files
         $timings.mozFilesTotal = $moz.totalFiles
         $timings.mozTruncated = $moz.truncated
         $overlayHosts = @()
-        if (& $budgetExceeded) { $skippedBlocks.Add('overlayHosts') | Out-Null } else { $overlayHosts = @(Get-OverlayHosts); & $lap 'overlayHostsMs' }
+        if (& $budgetExceeded) { $skippedBlocks.Add('overlayHosts') | Out-Null }
+        elseif ($collectSiteMode -and $earlyOverlayHosts.Count -gt 0) { $overlayHosts = $earlyOverlayHosts; & $lap 'overlayHostsMs' }
+        else { $overlayHosts = @(Get-OverlayHosts); & $lap 'overlayHostsMs' }
         $whitelistMirror = @()
         if (& $budgetExceeded) { $skippedBlocks.Add('whitelistMirror') | Out-Null } else { $whitelistMirror = @(Get-LogTail -Path "$OpenPathRoot\data\whitelist.txt" -Tail 40); & $lap 'whitelistMs' }
         $firefoxProcesses = @()
@@ -1084,11 +1145,18 @@ switch ($Step) {
         }
         $script:Body.collect.addonsLog = @($addonsLog | Select-Object -First 30 | ForEach-Object { & $truncateLine $_ 300 })
         $script:Body.collect.mozExtract = @($mozExtract | Select-Object -First 200 | ForEach-Object { & $truncateLine $_ 300 })
+        # Phase 6 C: the canary needs every hold outcome (the `all` cap would
+        # cut a busy real page) plus the navigation/reload decisions, and it
+        # records which MOZ filter and hosts were tracked.
+        $script:Body.collect.holds = @($diagnostics | Where-Object { $_ -match 'kind":"hold"' }).Count
+        $script:Body.collect.canaryDiagnostics = @($diagnostics | Where-Object { $_ -match 'kind":"(hold|hold-outcome|navigation|reload-decision)"' } | Select-Object -First 500 | ForEach-Object { & $truncateLine $_ 500 })
+        $script:Body.collect.mozPattern = $mozPattern
+        $script:Body.collect.mozHostsTracked = @($earlyOverlayHosts | Select-Object -First 100)
         $script:Body.collect.diagnosticLines = $diagnostics.Count
         $script:Body.collect.diagnosticSample = @($diagnostics | Select-Object -First 20 | ForEach-Object { & $truncateLine $_ 600 })
         $script:Body.collect.startupProfiles = @($profiles | Select-Object -Last 8 | ForEach-Object { & $truncateLine $_ 600 })
         $script:Body.collect.nativeHostTail = @($nativeHost | Select-Object -Last 40 | ForEach-Object { & $truncateLine $_ 600 })
-        $script:Body.collect.openpathTail = @($openpath | Select-Object -Last 30 | ForEach-Object { & $truncateLine $_ 600 })
+        $script:Body.collect.openpathTail = @($openpath | Select-Object -Last 60 | ForEach-Object { & $truncateLine $_ 600 })
         if ($workerState -and $workerState.Length -gt 16384) { $workerState = $workerState.Substring(0, 16384) + '...truncated' }
         $script:Body.collect.workerState = $workerState
         $script:Body.collect.overlayHosts = @($overlayHosts | Select-Object -First 100)
@@ -1099,7 +1167,7 @@ switch ($Step) {
         # progress, and the probe is bounded so the step still completes.
         $serializeKeyMs = [ordered]@{}
         $keyProbeWatch = [System.Diagnostics.Stopwatch]::StartNew()
-        foreach ($key in @('diagnostics', 'addonsLog', 'mozExtract', 'diagnosticSample', 'startupProfiles', 'nativeHostTail', 'openpathTail', 'workerState', 'overlayHosts', 'whitelistMirror', 'firefoxProcesses')) {
+        foreach ($key in @('diagnostics', 'canaryDiagnostics', 'addonsLog', 'mozExtract', 'diagnosticSample', 'startupProfiles', 'nativeHostTail', 'openpathTail', 'workerState', 'overlayHosts', 'whitelistMirror', 'firefoxProcesses')) {
             if (-not $script:Body.collect.Contains($key)) { continue }
             if ($keyProbeWatch.Elapsed.TotalSeconds -gt 30) { $serializeKeyMs['budgetExceeded'] = $true; break }
             $script:Body.collect.timings.serializeKeyCurrent = $key
@@ -1203,22 +1271,16 @@ switch ($Step) {
             }
             if ($acrylicIni) {
                 $dnsTopology.acrylicIniPath = $acrylicIni
-                # Phase 5.3 P5: read the WHOLE INI (the tail cut the primary
-                # address) and keep the section-qualified upstreams and affinity
-                # masks. Values are non-secret lab addresses/domain masks.
-                $acrylic = [ordered]@{}
-                $section = ''
-                foreach ($line in @((Get-FileTextSafe -Path $acrylicIni -MaxBytes 262144) -split "`r?`n")) {
-                    if ($line -match '^\s*\[(.+)\]\s*$') { $section = $Matches[1].Trim(); continue }
-                    if ($line -match '^\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.*)$') {
-                        $key = $Matches[1]
-                        if ($key -match 'ServerAddress$|DomainNameAffinityMask$|QueryTypeAffinityMask$|UseWindowsHostsFile$|^Enable$|AddressCache') {
-                            $qualified = if ($section) { "$section.$key" } else { $key }
-                            $acrylic[$qualified] = ([string]$Matches[2]).Trim()
-                        }
-                    }
+                # Phase 6 A: the parse lives in the tested FirstVisitDnsTopology
+                # module; the value is captured before any other -match, so the
+                # literal upstreams and masks reach the evidence.
+                if ($script:DnsTopologyModuleLoaded) {
+                    $dnsTopology.acrylic = ConvertFrom-OpenPathAcrylicIniText -Text (Get-FileTextSafe -Path $acrylicIni -MaxBytes 262144)
                 }
-                $dnsTopology.acrylic = $acrylic
+                else {
+                    $dnsTopology.acrylic = [ordered]@{}
+                    $dnsTopology.acrylicError = 'dns-topology-module-missing'
+                }
                 $acrylicHostsPath = Join-Path (Split-Path $acrylicIni -Parent) 'AcrylicHosts.txt'
                 if (Test-Path -LiteralPath $acrylicHostsPath) {
                     $acrylicHostsText = Get-FileTextSafe -Path $acrylicHostsPath -MaxBytes 262144
@@ -1316,10 +1378,38 @@ switch ($Step) {
         Complete-Step
     }
     'host-events' {
-        # AppLocker events, deliberately a separate short call: this is the only
-        # evidence available for builds without the per-user native host log.
+        # AppLocker + CodeIntegrity events, deliberately a separate short call:
+        # this is the only evidence available for builds without the per-user
+        # native host log, and Phase 6 needs the SAC / Code Integrity signals.
         Save-PartialResult
-        $events = [ordered]@{ at = [DateTime]::UtcNow.ToString('o') }
+        $languageMode = [string]$ExecutionContext.SessionState.LanguageMode
+        $ciQuery = '*[System[(EventID=3033 or EventID=3034 or EventID=3076 or EventID=3077 or EventID=3089)]]'
+        if ($languageMode -ne 'FullLanguage') {
+            # Phase 6 B: under ConstrainedLanguage the harness can still run
+            # native commands and write cmdlets; collect the minimum (state,
+            # events with wevtutil, openpath.log with type) and document it.
+            $minimal = @{}
+            $minimal.status = 'passed'
+            $minimal.step = $Step
+            $minimal.phase = $Phase
+            $minimal.scenario = $ScenarioId
+            $minimal.languageMode = $languageMode
+            $minimal.constrainedLanguage = $true
+            $ci = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$ciQuery", '/c:40', '/rd:true', '/f:text')
+            $minimal.codeIntegrityExit = $ci.exit
+            $minimal.codeIntegrityLineCount = @($ci.out).Count
+            $minimal.codeIntegrityLines = @($ci.out | Select-Object -First 200)
+            $openpathConstrained = Invoke-Cmd 'cmd.exe' @('/c', 'type C:\OpenPath\data\logs\openpath.log 2>nul')
+            $minimal.openpathLineCount = @($openpathConstrained.out).Count
+            $minimal.openpathTail = @($openpathConstrained.out | Select-Object -Last 30)
+            $minimalJson = $minimal | ConvertTo-Json -Depth 6 -Compress
+            Set-Content -LiteralPath $ResultPath -Value $minimalJson -Encoding UTF8 -ErrorAction SilentlyContinue
+            Write-Output '<<<GUEST_RESULT>>>'
+            Write-Output $minimalJson
+            Write-Output '<<<END_GUEST_RESULT>>>'
+            exit 0
+        }
+        $events = [ordered]@{ at = [DateTime]::UtcNow.ToString('o'); languageMode = $languageMode }
         foreach ($pair in @(
                 @{ Key = 'events8004'; Log = 'Microsoft-Windows-AppLocker/EXE and DLL'; Id = 8004 },
                 @{ Key = 'events8007'; Log = 'Microsoft-Windows-AppLocker/MSI and Script'; Id = 8007 }
@@ -1333,7 +1423,147 @@ switch ($Step) {
             $events[$pair.Key] = @($list)
             $events["exit$($pair.Id)"] = $result.exit
         }
+        # Phase 6 B: Code Integrity / SAC events (block and audit ids).
+        $ci = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$ciQuery", '/c:40', '/rd:true', '/f:text')
+        $ciList = New-Object System.Collections.Generic.List[string]
+        foreach ($line in @($ci.out)) {
+            $ciList.Add([string]$line) | Out-Null
+            if ($ciList.Count -ge 400) { break }
+        }
+        $events.codeIntegrity = @($ciList)
+        $events.codeIntegrityExit = $ci.exit
+        # Phase 6 B: constrained-language errors in the agent log (bounded).
+        $events.openpathLanguageErrors = @(Get-LogTail -Path "$OpenPathRoot\data\logs\openpath.log" -Tail 400 -Patterns @('ConstrainedLanguage', 'constrained language', 'language mode') | Select-Object -Last 20)
+        # Phase 6 B: agent state after the boot (Acrylic service, DNS for the
+        # anchor, watchdog/worker tasks).
+        $agentState = [ordered]@{}
+        try { $agentState.acrylicService = [string](Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue).Status } catch { $agentState.acrylicService = 'query-failed' }
+        try { $agentState.tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'OpenPath-*' } | ForEach-Object { [ordered]@{ name = $_.TaskName; state = [string]$_.State } }) } catch { }
+        try {
+            $planForState = Get-FixturePlan
+            $anchorHostForState = [string]$planForState.anchors.a1.host
+            if ($anchorHostForState) { $agentState.anchorDns = Resolve-Probe -HostName $anchorHostForState }
+        }
+        catch { }
+        $events.agentState = $agentState
         $script:Body.hostEvents = $events
+        Complete-Step
+    }
+    'sac-apply' {
+        # Phase 6 B: simulate "an installed machine to which Windows turns SAC
+        # On". Runs right after the warm-up with SAC=2; the class-boot reboot
+        # then applies it. Records the previous value and the CiTool result.
+        Save-PartialResult
+        $languageMode = [string]$ExecutionContext.SessionState.LanguageMode
+        if ($languageMode -ne 'FullLanguage') {
+            $script:Failures.Add("sac-apply-requires-full-language:$languageMode")
+            Complete-Step
+        }
+        $policyPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+        $previous = -1
+        try {
+            $current = Get-ItemProperty -LiteralPath $policyPath -Name 'VerifiedAndReputablePolicyState' -ErrorAction SilentlyContinue
+            if ($current -and $null -ne $current.VerifiedAndReputablePolicyState) { $previous = [int]$current.VerifiedAndReputablePolicyState }
+        }
+        catch { }
+        try {
+            if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
+            Set-ItemProperty -LiteralPath $policyPath -Name 'VerifiedAndReputablePolicyState' -Value 1 -Type DWord
+        }
+        catch {
+            $script:Failures.Add("sac-apply-registry-failed: $($_.Exception.Message)")
+            Complete-Step
+        }
+        $ciTool = Join-Path $env:SystemRoot 'System32\CiTool.exe'
+        $ci = [ordered]@{ path = $ciTool; exists = (Test-Path -LiteralPath $ciTool); exit = -1; out = @() }
+        if ($ci.exists) {
+            $result = Invoke-Cmd $ciTool @('-r')
+            $ci.exit = $result.exit
+            $ci.out = @($result.out | Select-Object -First 20)
+        }
+        $applied = -1
+        try {
+            $now = Get-ItemProperty -LiteralPath $policyPath -Name 'VerifiedAndReputablePolicyState' -ErrorAction Stop
+            if ($now -and $null -ne $now.VerifiedAndReputablePolicyState) { $applied = [int]$now.VerifiedAndReputablePolicyState }
+        }
+        catch { }
+        $script:Body.sacApply = [ordered]@{
+            previousValue = $previous
+            appliedValue  = $applied
+            ciTool        = $ci
+            at            = [DateTime]::UtcNow.ToString('o')
+        }
+        Complete-Step
+    }
+    'sac-state' {
+        # Phase 6 B: state after the class-boot reboot applied SAC. Works under
+        # ConstrainedLanguage too (minimal path with cmdlets and native
+        # commands only) because the policy can put PowerShell in CLM.
+        Save-PartialResult
+        $languageMode = [string]$ExecutionContext.SessionState.LanguageMode
+        $policyPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+        $ciQuery = '*[System[(EventID=3033 or EventID=3034 or EventID=3076 or EventID=3077 or EventID=3089)]]'
+        $registryValue = -1
+        $mpState = 'unknown'
+        try {
+            $current = Get-ItemProperty -LiteralPath $policyPath -Name 'VerifiedAndReputablePolicyState' -ErrorAction SilentlyContinue
+            if ($current -and $null -ne $current.VerifiedAndReputablePolicyState) { $registryValue = [int]$current.VerifiedAndReputablePolicyState }
+        }
+        catch { }
+        try {
+            if (Get-Command -Name Get-MpComputerStatus -ErrorAction SilentlyContinue) {
+                $mpState = [string](Get-MpComputerStatus -ErrorAction Stop).SmartAppControlState
+            }
+        }
+        catch { $mpState = 'query-failed' }
+        if ($languageMode -ne 'FullLanguage') {
+            $minimal = @{}
+            $minimal.status = 'passed'
+            $minimal.step = $Step
+            $minimal.phase = $Phase
+            $minimal.scenario = $ScenarioId
+            $minimal.languageMode = $languageMode
+            $minimal.constrainedLanguage = $true
+            $minimal.sacState = @{ registryValue = $registryValue; smartAppControlState = $mpState; enforced = ($registryValue -eq 1) }
+            $ci = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$ciQuery", '/c:40', '/rd:true', '/f:text')
+            $minimal.codeIntegrityExit = $ci.exit
+            $minimal.codeIntegrityLines = @($ci.out | Select-Object -First 200)
+            $openpathConstrained = Invoke-Cmd 'cmd.exe' @('/c', 'type C:\OpenPath\data\logs\openpath.log 2>nul')
+            $minimal.openpathLineCount = @($openpathConstrained.out).Count
+            $minimal.openpathTail = @($openpathConstrained.out | Select-Object -Last 30)
+            $minimalJson = $minimal | ConvertTo-Json -Depth 6 -Compress
+            Set-Content -LiteralPath $ResultPath -Value $minimalJson -Encoding UTF8 -ErrorAction SilentlyContinue
+            Write-Output '<<<GUEST_RESULT>>>'
+            Write-Output $minimalJson
+            Write-Output '<<<END_GUEST_RESULT>>>'
+            exit 0
+        }
+        $ci = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$ciQuery", '/c:40', '/rd:true', '/f:text')
+        $ciList = New-Object System.Collections.Generic.List[string]
+        foreach ($line in @($ci.out)) {
+            $ciList.Add([string]$line) | Out-Null
+            if ($ciList.Count -ge 400) { break }
+        }
+        $agentState = [ordered]@{}
+        try { $agentState.acrylicService = [string](Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue).Status } catch { $agentState.acrylicService = 'query-failed' }
+        try { $agentState.tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'OpenPath-*' } | ForEach-Object { [ordered]@{ name = $_.TaskName; state = [string]$_.State } }) } catch { }
+        try {
+            $planForState = Get-FixturePlan
+            $anchorHostForState = [string]$planForState.anchors.a1.host
+            if ($anchorHostForState) { $agentState.anchorDns = Resolve-Probe -HostName $anchorHostForState }
+        }
+        catch { }
+        try { $agentState.openpathErrors = @(Get-LogTail -Path "$OpenPathRoot\data\logs\openpath.log" -Tail 400 -Patterns @('ERROR', 'WARN') | Select-Object -Last 25) } catch { }
+        $script:Body.sacState = [ordered]@{
+            registryValue         = $registryValue
+            smartAppControlState  = $mpState
+            enforced              = ($registryValue -eq 1)
+            languageMode          = $languageMode
+            codeIntegrity         = @($ciList)
+            codeIntegrityExit     = $ci.exit
+            agentState            = $agentState
+            at                    = [DateTime]::UtcNow.ToString('o')
+        }
         Complete-Step
     }
     'cleanup' {

@@ -124,6 +124,59 @@ function Select-FirstVisitAppControlEvidence {
     return @($evidence.ToArray())
 }
 
+function Select-FirstVisitSmartAppControlEvidence {
+    <#
+    .SYNOPSIS
+    CodeIntegrity block events that name a product binary (Phase 6 B).
+    .DESCRIPTION
+    Parses wevtutil /f:text blocks (Event[...] ... Date ... Event ID ...) and
+    keeps the ones whose id is in the block set (3033/3034/3076/3077/3089) and
+    whose text names one of the candidate files (the native host exe, Acrylic,
+    firefox). The literal block is preserved as evidence.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Events = $null,
+        [string[]]$FileNames = @('OpenPath-NativeHost.exe', 'AcrylicDNSProxySvc.exe', 'AcrylicService.exe', 'firefox.exe'),
+        [int[]]$BlockIds = @(3033, 3034, 3076, 3077, 3089)
+    )
+    $blocks = New-Object System.Collections.Generic.List[object]
+    $current = $null
+    foreach ($line in @(Get-FirstVisitWarmupField -InputObject $Events -Name 'codeIntegrity')) {
+        $text = [string]$line
+        if ($text -match '^\s*Event\[\d+\]:') {
+            if ($current) { $blocks.Add($current.ToArray()) | Out-Null }
+            $current = New-Object System.Collections.Generic.List[string]
+        }
+        if ($null -eq $current) { $current = New-Object System.Collections.Generic.List[string] }
+        $current.Add($text) | Out-Null
+    }
+    if ($current) { $blocks.Add($current.ToArray()) | Out-Null }
+    $evidence = New-Object System.Collections.Generic.List[object]
+    foreach ($block in $blocks.ToArray()) {
+        $blockText = (@($block) -join "`n")
+        $id = -1
+        $idMatch = [regex]::Match($blockText, '(?im)^\s*Event ID\s*:\s*(\d+)')
+        if ($idMatch.Success) { $id = [int]$idMatch.Groups[1].Value }
+        if ($BlockIds -notcontains $id) { continue }
+        $matchedFile = ''
+        foreach ($name in @($FileNames)) {
+            if ($blockText -match [regex]::Escape($name)) { $matchedFile = $name; break }
+        }
+        if (-not $matchedFile) { continue }
+        $dateText = ''
+        $dateMatch = [regex]::Match($blockText, '(?im)^\s*(?:Date|Fecha)\s*:\s*(\S+)')
+        if ($dateMatch.Success) { $dateText = [string]$dateMatch.Groups[1].Value }
+        $evidence.Add([ordered]@{
+                eventId = $id
+                file    = $matchedFile
+                date    = $dateText
+                line    = $blockText
+            }) | Out-Null
+    }
+    return @($evidence.ToArray())
+}
+
 function Get-FirstVisitHostSignalsVerdict {
     <#
     .SYNOPSIS
@@ -132,6 +185,9 @@ function Get-FirstVisitHostSignalsVerdict {
     Reasons (both PRODUCT):
       - native-host-blocked-by-appcontrol: the student's launcher interpreter
         was denied by AppLocker (8004 for powershell.exe/pwsh.exe);
+      - native-host-blocked-by-smart-app-control: a Code Integrity block event
+        (3033/3034/3076/3077/3089) names the native host (or the browser) and
+        the host never started;
       - native-host-not-started: the template ships the per-user native host
         log but no `initialization completed` line appeared.
     A build without the per-user log capability and without deny events yields
@@ -143,11 +199,16 @@ function Get-FirstVisitHostSignalsVerdict {
         [AllowNull()][object]$Events = $null,
         [AllowNull()][string]$Capabilities = '',
         [string]$StudentUserName = 'alumno',
-        [string]$WindowStart = ''
+        [string]$WindowStart = '',
+        # Phase 6 B: Smart App Control evidence and the effective state.
+        [AllowNull()][object]$CodeIntegrityEvents = $null,
+        [string]$SmartAppControlState = ''
     )
     $hostStarted = [bool](Get-FirstVisitWarmupField -InputObject $Live -Name 'hostStarted')
     $evidence = @(Select-FirstVisitAppControlEvidence -Events $Events -StudentUserName $StudentUserName -WindowStart $WindowStart)
     $blocked = ($evidence.Count -gt 0)
+    $sacEvidence = @(Select-FirstVisitSmartAppControlEvidence -Events $CodeIntegrityEvents)
+    $sacBlocked = ($sacEvidence.Count -gt 0)
     $hostLogCapable = $false
     $backgroundStartCapable = $false
     $diagnosticBatchCapable = $false
@@ -160,7 +221,8 @@ function Get-FirstVisitHostSignalsVerdict {
     }
     $productReasons = New-Object System.Collections.Generic.List[string]
     if (-not $hostStarted) {
-        if ($blocked) { $productReasons.Add('native-host-blocked-by-appcontrol') }
+        if ($sacBlocked) { $productReasons.Add('native-host-blocked-by-smart-app-control') }
+        elseif ($blocked) { $productReasons.Add('native-host-blocked-by-appcontrol') }
         elseif ($hostLogCapable) { $productReasons.Add('native-host-not-started') }
     }
     $signals = [ordered]@{
@@ -173,14 +235,18 @@ function Get-FirstVisitHostSignalsVerdict {
         hostLogCapable       = $hostLogCapable
         backgroundStartCapable = $backgroundStartCapable
         diagnosticBatchCapable = $diagnosticBatchCapable
+        smartAppControlState = [string]$SmartAppControlState
+        blockedBySmartAppControl = $sacBlocked
     }
     return [ordered]@{
         status               = if ($productReasons.Count -eq 0) { 'passed' } else { 'failed' }
         productReasons       = @($productReasons.ToArray())
         blockedByAppControl  = $blocked
+        blockedBySmartAppControl = $sacBlocked
         appControlEvidence   = $evidence
+        smartAppControlEvidence = $sacEvidence
         signals              = $signals
     }
 }
 
-Export-ModuleMember -Function Get-FirstVisitPreconditionVerdict, Get-FirstVisitHostSignalsVerdict, Select-FirstVisitAppControlEvidence
+Export-ModuleMember -Function Get-FirstVisitPreconditionVerdict, Get-FirstVisitHostSignalsVerdict, Select-FirstVisitAppControlEvidence, Select-FirstVisitSmartAppControlEvidence

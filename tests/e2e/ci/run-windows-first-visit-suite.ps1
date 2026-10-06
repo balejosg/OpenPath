@@ -23,10 +23,27 @@ param(
     [Parameter(Mandatory)][ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })][string]$PersonalizedExePath,
     [string]$ControllerCommand,
     [string[]]$Scenarios = @('settled', 'class-boot'),
-    [ValidateRange(1, 20)][int]$Repetitions = 1
+    [ValidateRange(1, 20)][int]$Repetitions = 1,
+    # Phase 6 B: unchanged (default) | on. `on` only makes sense for class-boot.
+    [ValidateSet('unchanged', 'on')][string]$SmartAppControl = 'unchanged',
+    # Phase 6 C: real-site canary inputs (site scenario only).
+    [string]$SiteUrl = '',
+    [string]$SiteWhitelist = ''
 )
 
 $ErrorActionPreference = 'Stop'
+# Phase 6: fail fast before touching the lab.
+if ($Scenarios -contains 'site' -and [string]::IsNullOrWhiteSpace($SiteUrl)) {
+    [Console]::Error.WriteLine('first-visit-site-url-required: the site canary needs site_url.')
+    exit 2
+}
+if ($SmartAppControl -eq 'on') {
+    $invalid = @($Scenarios | Where-Object { $_ -ne 'class-boot' })
+    if ($invalid.Count -gt 0) {
+        [Console]::Error.WriteLine("first-visit-smart-app-control-requires-class-boot: scenarios=$($invalid -join ',')")
+        exit 2
+    }
+}
 if ([string]::IsNullOrWhiteSpace($ControllerCommand) -or -not (Test-Path -LiteralPath $ControllerCommand -PathType Leaf)) {
     [Console]::Error.WriteLine('BLOCKED_PLATFORM_VALIDATION: no authorized disposable Windows controller is configured.')
     exit 2
@@ -63,7 +80,18 @@ foreach ($repetition in 1..$Repetitions) {
         $labScenario = if ($env:OPENPATH_FIRST_VISIT_LAB_SCENARIO) { [string]$env:OPENPATH_FIRST_VISIT_LAB_SCENARIO } else { 'win11-education-existing-empty' }
         $payload = [ordered]@{
             schemaVersion = 2
-            firstVisit    = [ordered]@{ scenario = "first-visit-$scenario"; repetition = $repetition; labScenario = $labScenario; templateXpiSha256 = $templateXpiSha }
+            firstVisit    = [ordered]@{
+                scenario          = "first-visit-$scenario"
+                repetition        = $repetition
+                labScenario       = $labScenario
+                templateXpiSha256 = $templateXpiSha
+                # Phase 6 B/C: only dispatch inputs reach the guest; they travel
+                # inside the per-scenario payload so no site ever lands in the
+                # repo or in the nightly/auto-run plans.
+                smartAppControl   = $SmartAppControl
+                siteUrl           = $SiteUrl
+                siteWhitelist     = $SiteWhitelist
+            }
         }
         [IO.File]::WriteAllText($payloadPath, ($payload | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         $scenarioFailed = $false

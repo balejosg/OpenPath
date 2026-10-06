@@ -98,6 +98,37 @@ class PlanTests(unittest.TestCase):
         for host in settled["controlDependencies"]:
             self.assertNotIn(host, settled_body)
 
+    def test_site_plan_uses_the_real_url_and_serves_only_its_domains(self) -> None:
+        # Phase 6 C: the canary anchor is the real URL and the served whitelist
+        # carries only the requested domains (the real site learns its CDNs).
+        plan = fixture_server.build_plan(
+            "unit-run",
+            42,
+            "192.168.1.150",
+            "unit-token",
+            "site",
+            "https://www.reddit.com/",
+            ["reddit.com"],
+        )
+        self.assertTrue(plan["siteMode"])
+        self.assertEqual(plan["siteUrl"], "https://www.reddit.com/")
+        self.assertEqual(plan["anchors"]["a1"]["url"], "https://www.reddit.com/")
+        self.assertEqual(plan["anchors"]["a1"]["host"], "www.reddit.com")
+        self.assertEqual(plan["controlDependencies"], [])
+        self.assertEqual(plan["blockedSubdomains"], [])
+        body = fixture_server.whitelist_body(plan)
+        self.assertIn("reddit.com", body)
+        self.assertNotIn(".sslip.io", body)
+        self.assertNotIn("## BLOCKED-SUBDOMAINS\r\nblocked", body)
+        # No site_url is an input error, never a silent fixture plan.
+        with self.assertRaises(ValueError):
+            fixture_server.build_plan("unit-run", 42, "192.168.1.150", "t", "site", "", [])
+        # Without an explicit domain list the host is the only served domain.
+        defaulted = fixture_server.build_plan(
+            "unit-run", 42, "192.168.1.150", "t", "site", "https://example.invalid/app", []
+        )
+        self.assertEqual(defaulted["whitelistHosts"], ["example.invalid"])
+
 
 class FixtureServerTests(unittest.TestCase):
     @classmethod

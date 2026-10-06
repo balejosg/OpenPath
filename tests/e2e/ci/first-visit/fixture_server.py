@@ -60,13 +60,59 @@ PIXEL_PNG = bytes.fromhex(
 )
 
 
-def build_plan(run_id: str, seed: int, ip: str, token: str, scenario: str = "settled") -> dict:
+def build_plan(
+    run_id: str,
+    seed: int,
+    ip: str,
+    token: str,
+    scenario: str = "settled",
+    site_url: str = "",
+    site_domains: list[str] | None = None,
+) -> dict:
     rng = random.Random(seed)
     suffix = f"{ip}.sslip.io"
 
     def host(role: str, n: int) -> str:
         unique = "".join(rng.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(6))
         return f"{role}{n}-{unique}.{suffix}"
+
+    if scenario == "site":
+        # Phase 6 C: real-site canary. The anchor is the real URL, the served
+        # whitelist carries only the requested domains and there is no fixture
+        # dependency set (the real site learns its own CDN hosts).
+        if not site_url:
+            raise ValueError("site scenario requires site_url")
+        parsed_host = re.sub(r"^[a-z]+://", "", site_url.strip()).split("/", 1)[0].split(":", 1)[0].lower()
+        domains = [d.strip().lower() for d in (site_domains or []) if d and d.strip()]
+        if not domains:
+            domains = [parsed_host]
+        return {
+            "schemaVersion": 1,
+            "runId": run_id,
+            "seed": seed,
+            "ip": ip,
+            "token": token,
+            "scenario": "site",
+            "siteMode": True,
+            "siteUrl": site_url.strip(),
+            "siteDomains": domains,
+            "floorMode": False,
+            "roles": list(ROLES),
+            "anchors": {
+                "a1": {
+                    "host": parsed_host,
+                    "url": site_url.strip(),
+                    "roles": {},
+                }
+            },
+            "controlDependencies": [],
+            "neverLearnable": "",
+            "unlisted": "",
+            "whitelistHosts": domains,
+            "blockedSubdomains": [],
+            "blockedPaths": [],
+            "waveCriteria": {},
+        }
 
     anchors = {}
     for index in (1, 2):
@@ -458,7 +504,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         anchor_match = next(
             (key for key, entry in plan["anchors"].items() if entry["host"] == host), None
         )
-        if anchor_match is not None:
+        if anchor_match is not None and not plan.get("siteMode"):
             if path in ("/", "/index.html"):
                 self._send(200, anchor_html(plan, anchor_match).encode("utf-8"), "text/html; charset=utf-8")
                 self._finish(200, path, f"anchor={anchor_match}")
@@ -572,6 +618,9 @@ def main() -> int:
     # Phase 5.3 B4: scenario drives the served whitelist (floor pre-whitelists
     # every dependency host). `control` is accepted as the historical alias.
     parser.add_argument("--scenario", default="settled")
+    # Phase 6 C: real-site canary inputs (only the site scenario uses them).
+    parser.add_argument("--site-url", default="")
+    parser.add_argument("--site-domains", default="")
     parser.add_argument(
         "--font",
         default="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -579,8 +628,9 @@ def main() -> int:
     args = parser.parse_args()
 
     scenario = "floor" if args.scenario == "control" else args.scenario
+    site_domains = [part for part in str(args.site_domains).split(",") if part.strip()]
     seed = args.seed if args.seed is not None else int(time.time() * 1000) % 2_000_000_000
-    plan = build_plan(args.run_id, seed, args.ip, args.token, scenario)
+    plan = build_plan(args.run_id, seed, args.ip, args.token, scenario, args.site_url, site_domains)
     state = FixtureState(pathlib.Path(args.state_dir), plan, args.font)
     server = ThreadingHTTPServer((args.listen, args.port), FixtureHandler)
     server.state = state  # type: ignore[attr-defined]

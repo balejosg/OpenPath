@@ -99,6 +99,9 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
         hostProbeDeniedPowershell = $false
         hostProbeManifestExe = $false
         hostProbeError = ''
+        # Phase 6 C: real-site canary summary (empty for every other scenario).
+        canaryStatus = ''
+        canarySummary = ''
     }
     $prepareError = ''
     if (Test-Path -LiteralPath $preparePath) {
@@ -170,6 +173,18 @@ foreach ($scenarioDir in @(Get-ChildItem -LiteralPath $attemptRoot -Directory | 
             $row.hostProbeReads = [bool](Get-FirstVisitProperty -InputObject $hostProbe -Name 'readsResponded' -Default $false)
             $row.hostProbeDeniedPowershell = [bool](Get-FirstVisitProperty -InputObject $hostProbe -Name 'deniedPowershell' -Default $false)
             $row.hostProbeManifestExe = [bool](Get-FirstVisitProperty -InputObject $hostProbe -Name 'manifestTargetsCompiledHost' -Default $false)
+        }
+        # Phase 6 C: canary details for the row summary.
+        $canaryObject = Get-FirstVisitProperty -InputObject $metricsObject -Name 'canary'
+        if ($canaryObject) {
+            $row.canaryStatus = [string](Get-FirstVisitProperty -InputObject $canaryObject -Name 'status' -Default '')
+            $canaryMetrics = Get-FirstVisitProperty -InputObject $canaryObject -Name 'metrics'
+            $canaryHolds = [int](Get-FirstVisitProperty -InputObject $canaryMetrics -Name 'holds' -Default 0)
+            $canaryP50 = [int](Get-FirstVisitProperty -InputObject $canaryMetrics -Name 'readyP50Ms' -Default -1)
+            $canaryMax = [int](Get-FirstVisitProperty -InputObject $canaryMetrics -Name 'readyMaxMs' -Default -1)
+            $canaryReloads = [int](Get-FirstVisitProperty -InputObject $canaryMetrics -Name 'reloads' -Default 0)
+            $canaryNegatives = [int](Get-FirstVisitProperty -InputObject $canaryObject -Name 'negativeCount' -Default 0)
+            $row.canarySummary = "holds=$canaryHolds readyP50/max=${canaryP50}/${canaryMax}ms reloads=$canaryReloads negatives=$canaryNegatives"
         }
     }
     # Phase 5.2 C1: the controller persists the scene verdict (from the page
@@ -272,7 +287,7 @@ $summary = [ordered]@{
     scenarios     = $rows
     baselines     = $baselines
 }
-$statusOverall = if (@($rows | Where-Object { $_.category -ne 'PASS' }).Count -gt 0) { 'failed' } else { 'passed' }
+$statusOverall = if (@($rows | Where-Object { $_.category -eq 'INFRA' -or $_.category -notin @('PASS', 'CANARY-PASS', 'CANARY-RED') }).Count -gt 0) { 'failed' } else { 'passed' }
 $summary.status = $statusOverall
 
 if ($SummaryJsonPath) { [IO.File]::WriteAllText($SummaryJsonPath, ($summary | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false)) }
@@ -283,8 +298,8 @@ $lines = @(
     '',
     "- Template: $templateSha (lag $templateLag successful main RELs)",
     '',
-    '| scenario | verdict | category | observe | evidence | blocked path | probe | reasons | error | product reasons | reloads | wave1 ms | visit delay s |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    '| scenario | verdict | category | canary | observe | evidence | blocked path | probe | reasons | error | product reasons | reloads | wave1 ms | visit delay s |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
 )
 foreach ($row in $rows) {
     $wave1 = if ($row.waveTimesMs) { [string]$row.waveTimesMs.wave1 } else { '' }
@@ -296,7 +311,8 @@ foreach ($row in $rows) {
         elseif ($row.hostProbePresent) { "exe ping=$([int]$row.hostProbePing) reads=$([int]$row.hostProbeReads) deny=$([int]$row.hostProbeDeniedPowershell) manifest=$([int]$row.hostProbeManifestExe)" }
         elseif ($row.status -eq 'observed') { "no-exe deny=$([int]$row.hostProbeDeniedPowershell)" }
         else { '' }
-    $lines += "| $($row.scenario) | $($row.verdict) | $($row.category) | $($row.observeStatus) | $evidenceText | $blockedPathText | $probeText | $(@($row.reasons) -join ',') | $errorText | $(@($row.productReasons) -join ',') | $($row.reloads) | $wave1 | $($row.visitDelaySeconds) |"
+    $canaryText = if ($row.canaryStatus) { "$($row.canaryStatus) $($row.canarySummary)" } else { '' }
+    $lines += "| $($row.scenario) | $($row.verdict) | $($row.category) | $canaryText | $($row.observeStatus) | $evidenceText | $blockedPathText | $probeText | $(@($row.reasons) -join ',') | $errorText | $(@($row.productReasons) -join ',') | $($row.reloads) | $wave1 | $($row.visitDelaySeconds) |"
 }
 $lines += ''
 $lines += '## Baselines (median / max, one clock per segment)'

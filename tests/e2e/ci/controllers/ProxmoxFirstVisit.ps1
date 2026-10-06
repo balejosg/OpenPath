@@ -8,6 +8,8 @@
 # Phase 3A.3: verdict and result contracts shared with the guest harness.
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitResult.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitWarmup.psm1') -Force
+# Phase 6 C: real-site canary metrics/verdict (pure, tested).
+Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitSiteCanary.psm1') -Force
 
 $script:OpenPathFirstVisitCaptureOffsets = @(5, 10, 15, 20, 30, 60)
 $script:OpenPathFirstVisitRefreshSettleSeconds = 30
@@ -45,12 +47,41 @@ function Get-OpenPathFirstVisitSettings {
     $hostAddress = [string](Get-OpenPathLabField -InputObject $Config -Name 'hostAddress')
     if ([string]::IsNullOrWhiteSpace($hostAddress)) { throw 'first-visit-host-address-missing' }
     $upstream = if ($env:OPENPATH_FIRST_VISIT_DNS_UPSTREAM) { [string]$env:OPENPATH_FIRST_VISIT_DNS_UPSTREAM } else { '192.168.1.133' }
+    # Phase 6 B: smart_app_control = unchanged (default) | on.
+    $smartAppControl = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'smartAppControl') } else { '' }
+    if ([string]::IsNullOrWhiteSpace($smartAppControl)) { $smartAppControl = 'unchanged' }
+    $smartAppControl = $smartAppControl.Trim().ToLowerInvariant()
+    if ($smartAppControl -notin @('unchanged', 'on')) { throw "first-visit-smart-app-control-invalid:$smartAppControl" }
+    if ($smartAppControl -eq 'on' -and $scenario -ne 'first-visit-class-boot') {
+        throw 'first-visit-smart-app-control-requires-class-boot'
+    }
+    # Phase 6 C: real-site canary inputs (only the site scenario uses them).
+    $siteUrl = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'siteUrl') } else { '' }
+    $siteWhitelist = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'siteWhitelist') } else { '' }
+    $siteDomains = @($siteWhitelist -split ',' | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } | Where-Object { $_ })
+    $siteMode = ($scenario -eq 'first-visit-site')
+    if ($siteMode -and [string]::IsNullOrWhiteSpace($siteUrl)) { throw 'first-visit-site-url-required' }
+    if ($siteMode) {
+        # The URL and the domains travel through a bash command on the Proxmox
+        # host: allow only URL-safe characters, never quotes/spaces/backticks.
+        if ($siteUrl.Trim() -notmatch '^https?://[A-Za-z0-9][A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]*$') {
+            throw 'first-visit-site-url-invalid'
+        }
+        foreach ($domain in $siteDomains) {
+            if ($domain -notmatch '^[a-z0-9][a-z0-9.-]*[a-z0-9]$') { throw "first-visit-site-domain-invalid:$domain" }
+        }
+        if ($siteDomains.Count -eq 0) { throw 'first-visit-site-whitelist-required' }
+    }
     return [pscustomobject]@{
-        Scenario    = $scenario
-        FixtureUrl  = "http://$hostAddress"
-        DnsIp       = $hostAddress
-        DnsUpstream = $upstream
-        HostAddress = $hostAddress
+        Scenario        = $scenario
+        FixtureUrl      = "http://$hostAddress"
+        DnsIp           = $hostAddress
+        DnsUpstream     = $upstream
+        HostAddress     = $hostAddress
+        SmartAppControl = $smartAppControl
+        SiteMode        = $siteMode
+        SiteUrl         = $siteUrl.Trim()
+        SiteDomains     = $siteDomains
     }
 }
 
@@ -60,15 +91,18 @@ function Start-OpenPathFirstVisitFixture {
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
         [Parameter(Mandatory = $true)][string]$RunId,
         [Parameter(Mandatory = $true)][string]$ArtifactsRoot,
-        [string]$Scenario = 'first-visit-settled'
+        [string]$Scenario = 'first-visit-settled',
+        [string]$SiteUrl = '',
+        [string[]]$SiteDomains = @()
     )
     $stagingRoot = [string](Get-OpenPathLabField -InputObject $Config -Name 'hostStagingRoot')
     if ([string]::IsNullOrWhiteSpace($stagingRoot)) { $stagingRoot = '/var/tmp/openpath-first-visit' }
     $staging = "$stagingRoot/$RunId".Replace('//', '/')
     # Phase 5.3 B4: the scenario selects the served whitelist (floor
     # pre-whitelists every dependency host). `control` is the historical alias.
-    $fixtureScenario = if ($Scenario -eq 'first-visit-control') { 'floor' } elseif ($Scenario -eq 'first-visit-floor') { 'floor' } else { 'settled' }
-    $settings = Get-OpenPathFirstVisitSettings -Payload ([pscustomobject]@{ firstVisit = [pscustomobject]@{ scenario = $Scenario } }) -Config $Config
+    # Phase 6 C: the site canary serves only the requested real domains.
+    $fixtureScenario = if ($Scenario -eq 'first-visit-control') { 'floor' } elseif ($Scenario -eq 'first-visit-floor') { 'floor' } elseif ($Scenario -eq 'first-visit-site') { 'site' } else { 'settled' }
+    $settings = Get-OpenPathFirstVisitSettings -Payload ([pscustomobject]@{ firstVisit = [pscustomobject]@{ scenario = $Scenario; siteUrl = $SiteUrl; siteWhitelist = ($SiteDomains -join ',') } }) -Config $Config
     $localFixtures = Get-OpenPathFirstVisitFixturesRoot
 
     & $Transport.InvokeHostCommand @('mkdir', '-p', "$staging/state") '' | Out-Null
@@ -79,8 +113,12 @@ function Start-OpenPathFirstVisitFixture {
     # next start fails with EADDRINUSE; clear every fixture instance first.
     # The bracket form keeps pkill from matching its own ssh command line.
     & $Transport.InvokeHostCommand @('bash', '-lc', "pkill -f 'fixture[_]server.py --state-dir' || true; pkill -f 'dns[_]fixture.py --state-dir' || true; sleep 2; echo cleared") '' | Out-Null
+    $siteArgs = ''
+    if ($fixtureScenario -eq 'site') {
+        $siteArgs = "--site-url '$($settings.SiteUrl)' --site-domains '$($settings.SiteDomains -join ',')' "
+    }
     $startCommand = "setsid nohup python3 $staging/dns_fixture.py --state-dir $staging/state --upstream $($settings.DnsUpstream) > $staging/dns.log 2>&1 < /dev/null & sleep 1; " +
-    "setsid nohup python3 $staging/fixture_server.py --state-dir $staging/state --port 80 --run-id $RunId --ip $($settings.HostAddress) --scenario $fixtureScenario > $staging/fixture.log 2>&1 < /dev/null & sleep 2; echo started"
+    "setsid nohup python3 $staging/fixture_server.py --state-dir $staging/state --port 80 --run-id $RunId --ip $($settings.HostAddress) --scenario $fixtureScenario $siteArgs> $staging/fixture.log 2>&1 < /dev/null & sleep 2; echo started"
     $startOutput = (& $Transport.InvokeHostCommand @('bash', '-lc', $startCommand) '').Trim()
     $planText = ''
     $httpDeadline = (Get-Date).AddSeconds(60)
@@ -752,7 +790,13 @@ function Get-OpenPathFirstVisitMetrics {
         [AllowNull()][object]$CollectTimings = $null,
         # Phase 5.2 E2: student host probe evidence (per scene).
         [AllowNull()][object]$HostProbe = $null,
-        [string]$HostProbeError = ''
+        [string]$HostProbeError = '',
+        # Phase 6: real-site canary metrics/verdict, SAC state and the post-boot
+        # CodeIntegrity evidence.
+        [AllowNull()][object]$Canary = $null,
+        [AllowNull()][object]$SacState = $null,
+        [AllowNull()][object]$PostHostEvents = $null,
+        [AllowNull()][object]$PostHostVerdict = $null
     )
     $hostProfile = @()
     foreach ($line in $StartupProfiles) {
@@ -806,6 +850,10 @@ function Get-OpenPathFirstVisitMetrics {
             $hostSignalsMetrics = Get-OpenPathLabField -InputObject $hostEvidence -Name 'signals'
             $appControlEvidence = @(Get-OpenPathLabField -InputObject $hostEvidence -Name 'verdict' | ForEach-Object { $_.appControlEvidence } | Where-Object { $_ })
         }
+    }
+    # Phase 6 B: a post-boot block (SAC/CodeIntegrity) is a product reason too.
+    if ($PostHostVerdict) {
+        $productReasons = @($productReasons + @(Get-OpenPathLabField -InputObject $PostHostVerdict -Name 'productReasons') | Select-Object -Unique)
     }
     $diagnosticKinds = [ordered]@{
         lines           = @($DiagnosticLines).Count
@@ -863,8 +911,14 @@ function Get-OpenPathFirstVisitMetrics {
             productReasons       = @($productReasons)
             hostSignals          = $hostSignalsMetrics
             appControlEvidence   = @($appControlEvidence | Select-Object -First 5)
+            blockedBySmartAppControl = [bool](Get-OpenPathLabField -InputObject $PostHostVerdict -Name 'blockedBySmartAppControl')
         }
         fixture        = if ($FixtureState) { [ordered]@{ requests = [int]$FixtureState.requests } } else { $null }
+        # Phase 6 evidence: the real-site canary, the SAC state after the boot
+        # and the post-boot CodeIntegrity collection.
+        canary         = $Canary
+        sacState       = $SacState
+        postHostEvents = $PostHostEvents
     }
 }
 
@@ -907,7 +961,7 @@ New-Item -ItemType Directory -Path 'C:\OpenPathLab\first-visit' -Force | Out-Nul
 [IO.File]::WriteAllText('C:\OpenPathLab\first-visit\student-session-launch.ps1', $launcherLiteral, [Text.UTF8Encoding]::new(`$false))
 Write-Output 'launcher-staged'
 "@ 120 | Out-Null
-    foreach ($moduleName in @('FirstVisitWarmup.psm1', 'FirstVisitResult.psm1', 'Test-OpenPathNativeHostAsStudent.ps1')) {
+    foreach ($moduleName in @('FirstVisitWarmup.psm1', 'FirstVisitResult.psm1', 'FirstVisitDnsTopology.psm1', 'FirstVisitSiteCanary.psm1', 'Test-OpenPathNativeHostAsStudent.ps1')) {
         $localModule = Join-Path (Get-OpenPathFirstVisitFixturesRoot) $moduleName
         if (-not (Test-Path -LiteralPath $localModule -PathType Leaf)) { throw "first-visit-helper-missing-$moduleName" }
         $published = & $Transport.PublishArtifact $Paths.StagingDir $localModule
@@ -920,7 +974,7 @@ Write-Output 'launcher-staged'
         if ($guestHash -and ($guestHash.ToLowerInvariant() -ne $localHash)) { throw "first-visit-helper-hash-mismatch-$moduleName" }
     }
     try { & $Transport.RemoveHostStaging $Paths.StagingDir | Out-Null } catch { }
-    $fixture = Start-OpenPathFirstVisitFixture -Config $Config -Transport $Transport -RunId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId')) -ArtifactsRoot ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) -Scenario $scenarioNormalized
+    $fixture = Start-OpenPathFirstVisitFixture -Config $Config -Transport $Transport -RunId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId')) -ArtifactsRoot ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) -Scenario $scenarioNormalized -SiteUrl $firstVisit.SiteUrl -SiteDomains $firstVisit.SiteDomains
     Write-OpenPathFirstVisitGuestFixtureInfo -Transport $Transport -Vmid $Vmid -Settings $fixture.Settings -Plan $fixture.Plan
     $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
     $configure = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'configure' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
@@ -1026,6 +1080,15 @@ Write-Output 'autologon-on'
         $hostEventsBody = $hostEventsStep.body.state.hostEvents
     }
     catch { $hostEvidenceError = (($hostEvidenceError + ' ' + [string]$_.Exception.Message).Trim()) }
+    # Phase 6 B: smart_app_control=on simulates an installed machine to which
+    # Windows turns SAC On: set VerifiedAndReputablePolicyState=1, run CiTool -r
+    # and let the class-boot reboot apply it. The post-boot state is read in
+    # observe (sac-state) and a policy that did not land is INFRA.
+    $sacApply = $null
+    if ($firstVisit.SmartAppControl -eq 'on') {
+        $sacApplyStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'sac-apply' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
+        $sacApply = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacApplyStep -Name 'body') -Name 'state') -Name 'sacApply'
+    }
     $liveForVerdict = $hostSignalsBody
     if (-not $liveForVerdict) {
         # Fall back to the live signals the verify step already collected: the
@@ -1080,6 +1143,11 @@ Write-Output 'autologon-on'
         passwordReset       = ($passwordReset -match 'done')
         sessionUser         = $sessionUser
         capabilities        = $capabilities
+        smartAppControl     = [string]$firstVisit.SmartAppControl
+        sacApply            = $sacApply
+        siteMode            = [bool]$firstVisit.SiteMode
+        siteUrl             = [string]$firstVisit.SiteUrl
+        siteDomains         = @($firstVisit.SiteDomains)
         xpi                 = $stage.body.state.xpi
         xpiUpload           = [string]$stage.body.state.xpiUpload
         xpiServedSha256     = $xpiServedSha
@@ -1154,6 +1222,12 @@ function Invoke-OpenPathFirstVisitObserve {
     $scenario = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'scenario') } else { 'first-visit-settled' }
     if (-not $scenario) { $scenario = 'first-visit-settled' }
     if ($scenario -eq 'first-visit-control') { $scenario = 'first-visit-floor' }
+    # Phase 6 C: the real-site canary has no page self-report (the real site is
+    # not instrumented); its verdict comes from the collected diagnostics.
+    $siteMode = ($scenario -eq 'first-visit-site')
+    # Phase 6 B: SAC state is read only for smart_app_control=on scenes.
+    $sacStateInfo = $null
+    $sacStepError = ''
     if ([string](Get-OpenPathLabField -InputObject $Config -Name 'mode') -ne 'acceptance') {
         throw 'first-visit-requires-acceptance-lab-config'
     }
@@ -1178,6 +1252,64 @@ function Invoke-OpenPathFirstVisitObserve {
         if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-reboot-timeout' }
         $session = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'observe' -Step 'session' -TimeoutSeconds 420
         $logonAt = [string]$session.body.state.sessionLogonAt
+        # Phase 6 B: after the class-boot reboot applied SAC, read the effective
+        # state. Not On means the dispatch could not create the risk scenario:
+        # the scene is INFRA sac-not-enforced and stops here. If the SAC policy
+        # blocks PowerShell itself, a cmd-only fallback still reads the policy
+        # and the Code Integrity events.
+        $sacStateInfo = $null
+        $sacStepError = ''
+        if ([string]$state.smartAppControl -eq 'on') {
+            $sacStateStep = $null
+            try {
+                $sacStateStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'sac-state' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300 -AllowFailed
+            }
+            catch { $sacStepError = [string]$_.Exception.Message }
+            if ($sacStateStep) {
+                $sacStateInfo = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacStateStep -Name 'body') -Name 'state') -Name 'sacState'
+                if (-not $sacStateInfo) {
+                    $sacStateInfo = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacStateStep -Name 'body') -Name 'state') -Name 'hostEvents'
+                }
+                if (-not $sacStateInfo -and @($sacStateStep.failures).Count -gt 0) { $sacStepError = ((@($sacStateStep.failures) -join ',') + ' ' + $sacStepError).Trim() }
+            }
+            if (-not $sacStateInfo) {
+                # cmd.exe only: reg query + wevtutil, no PowerShell (a SAC policy
+                # can put every PowerShell session in ConstrainedLanguage).
+                $regText = ''
+                $eventText = ''
+                try {
+                    if ($Transport.Contains('InvokeGuestCommand')) {
+                        $regText = (& $Transport.InvokeGuestCommand $Vmid 'reg query "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState' 120 | Out-String)
+                        $eventText = (& $Transport.InvokeGuestCommand $Vmid 'wevtutil qe Microsoft-Windows-CodeIntegrity/Operational "/q:*[System[(EventID=3033 or EventID=3034 or EventID=3076 or EventID=3077 or EventID=3089)]]" /c:40 /rd:true /f:text' 180 | Out-String)
+                    }
+                }
+                catch { $sacStepError = (($sacStepError + ' cmd-fallback: ' + [string]$_.Exception.Message).Trim()) }
+                $fallbackRegistry = -1
+                $registryMatch = [regex]::Match([string]$regText, 'VerifiedAndReputablePolicyState\s+REG_DWORD\s+0x([0-9a-fA-F]+)')
+                if ($registryMatch.Success) { $fallbackRegistry = [int]("0x" + $registryMatch.Groups[1].Value) }
+                $fallbackLines = @(@([string]$eventText -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -First 400)
+                $sacStateInfo = [ordered]@{
+                    registryValue        = $fallbackRegistry
+                    smartAppControlState = 'unavailable'
+                    languageMode         = 'unavailable'
+                    enforced             = ($fallbackRegistry -eq 1)
+                    source               = 'cmd-fallback'
+                    codeIntegrity        = @($fallbackLines)
+                    error                = $sacStepError
+                }
+            }
+            $registryValue = Get-OpenPathLabField -InputObject $sacStateInfo -Name 'registryValue'
+            $mpState = [string](Get-OpenPathLabField -InputObject $sacStateInfo -Name 'smartAppControlState')
+            $mpOn = ($mpState -match '^(?i)on$')
+            $mpUnknown = ($mpState -in @('', 'unknown', 'query-failed', 'unavailable'))
+            $enforced = ($null -ne $registryValue -and [int]$registryValue -eq 1) -and ($mpOn -or $mpUnknown)
+            if (-not $enforced) {
+                $notEnforcedDetail = "sac-not-enforced: registryValue=$registryValue smartAppControlState=$mpState"
+                if ($sacStepError) { $notEnforcedDetail = "$notEnforcedDetail error=$sacStepError" }
+                throw $notEnforcedDetail
+            }
+            Write-Host ("first-visit SAC state: registryValue=$registryValue smartAppControlState=$mpState languageMode=$([string](Get-OpenPathLabField -InputObject $sacStateInfo -Name 'languageMode')) source=$([string](Get-OpenPathLabField -InputObject $sacStateInfo -Name 'source'))")
+        }
     }
     else {
         # The visit step launched the browser on the student's desktop directly.
@@ -1214,26 +1346,34 @@ function Invoke-OpenPathFirstVisitObserve {
     $staging = "$([string](Get-OpenPathLabField -InputObject $Config -Name 'hostStagingRoot'))/$([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId'))".Replace('//', '/')
     $report = $null
     $fixtureState = $null
-    $deadline = (Get-Date).AddSeconds($script:OpenPathFirstVisitReportWaitSeconds)
-    $firstReportAt = $null
-    while ($true) {
-        $stateTextForObserve = (& $Transport.InvokeHostCommand @('curl', '-s', '--max-time', '10', "$fixtureUrl/state.json") '').Trim()
-        if ($stateTextForObserve.StartsWith('{')) {
-            $fixtureState = $stateTextForObserve | ConvertFrom-Json
-            $lastReport = Get-OpenPathLabField -InputObject $fixtureState -Name 'lastReport'
-            if ($lastReport) {
-                $report = $lastReport
-                if (-not $firstReportAt) { $firstReportAt = Get-Date }
-                # The blocked-path probe (Phase 5.2 E3) settles a few seconds
-                # after load; prefer the report that carries its final value,
-                # bounded by the grace so a legacy page can never stall here.
-                if ([bool](Get-OpenPathLabField -InputObject $report -Name 'blockedPathFinal')) { break }
-                if ($script:OpenPathFirstVisitReportGraceSeconds -le 0) { break }
-                if (((Get-Date) - $firstReportAt).TotalSeconds -ge $script:OpenPathFirstVisitReportGraceSeconds) { break }
+    if (-not $siteMode) {
+        $deadline = (Get-Date).AddSeconds($script:OpenPathFirstVisitReportWaitSeconds)
+        $firstReportAt = $null
+        while ($true) {
+            $stateTextForObserve = (& $Transport.InvokeHostCommand @('curl', '-s', '--max-time', '10', "$fixtureUrl/state.json") '').Trim()
+            if ($stateTextForObserve.StartsWith('{')) {
+                $fixtureState = $stateTextForObserve | ConvertFrom-Json
+                $lastReport = Get-OpenPathLabField -InputObject $fixtureState -Name 'lastReport'
+                if ($lastReport) {
+                    $report = $lastReport
+                    if (-not $firstReportAt) { $firstReportAt = Get-Date }
+                    # The blocked-path probe (Phase 5.2 E3) settles a few seconds
+                    # after load; prefer the report that carries its final value,
+                    # bounded by the grace so a legacy page can never stall here.
+                    if ([bool](Get-OpenPathLabField -InputObject $report -Name 'blockedPathFinal')) { break }
+                    if ($script:OpenPathFirstVisitReportGraceSeconds -le 0) { break }
+                    if (((Get-Date) - $firstReportAt).TotalSeconds -ge $script:OpenPathFirstVisitReportGraceSeconds) { break }
+                }
             }
+            if ((Get-Date) -ge $deadline) { break }
+            Start-Sleep -Seconds 5
         }
-        if ((Get-Date) -ge $deadline) { break }
-        Start-Sleep -Seconds 5
+    }
+    else {
+        # Canary: the real site is not instrumented; still snapshot the fixture
+        # state for the request counters.
+        $stateTextForObserve = (& $Transport.InvokeHostCommand @('curl', '-s', '--max-time', '10', "$fixtureUrl/state.json") '').Trim()
+        if ($stateTextForObserve.StartsWith('{')) { $fixtureState = $stateTextForObserve | ConvertFrom-Json }
     }
     $repairReloads = -1
     $reportsText = (& $Transport.InvokeHostCommand @('bash', '-lc', "test -f $staging/state/reports.jsonl && cat $staging/state/reports.jsonl || true") '').Trim()
@@ -1252,33 +1392,37 @@ function Invoke-OpenPathFirstVisitObserve {
     }
     $browserRequests = if ($fixtureState) { [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'browserRequests') } else { 0 }
     $plan = $state.plan
-    $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario -RepairReloads $repairReloads
-    $prepareHostEvidence = Get-OpenPathLabField -InputObject $state -Name 'hostEvidence'
-    $prepareProductReasons = @(Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'productReasons')
-    $prepareHostSignals = Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'signals'
-    $prepareHostVerdict = Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'verdict'
-    $prepareLiveSignals = Get-OpenPathLabField -InputObject $state -Name 'liveSignals'
-    $verdictDocument = [ordered]@{
-        schemaVersion       = 1
-        scenario            = $scenario
-        source              = 'self-report+prepare'
-        verdict             = $verdict
-        reportPresent       = ($null -ne $report)
-        browserRequests     = $browserRequests
-        fixtureRequests     = if ($fixtureState) { [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests') } else { 0 }
-        repairReloads       = $repairReloads
-        productReasons      = @($prepareProductReasons)
-        hostStarted         = [bool](Get-OpenPathLabField -InputObject $prepareLiveSignals -Name 'hostStarted')
-        hostSignals         = $prepareHostSignals
-        blockedByAppControl = [bool](Get-OpenPathLabField -InputObject $prepareHostVerdict -Name 'blockedByAppControl')
-        blockedPathEnforced = Get-OpenPathLabField -InputObject $report -Name 'blockedPathEnforced'
-        blockedPathFinal    = [bool](Get-OpenPathLabField -InputObject $report -Name 'blockedPathFinal')
-        evidenceIncomplete  = $false
-        collectError        = ''
-        writtenAt           = [DateTime]::UtcNow.ToString('o')
-    }
+    $verdict = $null
+    $verdictDocument = $null
     $verdictPath = Join-Path $artifactsRoot 'observe-verdict.json'
-    [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+    if (-not $siteMode) {
+        $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario -RepairReloads $repairReloads
+        $prepareHostEvidence = Get-OpenPathLabField -InputObject $state -Name 'hostEvidence'
+        $prepareProductReasons = @(Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'productReasons')
+        $prepareHostSignals = Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'signals'
+        $prepareHostVerdict = Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'verdict'
+        $prepareLiveSignals = Get-OpenPathLabField -InputObject $state -Name 'liveSignals'
+        $verdictDocument = [ordered]@{
+            schemaVersion       = 1
+            scenario            = $scenario
+            source              = 'self-report+prepare'
+            verdict             = $verdict
+            reportPresent       = ($null -ne $report)
+            browserRequests     = $browserRequests
+            fixtureRequests     = if ($fixtureState) { [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests') } else { 0 }
+            repairReloads       = $repairReloads
+            productReasons      = @($prepareProductReasons)
+            hostStarted         = [bool](Get-OpenPathLabField -InputObject $prepareLiveSignals -Name 'hostStarted')
+            hostSignals         = $prepareHostSignals
+            blockedByAppControl = [bool](Get-OpenPathLabField -InputObject $prepareHostVerdict -Name 'blockedByAppControl')
+            blockedPathEnforced = Get-OpenPathLabField -InputObject $report -Name 'blockedPathEnforced'
+            blockedPathFinal    = [bool](Get-OpenPathLabField -InputObject $report -Name 'blockedPathFinal')
+            evidenceIncomplete  = $false
+            collectError        = ''
+            writtenAt           = [DateTime]::UtcNow.ToString('o')
+        }
+        [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+    }
     # Phase 5.2: copy the guest logs right after the verdict, before the heavy
     # collect/probe. A later failure then still explains the visit from the
     # visit-time native-host.log (extension diagnostics, E1 decisions).
@@ -1336,7 +1480,27 @@ function Invoke-OpenPathFirstVisitObserve {
     if (-not $hostProbeError) {
         $hostProbeError = [string](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostProbeState -Name 'hostProbe') -Name 'error')
     }
-    if ($scenario -in @('first-visit-settled', 'first-visit-floor')) {
+    # Phase 6 B: post-boot CodeIntegrity / language-mode / agent-state evidence
+    # for every scenario (also with SAC=2), bounded and best-effort.
+    $postEvents = $null
+    $postEventsError = ''
+    try {
+        $postEventsStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'host-events' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300 -AllowRetry -AllowFailed
+        $postEvents = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $postEventsStep -Name 'body') -Name 'state') -Name 'hostEvents'
+    }
+    catch {
+        $postEventsError = [string]$_.Exception.Message
+        if ($postEventsError.Length -gt 400) { $postEventsError = $postEventsError.Substring(0, 400) + '...' }
+        Write-Warning "first-visit post-boot host events failed: $postEventsError"
+    }
+    # Phase 6 B: the SAC-blocked signal needs the post-boot CodeIntegrity
+    # evidence; the merged product reasons feed the verdict document.
+    $postHostVerdict = $null
+    if ($postEvents) {
+        $postLive = [pscustomobject]@{ hostStarted = (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $state -Name 'liveSignals') -Name 'hostStarted') }
+        $postHostVerdict = Get-FirstVisitHostSignalsVerdict -Live $postLive -Events $postEvents -CodeIntegrityEvents $postEvents -Capabilities ([string]$state.capabilities.CapabilityArgument) -StudentUserName $settings.StudentUserName -SmartAppControlState ([string](Get-OpenPathLabField -InputObject $sacStateInfo -Name 'smartAppControlState'))
+    }
+    if ($scenario -in @('first-visit-settled', 'first-visit-floor') -and -not $siteMode) {
         try {
             $security = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'security' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300 -AllowRetry
         }
@@ -1360,7 +1524,62 @@ function Invoke-OpenPathFirstVisitObserve {
     $diagnosticLines = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectDiagnostics -Name 'all'))
     $startupProfiles = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'startupProfiles'))
     $openpathTail = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'openpathTail'))
-    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles $startupProfiles -FixtureState $metricsFixture -Verdict $verdict -LogLines $openpathTail -Diagnostics $collectDiagnostics -PrepareState $state -EvidenceIncomplete ([bool]$collectError) -CollectError $collectError -CollectTimings $collectTimings -HostProbe $hostProbeResult -HostProbeError $hostProbeError
+    # Phase 6 C: the real-site canary verdict is computed from the collected
+    # evidence (extension holds/outcomes, bounded MOZ_LOG nsHostResolver lines
+    # for the learned hosts and the worker stamp lines). It never fails the run:
+    # only INFRA does. The verdict document is written here (there is no page
+    # self-report to persist before the collect).
+    $canary = $null
+    if ($siteMode) {
+        $canaryDiagnostics = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'canaryDiagnostics'))
+        $canaryOverlayHosts = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'overlayHosts'))
+        $canaryMetrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $canaryDiagnostics -OpenPathLines $openpathTail
+        $canaryMoz = Select-OpenPathFirstVisitMozHostLines -MozLines $mozExtract -Hosts $canaryOverlayHosts -ReadyTimes (Get-OpenPathLabField -InputObject $canaryMetrics -Name 'readyTimes')
+        $canaryVerdict = Get-OpenPathFirstVisitCanaryVerdict -Metrics $canaryMetrics -MozResult $canaryMoz
+        $canary = [ordered]@{
+            status              = [string]$canaryVerdict.status
+            reasons             = @($canaryVerdict.reasons)
+            metrics             = $canaryMetrics
+            negativeCount       = [int](Get-OpenPathLabField -InputObject $canaryMoz -Name 'negativeCount')
+            negativesAfterReady = @(Get-OpenPathLabField -InputObject $canaryMoz -Name 'negativesAfterReady')
+            linesByHost         = Get-OpenPathLabField -InputObject $canaryMoz -Name 'linesByHost'
+            hostCount           = $canaryOverlayHosts.Count
+            diagnostics         = $canaryDiagnostics.Count
+            mozLines            = $mozExtract.Count
+        }
+        $prepareHostEvidenceForCanary = Get-OpenPathLabField -InputObject $state -Name 'hostEvidence'
+        $verdictDocument = [ordered]@{
+            schemaVersion       = 1
+            scenario            = $scenario
+            source              = 'canary'
+            canary              = $true
+            canaryStatus        = [string]$canaryVerdict.status
+            canaryReasons       = @($canaryVerdict.reasons)
+            canaryMetrics       = $canaryMetrics
+            negativesAfterReady = @(Get-OpenPathLabField -InputObject $canaryMoz -Name 'negativesAfterReady')
+            reportPresent       = $false
+            verdict             = [ordered]@{
+                status  = if ([string]$canaryVerdict.status -eq 'CANARY-PASS') { 'canary-pass' } else { 'canary-red' }
+                reasons = @($canaryVerdict.reasons)
+                waves   = [ordered]@{}
+            }
+            productReasons      = @(Get-OpenPathLabField -InputObject $prepareHostEvidenceForCanary -Name 'productReasons')
+            hostStarted         = [bool](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $state -Name 'liveSignals') -Name 'hostStarted')
+            evidenceIncomplete  = [bool]$collectError
+            collectError        = $collectError
+            writtenAt           = [DateTime]::UtcNow.ToString('o')
+        }
+        [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
+    }
+    # Phase 6 B: merge the post-boot host verdict into the persisted document
+    # (a SAC/CodeIntegrity block is a product reason even when the visit ran).
+    if ($postHostVerdict -and @($postHostVerdict.productReasons).Count -gt 0) {
+        $mergedReasons = @($verdictDocument.productReasons) + @($postHostVerdict.productReasons)
+        $verdictDocument.productReasons = @($mergedReasons | Select-Object -Unique)
+        $verdictDocument.blockedBySmartAppControl = [bool]$postHostVerdict.blockedBySmartAppControl
+        [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
+    }
+    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles $startupProfiles -FixtureState $metricsFixture -Verdict $verdict -LogLines $openpathTail -Diagnostics $collectDiagnostics -PrepareState $state -EvidenceIncomplete ([bool]$collectError) -CollectError $collectError -CollectTimings $collectTimings -HostProbe $hostProbeResult -HostProbeError $hostProbeError -Canary $canary -SacState $sacStateInfo -PostHostEvents $postEvents -PostHostVerdict $postHostVerdict
     if ($collectError) {
         # Same file, added fields only: the verdict written before the collect
         # is never replaced, the incompleteness is.
@@ -1396,6 +1615,12 @@ function Invoke-OpenPathFirstVisitObserve {
             metrics           = $metrics
             evidenceIncomplete = [bool]$collectError
             collectError      = $collectError
+            postHostEvents    = $postEvents
+            postHostEventsError = $postEventsError
+            postHostVerdict   = $postHostVerdict
+            sacState          = $sacStateInfo
+            sacStepError      = $sacStepError
+            canary            = $canary
             security          = if ($security) { $security.body.state } else { $null }
             securityError     = $securityError
         }

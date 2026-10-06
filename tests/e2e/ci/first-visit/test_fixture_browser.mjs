@@ -11,6 +11,7 @@
 //   node tests/e2e/ci/first-visit/test_fixture_browser.mjs [--fixture-path PATH] [--timeout 30]
 //
 // Exit 0 = all waves true, exit 1 = any missing (prints the observed flags).
+/* global window, document */
 
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';

@@ -1193,10 +1193,19 @@ function Invoke-OpenPathLabQgaScript {
         [int]$Attempts = 4,
         # Phase 5.3 B2: a timed-out guest command keeps running; kill its tree
         # before returning. Tests can disable it to observe the raw shape.
-        [bool]$KillTimedOutProcess = $true
+        [bool]$KillTimedOutProcess = $true,
+        # Phase 6 B: run a cmd.exe line instead of a PowerShell script. The SAC
+        # policy can put PowerShell in ConstrainedLanguage and block unsigned
+        # script modules; registry and wevtutil reads still work from cmd.
+        [string]$Command = ''
     )
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($PowerShell))
-    $arguments = @('qm', 'guest', 'exec', [string]$Vmid, '--timeout', [string]$TimeoutSeconds, '--', 'powershell.exe', '-NoProfile', '-EncodedCommand', $encoded)
+    if ($Command) {
+        $arguments = @('qm', 'guest', 'exec', [string]$Vmid, '--timeout', [string]$TimeoutSeconds, '--', 'cmd.exe', '/c', $Command)
+    }
+    else {
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($PowerShell))
+        $arguments = @('qm', 'guest', 'exec', [string]$Vmid, '--timeout', [string]$TimeoutSeconds, '--', 'powershell.exe', '-NoProfile', '-EncodedCommand', $encoded)
+    }
     # The guest agent is briefly unavailable while a requested reboot is still
     # settling. Retry only transport failures (no process started): a timeout
     # or a completed run must never relaunch the step (Phase 5.3 B2; four
@@ -1371,7 +1380,7 @@ function New-OpenPathProxmoxLabTransport {
     $h = @{
         Ssh = { param($SshCommand, $SshHost, $ArgumentList, $InputText) Invoke-OpenPathLabSsh -SshCommand $SshCommand -SshHost $SshHost -ArgumentList $ArgumentList -InputText $InputText }
         Scp = { param($ScpCommand, $SshHost, $LocalPath, $RemotePath) & $ScpCommand '-o' 'BatchMode=yes' '-q' $LocalPath "$SshHost`:$RemotePath" 2>&1 | Out-String }
-        Qga = { param($SshCommand, $SshHost, $Vmid, $PowerShell, $TimeoutSeconds = 120, $Attempts = 4) Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $PowerShell -TimeoutSeconds $TimeoutSeconds -Attempts $Attempts }
+        Qga = { param($SshCommand, $SshHost, $Vmid, $PowerShell, $TimeoutSeconds = 120, $Attempts = 4, $Command = '') Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $PowerShell -TimeoutSeconds $TimeoutSeconds -Attempts $Attempts -Command $Command }
         GuestOsInfo = { param($SshCommand, $SshHost, $Vmid) Get-OpenPathLabGuestOsInfo -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid }
         GuestBootId = { param($SshCommand, $SshHost, $Vmid) Get-OpenPathLabGuestBootId -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid }
     }
@@ -1581,6 +1590,13 @@ test -s "$dump"
     $transport.InvokeGuestPowerShellOnce = {
         param($Vmid, $Script, $TimeoutSeconds)
         $text = & $h.Qga $lab.SshCommand $lab.SshHost -Vmid ([int]$Vmid) -PowerShell ([string]$Script) -TimeoutSeconds ([int]$TimeoutSeconds) -Attempts 1
+        return [string]$text
+    }.GetNewClosure()
+    # Phase 6 B: cmd-only guest command for the SAC fallback (a constrained
+    # PowerShell must not be the only way to read the policy and the events).
+    $transport.InvokeGuestCommand = {
+        param($Vmid, $Command, $TimeoutSeconds = 120)
+        $text = & $h.Qga $lab.SshCommand $lab.SshHost -Vmid ([int]$Vmid) -PowerShell '' -Command ([string]$Command) -TimeoutSeconds ([int]$TimeoutSeconds) -Attempts 1
         return [string]$text
     }.GetNewClosure()
     return $transport

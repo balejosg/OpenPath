@@ -186,4 +186,77 @@ describe('first-visit lane contract', () => {
     assert.match(controller, /Get-OpenPathFirstVisitBuildCapabilities/u);
     assert.match(controller, /templateXpiSha256/u);
   });
+
+  test('the Acrylic INI parse keeps literal values before any other match (Phase 6 A)', () => {
+    const module = read('tests/e2e/ci/first-visit/FirstVisitDnsTopology.psm1');
+    // The value is captured BEFORE the interesting-key -match; the previous
+    // order overwrote $Matches and stored every value empty.
+    assert.match(module, /function ConvertFrom-OpenPathAcrylicIniText/u);
+    assert.match(
+      module,
+      /\$value = \(\[string\]\$Matches\[2\]\)\.Trim\(\)[\s\S]{0,240}if \(\$key -match/u
+    );
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.match(harness, /ConvertFrom-OpenPathAcrylicIniText/u);
+    const controller = read('tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1');
+    assert.match(controller, /FirstVisitDnsTopology\.psm1/u);
+  });
+
+  test('the lane can simulate Smart App Control and collects its evidence (Phase 6 B)', () => {
+    const workflow = read(workflowPath);
+    assert.match(workflow, /smart_app_control:/u);
+    assert.match(workflow, /-SmartAppControl/u);
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.match(harness, /'sac-apply'/u);
+    assert.match(harness, /'sac-state'/u);
+    assert.match(harness, /VerifiedAndReputablePolicyState/u);
+    assert.match(harness, /Microsoft-Windows-CodeIntegrity\/Operational/u);
+    assert.match(harness, /LanguageMode/u);
+    const warmup = read('tests/e2e/ci/first-visit/FirstVisitWarmup.psm1');
+    assert.match(warmup, /native-host-blocked-by-smart-app-control/u);
+    const controller = read('tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1');
+    assert.match(controller, /first-visit-smart-app-control-requires-class-boot/u);
+    assert.match(controller, /sac-not-enforced/u);
+    assert.match(controller, /-CodeIntegrityEvents/u);
+    assert.match(warmup, /Select-FirstVisitSmartAppControlEvidence/u);
+    assert.match(warmup, /blockedBySmartAppControl/u);
+  });
+
+  test('the real-site canary only runs by dispatch and is non-blocking (Phase 6 C)', () => {
+    const workflow = read(workflowPath);
+    assert.match(workflow, /site_url:/u);
+    assert.match(workflow, /site_whitelist:/u);
+    assert.match(workflow, /-SiteUrl/u);
+    assert.match(workflow, /-SiteWhitelist/u);
+    // The auto-run/nightly plans never contain site: only a dispatch asks for it.
+    const planModule = read('tests/e2e/ci/first-visit/FirstVisitLanePlan.psm1');
+    assert.match(
+      planModule,
+      /'settled,hot,class-boot,floor'; repetitions = 2; source = 'schedule'/u
+    );
+    assert.match(planModule, /'settled,class-boot'; repetitions = 1; source = 'workflow_run'/u);
+    assert.doesNotMatch(planModule, /site/u);
+    const suite = read('tests/e2e/ci/run-windows-first-visit-suite.ps1');
+    assert.match(suite, /first-visit-site-url-required/u);
+    const fixture = read('tests/e2e/ci/first-visit/fixture_server.py');
+    assert.match(fixture, /siteMode/u);
+    assert.match(fixture, /--site-url/u);
+    assert.match(fixture, /requires site_url/u);
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.match(harness, /MOZ_LOG/u);
+    assert.match(harness, /nsHostResolver/u);
+    assert.match(harness, /canaryDiagnostics/u);
+    const canary = read('tests/e2e/ci/first-visit/FirstVisitSiteCanary.psm1');
+    assert.match(canary, /CANARY-PASS/u);
+    assert.match(canary, /CANARY-RED/u);
+    assert.match(canary, /holds-not-ready/u);
+    assert.match(canary, /negative-lookups-after-ready/u);
+    assert.match(canary, /stampGaps/u);
+    const outcome = read('tests/e2e/ci/first-visit/FirstVisitOutcome.psm1');
+    assert.match(outcome, /CANARY-PASS/u);
+    assert.match(outcome, /canary-status-missing/u);
+    const aggregate = read('tests/e2e/ci/aggregate-windows-first-visit.ps1');
+    assert.match(aggregate, /canaryStatus/u);
+    assert.match(aggregate, /'CANARY-PASS', 'CANARY-RED'/u);
+  });
 });

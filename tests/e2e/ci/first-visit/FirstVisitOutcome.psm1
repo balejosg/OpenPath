@@ -49,6 +49,9 @@ function Get-OpenPathFirstVisitSceneOutcome {
         [string]$Scenario = ''
     )
     $isFloor = ($Scenario -match 'first-visit-floor')
+    # Phase 6 C: the real-site canary never fails the run: CANARY-PASS and
+    # CANARY-RED are both non-blocking categories; only INFRA is a failure.
+    $isSite = ($Scenario -match 'first-visit-site')
     $outcome = [ordered]@{
         category            = 'UNKNOWN'
         verdict             = 'unknown'
@@ -73,6 +76,32 @@ function Get-OpenPathFirstVisitSceneOutcome {
         if ($null -ne $blockedPath) { $outcome.blockedPathEnforced = [bool]$blockedPath }
         $hostStarted = Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'hostStarted'
         if ($null -ne $hostStarted) { $outcome.hostStarted = [bool]$hostStarted }
+        if ($isSite) {
+            # Canary classification: the document was written by the controller
+            # after the collect; evidence incompleteness (or an observe error
+            # without a canary status) is INFRA, otherwise the canary status
+            # itself is the category.
+            $canaryStatus = [string](Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'canaryStatus')
+            if ($outcome.evidenceIncomplete) {
+                $outcome.category = 'INFRA'
+                $outcome.error = if ($outcome.collectError) { $outcome.collectError } elseif ($ObserveError) { $ObserveError } else { 'evidence-incomplete' }
+            }
+            elseif ($canaryStatus -in @('CANARY-PASS', 'CANARY-RED')) {
+                $outcome.category = $canaryStatus
+                $outcome.error = ''
+                $canaryReasons = @(Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'canaryReasons')
+                if ($canaryReasons.Count -gt 0) { $outcome.reasons = @($canaryReasons) }
+            }
+            elseif ($ObserveError) {
+                $outcome.category = 'INFRA'
+                $outcome.error = $ObserveError
+            }
+            else {
+                $outcome.category = 'INFRA'
+                $outcome.error = 'canary-status-missing'
+            }
+            return [pscustomobject]$outcome
+        }
         if ($Metrics) {
             $outcome.evidenceIncomplete = $outcome.evidenceIncomplete -or [bool](Get-OpenPathFirstVisitOutcomeField -InputObject $Metrics -Name 'evidenceIncomplete')
             if (-not $outcome.collectError) { $outcome.collectError = [string](Get-OpenPathFirstVisitOutcomeField -InputObject $Metrics -Name 'collectError') }
