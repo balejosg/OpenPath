@@ -238,6 +238,7 @@ describe('first-visit lane contract', () => {
     assert.doesNotMatch(planModule, /site/u);
     const suite = read('tests/e2e/ci/run-windows-first-visit-suite.ps1');
     assert.match(suite, /first-visit-site-url-required/u);
+    assert.match(suite, /site-class-boot/u);
     const fixture = read('tests/e2e/ci/first-visit/fixture_server.py');
     assert.match(fixture, /siteMode/u);
     assert.match(fixture, /--site-url/u);

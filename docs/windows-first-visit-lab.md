@@ -13,13 +13,14 @@ with the generic rules.
 
 ## What it runs
 
-| Scenario | Name                     | What happens                                                                                        |
-| -------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
-| W        | `first-visit-settled`    | settled install; a fresh Firefox opens anchor 1                                                     |
-| W2       | `first-visit-hot`        | same Firefox stays open >=5 min; a new window opens anchor 2                                        |
-| B        | `first-visit-class-boot` | install, warm-up + clean close, reboot, autologon, Firefox <=60 s after logon                       |
-| F        | `first-visit-floor`      | like W but the dependency hosts are pre-whitelisted (the environment floor; `control` is the alias) |
-| S        | `first-visit-site`       | Phase 6 C: real-site canary, dispatch only (see below)                                              |
+| Scenario | Name                          | What happens                                                                                        |
+| -------- | ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| W        | `first-visit-settled`         | settled install; a fresh Firefox opens anchor 1                                                     |
+| W2       | `first-visit-hot`             | same Firefox stays open >=5 min; a new window opens anchor 2                                        |
+| B        | `first-visit-class-boot`      | install, warm-up + clean close, reboot, autologon, Firefox <=60 s after logon                       |
+| F        | `first-visit-floor`           | like W but the dependency hosts are pre-whitelisted (the environment floor; `control` is the alias) |
+| S        | `first-visit-site`            | Phase 6 C: real-site canary, settled-like, dispatch only (see below)                                |
+| SB       | `first-visit-site-class-boot` | Phase 6 C: real-site canary through the class-boot refresh, dispatch only                           |
 
 W also runs the security checks (`first-visit-settled`/`first-visit-floor`):
 the never-learnable host stays blocked, the unlisted host does not resolve, the
@@ -202,12 +203,13 @@ host (or the browser) with the host not started adds the product signal
 
 `site` runs **only by dispatch** (never in the auto-run or the nightly) with two
 inputs: `site_url` (required) and `site_whitelist` (comma-separated domains).
-The real URL is the anchor, the served whitelist contains only those domains and
-there is no fixture dependency precondition; the real site learns its own CDN
-hosts through the product. MOZ_LOG (`timestamp,nsHostResolver:5`, rotated at
-4 MiB per file) is enabled only for this scenario and the collect reads at most
-four files/4 MiB each (<= 16 MiB). The page self-report does not exist, so the
-verdict is CANARY:
+`site` visits in-session; `site-class-boot` runs the same real-site plan through
+the class-boot refresh (reboot + logon launch). The real URL is the anchor, the
+served whitelist contains only those domains and there is no fixture dependency
+precondition; the real site learns its own CDN hosts through the product.
+MOZ_LOG (`timestamp,nsHostResolver:5`, rotated at 4 MiB per file) is enabled
+only for these scenarios and the collect reads at most four files/4 MiB each
+(<= 16 MiB). The page self-report does not exist, so the verdict is CANARY:
 
 - metrics: holds and their outcomes (ready/cancelled/error), ready retention
   p50/max, last ready relative to the navigation, E1 reloads and reasons,
@@ -230,6 +232,10 @@ gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
 # Real-site canary (base URL + domains only; never committed to the repo):
 gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
   -f scenarios=site -f repetitions=1 \
+  -f site_url=https://example.invalid/ -f site_whitelist=example.invalid
+# class-boot canary variant:
+gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
+  -f scenarios=site-class-boot -f repetitions=1 \
   -f site_url=https://example.invalid/ -f site_whitelist=example.invalid
 ```
 

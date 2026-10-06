@@ -868,7 +868,7 @@ switch ($Step) {
         $script:Body.anchor = 'a1'
         $script:Body.anchorUrl = $url
         $script:Body.siteMode = $siteMode
-        if ($ScenarioId -eq 'first-visit-class-boot') {
+        if ($ScenarioId -like '*class-boot*') {
             # Class boot: arm the wrapper for the next logon (the run key is what
             # starts the browser in this lab) and reboot; the host waits for the
             # new logon and measures the class-boot window.

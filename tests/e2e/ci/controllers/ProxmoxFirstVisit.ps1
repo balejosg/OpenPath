@@ -16,6 +16,10 @@ $script:OpenPathFirstVisitRefreshSettleSeconds = 30
 $script:OpenPathFirstVisitObserveSettleSeconds = 15
 $script:OpenPathFirstVisitHotWindowSeconds = 300
 $script:OpenPathFirstVisitHotSecondSettleSeconds = 20
+# Phase 6: the post-security settle and the inter-attempt retry are test
+# knobs; the lane tests zero them so the suite never spends minutes sleeping.
+$script:OpenPathFirstVisitSecuritySettleSeconds = 20
+$script:OpenPathFirstVisitStepRetryDelaySeconds = 15
 # Phase 5.2 C1: extra seconds the report wait keeps polling for the page's
 # final blocked-path probe (0 in the contract tests), and the wait cap.
 $script:OpenPathFirstVisitReportGraceSeconds = 15
@@ -52,14 +56,16 @@ function Get-OpenPathFirstVisitSettings {
     if ([string]::IsNullOrWhiteSpace($smartAppControl)) { $smartAppControl = 'unchanged' }
     $smartAppControl = $smartAppControl.Trim().ToLowerInvariant()
     if ($smartAppControl -notin @('unchanged', 'on')) { throw "first-visit-smart-app-control-invalid:$smartAppControl" }
-    if ($smartAppControl -eq 'on' -and $scenario -ne 'first-visit-class-boot') {
+    if ($smartAppControl -eq 'on' -and $scenario -notlike '*class-boot*') {
         throw 'first-visit-smart-app-control-requires-class-boot'
     }
     # Phase 6 C: real-site canary inputs (only the site scenario uses them).
     $siteUrl = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'siteUrl') } else { '' }
     $siteWhitelist = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'siteWhitelist') } else { '' }
     $siteDomains = @($siteWhitelist -split ',' | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } | Where-Object { $_ })
-    $siteMode = ($scenario -eq 'first-visit-site')
+    # Phase 6 C: `site` is the settled-like canary; `site-class-boot` runs the
+    # same real-site plan through the class-boot refresh (reboot + logon).
+    $siteMode = ($scenario -in @('first-visit-site', 'first-visit-site-class-boot'))
     if ($siteMode -and [string]::IsNullOrWhiteSpace($siteUrl)) { throw 'first-visit-site-url-required' }
     if ($siteMode) {
         # The URL and the domains travel through a bash command on the Proxmox
@@ -101,7 +107,7 @@ function Start-OpenPathFirstVisitFixture {
     # Phase 5.3 B4: the scenario selects the served whitelist (floor
     # pre-whitelists every dependency host). `control` is the historical alias.
     # Phase 6 C: the site canary serves only the requested real domains.
-    $fixtureScenario = if ($Scenario -eq 'first-visit-control') { 'floor' } elseif ($Scenario -eq 'first-visit-floor') { 'floor' } elseif ($Scenario -eq 'first-visit-site') { 'site' } else { 'settled' }
+    $fixtureScenario = if ($Scenario -eq 'first-visit-control') { 'floor' } elseif ($Scenario -eq 'first-visit-floor') { 'floor' } elseif ($Scenario -in @('first-visit-site', 'first-visit-site-class-boot')) { 'site' } else { 'settled' }
     $settings = Get-OpenPathFirstVisitSettings -Payload ([pscustomobject]@{ firstVisit = [pscustomobject]@{ scenario = $Scenario; siteUrl = $SiteUrl; siteWhitelist = ($SiteDomains -join ',') } }) -Config $Config
     $localFixtures = Get-OpenPathFirstVisitFixturesRoot
 
@@ -529,7 +535,7 @@ function Send-OpenPathFirstVisitStep {
         # lookup above covers the evidence and a relaunch would double the step.
         if ($timedOut -or $attempt -ge $maxAttempts) { break }
         Update-OpenPathLabActiveHeartbeat
-        Start-Sleep -Seconds 15
+        if ($script:OpenPathFirstVisitStepRetryDelaySeconds -gt 0) { Start-Sleep -Seconds $script:OpenPathFirstVisitStepRetryDelaySeconds }
     }
     $resolved = Resolve-FirstVisitGuestResult -Output ([string]$output) -FileText $fileText
     if (-not $resolved.json) {
@@ -718,7 +724,7 @@ function Get-OpenPathFirstVisitReportVerdict {
         $result.reasons += 'self-report-missing'
         return [pscustomobject]$result
     }
-    $isClassBoot = ($Scenario -eq 'first-visit-class-boot')
+    $isClassBoot = ($Scenario -like '*class-boot*')
     $threshold = if ($isClassBoot) { $ClassBootWaveThresholdMs } else { $SettledWaveThresholdMs }
     $maxReloads = if ($isClassBoot) { $MaxReloadsClassBoot } else { $MaxReloadsSettled }
     $waves = $Report.waves
@@ -1244,7 +1250,7 @@ function Invoke-OpenPathFirstVisitObserve {
     $arm = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'visit' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
     $refreshMode = [string](Get-OpenPathLabField -InputObject $arm.body.state.arm -Name 'mode')
     $logonAt = ''
-    if ($scenario -eq 'first-visit-class-boot') {
+    if ($scenario -like '*class-boot*') {
         # The visit step armed the run-key wrapper and requested the reboot; wait
         # for the new boot, the real logon and the browser it starts.
         $bootBefore = [string]$state.bootIdLatest
@@ -1509,7 +1515,7 @@ function Invoke-OpenPathFirstVisitObserve {
             if ($securityError.Length -gt 400) { $securityError = $securityError.Substring(0, 400) + '...' }
             Write-Warning "first-visit security step failed: $securityError"
         }
-        Start-Sleep -Seconds 20
+        if ($script:OpenPathFirstVisitSecuritySettleSeconds -gt 0) { Start-Sleep -Seconds $script:OpenPathFirstVisitSecuritySettleSeconds }
         $blockedCapture = Join-Path $captureDir "console-$scenario-blocked.ppm"
         try { & $Transport.CaptureScreendump $Vmid $blockedCapture | Out-Null } catch { Write-Warning 'blocked screendump failed' }
     }

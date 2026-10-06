@@ -10,6 +10,9 @@
       first-visit-class-boot B  install, warm-up, reboot, autologon, Firefox <=60 s
       first-visit-floor      C  like W but with the dependency hosts pre-whitelisted
                                 (environment floor; `control` is accepted as alias)
+      first-visit-site       S  real-site canary, settled-like (dispatch only)
+      first-visit-site-class-boot SB real-site canary through the class-boot
+                                refresh (dispatch only)
 
     Each repetition creates a fresh run/attempt/scenario artifact boundary. The
     verdict comes from the page self-report; the caller aggregates metrics.
@@ -33,8 +36,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 # Phase 6: fail fast before touching the lab.
-if ($Scenarios -contains 'site' -and [string]::IsNullOrWhiteSpace($SiteUrl)) {
-    [Console]::Error.WriteLine('first-visit-site-url-required: the site canary needs site_url.')
+$siteScenarios = @($Scenarios | Where-Object { $_ -like 'site*' })
+if ($siteScenarios.Count -gt 0 -and [string]::IsNullOrWhiteSpace($SiteUrl)) {
+    [Console]::Error.WriteLine("first-visit-site-url-required: the site canary needs site_url (scenarios=$($siteScenarios -join ',')).")
     exit 2
 }
 if ($SmartAppControl -eq 'on') {

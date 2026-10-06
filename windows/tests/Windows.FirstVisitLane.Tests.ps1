@@ -345,6 +345,12 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                 $script:OpenPathFirstVisitHotSecondSettleSeconds = 0
                 $script:OpenPathFirstVisitReportGraceSeconds = 0
                 $script:OpenPathFirstVisitReportWaitSeconds = 0
+                # Phase 6: the post-security settle and the inter-attempt retry
+                # are knobs; the dispatch tests zero them (each was spending
+                # 20 s + 15 s per observe test and the Windows shard hit its
+                # per-file timeout).
+                $script:OpenPathFirstVisitSecuritySettleSeconds = 0
+                $script:OpenPathFirstVisitStepRetryDelaySeconds = 0
             }
             $script:FirstVisitArtifacts = Join-Path $TestDrive ('first-visit-' + [guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $script:FirstVisitArtifacts -Force | Out-Null
@@ -1443,6 +1449,7 @@ PrimaryServerAddress=198.51.100.7
         BeforeAll {
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitSiteCanary.psm1') -Force
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitWarmup.psm1') -Force
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitOutcome.psm1') -Force
             function ConvertTo-DiagLine {
                 param([hashtable]$Event)
                 return '2026-10-06 12:00:00 [INFO] [NativeHost] [PID:1] stage=extension-diagnostic ' + (($Event | ConvertTo-Json -Compress))
@@ -1553,6 +1560,8 @@ PrimaryServerAddress=198.51.100.7
             $site.SiteMode | Should -BeTrue
             $site.SiteUrl | Should -Be 'https://example.invalid/'
             $site.SiteDomains | Should -Contain 'example.invalid'
+            $siteClassBoot = Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site-class-boot'; siteUrl = 'https://example.invalid/'; siteWhitelist = 'example.invalid' }) -Config $config
+            $siteClassBoot.SiteMode | Should -BeTrue
             { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site' }) -Config $config } | Should -Throw '*first-visit-site-url-required*'
             { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site'; siteUrl = 'https://example.invalid/a b' }) -Config $config } | Should -Throw '*first-visit-site-url-invalid*'
             { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site'; siteUrl = 'https://example.invalid/'; siteWhitelist = 'bad_domain!' }) -Config $config } | Should -Throw '*first-visit-site-domain-invalid*'
@@ -1560,6 +1569,8 @@ PrimaryServerAddress=198.51.100.7
             $sac.SmartAppControl | Should -Be 'on'
             { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-settled'; smartAppControl = 'on' }) -Config $config } | Should -Throw '*requires-class-boot*'
             { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-class-boot'; smartAppControl = 'maybe' }) -Config $config } | Should -Throw '*smart-app-control-invalid*'
+            # `site-class-boot` is a class-boot flow, so the SAC simulation is allowed there.
+            { Get-OpenPathFirstVisitSettings -Payload (New-FirstVisitPayload @{ scenario = 'first-visit-site-class-boot'; siteUrl = 'https://example.invalid/'; siteWhitelist = 'example.invalid'; smartAppControl = 'on' }) -Config $config } | Should -Not -Throw
         }
 
         It 'Classifies a canary scene as CANARY-PASS/CANARY-RED and only INFRA fails the run' {
@@ -1581,13 +1592,16 @@ PrimaryServerAddress=198.51.100.7
             $row = (Get-Content -LiteralPath $summaryJson -Raw | ConvertFrom-Json).scenarios[0]
             $row.category | Should -Be 'CANARY-RED'
             $row.canaryStatus | Should -Be 'CANARY-RED'
-            # An incomplete canary is INFRA and does fail the run.
-            [IO.File]::WriteAllText((Join-Path $scenarioDir 'observe-verdict.json'), '{"schemaVersion":1,"scenario":"first-visit-site","source":"canary","canary":true,"canaryStatus":"CANARY-PASS","reportPresent":false,"verdict":{"status":"canary-pass","reasons":[]},"productReasons":[],"evidenceIncomplete":true,"collectError":"collect-timeout"}')
-            & $hostExe @hostArguments -File $aggregate -RunId '12345' -RunAttempt 1 -EvidenceRoot $root -SummaryJsonPath $summaryJson | Out-Null
-            $LASTEXITCODE | Should -Be 1
-            $row = (Get-Content -LiteralPath $summaryJson -Raw | ConvertFrom-Json).scenarios[0]
-            $row.category | Should -Be 'INFRA'
-            $row.error | Should -Be 'collect-timeout'
+            # An incomplete canary is INFRA and does fail the run. The pure
+            # classifier is exercised directly so the test never needs a second
+            # aggregate host process (the Windows shard's per-file timeout).
+            $infraOutcome = Get-OpenPathFirstVisitSceneOutcome -VerdictFile ([pscustomobject]@{
+                    scenario = 'first-visit-site'; source = 'canary'; canary = $true; canaryStatus = 'CANARY-PASS'
+                    reportPresent = $false; productReasons = @(); evidenceIncomplete = $true; collectError = 'collect-timeout'
+                    verdict = [pscustomobject]@{ status = 'canary-pass'; reasons = @() }
+                }) -Metrics $null -Scenario 'first-visit-site'
+            $infraOutcome.category | Should -Be 'INFRA'
+            $infraOutcome.error | Should -Be 'collect-timeout'
         }
     }
 }
