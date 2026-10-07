@@ -20,6 +20,15 @@ Describe 'First-visit lane budgets (Phase 5.2 C4)' {
         (Get-OpenPathFirstVisitSceneBudgetSeconds) | Should -BeLessOrEqual 1800
     }
 
+    It 'allows the Smart App Control scene its enforcement reboot cycles inside prepare' {
+        # Phase 6.1 C: a SAC scene proves enforcement with dedicated reboot
+        # cycles (and one extra Defender attempt) inside prepare; the scheduled
+        # scene budget stays untouched.
+        (Get-OpenPathFirstVisitPhaseBudget -Mode Prepare -SmartAppControl) | Should -Be 1500
+        (Get-OpenPathFirstVisitPhaseBudget -Mode Prepare) | Should -Be 720
+        (Get-OpenPathFirstVisitPhaseBudget -Mode Observe -SmartAppControl) | Should -Be 660
+    }
+
     It 'keeps the scheduled plan inside 80 percent of the workflow timeout' {
         $script:WorkflowTimeoutMinutes | Should -BeGreaterThan 0
         $plan = Get-OpenPathFirstVisitScenarioPlan -EventName 'schedule'

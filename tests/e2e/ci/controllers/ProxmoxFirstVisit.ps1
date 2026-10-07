@@ -1159,6 +1159,9 @@ Write-Output 'autologon-on'
     if ($firstVisit.SmartAppControl -eq 'on') {
         $sacApplyStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'sac-apply' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
         $sacApply = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacApplyStep -Name 'body') -Name 'state') -Name 'sacApply'
+        # Phase 6.1 fix: request the reboot that applies the policy; the cycle
+        # only ever WAITS for it (run 37583684814 hung until the phase timeout).
+        & $Transport.RequestGuestReboot $Vmid | Out-Null
         $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootId $TimeoutSeconds)
         if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-sac-reboot-timeout' }
         $sacSession = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420
@@ -1172,6 +1175,7 @@ Write-Output 'autologon-on'
                 $defenderStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'sac-defender-enable' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300 -AllowFailed
                 $sacApplyStepSecond = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'sac-apply' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
                 $sacApplySecond = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacApplyStepSecond -Name 'body') -Name 'state') -Name 'sacApply'
+                & $Transport.RequestGuestReboot $Vmid | Out-Null
                 $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootId $TimeoutSeconds)
                 if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-sac-reboot-timeout' }
                 $sacSession = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -Phase 'prepare' -Step 'session' -TimeoutSeconds 420

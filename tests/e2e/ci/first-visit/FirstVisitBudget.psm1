@@ -16,10 +16,14 @@ function Get-OpenPathFirstVisitPhaseBudget {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Observe', 'AfterReboot', 'Cleanup')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Observe', 'AfterReboot', 'Cleanup')][string]$Mode,
+        # Phase 6.1 C: the Smart App Control scene proves enforcement with
+        # dedicated reboot cycles (plus one Defender extra attempt) inside
+        # prepare; the default budget stays where the nightly was measured.
+        [switch]$SmartAppControl
     )
     switch ($Mode) {
-        'Prepare' { return 720 }
+        'Prepare' { if ($SmartAppControl) { return 1500 } ; return 720 }
         'Observe' { return 660 }
         'AfterReboot' { return 660 }
         'Cleanup' { return 420 }

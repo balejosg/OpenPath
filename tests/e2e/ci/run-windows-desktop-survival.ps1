@@ -78,9 +78,17 @@ $controllerResult = $null
 $phaseTimeoutSeconds = 1800
 if ($env:OPENPATH_SUITE_KIND -eq 'FirstVisit') {
     # Phase 5.2 C4: a first-visit scene is bounded per phase so the scheduled
-    # plan fits the workflow timeout with margin.
+    # plan fits the workflow timeout with margin. Phase 6.1 C: the Smart App
+    # Control scene needs its enforcement reboot cycles inside prepare.
     Import-Module (Join-Path $PSScriptRoot 'first-visit\FirstVisitBudget.psm1') -Force
-    $phaseTimeoutSeconds = Get-OpenPathFirstVisitPhaseBudget -Mode $Mode
+    $smartAppControl = $false
+    try {
+        $controllerPayload = Get-Content -LiteralPath $ControllerPayloadPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        $firstVisitPayload = $controllerPayload.firstVisit
+        if ($firstVisitPayload -and ([string]$firstVisitPayload.smartAppControl) -eq 'on') { $smartAppControl = $true }
+    }
+    catch { }
+    $phaseTimeoutSeconds = Get-OpenPathFirstVisitPhaseBudget -Mode $Mode -SmartAppControl:$smartAppControl
 }
 try {
     $controllerResult = Invoke-OpenPathDisposableWindowsController -Command $ControllerCommand -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -PayloadPath $ControllerPayloadPath -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -TimeoutSeconds $phaseTimeoutSeconds

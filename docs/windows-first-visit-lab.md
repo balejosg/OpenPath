@@ -207,6 +207,9 @@ Defender`) and the CodeIntegrity/Operational events in **XML** from the
    and Defender cannot override it) and stops there. One extra attempt is
    allowed: if Defender is disabled by policy, `sac-defender-enable` removes
    those values, starts `WinDefend`, re-applies SAC and repeats the control.
+   The enforcement cycles run inside prepare with their own reboots (each
+   requested before it is awaited); a SAC scene gets a larger prepare budget
+   (1500 s) while the scheduled scene budget stays untouched.
 
 Every scene also records the harness `LanguageMode`, constrained-language lines
 from `openpath.log` and the post-boot agent state (Acrylic service, anchor DNS,

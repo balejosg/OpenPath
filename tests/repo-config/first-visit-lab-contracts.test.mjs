@@ -357,5 +357,11 @@ describe('first-visit lane contract', () => {
     assert.match(controller, /sac-defender-enable/u);
     assert.match(controller, /sac-not-enforced/u);
     assert.match(controller, /first-visit-sac-reboot-timeout/u);
+    // Phase 6.1 fix: the SAC cycle must REQUEST the reboot it then waits for.
+    assert.match(controller, /RequestGuestReboot \$Vmid/u);
+    const budget = read('tests/e2e/ci/first-visit/FirstVisitBudget.psm1');
+    assert.match(budget, /\[switch\]\$SmartAppControl/u);
+    const runner = read('tests/e2e/ci/run-windows-desktop-survival.ps1');
+    assert.match(runner, /-SmartAppControl:\$smartAppControl/u);
   });
 });

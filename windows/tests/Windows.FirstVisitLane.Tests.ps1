@@ -264,6 +264,10 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                             'prepare/verify-warmup' = '{"status":"passed","body":{"state":{"warmupVerification":{"status":"passed","reasons":[]},"preconditions":{"status":"passed","reasons":[]},"hostSignals":{"hostStarted":true,"hostPids":["42"],"firstInitLine":"Native host initialization completed pid=42","diagnosticLines":3,"backgroundStart":true,"diagnosticBatchFirst":true},"liveSignals":{"hostStarted":true,"hostPids":["42"],"backgroundStart":true,"diagnosticBatchFirst":true,"diagnosticLines":3},"xpiFetch":{"fetched":true,"afterArmSeconds":1.9,"baseCount":1,"count":2},"extension":{"found":true,"active":true,"userDisabled":false,"appDisabled":false,"version":"1.2.3"},"closeAfterWarmup":{"forced":true}},"session":""}}'
                             'prepare/host-signals' = '{"status":"passed","body":{"state":{"hostSignals":{"hostStarted":true,"hostPids":["42"],"firstInitLine":"Native host initialization completed pid=42","appControl":{"enableNonAdminAppControl":true,"nonAdminAppControlMode":"Enforced","appControlProfile":"ClassroomStandard"},"restrictedGroup":["alumno"],"manifestPath":"C:\\OpenPath\\native\\whitelist_native_host.json","wrapperPath":"C:\\OpenPath\\native\\OpenPath-NativeHost.cmd"}},"session":""}}'
                             'prepare/host-events' = '{"status":"passed","body":{"state":{"hostEvents":{"events8004":[],"events8007":[]}},"session":""}}'
+                            'prepare/sac-control' = '{"status":"passed","body":{"state":{"sacControl":{"ran":true,"languageMode":"FullLanguage","csc":"C:\\csc.exe","compileExit":0,"plain":{"started":true,"exitCode":7},"motw":{"started":true,"exitCode":7},"cleaned":true,"error":""}},"session":""}}'
+                            'prepare/sac-apply' = '{"status":"passed","body":{"state":{"sacApply":{"previousValue":2,"appliedValue":1,"ciTool":{"exists":true,"exit":0,"raw":["policy"]},"at":"2026-10-07T00:00:00Z"}},"session":""}}'
+                            'prepare-sac/sac-state' = '{"status":"passed","body":{"state":{"sacState":{"registryValue":1,"smartAppControlState":"On","languageMode":"FullLanguage","deviceGuard":{"umciEnforcementStatus":2,"ciEnforcementStatus":2,"securityServicesRunning":[1,2]},"ciTool":{"exists":true,"exit":0,"mode":"text","raw":["policy"],"json":""},"defender":{"status":{"amServiceEnabled":true,"smartAppControlState":"On"},"policy":[],"disabledByPolicy":[],"error":""},"codeIntegrityXml":{"exit":0,"xml":"","truncated":false,"events":0},"agentState":{},"at":"2026-10-07T00:00:01Z"}},"session":""}}'
+                            'prepare-sac/sac-control' = '{"status":"passed","body":{"state":{"sacControl":{"ran":true,"languageMode":"FullLanguage","csc":"C:\\csc.exe","compileExit":0,"plain":{"started":true,"exitCode":7},"motw":{"started":false,"nativeError":1260,"error":"blocked by policy"},"cleaned":true,"error":""}},"session":""}}'
                             'observe/session'   = '{"status":"passed","body":{"state":{"session":"alumno","sessionLogonAt":"2026-10-01T20:00:00.0000000Z"},"session":"alumno"}}'
                             'observe/visit'     = '{"status":"passed","body":{"state":{"arm":{"mode":"in-session"},"anchor":"a1"},"session":""}}'
                             'observe/wait-firefox' = '{"status":"passed","body":{"state":{"launchedAt":"2026-10-01T20:00:30.0000000Z","firefox":[{"pid":3,"created":"2026-10-01T20:00:30.0000000Z"}],"firefoxLog":[]},"session":""}}'
@@ -312,7 +316,8 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                     [Parameter(Mandatory = $true)][string]$TemplatePath,
                     [Parameter(Mandatory = $true)][string]$PersonalizedExePath,
                     [string]$Phase = 'prepare',
-                    [string]$Scenario = 'first-visit-settled'
+                    [string]$Scenario = 'first-visit-settled',
+                    [string]$SmartAppControl = ''
                 )
                 return [pscustomobject]@{
                     schemaVersion    = 2
@@ -329,7 +334,7 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                     templateSha256   = (Get-FileHash -LiteralPath $TemplatePath -Algorithm SHA256).Hash.ToLowerInvariant()
                     personalizedExePath = $PersonalizedExePath
                     personalizedExeSha256 = (Get-FileHash -LiteralPath $PersonalizedExePath -Algorithm SHA256).Hash.ToLowerInvariant()
-                    firstVisit       = [pscustomobject]@{ scenario = $Scenario; repetition = 1; labScenario = 'win11-education-existing-empty'; templateXpiSha256 = 'fake-template-xpi-sha' }
+                    firstVisit       = [pscustomobject]@{ scenario = $Scenario; repetition = 1; labScenario = 'win11-education-existing-empty'; templateXpiSha256 = 'fake-template-xpi-sha'; smartAppControl = $SmartAppControl }
                 }
             }
         }
@@ -438,6 +443,34 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             @($state.Calls) | Should -Contain 'WaitGuestRebooted'
             @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:observe/session'
             @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:observe/visit'
+        }
+
+        It 'Requests a reboot before every SAC wait and proves enforcement in prepare' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakePlan)
+            $transport = New-FirstVisitTestTransport -State $state
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Scenario 'first-visit-class-boot' -SmartAppControl 'on'
+            $result = Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport
+            $result.status | Should -Be 'passed'
+            $result.observation.state.sacDecision.applied | Should -BeTrue
+            @($result.observation.state.sacCycles).Count | Should -Be 1
+            @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:prepare/sac-control'
+            @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:prepare/sac-apply'
+            @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:prepare-sac/sac-state'
+            @($state.Calls) | Should -Contain 'InvokeGuestPowerShell:prepare-sac/sac-control'
+            # Phase 6.1 fix: the (buggy) SAC cycle waited for a reboot nobody
+            # requested; between sac-apply and the first assessment there must
+            # be exactly one RequestGuestReboot BEFORE the WaitGuestRebooted.
+            $calls = @($state.Calls)
+            $applyIndex = [array]::IndexOf($calls, 'InvokeGuestPowerShell:prepare/sac-apply')
+            $stateIndex = [array]::IndexOf($calls, 'InvokeGuestPowerShell:prepare-sac/sac-state')
+            $applyIndex | Should -BeGreaterOrEqual 0
+            $stateIndex | Should -BeGreaterThan $applyIndex
+            $between = @($calls[$applyIndex..$stateIndex])
+            @($between | Where-Object { $_ -eq 'RequestGuestReboot' }).Count | Should -Be 1
+            @($between | Where-Object { $_ -eq 'WaitGuestRebooted' }).Count | Should -Be 1
+            $requestRel = [array]::IndexOf($between, 'RequestGuestReboot')
+            $waitRel = [array]::IndexOf($between, 'WaitGuestRebooted')
+            $requestRel | Should -BeLessThan $waitRel
         }
 
         It 'Restores collect values that traveled as part files' {
