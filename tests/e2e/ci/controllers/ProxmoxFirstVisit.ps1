@@ -1342,7 +1342,8 @@ function Invoke-OpenPathFirstVisitObserve {
     if ($scenario -eq 'first-visit-control') { $scenario = 'first-visit-floor' }
     # Phase 6 C: the real-site canary has no page self-report (the real site is
     # not instrumented); its verdict comes from the collected diagnostics.
-    $siteMode = ($scenario -eq 'first-visit-site')
+    # Phase 6.1 fix: the class-boot canary variant must take the same path.
+    $siteMode = ($scenario -in @('first-visit-site', 'first-visit-site-class-boot'))
     # Phase 6 B: SAC state is read only for smart_app_control=on scenes.
     $sacStateInfo = $null
     $sacControlInfo = $null

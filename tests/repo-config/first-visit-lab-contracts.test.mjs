@@ -331,6 +331,13 @@ describe('first-visit lane contract', () => {
     assert.match(controller, /siteHost/u);
     assert.match(controller, /-SiteHost/u);
     assert.match(controller, /visitDiagnostics/u);
+    // Phase 6.1 fix: the settings AND the observe phase must both accept the
+    // site-class-boot variant (the observe exact match lost the canary path).
+    const siteModeChecks =
+      controller.match(
+        /\$siteMode = \(\$scenario -in @\('first-visit-site', 'first-visit-site-class-boot'\)\)/gu
+      ) ?? [];
+    assert.ok(siteModeChecks.length >= 2, 'settings and observe must both accept site-class-boot');
   });
 
   test('the SAC proof is a positive control, not the registry (Phase 6.1 C)', () => {

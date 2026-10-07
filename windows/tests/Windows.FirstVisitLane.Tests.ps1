@@ -317,7 +317,9 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                     [Parameter(Mandatory = $true)][string]$PersonalizedExePath,
                     [string]$Phase = 'prepare',
                     [string]$Scenario = 'first-visit-settled',
-                    [string]$SmartAppControl = ''
+                    [string]$SmartAppControl = '',
+                    [string]$SiteUrl = '',
+                    [string]$SiteWhitelist = ''
                 )
                 return [pscustomobject]@{
                     schemaVersion    = 2
@@ -334,8 +336,29 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
                     templateSha256   = (Get-FileHash -LiteralPath $TemplatePath -Algorithm SHA256).Hash.ToLowerInvariant()
                     personalizedExePath = $PersonalizedExePath
                     personalizedExeSha256 = (Get-FileHash -LiteralPath $PersonalizedExePath -Algorithm SHA256).Hash.ToLowerInvariant()
-                    firstVisit       = [pscustomobject]@{ scenario = $Scenario; repetition = 1; labScenario = 'win11-education-existing-empty'; templateXpiSha256 = 'fake-template-xpi-sha'; smartAppControl = $SmartAppControl }
+                    firstVisit       = [pscustomobject]@{ scenario = $Scenario; repetition = 1; labScenario = 'win11-education-existing-empty'; templateXpiSha256 = 'fake-template-xpi-sha'; smartAppControl = $SmartAppControl; siteUrl = $SiteUrl; siteWhitelist = $SiteWhitelist }
                 }
+            }
+
+            function New-FirstVisitFakeSitePlan {
+                # Phase 6.1: a site plan (real URL as the anchor, no fixture
+                # dependency set) for the site-class-boot canary dispatch test.
+                $plan = [ordered]@{
+                    schemaVersion       = 1
+                    runId               = '12345'
+                    siteMode            = $true
+                    siteUrl             = 'https://www.example.invalid/'
+                    siteDomains         = @('example.invalid')
+                    anchors             = [ordered]@{
+                        a1 = [ordered]@{ host = 'www.example.invalid'; url = 'https://www.example.invalid/'; roles = [ordered]@{} }
+                    }
+                    controlDependencies = @()
+                    neverLearnable      = ''
+                    unlisted            = ''
+                    whitelistHosts      = @('example.invalid')
+                    blockedSubdomains   = @()
+                }
+                return ($plan | ConvertTo-Json -Depth 8 -Compress)
             }
         }
 
@@ -471,6 +494,25 @@ Write-Output ('SKIPPED=' + [string]`$result.Result.skipped)
             $requestRel = [array]::IndexOf($between, 'RequestGuestReboot')
             $waitRel = [array]::IndexOf($between, 'WaitGuestRebooted')
             $requestRel | Should -BeLessThan $waitRel
+        }
+
+        It 'Writes the canary verdict for a site-class-boot observe scene' {
+            $state = New-FirstVisitTestState -PlanJson (New-FirstVisitFakeSitePlan)
+            $state.ResponseOverrides['observe/collect'] = '{"status":"passed","body":{"state":{"collect":{"diagnostics":{"lines":2,"hostStarted":true},"canaryDiagnostics":["2026-10-07 08:00:00 [INFO] [NativeHost] [PID:1] stage=extension-diagnostic {\"kind\":\"navigation\",\"host\":\"www.example.invalid\",\"ts\":1791380590510}"],"overlayHosts":[],"mozExtract":[],"openpathTail":[],"holds":0,"mozFileNames":[]}},"session":""}}'
+            $transport = New-FirstVisitTestTransport -State $state
+            $preparePayload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Scenario 'first-visit-site-class-boot' -SiteUrl 'https://www.example.invalid/' -SiteWhitelist 'example.invalid'
+            Invoke-OpenPathProxmoxControllerPhase -Payload $preparePayload -Config (New-FirstVisitTestConfig) -Transport $transport | Out-Null
+            $payload = New-FirstVisitTestPayload -ArtifactsRoot $script:FirstVisitArtifacts -TemplatePath $script:FirstVisitTemplate -PersonalizedExePath $script:FirstVisitPersonalized -Phase 'observe' -Scenario 'first-visit-site-class-boot' -SiteUrl 'https://www.example.invalid/' -SiteWhitelist 'example.invalid'
+            $result = Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-FirstVisitTestConfig) -Transport $transport
+            $result.status | Should -Be 'passed'
+            $verdictPath = Join-Path $script:FirstVisitArtifacts 'observe-verdict.json'
+            (Test-Path -LiteralPath $verdictPath) | Should -BeTrue
+            $doc = Get-Content -LiteralPath $verdictPath -Raw | ConvertFrom-Json
+            $doc.source | Should -Be 'canary'
+            $doc.canary | Should -BeTrue
+            $doc.canaryStatus | Should -Be 'CANARY-RED'
+            $doc.siteNavigated | Should -BeTrue
+            $result.observation.state.canary.status | Should -Be 'CANARY-RED'
         }
 
         It 'Restores collect values that traveled as part files' {
