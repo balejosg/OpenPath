@@ -226,22 +226,25 @@ function Get-BoundedMozMatches {
         }
     }
     $ordered = @($files | Sort-Object LastWriteTime -Descending)
-    $matches = New-Object System.Collections.Generic.List[string]
+    # Phase 6.1 fix: never name this list `$matches`; the -match operator writes
+    # the automatic $Matches variable and silently replaces the list with a
+    # hashtable, so .Add() fails on the first matching line (smoke 37582014698).
+    $mozMatches = New-Object System.Collections.Generic.List[string]
     $scanned = 0
     $truncated = $false
     foreach ($file in $ordered) {
-        if ($matches.Count -ge $MaxMatches -or $stopwatch.Elapsed.TotalSeconds -gt $BudgetSeconds) { $truncated = $true; break }
+        if ($mozMatches.Count -ge $MaxMatches -or $stopwatch.Elapsed.TotalSeconds -gt $BudgetSeconds) { $truncated = $true; break }
         if ($scanned -ge $MaxFiles) { $truncated = $true; break }
         $scanned += 1
         foreach ($line in @(Get-FileTailSafe -Path $file.FullName -Lines 4000 -MaxBytes $MaxBytesPerFile)) {
             if ($line -match $Pattern) {
-                $matches.Add([string]$line) | Out-Null
-                if ($matches.Count -ge $MaxMatches) { break }
+                $mozMatches.Add([string]$line) | Out-Null
+                if ($mozMatches.Count -ge $MaxMatches) { break }
             }
         }
     }
     return [ordered]@{
-        lines     = @($matches)
+        lines     = @($mozMatches)
         files     = $scanned
         totalFiles = $ordered.Count
         truncated = $truncated

@@ -316,6 +316,10 @@ describe('first-visit lane contract', () => {
     assert.match(harness, /preExistingFirefox/u);
     assert.match(harness, /pre-existing-firefox-remains/u);
     assert.match(harness, /mozFileNames/u);
+    // The -match operator owns $Matches: the moz collector must never keep its
+    // list in a variable named $matches (smoke run 37582014698 collect crash).
+    assert.match(harness, /mozMatches/u);
+    assert.doesNotMatch(harness, /\$matches\.Add/u);
     const canary = read('tests/e2e/ci/first-visit/FirstVisitSiteCanary.psm1');
     assert.match(canary, /siteNavigated/u);
     assert.match(canary, /siteNavigationTs/u);

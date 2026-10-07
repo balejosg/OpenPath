@@ -1719,4 +1719,36 @@ PrimaryServerAddress=198.51.100.7
             $navigatedOutcome.category | Should -Be 'CANARY-PASS'
         }
     }
+
+    Context 'MOZ collector survives the regex automatic variable (Phase 6.1 fix)' -Tag 'Phase61' {
+        BeforeAll {
+            $harnessPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\Invoke-OpenPathFirstVisitGuest.ps1'
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($harnessPath, [ref]$tokens, [ref]$parseErrors)
+            foreach ($name in @('Get-BoundedMozMatches', 'Get-FileTailSafe')) {
+                $definition = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true) | Select-Object -First 1
+                if (-not $definition) { throw "first-visit-harness-function-missing: $name" }
+                . ([scriptblock]::Create($definition.Extent.Text))
+            }
+            $script:mozFixtureDir = Join-Path ([IO.Path]::GetTempPath()) ('openpath-moz-fixture-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $script:mozFixtureDir -Force | Out-Null
+            $logPath = Join-Path $script:mozFixtureDir 'hostresolver.log.0'
+            [IO.File]::WriteAllLines($logPath, @(
+                    '2026-10-07 08:00:00.000000 UTC - [1:1]: D/nsHostResolver DNS lookup for a.example.invalid',
+                    '2026-10-07 08:00:01.000000 UTC - [1:1]: D/nsHostResolver DNS lookup for b.example.invalid'
+                ))
+        }
+        AfterAll {
+            Remove-Item -LiteralPath $script:mozFixtureDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        It 'Keeps the match list type intact while -match owns $Matches' {
+            # The -match operator writes the automatic $Matches variable; a
+            # local list named $matches is silently replaced by a hashtable and
+            # .Add() then fails (the smoke run 37582014698 collect crash).
+            $result = Get-BoundedMozMatches -Directories @($script:mozFixtureDir) -Pattern 'nsHostResolver' -FileFilter '*'
+            @($result.lines).Count | Should -Be 2
+            $result.fileNames | Should -Contain 'hostresolver.log.0'
+        }
+    }
 }
