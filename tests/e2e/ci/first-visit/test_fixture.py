@@ -107,17 +107,17 @@ class PlanTests(unittest.TestCase):
             "192.168.1.150",
             "unit-token",
             "site",
-            "https://www.reddit.com/",
-            ["reddit.com"],
+            "https://www.example.invalid/app",
+            ["example.invalid"],
         )
         self.assertTrue(plan["siteMode"])
-        self.assertEqual(plan["siteUrl"], "https://www.reddit.com/")
-        self.assertEqual(plan["anchors"]["a1"]["url"], "https://www.reddit.com/")
-        self.assertEqual(plan["anchors"]["a1"]["host"], "www.reddit.com")
+        self.assertEqual(plan["siteUrl"], "https://www.example.invalid/app")
+        self.assertEqual(plan["anchors"]["a1"]["url"], "https://www.example.invalid/app")
+        self.assertEqual(plan["anchors"]["a1"]["host"], "www.example.invalid")
         self.assertEqual(plan["controlDependencies"], [])
         self.assertEqual(plan["blockedSubdomains"], [])
         body = fixture_server.whitelist_body(plan)
-        self.assertIn("reddit.com", body)
+        self.assertIn("example.invalid", body)
         self.assertNotIn(".sslip.io", body)
         self.assertNotIn("## BLOCKED-SUBDOMAINS\r\nblocked", body)
         # No site_url is an input error, never a silent fixture plan.

@@ -27,7 +27,10 @@ param(
     # The controller passes the fixture clock captured just before the warm-up
     # launch (guest steps are separate processes, so step-local state does not
     # survive).
-    [string]$FixtureBaselineJson = ''
+    [string]$FixtureBaselineJson = '',
+    # Phase 6.1 C: ISO-8601 UTC scene start (prepare began). Every CodeIntegrity
+    # XML query is bounded to the scene from this mark.
+    [string]$SceneStartedAt = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -62,6 +65,13 @@ $canaryModulePath = Join-Path $PSScriptRoot 'FirstVisitSiteCanary.psm1'
 if (Test-Path -LiteralPath $canaryModulePath) {
     try { Import-Module -Name $canaryModulePath -Force -ErrorAction Stop; $script:CanaryModuleLoaded = $true }
     catch { $script:ModuleLoadError = (($script:ModuleLoadError + " canary: $($_.Exception.Message)").Trim()) }
+}
+# Phase 6.1 A: the launch-wrapper body builder (one directive per line).
+$script:LaunchModuleLoaded = $false
+$launchModulePath = Join-Path $PSScriptRoot 'FirstVisitLaunch.psm1'
+if (Test-Path -LiteralPath $launchModulePath) {
+    try { Import-Module -Name $launchModulePath -Force -ErrorAction Stop; $script:LaunchModuleLoaded = $true }
+    catch { $script:ModuleLoadError = (($script:ModuleLoadError + " launch: $($_.Exception.Message)").Trim()) }
 }
 $OpenPathRoot = 'C:\OpenPath'
 $LabRoot = 'C:\OpenPathLab'
@@ -201,13 +211,17 @@ function Get-BoundedMozMatches {
         [int]$MaxFiles = 4,
         [int]$MaxBytesPerFile = 4194304,
         [int]$MaxMatches = 200,
-        [int]$BudgetSeconds = 20
+        [int]$BudgetSeconds = 20,
+        # Phase 6.1 A: Firefox writes the rotated MOZ_LOG files with the real
+        # names generated from MOZ_LOG_FILE; the canary scans its dedicated moz
+        # directories without a name filter and records which files it saw.
+        [string]$FileFilter = '*.log*'
     )
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $files = New-Object System.Collections.Generic.List[object]
     foreach ($directory in $Directories) {
         if (-not $directory) { continue }
-        foreach ($file in @(Get-ChildItem -LiteralPath $directory -Filter '*.log*' -ErrorAction SilentlyContinue)) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $directory -Filter $FileFilter -ErrorAction SilentlyContinue)) {
             $files.Add($file) | Out-Null
         }
     }
@@ -232,6 +246,7 @@ function Get-BoundedMozMatches {
         totalFiles = $ordered.Count
         truncated = $truncated
         elapsedMs = [int]$stopwatch.ElapsedMilliseconds
+        fileNames = @($ordered | Select-Object -First 12 | ForEach-Object { $_.Name })
     }
 }
 
@@ -244,6 +259,35 @@ function Get-FirefoxProcesses {
             })
 }
 
+function Get-PreExistingFirefox {
+    # Phase 6.1 B: who is already open when the visit launches (pid, creation,
+    # parent process and command line via Win32_Process). Recorded for every
+    # scenario; the harness closes them for every non-hot scenario so the visit
+    # browser is the one the wrapper starts.
+    $rows = @()
+    try {
+        foreach ($process in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='firefox.exe'" -ErrorAction SilentlyContinue)) {
+            $created = ''
+            try { $created = ([datetime]$process.CreationDate).ToUniversalTime().ToString('o') } catch { $created = [string]$process.CreationDate }
+            $parentName = ''
+            try {
+                $parent = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$([int]$process.ParentProcessId)" -ErrorAction SilentlyContinue | Select-Object -First 1)
+                if ($parent.Count -gt 0) { $parentName = [string]$parent[0].Name }
+            }
+            catch { }
+            $rows += [ordered]@{
+                pid         = [int]$process.ProcessId
+                created     = $created
+                parentPid   = [int]$process.ParentProcessId
+                parentName  = $parentName
+                commandLine = ([string]$process.CommandLine)
+            }
+        }
+    }
+    catch { }
+    return @($rows)
+}
+
 function Invoke-Cmd {
     # Small native-command wrapper: returns the exit code and the output lines.
     param([Parameter(Mandatory = $true)][string]$File, [string[]]$Arguments = @())
@@ -253,6 +297,81 @@ function Invoke-Cmd {
     }
     catch {
         return [ordered]@{ exit = -1; out = @($_.Exception.Message) }
+    }
+}
+
+function Invoke-SacControlRun {
+    # Phase 6.1 C: run one control exe as SYSTEM with a hard timeout. A code
+    # integrity policy blocks CreateProcess (Win32 error 1260 and friends) —
+    # that failure to start is the control signal, not the exit code.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [int]$TimeoutMs = 10000,
+        [int]$ExpectedExitCode = 7
+    )
+    $started = [DateTime]::UtcNow
+    $info = [ordered]@{
+        path             = $Path
+        started          = $false
+        timedOut         = $false
+        exitCode         = $null
+        expectedExitCode = $ExpectedExitCode
+        nativeError      = $null
+        error            = ''
+        elapsedMs        = -1
+    }
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $Path
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $process = [System.Diagnostics.Process]::Start($psi)
+        $info.started = $true
+        if (-not $process.WaitForExit($TimeoutMs)) {
+            $info.timedOut = $true
+            try { $process.Kill() } catch { }
+        }
+        else {
+            try { $info.exitCode = [int]$process.ExitCode } catch { }
+        }
+    }
+    catch {
+        $exception = $_.Exception
+        if (-not ($exception -is [System.ComponentModel.Win32Exception]) -and ($exception.InnerException -is [System.ComponentModel.Win32Exception])) {
+            $exception = $exception.InnerException
+        }
+        if ($exception -is [System.ComponentModel.Win32Exception]) { $info.nativeError = [int]$exception.NativeErrorCode }
+        $info.error = [string]$exception.Message
+    }
+    $info.elapsedMs = [int](([DateTime]::UtcNow) - $started).TotalMilliseconds
+    return $info
+}
+
+function Get-CodeIntegrityXmlEvents {
+    # Phase 6.1 C: XML keeps FileName, PolicyId and the correlation ids; the
+    # text format loses them. Bounded to MaxEvents and ~1 MB per call, oldest
+    # first from the scene start.
+    param(
+        [string]$SinceIso = '',
+        [int]$MaxEvents = 200,
+        [int]$MaxBytes = 1048576
+    )
+    $query = '*'
+    if ($SinceIso) { $query = "*[System[TimeCreated[@SystemTime>='$SinceIso']]]" }
+    $result = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$query", "/c:$MaxEvents", '/rd:false', '/f:xml')
+    $text = (@($result.out) -join "`r`n")
+    $truncated = $false
+    if ($text.Length -gt $MaxBytes) {
+        $text = $text.Substring(0, $MaxBytes)
+        $truncated = $true
+    }
+    return [ordered]@{
+        exit      = $result.exit
+        xml       = $text
+        truncated = $truncated
+        events    = ([regex]::Matches($text, '(?s)<Event\s')).Count
     }
 }
 
@@ -357,8 +476,8 @@ function Write-CleanFirefoxCmd {
         [Parameter(Mandatory = $true)][string]$Url,
         [Parameter(Mandatory = $true)][string]$Tag,
         # Phase 6 C: MOZ_LOG nsHostResolver capture is enabled ONLY for the
-        # real-site canary. Rotation is capped per file; the collect reads at
-        # most 4 files x 4 MiB (<= 16 MiB, under the 20 MB budget).
+        # real-site canary. Firefox rotates with `rotate:16` (four .0-.3 files);
+        # the collect reads the newest files within its own budget.
         [bool]$MozLog = $false
     )
     $firefox = Get-FirefoxInstallPath
@@ -366,20 +485,21 @@ function Write-CleanFirefoxCmd {
     Initialize-VisitRoot | Out-Null
     $root = $script:VisitRoot
     $cmdPath = Join-Path $root ("ff-$Tag.cmd")
-    $mozLines = ''
-    if ($MozLog) {
-        $mozLines = @"
-set MOZ_LOG=timestamp,nsHostResolver:5
-set MOZ_LOG_FILE=$root\moz\hostresolver.log
-set MOZ_LOG_FILE_MAX_SIZE=4194304
-"@
+    if ($script:LaunchModuleLoaded) {
+        $body = ConvertTo-OpenPathFirstVisitFirefoxCmdBody -FirefoxPath $firefox -Url $Url -Tag $Tag -Root $root -MozLog $MozLog
     }
-    $body = @"
-@echo off
-echo launch %DATE% %TIME% user=%USERNAME% tag=$Tag >> "$root\logs\launch.log"
-$mozLines"$firefox" -new-window "$Url" >> "$root\logs\firefox-$Tag.log" 2>&1
-echo exit %ERRORLEVEL% >> "$root\logs\launch.log"
-"@
+    else {
+        # Minimal correct fallback: never glue a `set` directive to the launch
+        # line (Phase 6.1 A regression guard).
+        $lines = @('@echo off', "echo launch %DATE% %TIME% user=%USERNAME% tag=$Tag >> ""$root\logs\launch.log""")
+        if ($MozLog) {
+            $lines += 'set MOZ_LOG=timestamp,rotate:16,nsHostResolver:5'
+            $lines += "set MOZ_LOG_FILE=$root\moz\hostresolver.log"
+        }
+        $lines += """$firefox"" -new-window ""$Url"" >> ""$root\logs\firefox-$Tag.log"" 2>&1"
+        $lines += "echo exit %ERRORLEVEL% >> ""$root\logs\launch.log"""
+        $body = (($lines -join "`r`n") + "`r`n")
+    }
     [IO.File]::WriteAllText($cmdPath, $body, [Text.UTF8Encoding]::new($false))
     return $cmdPath
 }
@@ -868,6 +988,23 @@ switch ($Step) {
         $script:Body.anchor = 'a1'
         $script:Body.anchorUrl = $url
         $script:Body.siteMode = $siteMode
+        # Phase 6.1 B: record any Firefox already open at visit launch (pid,
+        # creation, parent, command line) and close it for every non-hot
+        # scenario, so the measured browser is the one this visit starts.
+        $preExisting = @(Get-PreExistingFirefox)
+        $script:Body.preExistingFirefox = $preExisting
+        $closePreExisting = ($ScenarioId -notlike '*hot*')
+        if ($closePreExisting -and $preExisting.Count -gt 0) {
+            $script:Body.preExistingClose = Close-FirefoxProcesses
+            $deadline = (Get-Date).AddSeconds(20)
+            while ((Get-Date) -lt $deadline) {
+                if (@(Get-FirefoxProcesses).Count -eq 0) { break }
+                Start-Sleep -Seconds 2
+            }
+            $remaining = @(Get-FirefoxProcesses)
+            $script:Body.preExistingRemaining = $remaining
+            if ($remaining.Count -gt 0) { $script:Failures.Add("pre-existing-firefox-remains:$($remaining.Count)") | Out-Null }
+        }
         if ($ScenarioId -like '*class-boot*') {
             # Class boot: arm the wrapper for the next logon (the run key is what
             # starts the browser in this lab) and reboot; the host waits for the
@@ -1106,14 +1243,28 @@ switch ($Step) {
         if ($collectSiteMode -and $earlyOverlayHosts.Count -gt 0) {
             $mozPattern = (@($earlyOverlayHosts) | ForEach-Object { [regex]::Escape([string]$_) }) -join '|'
         }
-        $moz = [ordered]@{ lines = @(); files = 0; totalFiles = 0; truncated = $true }
+        # Phase 6.1 A: the canary scans its dedicated moz directories without a
+        # name filter (Firefox rotates the MOZ_LOG_FILE base into real names) and
+        # records the file names it actually saw.
+        $mozFilter = if ($collectSiteMode) { '*' } else { '*.log*' }
+        $moz = [ordered]@{ lines = @(); files = 0; totalFiles = 0; truncated = $true; fileNames = @() }
         if (& $budgetExceeded) { $skippedBlocks.Add('moz') | Out-Null }
-        else { $moz = Get-BoundedMozMatches -Directories @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz')) -Pattern $mozPattern; $mozExtract = @($moz.lines) }
+        else { $moz = Get-BoundedMozMatches -Directories @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz')) -Pattern $mozPattern -FileFilter $mozFilter; $mozExtract = @($moz.lines) }
         $mozExtract = @($moz.lines)
         & $lap 'mozScanMs'
         $timings.mozFiles = $moz.files
         $timings.mozFilesTotal = $moz.totalFiles
         $timings.mozTruncated = $moz.truncated
+        $timings.mozFileNames = @($moz.fileNames)
+        $mozDirListing = @()
+        foreach ($mozDir in @('C:\OpenPathLab\moz', (Join-Path $script:VisitRoot 'moz'))) {
+            try {
+                foreach ($entry in @(Get-ChildItem -LiteralPath $mozDir -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 12)) {
+                    $mozDirListing += [ordered]@{ dir = $mozDir; name = $entry.Name; bytes = [long]$entry.Length; lastWrite = $entry.LastWriteTimeUtc.ToString('o') }
+                }
+            }
+            catch { }
+        }
         $overlayHosts = @()
         if (& $budgetExceeded) { $skippedBlocks.Add('overlayHosts') | Out-Null }
         elseif ($collectSiteMode -and $earlyOverlayHosts.Count -gt 0) { $overlayHosts = $earlyOverlayHosts; & $lap 'overlayHostsMs' }
@@ -1152,6 +1303,8 @@ switch ($Step) {
         $script:Body.collect.canaryDiagnostics = @($diagnostics | Where-Object { $_ -match 'kind":"(hold|hold-outcome|navigation|reload-decision)"' } | Select-Object -First 500 | ForEach-Object { & $truncateLine $_ 500 })
         $script:Body.collect.mozPattern = $mozPattern
         $script:Body.collect.mozHostsTracked = @($earlyOverlayHosts | Select-Object -First 100)
+        $script:Body.collect.mozFileNames = @($moz.fileNames | Select-Object -First 12)
+        $script:Body.collect.mozDirListing = @($mozDirListing | Select-Object -First 24)
         $script:Body.collect.diagnosticLines = $diagnostics.Count
         $script:Body.collect.diagnosticSample = @($diagnostics | Select-Object -First 20 | ForEach-Object { & $truncateLine $_ 600 })
         $script:Body.collect.startupProfiles = @($profiles | Select-Object -Last 8 | ForEach-Object { & $truncateLine $_ 600 })
@@ -1423,15 +1576,12 @@ switch ($Step) {
             $events[$pair.Key] = @($list)
             $events["exit$($pair.Id)"] = $result.exit
         }
-        # Phase 6 B: Code Integrity / SAC events (block and audit ids).
-        $ci = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$ciQuery", '/c:40', '/rd:true', '/f:text')
-        $ciList = New-Object System.Collections.Generic.List[string]
-        foreach ($line in @($ci.out)) {
-            $ciList.Add([string]$line) | Out-Null
-            if ($ciList.Count -ge 400) { break }
-        }
-        $events.codeIntegrity = @($ciList)
-        $events.codeIntegrityExit = $ci.exit
+        # Phase 6.1 C: Code Integrity XML from the scene start (all ids; keeps
+        # file, policy and correlation ids). Bounded to 200 events / ~512 KB.
+        $ciXml = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 200 -MaxBytes 524288
+        $events.codeIntegrityXml = $ciXml
+        $events.codeIntegrityExit = $ciXml.exit
+        $events.sceneStartedAt = $SceneStartedAt
         # Phase 6 B: constrained-language errors in the agent log (bounded).
         $events.openpathLanguageErrors = @(Get-LogTail -Path "$OpenPathRoot\data\logs\openpath.log" -Tail 400 -Patterns @('ConstrainedLanguage', 'constrained language', 'language mode') | Select-Object -Last 20)
         # Phase 6 B: agent state after the boot (Acrylic service, DNS for the
@@ -1447,6 +1597,111 @@ switch ($Step) {
         catch { }
         $events.agentState = $agentState
         $script:Body.hostEvents = $events
+        Complete-Step
+    }
+    'sac-defender-enable' {
+        # Phase 6.1 C extra attempt: clear the Defender-disabling policy values
+        # and make sure the service is running, so Smart App Control can
+        # evaluate signatures at all.
+        Save-PartialResult
+        $result = [ordered]@{
+            policyBefore  = @()
+            removed       = @()
+            policyAfter   = @()
+            serviceBefore = ''
+            serviceAfter  = ''
+            startError    = ''
+            at            = [DateTime]::UtcNow.ToString('o')
+        }
+        $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender'
+        try {
+            if (Test-Path $policyPath) {
+                $props = Get-ItemProperty -Path $policyPath -ErrorAction Stop
+                $entries = @($props.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' })
+                $result.policyBefore = @($entries | ForEach-Object { [ordered]@{ name = $_.Name; value = [string]$_.Value } })
+                foreach ($name in @('DisableAntiSpyware', 'DisableAntiVirus', 'DisableRoutinelyTakingAction', 'DisableRealtimeMonitoring', 'DisableBehaviorMonitoring', 'DisableIOAVProtection', 'DisableScriptScanning')) {
+                    if (@($entries | ForEach-Object { $_.Name }) -contains $name) {
+                        Remove-ItemProperty -Path $policyPath -Name $name -ErrorAction SilentlyContinue
+                        $result.removed += $name
+                    }
+                }
+            }
+        }
+        catch { }
+        try { $result.serviceBefore = [string](Get-Service -Name 'WinDefend' -ErrorAction SilentlyContinue).Status } catch { }
+        try { Set-Service -Name 'WinDefend' -StartupType Automatic -ErrorAction SilentlyContinue } catch { }
+        try { Start-Service -Name 'WinDefend' -ErrorAction Stop } catch { $result.startError = [string]$_.Exception.Message }
+        try { $result.serviceAfter = [string](Get-Service -Name 'WinDefend' -ErrorAction SilentlyContinue).Status } catch { }
+        try {
+            $propsAfter = Get-ItemProperty -Path $policyPath -ErrorAction SilentlyContinue
+            if ($propsAfter) {
+                $result.policyAfter = @($propsAfter.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' } | ForEach-Object { [ordered]@{ name = $_.Name; value = [string]$_.Value } })
+            }
+        }
+        catch { }
+        $script:Body.sacDefenderEnable = $result
+        Complete-Step
+    }
+    'sac-control' {
+        # Phase 6.1 C: positive control for Smart App Control. Compile a trivial
+        # console exe with the .NET Framework csc.exe, keep a MOTW (ZoneId=3)
+        # and a plain copy, run both as SYSTEM and collect the CodeIntegrity XML
+        # events that name them. No binary ever enters the repository; the
+        # directory is removed afterwards.
+        Save-PartialResult
+        $languageMode = [string]$ExecutionContext.SessionState.LanguageMode
+        $control = [ordered]@{
+            ran           = $false
+            languageMode  = $languageMode
+            dir           = 'C:\Windows\Temp\openpath-sac-control'
+            csc           = ''
+            compileExit   = -1
+            compileOutput = @()
+            plain         = $null
+            motw          = $null
+            codeIntegrity = $null
+            cleaned       = $false
+            error         = ''
+        }
+        if ($languageMode -ne 'FullLanguage') {
+            $control.error = "constrained-language:$languageMode"
+            $script:Body.sacControl = $control
+            Complete-Step
+        }
+        try {
+            $control.ran = $true
+            $dir = $control.dir
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $source = Join-Path $dir 'control.cs'
+            [IO.File]::WriteAllText($source, 'public static class OpenPathSacControl { public static void Main() { System.Environment.ExitCode = 7; } }', [Text.UTF8Encoding]::new($false))
+            $candidates = @(
+                (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
+                (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
+            )
+            $csc = @($candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
+            if ($csc.Count -eq 0) { throw 'csc-not-found' }
+            $control.csc = [string]$csc[0]
+            $compile = Invoke-Cmd ([string]$csc[0]) @('/nologo', '/target:exe', ("/out:" + (Join-Path $dir 'control.exe')), $source)
+            $control.compileExit = $compile.exit
+            $control.compileOutput = @($compile.out | Select-Object -First 10)
+            $compiled = Join-Path $dir 'control.exe'
+            if ($compile.exit -ne 0 -or -not (Test-Path -LiteralPath $compiled)) { throw "compile-failed:$($compile.exit)" }
+            $plainPath = Join-Path $dir 'control-plain.exe'
+            $motwPath = Join-Path $dir 'control-motw.exe'
+            Copy-Item -LiteralPath $compiled -Destination $plainPath -Force
+            Copy-Item -LiteralPath $compiled -Destination $motwPath -Force
+            $zone = "[ZoneTransfer]`r`nZoneId=3`r`nReferrerUrl=https://example.invalid/`r`nHostUrl=https://example.invalid/control.exe"
+            Set-Content -LiteralPath $motwPath -Stream 'Zone.Identifier' -Value $zone -Encoding ASCII
+            $control.plain = Invoke-SacControlRun -Path $plainPath
+            $control.motw = Invoke-SacControlRun -Path $motwPath
+            $control.codeIntegrity = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 60 -MaxBytes 262144
+        }
+        catch { $control.error = [string]$_.Exception.Message }
+        finally {
+            try { Remove-Item -LiteralPath $control.dir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+            $control.cleaned = -not (Test-Path -LiteralPath $control.dir)
+        }
+        $script:Body.sacControl = $control
         Complete-Step
     }
     'sac-apply' {
@@ -1524,7 +1779,17 @@ switch ($Step) {
             $minimal.scenario = $ScenarioId
             $minimal.languageMode = $languageMode
             $minimal.constrainedLanguage = $true
-            $minimal.sacState = @{ registryValue = $registryValue; smartAppControlState = $mpState; enforced = ($registryValue -eq 1) }
+            $minimalDeviceGuard = @{ umciEnforcementStatus = $null; ciEnforcementStatus = $null; error = 'constrained-language' }
+            try {
+                $dgMinimal = @(Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName 'Win32_DeviceGuard' -ErrorAction Stop | Select-Object -First 1)
+                if ($dgMinimal.Count -gt 0) {
+                    $minimalDeviceGuard.umciEnforcementStatus = $dgMinimal[0].UsermodeCodeIntegrityPolicyEnforcementStatus
+                    $minimalDeviceGuard.ciEnforcementStatus = $dgMinimal[0].CodeIntegrityPolicyEnforcementStatus
+                    $minimalDeviceGuard.error = ''
+                }
+            }
+            catch { }
+            $minimal.sacState = @{ registryValue = $registryValue; smartAppControlState = $mpState; languageMode = $languageMode; deviceGuard = $minimalDeviceGuard; constrainedLanguage = $true }
             $ci = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$ciQuery", '/c:40', '/rd:true', '/f:text')
             $minimal.codeIntegrityExit = $ci.exit
             $minimal.codeIntegrityLines = @($ci.out | Select-Object -First 200)
@@ -1538,12 +1803,58 @@ switch ($Step) {
             Write-Output '<<<END_GUEST_RESULT>>>'
             exit 0
         }
-        $ci = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$ciQuery", '/c:40', '/rd:true', '/f:text')
-        $ciList = New-Object System.Collections.Generic.List[string]
-        foreach ($line in @($ci.out)) {
-            $ciList.Add([string]$line) | Out-Null
-            if ($ciList.Count -ge 400) { break }
+        $deviceGuard = [ordered]@{ umciEnforcementStatus = $null; ciEnforcementStatus = $null; securityServicesRunning = @(); error = '' }
+        try {
+            $dg = @(Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName 'Win32_DeviceGuard' -ErrorAction Stop | Select-Object -First 1)
+            if ($dg.Count -gt 0) {
+                if ($null -ne $dg[0].UsermodeCodeIntegrityPolicyEnforcementStatus) { $deviceGuard.umciEnforcementStatus = [int]$dg[0].UsermodeCodeIntegrityPolicyEnforcementStatus }
+                if ($null -ne $dg[0].CodeIntegrityPolicyEnforcementStatus) { $deviceGuard.ciEnforcementStatus = [int]$dg[0].CodeIntegrityPolicyEnforcementStatus }
+                $deviceGuard.securityServicesRunning = @($dg[0].SecurityServicesRunning)
+            }
+            else { $deviceGuard.error = 'no-instance' }
         }
+        catch { $deviceGuard.error = [string]$_.Exception.Message }
+        $ciToolPath = Join-Path $env:SystemRoot 'System32\CiTool.exe'
+        $ciTool = [ordered]@{ path = $ciToolPath; exists = (Test-Path -LiteralPath $ciToolPath); exit = -1; mode = 'none'; raw = @(); json = '' }
+        if ($ciTool.exists) {
+            $rawResult = Invoke-Cmd $ciToolPath @('-lp')
+            $ciTool.exit = $rawResult.exit
+            $ciTool.mode = 'text'
+            $ciTool.raw = @($rawResult.out | Select-Object -First 60)
+            $jsonResult = Invoke-Cmd $ciToolPath @('-lp', '--json')
+            $jsonText = (@($jsonResult.out) -join "`n").Trim()
+            if ($jsonResult.exit -eq 0 -and $jsonText -match '^\s*[\{\[]') {
+                $ciTool.mode = 'json'
+                if ($jsonText.Length -gt 40000) { $jsonText = $jsonText.Substring(0, 40000) }
+                $ciTool.json = $jsonText
+            }
+        }
+        $defender = [ordered]@{ status = $null; policy = @(); disabledByPolicy = @(); error = '' }
+        try {
+            $mp = Get-MpComputerStatus -ErrorAction Stop
+            $defender.status = [ordered]@{
+                amServiceEnabled          = [bool]$mp.AMServiceEnabled
+                antivirusEnabled          = [bool]$mp.AntivirusEnabled
+                realTimeProtectionEnabled = [bool]$mp.RealTimeProtectionEnabled
+                isTamperProtected         = [bool]$mp.IsTamperProtected
+                smartAppControlState      = [string]$mp.SmartAppControlState
+                amServiceVersion          = [string]$mp.AMServiceVersion
+            }
+        }
+        catch { $defender.error = [string]$_.Exception.Message }
+        try {
+            $defenderPolicy = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender' -ErrorAction SilentlyContinue
+            if ($defenderPolicy) {
+                $entries = @($defenderPolicy.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' })
+                $defender.policy = @($entries | ForEach-Object { [ordered]@{ name = $_.Name; value = [string]$_.Value } })
+                foreach ($name in @('DisableAntiSpyware', 'DisableAntiVirus', 'DisableRoutinelyTakingAction', 'DisableRealtimeMonitoring', 'DisableBehaviorMonitoring', 'DisableIOAVProtection', 'DisableScriptScanning')) {
+                    $entry = @($entries | Where-Object { $_.Name -eq $name } | Select-Object -First 1)
+                    if ($entry.Count -gt 0 -and ([string]$entry[0].Value) -notin @('0', '')) { $defender.disabledByPolicy += $name }
+                }
+            }
+        }
+        catch { }
+        $ciXml = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 200 -MaxBytes 524288
         $agentState = [ordered]@{}
         try { $agentState.acrylicService = [string](Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue).Status } catch { $agentState.acrylicService = 'query-failed' }
         try { $agentState.tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'OpenPath-*' } | ForEach-Object { [ordered]@{ name = $_.TaskName; state = [string]$_.State } }) } catch { }
@@ -1557,11 +1868,14 @@ switch ($Step) {
         $script:Body.sacState = [ordered]@{
             registryValue         = $registryValue
             smartAppControlState  = $mpState
-            enforced              = ($registryValue -eq 1)
             languageMode          = $languageMode
-            codeIntegrity         = @($ciList)
-            codeIntegrityExit     = $ci.exit
+            deviceGuard           = $deviceGuard
+            ciTool                = $ciTool
+            defender              = $defender
+            codeIntegrityXml      = $ciXml
+            codeIntegrityExit     = $ciXml.exit
             agentState            = $agentState
+            sceneStartedAt        = $SceneStartedAt
             at                    = [DateTime]::UtcNow.ToString('o')
         }
         Complete-Step

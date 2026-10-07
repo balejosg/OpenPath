@@ -1455,11 +1455,11 @@ PrimaryServerAddress=198.51.100.7
                 return '2026-10-06 12:00:00 [INFO] [NativeHost] [PID:1] stage=extension-diagnostic ' + (($Event | ConvertTo-Json -Compress))
             }
             $script:canaryLines = @(
-                (ConvertTo-DiagLine @{ ts = 1000; kind = 'navigation'; source = 'onBeforeNavigate'; host = 'www.reddit.com' }),
-                (ConvertTo-DiagLine @{ ts = 1200; kind = 'hold'; dependencyHost = 'a.redditstatic.com'; tabId = 5; type = 'script' }),
-                (ConvertTo-DiagLine @{ ts = 2000; kind = 'hold-outcome'; dependencyHost = 'a.redditstatic.com'; outcome = 'ready'; ms = 800; tabId = 5 }),
-                (ConvertTo-DiagLine @{ ts = 2500; kind = 'hold'; dependencyHost = 'b.redditstatic.com'; tabId = -1; type = 'image' }),
-                (ConvertTo-DiagLine @{ ts = 7700; kind = 'hold-outcome'; dependencyHost = 'b.redditstatic.com'; outcome = 'cancelled-budget'; ms = 5200; tabId = -1 }),
+                (ConvertTo-DiagLine @{ ts = 1000; kind = 'navigation'; source = 'onBeforeNavigate'; host = 'www.example.invalid' }),
+                (ConvertTo-DiagLine @{ ts = 1200; kind = 'hold'; dependencyHost = 'cdn1.example.invalid'; tabId = 5; type = 'script' }),
+                (ConvertTo-DiagLine @{ ts = 2000; kind = 'hold-outcome'; dependencyHost = 'cdn1.example.invalid'; outcome = 'ready'; ms = 800; tabId = 5 }),
+                (ConvertTo-DiagLine @{ ts = 2500; kind = 'hold'; dependencyHost = 'cdn2.example.invalid'; tabId = -1; type = 'image' }),
+                (ConvertTo-DiagLine @{ ts = 7700; kind = 'hold-outcome'; dependencyHost = 'cdn2.example.invalid'; outcome = 'cancelled-budget'; ms = 5200; tabId = -1 }),
                 (ConvertTo-DiagLine @{ ts = 8000; kind = 'reload-decision'; reason = 'ready-adopted-document'; tabId = 5 }),
                 'not a diagnostic line'
             )
@@ -1485,8 +1485,8 @@ PrimaryServerAddress=198.51.100.7
             ($verdict.reasons -join ',') | Should -Match 'holds-not-ready:1'
 
             $okLines = @(
-                (ConvertTo-DiagLine @{ ts = 1200; kind = 'hold'; dependencyHost = 'a.redditstatic.com'; tabId = 5 }),
-                (ConvertTo-DiagLine @{ ts = 2000; kind = 'hold-outcome'; dependencyHost = 'a.redditstatic.com'; outcome = 'ready'; ms = 800; tabId = 5 })
+                (ConvertTo-DiagLine @{ ts = 1200; kind = 'hold'; dependencyHost = 'cdn1.example.invalid'; tabId = 5 }),
+                (ConvertTo-DiagLine @{ ts = 2000; kind = 'hold-outcome'; dependencyHost = 'cdn1.example.invalid'; outcome = 'ready'; ms = 800; tabId = 5 })
             )
             $okMetrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $okLines
             (Get-OpenPathFirstVisitCanaryVerdict -Metrics $okMetrics -MozResult ([pscustomobject]@{ negativeCount = 0 })).status | Should -Be 'CANARY-PASS'
@@ -1501,14 +1501,14 @@ PrimaryServerAddress=198.51.100.7
             $afterTs = $readyTs + 5000
             $format = { param([long]$Ts) ([datetimeoffset]::FromUnixTimeMilliseconds($Ts)).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss.ffffff') }
             $mozLines = @(
-                ((& $format $beforeTs) + ' UTC - [1:1]: D/nsHostResolver DNS lookup for a.redditstatic.com'),
-                ((& $format $afterTs) + ' UTC - [1:1]: D/nsHostResolver DNS lookup for a.redditstatic.com'),
-                ((& $format $afterTs) + ' UTC - [1:1]: E/nsHostResolver failed for a.redditstatic.com NS_ERROR_UNKNOWN_HOST'),
+                ((& $format $beforeTs) + ' UTC - [1:1]: D/nsHostResolver DNS lookup for cdn1.example.invalid'),
+                ((& $format $afterTs) + ' UTC - [1:1]: D/nsHostResolver DNS lookup for cdn1.example.invalid'),
+                ((& $format $afterTs) + ' UTC - [1:1]: E/nsHostResolver failed for cdn1.example.invalid NS_ERROR_UNKNOWN_HOST'),
                 ((& $format $afterTs) + ' UTC - [1:1]: D/nsHostResolver something for unrelated.example')
             )
-            $result = Select-OpenPathFirstVisitMozHostLines -MozLines $mozLines -Hosts @('a.redditstatic.com') -ReadyTimes ([pscustomobject]@{ 'a.redditstatic.com' = $readyTs })
+            $result = Select-OpenPathFirstVisitMozHostLines -MozLines $mozLines -Hosts @('cdn1.example.invalid') -ReadyTimes ([pscustomobject]@{ 'cdn1.example.invalid' = $readyTs })
             $result.negativeCount | Should -Be 1
-            @($result.linesByHost['a.redditstatic.com']).Count | Should -Be 3
+            @($result.linesByHost['cdn1.example.invalid']).Count | Should -Be 3
         }
 
         It 'Measures worker stamp to ready gaps over two seconds' {
@@ -1602,6 +1602,121 @@ PrimaryServerAddress=198.51.100.7
                 }) -Metrics $null -Scenario 'first-visit-site'
             $infraOutcome.category | Should -Be 'INFRA'
             $infraOutcome.error | Should -Be 'collect-timeout'
+        }
+    }
+
+    Context 'Visit launch wrapper (Phase 6.1 A)' -Tag 'Phase61' {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitLaunch.psm1') -Force
+            $firefoxPath = 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            $url = 'https://example.invalid/'
+            $root = 'C:\OpenPath\lab\first-visit'
+            $script:launchBody = ConvertTo-OpenPathFirstVisitFirefoxCmdBody -FirefoxPath $firefoxPath -Url $url -Tag 'visit' -Root $root -MozLog $true
+            $script:launchLines = @($script:launchBody -split "`r?`n")
+        }
+
+        It 'Keeps every set directive on its own line and exactly one quoted launch line with -new-window and the URL' {
+            $launchLines = @($script:launchLines | Where-Object { $_ -match '^\s*"' })
+            $launchLines.Count | Should -Be 1
+            $launchLines[0].Contains('"' + $firefoxPath + '"') | Should -BeTrue
+            $launchLines[0].Contains('-new-window') | Should -BeTrue
+            $launchLines[0].Contains('"' + $url + '"') | Should -BeTrue
+            $launchLines[0] | Should -Match 'firefox-visit\.log'
+            $script:launchLines | Should -Contain '@echo off'
+            # The old here-string glued the last set directive to the launch
+            # line: no set line may ever carry firefox.exe.
+            foreach ($line in $script:launchLines) {
+                if ($line -match '^\s*set\s') { $line | Should -Not -Match 'firefox\.exe' }
+            }
+        }
+
+        It 'Uses Firefox MOZ_LOG rotation and no unknown environment variable' {
+            $moz = @($script:launchLines | Where-Object { $_ -match '^\s*set\s+MOZ_LOG' })
+            $moz.Count | Should -Be 2
+            ($moz -join "`n") | Should -Match 'timestamp,rotate:16,nsHostResolver:5'
+            ($moz -join "`n").Contains("$root\moz\hostresolver.log") | Should -BeTrue
+            @($script:launchLines | Where-Object { $_ -match 'MOZ_LOG_FILE_MAX_SIZE' }).Count | Should -Be 0
+        }
+
+        It 'Omits every MOZ_LOG directive when the canary logging is off' {
+            $plain = ConvertTo-OpenPathFirstVisitFirefoxCmdBody -FirefoxPath 'C:\PF\firefox.exe' -Url 'http://example.invalid/' -Tag 'warmup' -Root 'C:\root' -MozLog $false
+            $plain | Should -Not -Match 'MOZ_LOG'
+            @($plain -split "`r?`n" | Where-Object { $_ -match '^\s*"' }).Count | Should -Be 1
+        }
+    }
+
+    Context 'SAC positive control and canary navigation (Phase 6.1 B/C)' -Tag 'Phase61' {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitWarmup.psm1') -Force
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitSiteCanary.psm1') -Force
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitOutcome.psm1') -Force
+            function ConvertTo-DiagLine61 {
+                param([hashtable]$Event)
+                return '2026-10-07 08:00:00 [INFO] [NativeHost] [PID:1] stage=extension-diagnostic ' + (($Event | ConvertTo-Json -Compress))
+            }
+        }
+
+        It 'Only counts SAC as applied with UMCI enforced AND the MOTW control blocked' {
+            $state = [pscustomobject]@{ deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 2 } }
+            $blockedMotw = [pscustomobject]@{
+                plain = [pscustomobject]@{ started = $true; exitCode = 7 }
+                motw  = [pscustomobject]@{ started = $false; error = 'blocked by policy'; nativeError = 1260 }
+            }
+            (Get-OpenPathFirstVisitSacDecision -SacState $state -SacControl $blockedMotw).applied | Should -BeTrue
+            # The registry saying On is not enough: the MOTW control must be blocked.
+            $ranMotw = [pscustomobject]@{
+                plain = [pscustomobject]@{ started = $true; exitCode = 7 }
+                motw  = [pscustomobject]@{ started = $true; exitCode = 7 }
+            }
+            (Get-OpenPathFirstVisitSacDecision -SacState $state -SacControl $ranMotw).applied | Should -BeFalse
+            # A blocked MOTW without UMCI enforcement is not enough either.
+            $auditState = [pscustomobject]@{ deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 1 } }
+            (Get-OpenPathFirstVisitSacDecision -SacState $auditState -SacControl $blockedMotw).applied | Should -BeFalse
+            # No control at all can never pass.
+            (Get-OpenPathFirstVisitSacDecision -SacState $state -SacControl $null).applied | Should -BeFalse
+        }
+
+        It 'Reads the Smart App Control block from the CodeIntegrity XML with file and policy' {
+            $xml = @'
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System><EventID>3033</EventID><TimeCreated SystemTime="2026-10-07T08:00:00.1234567Z"/></System><EventData><Data Name="PolicyId">{11111111-2222-3333-4444-555555555555}</Data><Data Name="FileName">\Device\HarddiskVolume3\Program Files\OpenPath\OpenPath-NativeHost.exe</Data></EventData></Event>
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System><EventID>3077</EventID><TimeCreated SystemTime="2026-10-07T08:00:01.1234567Z"/></System><EventData><Data Name="FileName">notepad.exe</Data></EventData></Event>
+'@
+            $events = [ordered]@{ codeIntegrityXml = [ordered]@{ xml = $xml } }
+            $evidence = @(Select-FirstVisitSmartAppControlEvidence -Events $events)
+            $evidence.Count | Should -Be 1
+            $evidence[0].eventId | Should -Be 3033
+            $evidence[0].blocking | Should -BeTrue
+            $evidence[0].policy | Should -Be '{11111111-2222-3333-4444-555555555555}'
+            $verdict = Get-FirstVisitHostSignalsVerdict -Live ([pscustomobject]@{ hostStarted = $false }) -Events $null -Capabilities 'native-host-log' -CodeIntegrityEvents $events
+            $verdict.productReasons | Should -Contain 'native-host-blocked-by-smart-app-control'
+            # Audit-only events (3076/3077) never raise the product signal.
+            $auditOnly = [ordered]@{ codeIntegrityXml = [ordered]@{ xml = '<Event><System><EventID>3077</EventID><TimeCreated SystemTime="2026-10-07T08:00:02Z"/></System><EventData><Data Name="FileName">OpenPath-NativeHost.exe</Data></EventData></Event>' } }
+            (Get-FirstVisitHostSignalsVerdict -Live ([pscustomobject]@{ hostStarted = $false }) -Events $null -Capabilities 'native-host-log' -CodeIntegrityEvents $auditOnly).blockedBySmartAppControl | Should -BeFalse
+        }
+
+        It 'Requires the site host to be navigated or the scene is INFRA site-not-navigated' {
+            $lines = @(
+                (ConvertTo-DiagLine61 @{ ts = 1000; kind = 'navigation'; source = 'onCommitted'; host = 'www.example.invalid' }),
+                (ConvertTo-DiagLine61 @{ ts = 1200; kind = 'hold'; dependencyHost = 'cdn.example.invalid'; tabId = 5 })
+            )
+            $metrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $lines -SiteHost 'www.example.invalid'
+            $metrics.siteNavigated | Should -BeTrue
+            $metrics.siteNavigationTs | Should -Be 1000
+            (Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $lines -SiteHost 'other.example.invalid').siteNavigated | Should -BeFalse
+            $outcome = Get-OpenPathFirstVisitSceneOutcome -VerdictFile ([pscustomobject]@{
+                    scenario = 'first-visit-site'; source = 'canary'; canary = $true; canaryStatus = 'CANARY-RED'
+                    siteNavigated = $false; reportPresent = $false; productReasons = @()
+                    verdict = [pscustomobject]@{ status = 'canary-red'; reasons = @('no-holds-observed') }
+                }) -Metrics $null -Scenario 'first-visit-site'
+            $outcome.category | Should -Be 'INFRA'
+            $outcome.error | Should -Be 'site-not-navigated'
+            # A navigated canary keeps its CANARY status as the category.
+            $navigatedOutcome = Get-OpenPathFirstVisitSceneOutcome -VerdictFile ([pscustomobject]@{
+                    scenario = 'first-visit-site'; source = 'canary'; canary = $true; canaryStatus = 'CANARY-PASS'
+                    siteNavigated = $true; reportPresent = $false; productReasons = @()
+                    verdict = [pscustomobject]@{ status = 'canary-pass'; reasons = @() }
+                }) -Metrics $null -Scenario 'first-visit-site'
+            $navigatedOutcome.category | Should -Be 'CANARY-PASS'
         }
     }
 }

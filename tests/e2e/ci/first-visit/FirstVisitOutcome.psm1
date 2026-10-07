@@ -80,11 +80,17 @@ function Get-OpenPathFirstVisitSceneOutcome {
             # Canary classification: the document was written by the controller
             # after the collect; evidence incompleteness (or an observe error
             # without a canary status) is INFRA, otherwise the canary status
-            # itself is the category.
+            # itself is the category. Phase 6.1 B: a scene that never navigated
+            # to the site host is INFRA site-not-navigated.
             $canaryStatus = [string](Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'canaryStatus')
+            $siteNavigated = Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'siteNavigated'
             if ($outcome.evidenceIncomplete) {
                 $outcome.category = 'INFRA'
                 $outcome.error = if ($outcome.collectError) { $outcome.collectError } elseif ($ObserveError) { $ObserveError } else { 'evidence-incomplete' }
+            }
+            elseif ($null -ne $siteNavigated -and -not [bool]$siteNavigated) {
+                $outcome.category = 'INFRA'
+                $outcome.error = 'site-not-navigated'
             }
             elseif ($canaryStatus -in @('CANARY-PASS', 'CANARY-RED')) {
                 $outcome.category = $canaryStatus

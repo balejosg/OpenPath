@@ -127,24 +127,63 @@ function Select-FirstVisitAppControlEvidence {
 function Select-FirstVisitSmartAppControlEvidence {
     <#
     .SYNOPSIS
-    CodeIntegrity block events that name a product binary (Phase 6 B).
+    CodeIntegrity events that name a product binary (Phase 6 B / 6.1 C).
     .DESCRIPTION
-    Parses wevtutil /f:text blocks (Event[...] ... Date ... Event ID ...) and
-    keeps the ones whose id is in the block set (3033/3034/3076/3077/3089) and
-    whose text names one of the candidate files (the native host exe, Acrylic,
-    firefox). The literal block is preserved as evidence.
+    Prefers the Phase 6.1 XML capture (file, PolicyId and correlation ids are
+    preserved there) and falls back to the colon-tolerant /f:text blocks. Keeps
+    the events whose id is in the decision set (3033/3034 blocked, 3076/3077
+    audited) and whose text names one of the candidate files (the native host
+    exe, Acrylic, firefox). The literal block is preserved as evidence and
+    `blocking` marks the enforced ids: only those may raise the product signal.
     #>
     [CmdletBinding()]
     param(
         [AllowNull()][object]$Events = $null,
         [string[]]$FileNames = @('OpenPath-NativeHost.exe', 'AcrylicDNSProxySvc.exe', 'AcrylicService.exe', 'firefox.exe'),
-        [int[]]$BlockIds = @(3033, 3034, 3076, 3077, 3089)
+        [int[]]$DecisionIds = @(3033, 3034, 3076, 3077),
+        [int[]]$BlockIds = @(3033, 3034)
     )
+    $evidence = New-Object System.Collections.Generic.List[object]
+    $xmlBlock = Get-FirstVisitWarmupField -InputObject $Events -Name 'codeIntegrityXml'
+    $xmlText = [string](Get-FirstVisitWarmupField -InputObject $xmlBlock -Name 'xml')
+    if ($xmlText -match '<Event') {
+        foreach ($match in [regex]::Matches($xmlText, '(?s)<Event\b.*?</Event>')) {
+            $block = $match.Value
+            $idMatch = [regex]::Match($block, '<EventID>(\d+)</EventID>')
+            if (-not $idMatch.Success) { continue }
+            $id = [int]$idMatch.Groups[1].Value
+            if ($DecisionIds -notcontains $id) { continue }
+            $matchedFile = ''
+            foreach ($name in @($FileNames)) {
+                if ($block -match [regex]::Escape($name)) { $matchedFile = $name; break }
+            }
+            if (-not $matchedFile) { continue }
+            $dateText = [string]([regex]::Match($block, 'SystemTime=''([^'']+)''').Groups[1].Value)
+            $policy = [string]([regex]::Match($block, '(?im)<Data Name="PolicyId">([^<]*)</Data>').Groups[1].Value)
+            $fileName = [string]([regex]::Match($block, '(?im)<Data Name="FileName">([^<]*)</Data>').Groups[1].Value)
+            $line = if ($block.Length -gt 4000) { $block.Substring(0, 4000) + '...' } else { $block }
+            $evidence.Add([ordered]@{
+                    eventId  = $id
+                    blocking = ($BlockIds -contains $id)
+                    file     = $matchedFile
+                    fileName = $fileName
+                    policy   = $policy
+                    date     = $dateText
+                    line     = $line
+                }) | Out-Null
+        }
+        return @($evidence.ToArray())
+    }
+    # Text fallback (no XML captured): split on Event[n] with or without colon.
     $blocks = New-Object System.Collections.Generic.List[object]
     $current = $null
-    foreach ($line in @(Get-FirstVisitWarmupField -InputObject $Events -Name 'codeIntegrity')) {
+    $textSource = Get-FirstVisitWarmupField -InputObject $Events -Name 'codeIntegrity'
+    $textLines = @()
+    if ($textSource -is [string]) { $textLines = @($textSource -split "`r?`n") }
+    else { $textLines = @($textSource) }
+    foreach ($line in $textLines) {
         $text = [string]$line
-        if ($text -match '^\s*Event\[\d+\]:') {
+        if ($text -match '^\s*Event\[\d+\]:?') {
             if ($current) { $blocks.Add($current.ToArray()) | Out-Null }
             $current = New-Object System.Collections.Generic.List[string]
         }
@@ -152,13 +191,12 @@ function Select-FirstVisitSmartAppControlEvidence {
         $current.Add($text) | Out-Null
     }
     if ($current) { $blocks.Add($current.ToArray()) | Out-Null }
-    $evidence = New-Object System.Collections.Generic.List[object]
     foreach ($block in $blocks.ToArray()) {
         $blockText = (@($block) -join "`n")
         $id = -1
         $idMatch = [regex]::Match($blockText, '(?im)^\s*Event ID\s*:\s*(\d+)')
         if ($idMatch.Success) { $id = [int]$idMatch.Groups[1].Value }
-        if ($BlockIds -notcontains $id) { continue }
+        if ($DecisionIds -notcontains $id) { continue }
         $matchedFile = ''
         foreach ($name in @($FileNames)) {
             if ($blockText -match [regex]::Escape($name)) { $matchedFile = $name; break }
@@ -168,13 +206,59 @@ function Select-FirstVisitSmartAppControlEvidence {
         $dateMatch = [regex]::Match($blockText, '(?im)^\s*(?:Date|Fecha)\s*:\s*(\S+)')
         if ($dateMatch.Success) { $dateText = [string]$dateMatch.Groups[1].Value }
         $evidence.Add([ordered]@{
-                eventId = $id
-                file    = $matchedFile
-                date    = $dateText
-                line    = $blockText
+                eventId  = $id
+                blocking = ($BlockIds -contains $id)
+                file     = $matchedFile
+                fileName = ''
+                policy   = ''
+                date     = $dateText
+                line     = $blockText
             }) | Out-Null
     }
     return @($evidence.ToArray())
+}
+
+function Get-OpenPathFirstVisitSacDecision {
+    <#
+    .SYNOPSIS
+    Phase 6.1 C: Smart App Control counts as applied only with a positive
+    control.
+    .DESCRIPTION
+    `applied` requires BOTH the DeviceGuard usermode code integrity enforcement
+    status to be enforced (2) AND the MOTW control copy (ZoneId=3) to be
+    blocked. The registry value, Defender status and CiTool listing are
+    informational; they never decide on their own.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$SacState = $null,
+        [AllowNull()][object]$SacControl = $null
+    )
+    $deviceGuard = Get-FirstVisitWarmupField -InputObject $SacState -Name 'deviceGuard'
+    $umci = Get-FirstVisitWarmupField -InputObject $deviceGuard -Name 'umciEnforcementStatus'
+    $umciApplied = ($null -ne $umci -and [int]$umci -eq 2)
+    $plain = Get-FirstVisitWarmupField -InputObject $SacControl -Name 'plain'
+    $motw = Get-FirstVisitWarmupField -InputObject $SacControl -Name 'motw'
+    $plainRan = $false
+    if ($plain) {
+        $plainStarted = Get-FirstVisitWarmupField -InputObject $plain -Name 'started'
+        $plainExit = Get-FirstVisitWarmupField -InputObject $plain -Name 'exitCode'
+        $plainRan = ([bool]$plainStarted) -and ($null -ne $plainExit) -and ([int]$plainExit -in @(0, 7))
+    }
+    $motwStarted = $null
+    $motwBlocked = $false
+    if ($motw) {
+        $motwStarted = [bool](Get-FirstVisitWarmupField -InputObject $motw -Name 'started')
+        $motwBlocked = (-not $motwStarted)
+    }
+    return [ordered]@{
+        umciEnforcementStatus = if ($null -ne $umci) { [int]$umci } else { -1 }
+        umciApplied           = $umciApplied
+        plainRan              = $plainRan
+        motwStarted           = $motwStarted
+        motwBlocked           = $motwBlocked
+        applied               = ($umciApplied -and $motwBlocked)
+    }
 }
 
 function Get-FirstVisitHostSignalsVerdict {
@@ -208,7 +292,7 @@ function Get-FirstVisitHostSignalsVerdict {
     $evidence = @(Select-FirstVisitAppControlEvidence -Events $Events -StudentUserName $StudentUserName -WindowStart $WindowStart)
     $blocked = ($evidence.Count -gt 0)
     $sacEvidence = @(Select-FirstVisitSmartAppControlEvidence -Events $CodeIntegrityEvents)
-    $sacBlocked = ($sacEvidence.Count -gt 0)
+    $sacBlocked = (@($sacEvidence | Where-Object { $_.blocking }).Count -gt 0)
     $hostLogCapable = $false
     $backgroundStartCapable = $false
     $diagnosticBatchCapable = $false
@@ -249,4 +333,4 @@ function Get-FirstVisitHostSignalsVerdict {
     }
 }
 
-Export-ModuleMember -Function Get-FirstVisitPreconditionVerdict, Get-FirstVisitHostSignalsVerdict, Select-FirstVisitAppControlEvidence, Select-FirstVisitSmartAppControlEvidence
+Export-ModuleMember -Function Get-FirstVisitPreconditionVerdict, Get-FirstVisitHostSignalsVerdict, Get-OpenPathFirstVisitSacDecision, Select-FirstVisitAppControlEvidence, Select-FirstVisitSmartAppControlEvidence

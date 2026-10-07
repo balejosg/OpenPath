@@ -3,14 +3,27 @@
 // tests/e2e/ci/run-windows-first-visit-suite.ps1 and
 // tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 
 import { projectRoot } from './support.mjs';
 
 function read(relativePath) {
   return readFileSync(resolve(projectRoot, relativePath), 'utf8');
+}
+
+function listFiles(directory) {
+  const out = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const full = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...listFiles(full));
+    } else {
+      out.push(full);
+    }
+  }
+  return out;
 }
 
 describe('first-visit lane contract', () => {
@@ -259,5 +272,86 @@ describe('first-visit lane contract', () => {
     const aggregate = read('tests/e2e/ci/aggregate-windows-first-visit.ps1');
     assert.match(aggregate, /canaryStatus/u);
     assert.match(aggregate, /'CANARY-PASS', 'CANARY-RED'/u);
+  });
+
+  test('no real site name lives in the lane sources (Phase 6.1 D)', () => {
+    const forbidden = /(reddit|redditstatic|bbc|youtube)/iu;
+    const roots = [
+      'tests/e2e/ci/first-visit',
+      'windows/tests/Windows.FirstVisitLane.Tests.ps1',
+      '.github/workflows/windows-first-visit-lab.yml',
+    ];
+    const files = [];
+    for (const root of roots) {
+      const absolute = resolve(projectRoot, root);
+      if (statSync(absolute).isDirectory()) {
+        files.push(...listFiles(absolute));
+      } else {
+        files.push(absolute);
+      }
+    }
+    const offenders = [];
+    for (const absolute of files) {
+      if (absolute.endsWith('.pyc')) continue;
+      if (forbidden.test(readFileSync(absolute, 'utf8'))) {
+        offenders.push(relative(projectRoot, absolute));
+      }
+    }
+    assert.deepEqual(offenders, [], `real site names found: ${offenders.join(', ')}`);
+  });
+
+  test('the visit wrapper owns its launch line and the canary requires navigation (Phase 6.1 A/B)', () => {
+    const launch = read('tests/e2e/ci/first-visit/FirstVisitLaunch.psm1');
+    assert.match(launch, /function ConvertTo-OpenPathFirstVisitFirefoxCmdBody/u);
+    assert.match(launch, /timestamp,rotate:16,nsHostResolver:5/u);
+    const launchCode = launch
+      .split(/\r?\n/u)
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n');
+    assert.doesNotMatch(launchCode, /MOZ_LOG_FILE_MAX_SIZE/u);
+    assert.match(launch, /\$lines -join/u);
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.match(harness, /FirstVisitLaunch\.psm1/u);
+    assert.match(harness, /function Get-PreExistingFirefox/u);
+    assert.match(harness, /preExistingFirefox/u);
+    assert.match(harness, /pre-existing-firefox-remains/u);
+    assert.match(harness, /mozFileNames/u);
+    const canary = read('tests/e2e/ci/first-visit/FirstVisitSiteCanary.psm1');
+    assert.match(canary, /siteNavigated/u);
+    assert.match(canary, /siteNavigationTs/u);
+    assert.match(canary, /navigationEvents/u);
+    const outcome = read('tests/e2e/ci/first-visit/FirstVisitOutcome.psm1');
+    assert.match(outcome, /site-not-navigated/u);
+    const controller = read('tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1');
+    assert.match(controller, /SceneStartedAt/u);
+    assert.match(controller, /siteHost/u);
+    assert.match(controller, /-SiteHost/u);
+    assert.match(controller, /visitDiagnostics/u);
+  });
+
+  test('the SAC proof is a positive control, not the registry (Phase 6.1 C)', () => {
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.match(harness, /'sac-control'/u);
+    assert.match(harness, /'sac-defender-enable'/u);
+    assert.match(harness, /control-motw\.exe/u);
+    assert.match(harness, /control-plain\.exe/u);
+    assert.match(harness, /Zone\.Identifier/u);
+    assert.match(harness, /Win32_DeviceGuard/u);
+    assert.match(harness, /UsermodeCodeIntegrityPolicyEnforcementStatus/u);
+    assert.match(harness, /CiTool\.exe/u);
+    assert.match(harness, /'-lp'/u);
+    assert.match(harness, /'\/f:xml'/u);
+    assert.match(harness, /\/target:exe/u);
+    assert.match(harness, /StartupTime|SceneStartedAt/u);
+    const warmup = read('tests/e2e/ci/first-visit/FirstVisitWarmup.psm1');
+    assert.match(warmup, /function Get-OpenPathFirstVisitSacDecision/u);
+    assert.match(warmup, /umciApplied/u);
+    assert.match(warmup, /motwBlocked/u);
+    assert.match(warmup, /codeIntegrityXml/u);
+    const controller = read('tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1');
+    assert.match(controller, /Invoke-OpenPathFirstVisitSacAssessment/u);
+    assert.match(controller, /sac-defender-enable/u);
+    assert.match(controller, /sac-not-enforced/u);
+    assert.match(controller, /first-visit-sac-reboot-timeout/u);
   });
 });

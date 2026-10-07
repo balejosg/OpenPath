@@ -175,7 +175,7 @@ The lane serializes with the desktop-survival suite through the same lab lock
 (see below) and never signs in AMO: it consumes the `windows-offline-template`
 and `windows-personalized-exe` artifacts of the exact release-scripts run.
 
-## Smart App Control simulation (Phase 6 B)
+## Smart App Control simulation (Phase 6 B, positive proof in 6.1 C)
 
 `smart_app_control: unchanged` is the default. With `smart_app_control: on`
 (class-boot only; any other scenario is rejected before the lab), the lane
@@ -185,19 +185,37 @@ simulates an installed machine to which Windows turns SAC on:
 2. `VerifiedAndReputablePolicyState=1` is written under
    `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy` and `CiTool.exe -r` runs
    when present (`sac-apply` step, records the previous/applied value);
-3. the class-boot reboot applies it; after the boot the lane reads the registry
-   value and `(Get-MpComputerStatus).SmartAppControlState` (`sac-state` step).
-   Not On means the dispatch could not create the risk scenario: the scene is
-   INFRA `sac-not-enforced` and stops there.
+3. the lane reboots (dedicated SAC reboot in prepare, so the measured
+   class-boot visit stays clean) and then proves enforcement with a **positive
+   control**, not with the registry:
+   - `sac-control` (every scene, SAC=2 baseline included) compiles a trivial
+     console exe with the .NET Framework `csc.exe` in
+     `C:\Windows\Temp\openpath-sac-control`, keeps a `control-motw.exe` copy
+     with a `Zone.Identifier`/ZoneId=3 mark and a `control-plain.exe` copy,
+     runs both as SYSTEM with a 10 s timeout, records the exit code or the
+     Win32 policy-block error and the CodeIntegrity XML events naming them,
+     then deletes the directory. No binary ever enters the repository;
+   - `sac-state` reads `Win32_DeviceGuard`
+     (`UsermodeCodeIntegrityPolicyEnforcementStatus`), `CiTool.exe -lp`
+     (raw + `--json` when the build supports it), the Defender status
+     (`Get-MpComputerStatus`, `HKLM\SOFTWARE\Policies\Microsoft\Windows
+Defender`) and the CodeIntegrity/Operational events in **XML** from the
+     scene start (`TimeCreated`, `EventID`, `FileName`, `PolicyId`; <=200
+     events and <=1 MB per query). The registry value is informational only;
+4. SAC counts as applied only with the UMCI enforcement status enforced **and**
+   `control-motw` blocked. Anything else is INFRA `sac-not-enforced` (registry
+   and Defender cannot override it) and stops there. One extra attempt is
+   allowed: if Defender is disabled by policy, `sac-defender-enable` removes
+   those values, starts `WinDefend`, re-applies SAC and repeats the control.
 
-Every scene (SAC=2 too) collects bounded CodeIntegrity/Operational events
-(ids 3033, 3034, 3076, 3077, 3089), the harness `LanguageMode`, constrained-
-language lines from `openpath.log` and the post-boot agent state (Acrylic
-service, anchor DNS, OpenPath-\* tasks). When the harness itself runs under
-`ConstrainedLanguage`, the affected steps fall back to a minimal cmd/wevtutil
-collection and the evidence says so. A Code Integrity event naming the native
+Every scene also records the harness `LanguageMode`, constrained-language lines
+from `openpath.log` and the post-boot agent state (Acrylic service, anchor DNS,
+OpenPath-\* tasks). When the harness itself runs under `ConstrainedLanguage`,
+the affected steps fall back to a minimal cmd/wevtutil collection and the
+evidence says so. A blocked (3033/3034) Code Integrity event naming the native
 host (or the browser) with the host not started adds the product signal
-`native-host-blocked-by-smart-app-control`.
+`native-host-blocked-by-smart-app-control`; audit-only events (3076/3077) never
+raise it.
 
 ## Real-site canary (Phase 6 C)
 
@@ -207,9 +225,20 @@ inputs: `site_url` (required) and `site_whitelist` (comma-separated domains).
 the class-boot refresh (reboot + logon launch). The real URL is the anchor, the
 served whitelist contains only those domains and there is no fixture dependency
 precondition; the real site learns its own CDN hosts through the product.
-MOZ_LOG (`timestamp,nsHostResolver:5`, rotated at 4 MiB per file) is enabled
-only for these scenarios and the collect reads at most four files/4 MiB each
-(<= 16 MiB). The page self-report does not exist, so the verdict is CANARY:
+
+Phase 6.1 A: the visit wrapper is built line by line (`FirstVisitLaunch.psm1`,
+unit tested): every `set` directive and the launch line own their own line, so
+the launch line always starts with the quoted `firefox.exe` path and carries
+`-new-window` and the URL. MOZ_LOG uses Firefox's own rotation
+(`timestamp,rotate:16,nsHostResolver:5`, four `.0-.3` files) and no unknown
+environment variable; the collect records the real file names it found. Phase
+6.1 B: every scene records any Firefox that was already open at visit launch
+(pid, creation, parent and command line via Win32_Process) and closes it for
+every non-hot scenario, so `settled`/`site` measure the browser the visit
+starts (hot keeps the warm-session case). A `site` scene whose extension
+diagnostics never show a `navigation` to the site host is INFRA
+`site-not-navigated`; CANARY-PASS/CANARY-RED are only possible after real
+navigation.
 
 - metrics: holds and their outcomes (ready/cancelled/error), ready retention
   p50/max, last ready relative to the navigation, E1 reloads and reasons,

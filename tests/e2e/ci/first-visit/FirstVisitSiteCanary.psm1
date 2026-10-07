@@ -55,7 +55,9 @@ function Get-OpenPathFirstVisitCanaryMetrics {
     [CmdletBinding()]
     param(
         [AllowNull()][string[]]$DiagnosticLines = @(),
-        [AllowNull()][string[]]$OpenPathLines = @()
+        [AllowNull()][string[]]$OpenPathLines = @(),
+        # Phase 6.1 B: the site host the canary must see navigated.
+        [string]$SiteHost = ''
     )
     $outcomes = New-Object System.Collections.Generic.List[object]
     $holds = 0
@@ -63,6 +65,7 @@ function Get-OpenPathFirstVisitCanaryMetrics {
     $reloadReasons = New-Object System.Collections.Generic.List[string]
     $reloadDecisions = 0
     $navigationTs = $null
+    $navigationEvents = New-Object System.Collections.Generic.List[object]
     foreach ($line in @($DiagnosticLines)) {
         $event = ConvertFrom-OpenPathFirstVisitDiagnosticLine -Line $line
         if (-not $event) { continue }
@@ -88,9 +91,17 @@ function Get-OpenPathFirstVisitCanaryMetrics {
             }
             'navigation' {
                 $ts = Get-OpenPathFirstVisitCanaryField -InputObject $event -Name 'ts'
+                $hostName = [string](Get-OpenPathFirstVisitCanaryField -InputObject $event -Name 'host')
                 if ($null -ne $ts) {
                     $value = [long]$ts
                     if ($null -eq $navigationTs -or $value -lt $navigationTs) { $navigationTs = $value }
+                    if ($navigationEvents.Count -lt 50) {
+                        $navigationEvents.Add([ordered]@{
+                                host   = $hostName
+                                ts     = $value
+                                source = [string](Get-OpenPathFirstVisitCanaryField -InputObject $event -Name 'source')
+                            }) | Out-Null
+                    }
                 }
             }
         }
@@ -122,6 +133,18 @@ function Get-OpenPathFirstVisitCanaryMetrics {
         $delta = [long]$lastReadyTs - [long]$navigationTs
         if ($delta -ge 0) { $lastReadyFromNavigationMs = [int]$delta }
     }
+    # Phase 6.1 B: did any navigation event reach the site host?
+    $normalizedSiteHost = ([string]$SiteHost).Trim().TrimEnd('.').ToLowerInvariant()
+    $siteNavigationTs = 0
+    if ($normalizedSiteHost) {
+        foreach ($nav in $navigationEvents.ToArray()) {
+            $navHost = ([string]$nav.host).Trim().TrimEnd('.').ToLowerInvariant()
+            if ($navHost -and $navHost -eq $normalizedSiteHost) {
+                if ($siteNavigationTs -eq 0 -or [long]$nav.ts -lt $siteNavigationTs) { $siteNavigationTs = [long]$nav.ts }
+            }
+        }
+    }
+    $siteNavigated = ($siteNavigationTs -gt 0)
     $stampGaps = @(Get-OpenPathFirstVisitStampGaps -OpenPathLines $OpenPathLines -ReadyEvents @($outcomes | Where-Object { $_.outcome -eq 'ready' }))
     return [ordered]@{
         holds                  = $holds
@@ -138,6 +161,10 @@ function Get-OpenPathFirstVisitCanaryMetrics {
         reloadReasons          = @($reloadReasons.ToArray())
         serviceWorkerHolds     = $serviceWorkerHolds
         stampGaps              = @($stampGaps)
+        siteHost               = $normalizedSiteHost
+        siteNavigated          = $siteNavigated
+        siteNavigationTs       = $siteNavigationTs
+        navigationEvents       = $navigationEvents.ToArray()
     }
 }
 
