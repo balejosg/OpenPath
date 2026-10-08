@@ -1910,8 +1910,28 @@ PrimaryServerAddress=198.51.100.7
             @(Get-OpenPathFirstVisitSamplerGaps -Samples @([pscustomobject]@{ t = 1000 }, [pscustomobject]@{ t = 5000; cpuSample = $true })).Count | Should -Be 0
         }
 
-        It 'Normalizes the persisted scene start back to invariant ISO (Phase 7 L3)' {
-            (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value ([datetime]::new(2026, 10, 7, 13, 14, 47, [DateTimeKind]::Utc))) | Should -Be '2026-10-07T13:14:47.0000000Z'
+        It 'Parses the sampler timeline cheaply and classifies sampler-only gaps' {
+            $lines = @(
+                '{"t":1000,"c":1}',
+                '{"t":1100,"c":2}',
+                '{"t":5200,"c":3}',
+                '{"t":5300,"c":4,"cpuSample":true,"systemCpu":10}',
+                '{"t":5400,"c":5}'
+            )
+            ((Get-OpenPathFirstVisitSamplerTickValues -Lines $lines) -join ',') | Should -Be '1000,1100,5200,5400'
+            $gaps = @(Get-OpenPathFirstVisitSamplerGapsFromTicks -Ticks @(1000, 1100, 5200, 5400))
+            $gaps.Count | Should -Be 1
+            $gaps[0].gapMs | Should -Be 4100
+
+            # A sampler gap with no worker gap is still a classified whole-VM
+            # pause (the first Phase 7 runs only classified log gaps).
+            $classification = Get-OpenPathFirstVisitStallClassification -LogGaps @() -SamplerGaps $gaps -SaturationWindows @() -HostPressure @()
+            $classification.vmStall | Should -BeTrue
+            $classification.gaps[0].source | Should -Be 'sampler'
+            $classification.gaps[0].classification | Should -Be 'vm-stall'
+        }
+
+        It 'Normalizes the persisted scene start back to invariant ISO (Phase 7 L3)' {            (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value ([datetime]::new(2026, 10, 7, 13, 14, 47, [DateTimeKind]::Utc))) | Should -Be '2026-10-07T13:14:47.0000000Z'
             (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value '2026-10-07T13:14:47.1234567Z') | Should -Be '2026-10-07T13:14:47.1234567Z'
             (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value $null) | Should -Be ''
         }

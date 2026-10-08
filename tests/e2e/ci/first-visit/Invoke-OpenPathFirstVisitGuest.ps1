@@ -1022,15 +1022,6 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             $perf = @(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction Stop)
             $total = @($perf | Where-Object { $_.Name -eq '_Total' } | Select-Object -First 1)
             if ($total.Count -gt 0) { $system = [math]::Round([double]$total[0].PercentProcessorTime / $logical, 1) }
-            $byId = @{}
-            foreach ($entry in $perf) { $byId[[int]$entry.IDProcess] = $entry }
-            $workerCpu = $null
-            foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'")) {
-                if ([string]$proc.CommandLine -match 'RuntimeDependencyWorker' -and $byId.ContainsKey([int]$proc.ProcessId)) {
-                    $value = [math]::Round([double]$byId[[int]$proc.ProcessId].PercentProcessorTime / $logical, 1)
-                    if ($null -eq $workerCpu -or $value -gt $workerCpu) { $workerCpu = $value }
-                }
-            }
             foreach ($name in @('firefox', 'MsMpEng', 'AcrylicService')) {
                 foreach ($entry in $perf) {
                     if ([string]$entry.Name -eq $name) {
@@ -1040,7 +1031,22 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
                     }
                 }
             }
-            if ($null -ne $workerCpu) { $processes['worker'] = $workerCpu }
+            # The worker lookup is the expensive second WMI query: resolve the
+            # pid every 10 s (or when it is missing) and reuse it otherwise.
+            if ($script:workerPid -le 0 -or ($tick % 200 -eq 0)) {
+                $script:workerPid = 0
+                foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction Stop)) {
+                    if ([string]$proc.CommandLine -match 'RuntimeDependencyWorker') { $script:workerPid = [int]$proc.ProcessId; break }
+                }
+            }
+            if ($script:workerPid -gt 0) {
+                foreach ($entry in $perf) {
+                    if ([int]$entry.IDProcess -eq [int]$script:workerPid) {
+                        $processes['worker'] = [math]::Round([double]$entry.PercentProcessorTime / $logical, 1)
+                        break
+                    }
+                }
+            }
         }
         catch { }
         $cpuSample = [ordered]@{ t = $now; cpuSample = $true; systemCpu = $system; processes = ([PSCustomObject]$processes) }
@@ -1092,29 +1098,33 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         if (Test-Path -LiteralPath $outPath) {
             $raw = @([System.IO.File]::ReadAllLines($outPath))
             $result.sampleCount = $raw.Count
-            $samples = New-Object System.Collections.Generic.List[object]
-            foreach ($line in $raw) {
-                if (-not $line) { continue }
-                try { $samples.Add(($line | ConvertFrom-Json)) | Out-Null } catch { }
-            }
             if ($script:StallModuleLoaded) {
-                $result.samplerGaps = @(Get-OpenPathFirstVisitSamplerGaps -Samples $samples.ToArray())
-                $result.saturationWindows = @(Get-OpenPathFirstVisitCpuSaturation -Samples $samples.ToArray())
+                # Phase 7 fix: parsing every 50 ms line into an object timed this
+                # step out on ~20-minute scenes (partial results). Ticks are
+                # pre-parsed with a regex; only the 1 Hz CPU census lines are
+                # deserialized.
+                $ticks = @(Get-OpenPathFirstVisitSamplerTickValues -Lines $raw)
+                $result.samplerGaps = @(Get-OpenPathFirstVisitSamplerGapsFromTicks -Ticks $ticks)
+                $cpuLines = @($raw | Where-Object { $_ -and $_.IndexOf('cpuSample') -ge 0 })
+                $cpuSamples = New-Object System.Collections.Generic.List[object]
+                $maxCpu = -1.0
+                foreach ($line in $cpuLines) {
+                    try { $sample = $line | ConvertFrom-Json } catch { continue }
+                    $cpuSamples.Add($sample) | Out-Null
+                    if ($null -ne $sample.systemCpu -and [double]$sample.systemCpu -gt $maxCpu) { $maxCpu = [double]$sample.systemCpu }
+                }
+                $result.saturationWindows = @(Get-OpenPathFirstVisitCpuSaturation -Samples $cpuSamples.ToArray())
+                $result.maxSystemCpu = [math]::Round($maxCpu, 1)
+                $decimated = New-Object System.Collections.Generic.List[string]
+                for ($i = 0; $i -lt $raw.Count; $i += 20) {
+                    if ($decimated.Count -ge 900) { break }
+                    $decimated.Add([string]$raw[$i]) | Out-Null
+                }
+                $result.decimated = @($decimated.ToArray())
             }
             else {
                 $result.error = (($result.error + ' stall-module-not-loaded').Trim())
             }
-            $maxCpu = -1.0
-            foreach ($sample in $samples) {
-                if ($null -ne $sample.systemCpu -and [double]$sample.systemCpu -gt $maxCpu) { $maxCpu = [double]$sample.systemCpu }
-            }
-            $result.maxSystemCpu = [math]::Round($maxCpu, 1)
-            $decimated = New-Object System.Collections.Generic.List[object]
-            for ($i = 0; $i -lt $samples.Count; $i += 20) {
-                if ($decimated.Count -ge 900) { break }
-                $decimated.Add($samples[$i]) | Out-Null
-            }
-            $result.decimated = @($decimated.ToArray())
         }
         $script:Body.stallSampler = $result
         Complete-Step

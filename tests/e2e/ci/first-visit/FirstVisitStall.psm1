@@ -37,6 +37,53 @@ function Get-OpenPathFirstVisitStallSampleTimestampMs {
     return [long]$t
 }
 
+function Get-OpenPathFirstVisitSamplerTickValues {
+    <#
+    .SYNOPSIS
+    Tick values (`t` epoch ms) from raw sampler JSONL lines.
+    .DESCRIPTION
+    The stop step reads tens of thousands of 50 ms lines; building a
+    PSCustomObject per line timed the step out (partial results in the first
+    Phase 7 runs). This is the cheap pre-parse: regex `"t":<n>` on every line
+    that is not a CPU census line. CPU lines are excluded here and parsed
+    separately (they are only one per second).
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string[]]$Lines = @(),
+        [int]$Stride = 1,
+        [int]$MaxLines = 0
+    )
+    $ticks = New-Object System.Collections.Generic.List[long]
+    if ($Stride -lt 1) { $Stride = 1 }
+    for ($i = 0; $i -lt @($Lines).Count; $i += $Stride) {
+        if ($MaxLines -gt 0 -and $ticks.Count -ge $MaxLines) { break }
+        $line = [string]$Lines[$i]
+        if (-not $line -or $line.IndexOf('cpuSample') -ge 0) { continue }
+        $match = [regex]::Match($line, '"t":(\d+)')
+        if ($match.Success) { $ticks.Add([long]$match.Groups[1].Value) | Out-Null }
+    }
+    return @($ticks.ToArray())
+}
+
+function Get-OpenPathFirstVisitSamplerGapsFromTicks {
+    # gaps over the threshold between consecutive tick values.
+    [CmdletBinding()]
+    param(
+        [AllowNull()][long[]]$Ticks = @(),
+        [int]$ThresholdMs = 2000
+    )
+    $sorted = @(@($Ticks) | Sort-Object)
+    $gaps = New-Object System.Collections.Generic.List[object]
+    for ($i = 1; $i -lt $sorted.Count; $i++) {
+        $gap = [long]$sorted[$i] - [long]$sorted[$i - 1]
+        if ($gap -gt $ThresholdMs) {
+            $gaps.Add([ordered]@{ startMs = [long]$sorted[$i - 1]; endMs = [long]$sorted[$i]; gapMs = [int]$gap; kind = 'sampler' }) | Out-Null
+        }
+    }
+    return @($gaps.ToArray())
+}
+
 function Get-OpenPathFirstVisitSamplerGaps {
     <#
     .SYNOPSIS
@@ -254,6 +301,33 @@ function Get-OpenPathFirstVisitStallClassification {
                 nextLine       = [string](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'next')
             }) | Out-Null
     }
+    # Sampler gaps that do not cover any worker/native gap are still whole-VM
+    # pauses: keep them classified in the record (source=sampler) so acceptance
+    # (c) has every >2 s gap, including the ones with no product log gap.
+    foreach ($samplerGap in @($SamplerGaps)) {
+        $samplerStart = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'startMs')
+        $samplerEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'endMs')
+        $overlaps = $false
+        foreach ($gap in @($LogGaps)) {
+            $logStart = [long](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'startMs')
+            $logEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'endMs')
+            if ($samplerStart -le $logEnd -and $samplerEnd -ge $logStart) { $overlaps = $true; break }
+        }
+        if ($overlaps) { continue }
+        $classified.Add([ordered]@{
+                source         = 'sampler'
+                startMs        = $samplerStart
+                endMs          = $samplerEnd
+                gapMs          = [int](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'gapMs')
+                classification = 'vm-stall'
+                evidence       = 'sampler gap with no worker/native gap in the same window'
+                culprits       = @()
+                hostPressure   = ''
+                firstLine      = ''
+                nextLine       = ''
+            }) | Out-Null
+        $vmStall = $true
+    }
     return [ordered]@{
         gaps            = @($classified.ToArray())
         vmStall         = $vmStall
@@ -267,6 +341,8 @@ function Get-OpenPathFirstVisitStallClassification {
 
 Export-ModuleMember -Function `
     Get-OpenPathFirstVisitStallField, `
+    Get-OpenPathFirstVisitSamplerTickValues, `
+    Get-OpenPathFirstVisitSamplerGapsFromTicks, `
     Get-OpenPathFirstVisitSamplerGaps, `
     Get-OpenPathFirstVisitCpuSaturation, `
     Get-OpenPathFirstVisitWorkerGaps, `
