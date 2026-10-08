@@ -134,6 +134,10 @@ function Get-OpenPathFirstVisitUpdateContention {
         [AllowNull()][string[]]$OpenPathLines = @(),
         [AllowNull()][string[]]$DiagnosticLines = @(),
         [AllowNull()][object]$CanaryMetrics = $null,
+        # Phase 7 L1: the guest trigger step confirms the update was in course
+        # before navigating the anchor. It is the authoritative precondition
+        # evidence when the collected log tail no longer carries the run start.
+        [AllowNull()][object]$TriggerEvidence = $null,
         [int]$MaxReadyP95Ms = 3000
     )
 
@@ -153,6 +157,11 @@ function Get-OpenPathFirstVisitUpdateContention {
                 break
             }
         }
+    }
+    if (-not $inCourse -and $TriggerEvidence -and ([bool](Get-OpenPathFirstVisitContentionField -InputObject $TriggerEvidence -Name 'inCourse'))) {
+        $inCourse = $true
+        $runningStartMs = Get-OpenPathFirstVisitLogTimestampMs -Line ([string](Get-OpenPathFirstVisitContentionField -InputObject $TriggerEvidence -Name 'runningStart'))
+        if ($null -ne $runningStartMs) { $activeStart = [long]$runningStartMs }
     }
 
     $holds = [int](Get-OpenPathFirstVisitContentionField -InputObject $CanaryMetrics -Name 'holds')

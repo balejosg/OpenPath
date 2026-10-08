@@ -1853,6 +1853,18 @@ PrimaryServerAddress=198.51.100.7
             $late.updateInCourse | Should -BeFalse
             $late.verdict | Should -Be 'CONTENTION-RED'
             $late.reasons | Should -Contain 'update-not-in-course-at-first-retention'
+
+            # Phase 7 L1 fix: the guest trigger evidence backs the precondition
+            # when the collected tail no longer carries the run start.
+            $fromTrigger = Get-OpenPathFirstVisitUpdateContention -OpenPathLines @() -DiagnosticLines $diagReady -CanaryMetrics ([pscustomobject]@{
+                    holds = 1; readyCount = 1; readyP95Ms = 2500; readyMaxMs = 2500
+                    outcomeCounts = [ordered]@{ ready = 1 }
+                }) -TriggerEvidence ([pscustomobject]@{
+                    inCourse     = $true
+                    runningStart = "$start [INFO] [Update.Runtime.psm1] [PID:1] === Starting openpath update ==="
+                })
+            $fromTrigger.updateInCourse | Should -BeTrue
+            $fromTrigger.verdict | Should -Be 'CONTENTION-PASS'
         }
 
         It 'Classifies VM stalls, guest saturation and worker-only gaps' {
@@ -1991,6 +2003,12 @@ PrimaryServerAddress=198.51.100.7
             $guest | Should -Match 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure'
             $guest | Should -Match 'schtasks\.exe'
             $guest | Should -Match 'pressure'
+            # Phase 7 L1 fix: the contention visit pre-launches about:blank and
+            # the trigger waits for the update to be in course before navigating.
+            $guest | Should -Match 'in-session-contention'
+            $guest | Should -Match 'Visit -Url .about:blank.'
+            $guest | Should -Match 'inCourse'
+            $guest | Should -Match "Tag 'visit-anchor'"
 
             $workflow = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\.github\workflows\windows-first-visit-lab.yml') -Raw
             $workflow | Should -Match 'update-contention'

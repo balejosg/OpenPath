@@ -1126,6 +1126,13 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         # path. A direct script start is only a fallback when schtasks cannot
         # run AND no update is already in course (log tail), never a second
         # concurrent cycle on purpose.
+        #
+        # Phase 7 L1 fix: the update start latency on this VM is variable (up to
+        # a minute under load), and the cold session launch alone takes ~20 s
+        # (longer than the update cycle). The visit pre-launches Firefox on
+        # about:blank first; this step then confirms the update is IN COURSE
+        # (newest start after the newest completion) and only then navigates the
+        # anchor, so the measured retentions are issued while the update runs.
         Save-PartialResult
         $schtasks = Join-Path $env:SystemRoot 'System32\schtasks.exe'
         $taskName = 'OpenPath-Update'
@@ -1143,6 +1150,12 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             logLinesBefore = 0
             logLinesAfter  = 0
             tail           = @()
+            inCourse       = $false
+            inCourseMs     = -1
+            retriggers     = 0
+            runningStart   = ''
+            navigation     = $null
+            error          = ''
         }
         if (Test-Path -LiteralPath $logPath) {
             $trigger.logLinesBefore = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue).Count
@@ -1153,24 +1166,64 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             $trigger.out = @($run.out | Select-Object -First 10)
             if ($run.exit -eq 0) { $trigger.mode = 'schtasks' }
         }
-        if ($trigger.mode -ne 'schtasks') {
-            $inCourse = $false
-            if (Test-Path -LiteralPath $logPath) {
-                $tailNow = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue | Select-Object -Last 80)
-                $startedRecently = @($tailNow | Where-Object { $_ -match '=== Starting openpath update ===' })
-                $completedRecently = @($tailNow | Where-Object { $_ -match 'OpenPath update completed|OpenPath update stages totalMs=' })
-                $inCourse = ($startedRecently.Count -gt $completedRecently.Count)
-            }
-            if (-not $inCourse -and (Test-Path -LiteralPath $scriptName)) {
-                $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptName) -PassThru -WindowStyle Hidden
-                $trigger.mode = 'direct'
-                $trigger.processId = [int]$proc.Id
-            }
-            elseif ($inCourse) { $trigger.mode = 'already-in-course' }
+        if ($trigger.mode -ne 'schtasks' -and (Test-Path -LiteralPath $scriptName)) {
+            $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptName) -PassThru -WindowStyle Hidden
+            $trigger.mode = 'direct'
+            $trigger.processId = [int]$proc.Id
         }
-        # Give the update a moment to log its start line so a failed trigger is
-        # visible in the step result.
-        Start-Sleep -Seconds 2
+        # Wait for an update run to be in course (bounded), re-triggering the
+        # task when nothing runs so a stale "task ignored" never stalls the
+        # scenario. A much slower start than the bound fails the scenario
+        # precondition visibly instead of silently measuring nothing.
+        $inCourseStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $lastRetriggerAt = [DateTime]::UtcNow
+        $deadline = (Get-Date).AddSeconds(180)
+        while ((Get-Date) -lt $deadline) {
+            $tailNow = @()
+            if (Test-Path -LiteralPath $logPath) {
+                $tailNow = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue | Select-Object -Last 400)
+            }
+            $startIndex = -1
+            $completeIndex = -1
+            for ($i = 0; $i -lt $tailNow.Count; $i++) {
+                if ($tailNow[$i] -match '=== Starting openpath update ===') { $startIndex = $i }
+                if ($tailNow[$i] -match 'OpenPath update completed|OpenPath update stages totalMs=') { $completeIndex = $i }
+            }
+            if ($startIndex -ge 0 -and $startIndex -gt $completeIndex) {
+                $trigger.inCourse = $true
+                $trigger.runningStart = [string]$tailNow[$startIndex]
+                break
+            }
+            if (((Get-Date) - $lastRetriggerAt).TotalSeconds -ge 20 -and $trigger.retriggers -lt 4) {
+                $trigger.retriggers += 1
+                $lastRetriggerAt = Get-Date
+                if (Test-Path -LiteralPath $schtasks) { Invoke-Cmd $schtasks @('/Run', '/TN', $taskName) | Out-Null }
+                elseif (Test-Path -LiteralPath $scriptName) {
+                    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptName) -PassThru -WindowStyle Hidden | Out-Null
+                }
+            }
+            Start-Sleep -Milliseconds 1500
+        }
+        $inCourseStopwatch.Stop()
+        $trigger.inCourseMs = [int]$inCourseStopwatch.ElapsedMilliseconds
+        if (-not $trigger.inCourse) {
+            $trigger.error = 'update-not-in-course-after-180s'
+        }
+        else {
+            # In course: navigate the anchor now, in the pre-launched Firefox.
+            try {
+                $plan = Get-FixturePlan
+                $anchorUrl = "http://$([string]$plan.anchors.a1.host)/"
+                $nav = Start-InSessionVisit -Url $anchorUrl -Tag 'visit-anchor'
+                $trigger.navigation = [ordered]@{
+                    url       = $anchorUrl
+                    at        = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+                    firefox   = @($nav.firefox)
+                    out       = @($nav.out)[-1]
+                }
+            }
+            catch { $trigger.error = "anchor-navigation: $([string]$_.Exception.Message)" }
+        }
         if (Test-Path -LiteralPath $logPath) {
             $tail = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue | Select-Object -Last 60)
             $trigger.logLinesAfter = $tail.Count
@@ -1205,6 +1258,17 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             $remaining = @(Get-FirefoxProcesses)
             $script:Body.preExistingRemaining = $remaining
             if ($remaining.Count -gt 0) { $script:Failures.Add("pre-existing-firefox-remains:$($remaining.Count)") | Out-Null }
+        }
+        if ($ScenarioId -like '*update-contention*') {
+            # Phase 7 L1 fix: pre-launch Firefox on about:blank. The cold
+            # session launch takes ~20 s (longer than the update cycle), so the
+            # update-trigger step confirms the update is in course first and
+            # only then navigates the anchor in this already-running browser;
+            # the measured retentions are issued during the update window.
+            $launch = Start-InSessionVisit -Url 'about:blank' -Tag 'visit'
+            $script:Body.launchOut = $launch.out
+            $script:Body.arm = [ordered]@{ mode = 'in-session-contention'; cmd = $launch.cmd; firefox = @($launch.firefox) }
+            Complete-Step
         }
         if ($ScenarioId -like '*class-boot*') {
             # Class boot: arm the wrapper for the next logon (the run key is what

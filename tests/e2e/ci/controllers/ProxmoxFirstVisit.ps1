@@ -1530,19 +1530,23 @@ function Invoke-OpenPathFirstVisitObserve {
     $samplers = Start-OpenPathFirstVisitSamplers -Payload $Payload -Config $Config -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Staging $observeStaging
     if ($samplers.error) { Write-Warning "first-visit samplers: $($samplers.error)" }
 
-    # Phase 7 L1: the update-contention scenario starts the product update
-    # right BEFORE the browser launch, so the dependency fast path has to
-    # contend with a real update cycle while the page fans out.
-    $updateTrigger = $null
-    if ($scenario -eq 'first-visit-update-contention') {
-        $triggerStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'update-trigger' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
-        $updateTrigger = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $triggerStep -Name 'body') -Name 'state') -Name 'updateTrigger'
-        Write-Host "first-visit update-contention trigger: mode=$([string](Get-OpenPathLabField -InputObject $updateTrigger -Name 'mode')) exit=$([string](Get-OpenPathLabField -InputObject $updateTrigger -Name 'exit'))"
-    }
     # 1) Arm the visit (wrapper + Run key) and refresh the session: logoff for
     #    settled/hot/control (the persistent host process stays warm), reboot for
     #    class-boot (Firefox starts within the class-boot window at logon).
+    #    Phase 7 L1: update-contention pre-launches Firefox on about:blank here;
+    #    the update trigger below then waits for the update to be in course and
+    #    navigates the anchor inside that running browser.
     $arm = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'visit' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
+    # Phase 7 L1: the update-contention scenario starts the product update after
+    # the pre-launch, waits until the update is demonstrably in course and then
+    # navigates the anchor, so the first retention is issued while the update
+    # runs.
+    $updateTrigger = $null
+    if ($scenario -eq 'first-visit-update-contention') {
+        $triggerStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'update-trigger' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
+        $updateTrigger = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $triggerStep -Name 'body') -Name 'state') -Name 'updateTrigger'
+        Write-Host "first-visit update-contention trigger: mode=$([string](Get-OpenPathLabField -InputObject $updateTrigger -Name 'mode')) inCourse=$([string](Get-OpenPathLabField -InputObject $updateTrigger -Name 'inCourse')) inCourseMs=$([string](Get-OpenPathLabField -InputObject $updateTrigger -Name 'inCourseMs')) navigation=$([string](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $updateTrigger -Name 'navigation') -Name 'url'))"
+    }
     $refreshMode = [string](Get-OpenPathLabField -InputObject $arm.body.state.arm -Name 'mode')
     # Phase 6.1 B: who was already open at visit launch (and whether it was
     # closed) travels with the scene evidence.
@@ -1859,8 +1863,10 @@ function Invoke-OpenPathFirstVisitObserve {
         }
         if ($scenario -eq 'first-visit-update-contention') {
             # Phase 7 L1: the acceptance analysis (update in course at the first
-            # retention, enqueue->ready p95 <= 3 s, zero cancelled-budget).
-            $contentionAnalysis = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $openpathTail -DiagnosticLines $canaryDiagnostics -CanaryMetrics $canaryMetrics
+            # retention, enqueue->ready p95 <= 3 s, zero cancelled-budget). The
+            # guest trigger evidence backs the precondition when the collected
+            # log tail no longer carries the run start.
+            $contentionAnalysis = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $openpathTail -DiagnosticLines $canaryDiagnostics -CanaryMetrics $canaryMetrics -TriggerEvidence $updateTrigger
             $canary['contention'] = $contentionAnalysis
             $canary['updateTrigger'] = $updateTrigger
         }

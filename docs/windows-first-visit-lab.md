@@ -263,12 +263,17 @@ The captures `t005..t060` are described manually (blank / unstyled / complete).
 settled-like visit with the product update started right before the browser
 launch:
 
+- the visit step pre-launches Firefox on `about:blank` (the cold session launch
+  takes longer than an update cycle);
 - the guest `update-trigger` step runs
-  `%SystemRoot%\System32\schtasks.exe /Run /TN OpenPath-Update` (absolute path);
-  a direct `Update-OpenPath.ps1` start is the fallback only when the task cannot
-  run **and** no update is already in course (log tail);
-- the scene proves from the collected logs that an update run was still in
-  course when the first dependency retention arrived
+  `%SystemRoot%\System32\schtasks.exe /Run /TN OpenPath-Update` (absolute path),
+  waits until an update run is demonstrably **in course** (newest start after
+  the newest completion, re-triggering when nothing runs) and only then
+  navigates the anchor in the already-running browser, so the measured
+  retentions are issued while the update runs. A direct `Update-OpenPath.ps1`
+  start is the fallback only when the task cannot run;
+- the scene proves from the guest trigger evidence and the collected logs that
+  an update run was still in course when the first dependency retention arrived
   (`Get-OpenPathFirstVisitUpdateContention`);
 - the acceptance counters are the canary retention metrics: enqueue->ready
   p95 <= 3 s and zero `cancelled-budget` holds (`CONTENTION-PASS`).
