@@ -62,9 +62,13 @@ function Handle-OpenPathDownloadFailure {
         throw "No local whitelist available and download failed"
     }
 
-    Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
-
-    $runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath
+    # Phase 7 P2: the queue apply writes the overlay and AcrylicHosts.txt; it runs
+    # inside the Acrylic writers lock so the dependency fast path (which waits on
+    # that lock, not on the update cycle) can interleave between the cycle stages.
+    $runtimeDependencyQueueChanged = [bool](Invoke-OpenPathUpdateWritersLockScope -Stage 'download-failure-queue-apply' -Action {
+            Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath | Out-Null
+            return (Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath)
+        })
     $policyState = Get-OpenPathEndpointPolicyState `
         -WhitelistSections (Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath)
     $repairPlan = New-OpenPathEndpointStateRepairPlan `
@@ -131,8 +135,10 @@ function Handle-OpenPathNotModified {
         return
     }
 
-    Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
-    $runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath
+    $runtimeDependencyQueueChanged = [bool](Invoke-OpenPathUpdateWritersLockScope -Stage 'not-modified-queue-apply' -Action {
+            Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath | Out-Null
+            return (Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath)
+        })
     $repairPlan = New-OpenPathEndpointStateRepairPlan `
         -PolicyState $policyState `
         -Mode 'CachedWhitelist' `
@@ -172,12 +178,16 @@ function Handle-OpenPathDisabledWhitelist {
 
     Write-OpenPathLog "DEACTIVATION FLAG detected - entering fail-open mode" -Level WARN
 
-    "# DESACTIVADO" | Set-Content $WhitelistPath -Encoding UTF8
+    Invoke-OpenPathUpdateWritersLockScope -Stage 'fail-open-marker' -Action {
+        "# DESACTIVADO" | Set-Content $WhitelistPath -Encoding UTF8
+    } | Out-Null
     $policyState = Get-OpenPathEndpointPolicyState `
         -WhitelistSections ([PSCustomObject]@{ IsDisabled = $true })
     $repairPlan = New-OpenPathEndpointStateRepairPlan -PolicyState $policyState -Mode 'FailOpen'
     Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
-    Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist
+    Invoke-OpenPathUpdateWritersLockScope -Stage 'fail-open-mirror' -Action {
+        Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist | Out-Null
+    } | Out-Null
     Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
 
     $runtimeHealth = Get-OpenPathRuntimeHealth
@@ -212,20 +222,44 @@ function Handle-OpenPathWhitelistApply {
         -Whitelist $Whitelist.Whitelist `
         -BlockedSubdomains $Whitelist.BlockedSubdomains `
         -BlockedPaths $Whitelist.BlockedPaths
-    $serializedWhitelist | Set-Content $WhitelistPath -Encoding UTF8
-    Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
-
-    Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath | Out-Null
+    # Phase 7 P2: whitelist write + mirror + queue apply are the shared writers;
+    # they run in one short Acrylic writers scope so the dependency fast path can
+    # interleave with the rest of the cycle (network, restarts, policies).
+    $queueScope = Invoke-OpenPathUpdateWritersLockScope -Stage 'whitelist-queue-apply' -Action {
+        $serializedWhitelist | Set-Content $WhitelistPath -Encoding UTF8
+        Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath | Out-Null
+        $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath -PassThru
+        return [PSCustomObject]@{
+            Queue   = $queueResult
+            Overlay = (Get-OpenPathRuntimeDependencyOverlayState)
+        }
+    }
     $policyState = Get-OpenPathEndpointPolicyState `
         -WhitelistSections (Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath)
     $repairPlan = New-OpenPathEndpointStateRepairPlan `
         -PolicyState $policyState `
         -Mode 'ApplyWhitelist' `
         -EnableBrowserPolicies:([bool]$Config.enableBrowserPolicies)
-    Invoke-OpenPathEndpointStateRepairPlan `
+    $repairResult = Invoke-OpenPathEndpointStateRepairPlan `
         -Plan $repairPlan `
         -Config $Config `
-        -BlockedPaths $Whitelist.BlockedPaths | Out-Null
+        -BlockedPaths $Whitelist.BlockedPaths
+
+    # Phase 7 P2: when this cycle left unapplied overlay content and its repair
+    # plan restarted Acrylic and flushed DNS, stamp exactly the generation this
+    # cycle applied. The dependency fast apply then only confirms it instead of
+    # paying a redundant restart for content the update already made operative.
+    if ($queueScope.Overlay -and
+        ($queueScope.Overlay.Generation -gt $queueScope.Overlay.AppliedGeneration) -and
+        $repairResult -and
+        ($repairResult.AcrylicRunning -eq $true) -and
+        ($repairResult.DnsFlushed -eq $true)) {
+        $stampedGeneration = [int]$queueScope.Overlay.Generation
+        Invoke-OpenPathUpdateWritersLockScope -Stage 'overlay-stamp' -Action {
+            Set-OpenPathRuntimeDependencyOverlayApplied -Generation $stampedGeneration | Out-Null
+        } | Out-Null
+        Write-OpenPathLog "OpenPath update stamped runtime dependency overlay appliedGeneration=$stampedGeneration"
+    }
 
     # W-1(b): on a whitelist change, immediately re-resolve and re-apply the outbound
     # egress floor so its per-IP HTTP/HTTPS allow-set tracks the new domains (the

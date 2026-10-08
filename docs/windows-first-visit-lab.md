@@ -13,14 +13,15 @@ with the generic rules.
 
 ## What it runs
 
-| Scenario | Name                          | What happens                                                                                        |
-| -------- | ----------------------------- | --------------------------------------------------------------------------------------------------- |
-| W        | `first-visit-settled`         | settled install; a fresh Firefox opens anchor 1                                                     |
-| W2       | `first-visit-hot`             | same Firefox stays open >=5 min; a new window opens anchor 2                                        |
-| B        | `first-visit-class-boot`      | install, warm-up + clean close, reboot, autologon, Firefox <=60 s after logon                       |
-| F        | `first-visit-floor`           | like W but the dependency hosts are pre-whitelisted (the environment floor; `control` is the alias) |
-| S        | `first-visit-site`            | Phase 6 C: real-site canary, settled-like, dispatch only (see below)                                |
-| SB       | `first-visit-site-class-boot` | Phase 6 C: real-site canary through the class-boot refresh, dispatch only                           |
+| Scenario | Name                            | What happens                                                                                        |
+| -------- | ------------------------------- | --------------------------------------------------------------------------------------------------- |
+| W        | `first-visit-settled`           | settled install; a fresh Firefox opens anchor 1                                                     |
+| W2       | `first-visit-hot`               | same Firefox stays open >=5 min; a new window opens anchor 2                                        |
+| B        | `first-visit-class-boot`        | install, warm-up + clean close, reboot, autologon, Firefox <=60 s after logon                       |
+| F        | `first-visit-floor`             | like W but the dependency hosts are pre-whitelisted (the environment floor; `control` is the alias) |
+| S        | `first-visit-site`              | Phase 6 C: real-site canary, settled-like, dispatch only (see below)                                |
+| SB       | `first-visit-site-class-boot`   | Phase 6 C: real-site canary through the class-boot refresh, dispatch only                           |
+| U        | `first-visit-update-contention` | Phase 7 L1: settled-like, with the product update started right before the visit (see below)        |
 
 W also runs the security checks (`first-visit-settled`/`first-visit-floor`):
 the never-learnable host stays blocked, the unlisted host does not resolve, the
@@ -166,8 +167,10 @@ gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
 #   range (head_sha against the newest comparable base) touches
 #   firefox-extension/src/**, firefox-extension/native/**, windows/lib/**,
 #   windows/scripts/**, tests/e2e/ci/first-visit/** or the lane itself
-#   (an undeterminable range fails open): W and B, one repetition each;
-# - nightly (02:17): settled, hot, class-boot and floor with two repetitions;
+#   (an undeterminable range fails open): W, B and U, one repetition each;
+# - nightly (02:17): settled, hot, class-boot and floor with two repetitions
+#   plus update-contention once (9 scenes: 9 x 30-min worst-case scene budget +
+#   15 min overhead = 285 min <= 288 min = 80% of the 360-min job timeout);
 # - dispatch: exactly the scenarios/repetitions requested.
 ```
 
@@ -254,12 +257,61 @@ navigation.
 
 The captures `t005..t060` are described manually (blank / unstyled / complete).
 
+## Update contention, stall diagnosis and SAC-before-install (Phase 7)
+
+`update-contention` (nightly once, in every auto-run and by dispatch) is the
+settled-like visit with the product update started right before the browser
+launch:
+
+- the guest `update-trigger` step runs
+  `%SystemRoot%\System32\schtasks.exe /Run /TN OpenPath-Update` (absolute path);
+  a direct `Update-OpenPath.ps1` start is the fallback only when the task cannot
+  run **and** no update is already in course (log tail);
+- the scene proves from the collected logs that an update run was still in
+  course when the first dependency retention arrived
+  (`Get-OpenPathFirstVisitUpdateContention`);
+- the acceptance counters are the canary retention metrics: enqueue->ready
+  p95 <= 3 s and zero `cancelled-budget` holds (`CONTENTION-PASS`).
+
+Phase 7 P1 adds the stall diagnosis to every scene. The guest runs a 50 ms
+sampler (high-resolution counter + UTC clock) with a per-second CPU census
+(firefox, the worker powershell, MsMpEng, Acrylic and system CPU); the
+controller samples the Proxmox host (`/proc/pressure/{cpu,io,memory}`, load,
+the VM's kvm CPU) and classifies every >2 s worker/fast-apply gap:
+
+- `vm-stall`: the sampler stops in the same window (the whole VM paused);
+- `guest-saturated`: the sampler runs and system CPU is pinned (the culprit
+  process names travel in the evidence);
+- `worker-only`: sampler alive, CPU normal, only the worker/native sequence
+  paused.
+
+A `vm-stall` overlapping a not-ready retention makes the scene INFRA `vm-stall`
+(the product is not blamed for a hypervisor pause); the raw samples live in
+`stall-samples.json`.
+
+`smart_app_control: on-before-install` (class-boot only) applies SAC **before**
+the product install: the pre-install cycle boots into enforcement and proves it
+with the positive control, and only then the template installs. The scene
+records the pre-install decision, the compiled native host state
+(`host-compile-state`: sha256 of the exe and build manifest plus the product
+ensure result), the forced recompilation with SAC still active
+(`host-recompile`: delete the compiled exe + build manifest, call the product
+ensure, repeat the student probe) and the CodeIntegrity XML window.
+
 ## Smart App Control and canary runbooks
 
 ```bash
 # SAC simulation (class-boot only), template from the push's REL run:
 gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
   -f scenarios=class-boot -f repetitions=1 -f smart_app_control=on
+
+# SAC already enforced before the install (Phase 7 L2):
+gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
+  -f scenarios=class-boot -f repetitions=1 -f smart_app_control=on-before-install
+
+# Update contention (Phase 7 L1; also in the auto-run and nightly):
+gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \
+  -f scenarios=update-contention -f repetitions=2
 
 # Real-site canary (base URL + domains only; never committed to the repo):
 gh workflow run windows-first-visit-lab.yml -f template_run_id=<rel-run-id> \

@@ -24,7 +24,7 @@ on:
         required: false
         type: string
       scenarios:
-        description: 'comma-separated scenarios (settled,hot,class-boot,floor,site; control is the floor alias; site only by dispatch and never in auto-run/nightly)'
+        description: 'comma-separated scenarios (settled,hot,class-boot,floor,site,update-contention; control is the floor alias; site only by dispatch and never in auto-run/nightly)'
         required: false
         default: 'settled,class-boot'
         type: string
@@ -34,7 +34,7 @@ on:
         default: '1'
         type: string
       smart_app_control:
-        description: 'class-boot Smart App Control simulation: unchanged (default) or on'
+        description: 'class-boot Smart App Control simulation: unchanged (default), on, or on-before-install'
         required: false
         default: 'unchanged'
         type: string

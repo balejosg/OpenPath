@@ -41,8 +41,10 @@ if ($siteScenarios.Count -gt 0 -and [string]::IsNullOrWhiteSpace($SiteUrl)) {
     [Console]::Error.WriteLine("first-visit-site-url-required: the site canary needs site_url (scenarios=$($siteScenarios -join ',')).")
     exit 2
 }
-if ($SmartAppControl -eq 'on') {
-    $invalid = @($Scenarios | Where-Object { $_ -ne 'class-boot' })
+if ($SmartAppControl -in @('on', 'on-before-install')) {
+    $invalid = @($Scenarios | ForEach-Object {
+            if ($_ -match '^([a-z0-9-]+):(\d+)$') { $Matches[1] } else { [string]$_ }
+        } | Where-Object { $_ -ne 'class-boot' })
     if ($invalid.Count -gt 0) {
         [Console]::Error.WriteLine("first-visit-smart-app-control-requires-class-boot: scenarios=$($invalid -join ',')")
         exit 2
@@ -72,11 +74,25 @@ try {
     }
 }
 catch { $templateXpiSha = '' }
+# Phase 7 L1: a scenario token may cap its own repetitions with a `name:N`
+# suffix (the nightly runs update-contention once to stay inside the worst-case
+# scene budget); every other token keeps the global repetition count.
+$scenarioRepetitionLimit = @{}
+$scenarioNames = New-Object System.Collections.Generic.List[string]
+foreach ($token in $Scenarios) {
+    $name = [string]$token
+    $limit = $Repetitions
+    if ($token -match '^([a-z0-9-]+):(\d+)$') {
+        $name = $Matches[1]
+        $limit = [int]$Matches[2]
+    }
+    if ($name -eq 'control') { $name = 'floor' }
+    $scenarioRepetitionLimit[$name] = $limit
+    $scenarioNames.Add($name) | Out-Null
+}
 foreach ($repetition in 1..$Repetitions) {
-    foreach ($scenario in $Scenarios) {
-        # Phase 5.3 B4: floor is the real environment control; `control` was
-        # the old name and stays accepted as an alias.
-        if ($scenario -eq 'control') { $scenario = 'floor' }
+    foreach ($scenario in $scenarioNames.ToArray()) {
+        if ($repetition -gt [int]$scenarioRepetitionLimit[$scenario]) { continue }
         $scenarioId = "first-visit-$scenario-r$repetition"
         $scenarioRoot = Join-Path (Join-Path (Join-Path $ArtifactsRoot $RunId) ([string]$RunAttempt)) $scenarioId
         New-Item -ItemType Directory -Path $scenarioRoot -Force | Out-Null

@@ -187,7 +187,7 @@ Describe "Update Script" {
             $runtimeContent = Get-Content $runtimePath -Raw
 
             $runtimeContent | Should -Match '\[AllowNull\(\)\]\s+\[PSCustomObject\]\$Config'
-            $runtimeContent | Should -Match '(?s)if \(\$Config\) \{\s+Sync-FirefoxNativeHostMirror -Config \$Config -WhitelistPath \$WhitelistPath\s+\}'
+            $runtimeContent | Should -Match "(?s)if \(\`$Config\) \{\s+Invoke-OpenPathUpdateWritersLockScope -Stage 'checkpoint-rollback-mirror' -Action \{\s+Sync-FirefoxNativeHostMirror -Config \`$Config -WhitelistPath \`$WhitelistPath"
             $runtimeContent | Should -Match '(?s)if \(\$Config\) \{\s+Restore-OpenPathProtectedMode -Config \$Config -ErrorAction SilentlyContinue \| Out-Null\s+\}'
         }
 
@@ -343,8 +343,8 @@ Describe "Update Script" {
             $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
             $applyContent = Get-Content $applyHelperPath -Raw
 
-            $applyContent | Should -Match '(?s)Handle-OpenPathNotModified.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?-QueueChanged \$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan'
-            $applyContent | Should -Match '(?s)Handle-OpenPathDownloadFailure.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?-QueueChanged \$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan'
+            $applyContent | Should -Match "(?s)Handle-OpenPathNotModified.*?\`$runtimeDependencyQueueChanged = \[bool\]\(Invoke-OpenPathUpdateWritersLockScope -Stage 'not-modified-queue-apply'.*?-QueueChanged \`$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan"
+            $applyContent | Should -Match "(?s)Handle-OpenPathDownloadFailure.*?\`$runtimeDependencyQueueChanged = \[bool\]\(Invoke-OpenPathUpdateWritersLockScope -Stage 'download-failure-queue-apply'.*?-QueueChanged \`$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan"
         }
 
         It "Keeps runtime dependency queue apply scalar when Acrylic emits helper output" {
@@ -534,6 +534,194 @@ Describe "Update Script" {
             $sigGateStart = $content.IndexOf('$enforceSignature = ', $applyLoopStart)
             $sigGateStart | Should -BeGreaterThan $applyLoopStart
             $sigGateStart | Should -BeLessThan $moveStart
+        }
+    }
+
+    Context "Dependency writers lock scoping" {
+        BeforeAll {
+            $cycleLockScript = {
+                param([string]$MutexName, $Ready, $Release)
+                $mutex = [System.Threading.Mutex]::new($false, $MutexName)
+                $acquired = $mutex.WaitOne(0)
+                $Ready.Set()
+                $null = $Release.Wait(10000)
+                if ($acquired) { $mutex.ReleaseMutex() }
+            }
+            $writersLockScript = {
+                param([string]$MutexName, $Ready, $Release)
+                $mutex = [System.Threading.Mutex]::new($false, $MutexName)
+                $acquired = $mutex.WaitOne(0)
+                $Ready.Set()
+                $null = $Release.Wait(10000)
+                if ($acquired) { $mutex.ReleaseMutex() }
+            }
+
+            # Shared stubs for the update apply path (Phase 7 P2 stamping tests).
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1")
+            function ConvertTo-OpenPathWhitelistFileContent { param($Whitelist, $BlockedSubdomains, $BlockedPaths) 'WHITELIST' }
+            function Sync-FirefoxNativeHostMirror { param($Config, $WhitelistPath, [switch]$ClearWhitelist) }
+            function Invoke-OpenPathRuntimeDependencyQueueApply {
+                param($WhitelistPath, [switch]$PassThru)
+                $script:queueApplyCalls++
+                [PSCustomObject]@{ Changed = $true; Processed = 2; Rejected = 0; QueueProcessedMs = 5; OverlayWriteMs = 1; AcrylicHostUpdateMs = 1; AcrylicHostWritten = $true; AcrylicHostsChanged = $true }
+            }
+            function Get-OpenPathWhitelistSectionsFromFile { param($Path) [PSCustomObject]@{ Whitelist = @('example.com'); BlockedSubdomains = @(); IsDisabled = $false } }
+            function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [PSCustomObject]@{ IsDisabled = $false; ProtectedModeEligible = $true } }
+            function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $EnableBrowserPolicies, $QueueChanged) [PSCustomObject]@{ Mode = $Mode; Actions = @('RestoreProtectedMode'); QueueChanged = $false; ProtectedModeEligible = $true } }
+            function Invoke-OpenPathEndpointStateRepairPlan {
+                param($Plan, $Config, $BlockedPaths)
+                [PSCustomObject]@{
+                    AppliedActions = @('RestoreProtectedMode')
+                    AcrylicRunning = $script:repairAcrylicRunning
+                    DnsFlushed     = $script:repairDnsFlushed
+                }
+            }
+            function Get-OpenPathRuntimeDependencyOverlayState {
+                param([string]$Path = '')
+                [PSCustomObject]@{ Exists = $true; Generation = $script:overlayGeneration; AppliedGeneration = $script:overlayApplied }
+            }
+            function Set-OpenPathRuntimeDependencyOverlayApplied {
+                param([string]$Path = '', [int]$Generation = -1)
+                $script:stampCalls += [PSCustomObject]@{ Generation = $Generation }
+                return $true
+            }
+            function Invoke-OpenPathUpdateWritersLockScope {
+                param([scriptblock]$Action, [string]$MutexName = '', [int]$TimeoutSeconds = 60, [string]$Stage = '')
+                $script:lockScopes += $Stage
+                return (& $Action)
+            }
+            function Clear-StaleFailsafeState { param($StaleFailsafeStatePath) }
+            function Get-OpenPathRuntimeHealth { [PSCustomObject]@{ DnsServiceRunning = $true; DnsResolving = $true } }
+            function Send-OpenPathHealthReport { param() [PSCustomObject]@{} }
+            function Write-OpenPathLog { param([string]$Message, [string]$Level = 'INFO') }
+        }
+
+        It "keeps the dependency writers path free while the update cycle lock is held" {
+            $ready = [System.Threading.ManualResetEventSlim]::new($false)
+            $release = [System.Threading.ManualResetEventSlim]::new($false)
+            $holder = [powershell]::Create()
+            $null = $holder.AddScript($cycleLockScript).AddArgument('Global\OpenPathUpdateLock').AddArgument($ready).AddArgument($release)
+            $handle = $holder.BeginInvoke()
+            try {
+                $ready.Wait(5000) | Should -BeTrue
+                Import-Module (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1") -Force
+                InModuleScope Update.Runtime {
+                    # The dependency fast path takes the Acrylic writers lock; the
+                    # whole-cycle exclusion lock must not gate it (Phase 7 P2).
+                    (Invoke-OpenPathUpdateWritersLockScope -TimeoutSeconds 5 -Action { 'writers-ran' }) | Should -Be 'writers-ran'
+                }
+            }
+            finally {
+                $release.Set()
+                $null = $holder.EndInvoke($handle)
+                $holder.Dispose()
+            }
+        }
+
+        It "times out when another writer holds the Acrylic writers lock" {
+            $ready = [System.Threading.ManualResetEventSlim]::new($false)
+            $release = [System.Threading.ManualResetEventSlim]::new($false)
+            $holder = [powershell]::Create()
+            $null = $holder.AddScript($writersLockScript).AddArgument('Global\OpenPathAcrylicWriteLock').AddArgument($ready).AddArgument($release)
+            $handle = $holder.BeginInvoke()
+            try {
+                $ready.Wait(5000) | Should -BeTrue
+                Import-Module (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1") -Force
+                InModuleScope Update.Runtime {
+                    { Invoke-OpenPathUpdateWritersLockScope -TimeoutSeconds 1 -Action { 'blocked' } } |
+                        Should -Throw '*Acrylic writers lock*'
+                }
+            }
+            finally {
+                $release.Set()
+                $null = $holder.EndInvoke($handle)
+                $holder.Dispose()
+            }
+        }
+
+        It "keeps the shared writers scoped in the update cycle instead of held for the whole cycle" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+
+            Assert-ContentContainsAll -Content $runtimeContent -Needles @(
+                'function Invoke-OpenPathUpdateWritersLockScope',
+                "'Global\OpenPathAcrylicWriteLock'",
+                "OpenPath update stage=",
+                "OpenPath update stages totalMs=",
+                'waited $($lockWaitStopwatch.ElapsedMilliseconds) ms for the Acrylic writers lock'
+            )
+
+            $fastApplyStart = $runtimeContent.IndexOf('function Invoke-OpenPathRuntimeDependencyFastApply')
+            $updateCycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
+            $fastApplyBody = $runtimeContent.Substring($fastApplyStart, $updateCycleStart - $fastApplyStart)
+            $fastApplyBody | Should -Match "WriteMutexName = 'Global\\OpenPathAcrylicWriteLock'"
+            ([regex]::Matches($fastApplyBody, 'Mutex\]::new\(\$false, \$WriteMutexName\)')).Count | Should -Be 1
+        }
+
+        It "stamps the overlay generation after a successful restart and DNS flush" {
+            $script:repairAcrylicRunning = $true
+            $script:repairDnsFlushed = $true
+            $script:overlayGeneration = 3
+            $script:overlayApplied = 1
+            $script:stampCalls = @()
+            $script:lockScopes = @()
+            $script:queueApplyCalls = 0
+
+            $config = [PSCustomObject]@{ enableBrowserPolicies = $false; outboundEgressFloorEnabled = $false }
+            $whitelist = [PSCustomObject]@{ Whitelist = @('example.com'); BlockedSubdomains = @(); BlockedPaths = @() }
+            Handle-OpenPathWhitelistApply `
+                -Config $config `
+                -Whitelist $whitelist `
+                -WhitelistPath (Join-Path $TestDrive 'whitelist.txt') `
+                -StaleFailsafeStatePath (Join-Path $TestDrive 'stale-failsafe-state.json') | Out-Null
+
+            $script:queueApplyCalls | Should -Be 1
+            $script:stampCalls.Count | Should -Be 1
+            $script:stampCalls[0].Generation | Should -Be 3
+            $script:lockScopes | Should -Contain 'whitelist-queue-apply'
+            $script:lockScopes | Should -Contain 'overlay-stamp'
+        }
+
+        It "does not stamp when the repair plan did not prove both a restart and a flush" {
+            $script:repairAcrylicRunning = $true
+            $script:repairDnsFlushed = $false
+            $script:overlayGeneration = 3
+            $script:overlayApplied = 1
+            $script:stampCalls = @()
+            $script:lockScopes = @()
+            $script:queueApplyCalls = 0
+
+            $config = [PSCustomObject]@{ enableBrowserPolicies = $false; outboundEgressFloorEnabled = $false }
+            $whitelist = [PSCustomObject]@{ Whitelist = @('example.com'); BlockedSubdomains = @(); BlockedPaths = @() }
+            Handle-OpenPathWhitelistApply `
+                -Config $config `
+                -Whitelist $whitelist `
+                -WhitelistPath (Join-Path $TestDrive 'whitelist.txt') `
+                -StaleFailsafeStatePath (Join-Path $TestDrive 'stale-failsafe-state.json') | Out-Null
+
+            $script:stampCalls.Count | Should -Be 0
+            $script:lockScopes | Should -Contain 'whitelist-queue-apply'
+            $script:lockScopes | Should -Not -Contain 'overlay-stamp'
+        }
+
+        It "does not stamp when the overlay generation was already applied" {
+            $script:repairAcrylicRunning = $true
+            $script:repairDnsFlushed = $true
+            $script:overlayGeneration = 4
+            $script:overlayApplied = 4
+            $script:stampCalls = @()
+            $script:lockScopes = @()
+            $script:queueApplyCalls = 0
+
+            $config = [PSCustomObject]@{ enableBrowserPolicies = $false; outboundEgressFloorEnabled = $false }
+            $whitelist = [PSCustomObject]@{ Whitelist = @('example.com'); BlockedSubdomains = @(); BlockedPaths = @() }
+            Handle-OpenPathWhitelistApply `
+                -Config $config `
+                -Whitelist $whitelist `
+                -WhitelistPath (Join-Path $TestDrive 'whitelist.txt') `
+                -StaleFailsafeStatePath (Join-Path $TestDrive 'stale-failsafe-state.json') | Out-Null
+
+            $script:stampCalls.Count | Should -Be 0
         }
     }
 }

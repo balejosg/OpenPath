@@ -1309,10 +1309,10 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
 
         It 'Plans scenarios per trigger' {
             $schedule = Get-OpenPathFirstVisitScenarioPlan -EventName 'schedule'
-            $schedule.scenarios | Should -Be 'settled,hot,class-boot,floor'
+            $schedule.scenarios | Should -Be 'settled,hot,class-boot,floor,update-contention:1'
             $schedule.repetitions | Should -Be 2
             $afterRel = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_run'
-            $afterRel.scenarios | Should -Be 'settled,class-boot'
+            $afterRel.scenarios | Should -Be 'settled,class-boot,update-contention'
             $afterRel.repetitions | Should -Be 1
             $dispatch = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_dispatch'
             $dispatch.scenarios | Should -Be 'settled,class-boot'
@@ -1792,6 +1792,211 @@ PrimaryServerAddress=198.51.100.7
                     verdict = [pscustomobject]@{ status = 'canary-pass'; reasons = @() }
                 }) -Metrics $null -Scenario 'first-visit-site'
             $navigatedOutcome.category | Should -Be 'CANARY-PASS'
+        }
+    }
+
+    Context 'Update contention and stall diagnosis (Phase 7 P1/L1/L2/L3)' -Tag 'Phase7' {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitUpdateContention.psm1') -Force
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitStall.psm1') -Force
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitOutcome.psm1') -Force
+        }
+
+        It 'Parses the update runs and detects an update in course at the first retention' {
+            $start = '2026-10-08 10:00:00'
+            $openpath = @(
+                "$start [INFO] [Update.Runtime.psm1] [PID:1] === Starting openpath update ===",
+                '2026-10-08 10:00:05 [INFO] [Update.Runtime.psm1] [PID:1] OpenPath update stages totalMs=5000 enrollment=1 config-sync=1 portal-state=1 reconcile=1 backup=1 download=1 apply=1',
+                '2026-10-08 10:01:00 [INFO] [RuntimeDependency.Worker.ps1] [PID:2] Runtime dependency worker detected 1 queue file(s) queueFileAgeMs=5'
+            )
+            $runs = @(Get-OpenPathFirstVisitUpdateRuns -OpenPathLines $openpath)
+            $runs.Count | Should -Be 1
+            $runs[0].endMs | Should -Not -BeNullOrEmpty
+            $runStartMs = [long]$runs[0].startMs
+            $firstRetention = $runStartMs + 3000
+
+            $diag = @(
+                ('2026-10-08 10:00:03 [INFO] [OpenPath-NativeHost] stage=extension-diagnostic {"kind":"hold","dependencyHost":"i.redd.it","ts":' + $firstRetention + '}'),
+                ('2026-10-08 10:00:12 [INFO] [OpenPath-NativeHost] stage=extension-diagnostic {"kind":"hold-outcome","dependencyHost":"i.redd.it","outcome":"cancelled-budget","ms":9500,"ts":' + ($firstRetention + 9500) + '}')
+            )
+            (Get-OpenPathFirstVisitFirstRetentionMs -DiagnosticLines $diag) | Should -Be $firstRetention
+
+            $red = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $openpath -DiagnosticLines $diag -CanaryMetrics ([pscustomobject]@{
+                    holds = 2; readyCount = 1; readyP95Ms = 9500; readyMaxMs = 9500
+                    outcomeCounts = [ordered]@{ ready = 1; 'cancelled-budget' = 1 }
+                })
+            $red.updateInCourse | Should -BeTrue
+            $red.verdict | Should -Be 'CONTENTION-RED'
+            $red.cancelledBudget | Should -Be 1
+            $red.reasons | Should -Contain 'holds-not-ready:1'
+            $red.reasons | Should -Contain 'ready-p95-over-budget:9500'
+
+            # A still-running update (no completion line) counts as in course, and
+            # an all-ready batch inside the budget passes.
+            $openRun = @("$start [INFO] [Update.Runtime.psm1] [PID:1] === Starting openpath update ===")
+            $diagReady = @(
+                ('2026-10-08 10:00:03 [INFO] [OpenPath-NativeHost] stage=extension-diagnostic {"kind":"hold","dependencyHost":"i.redd.it","ts":' + $firstRetention + '}'),
+                ('2026-10-08 10:00:06 [INFO] [OpenPath-NativeHost] stage=extension-diagnostic {"kind":"hold-outcome","dependencyHost":"i.redd.it","outcome":"ready","ms":2500,"ts":' + ($firstRetention + 2500) + '}')
+            )
+            $green = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $openRun -DiagnosticLines $diagReady -CanaryMetrics ([pscustomobject]@{
+                    holds = 1; readyCount = 1; readyP95Ms = 2500; readyMaxMs = 2500
+                    outcomeCounts = [ordered]@{ ready = 1 }
+                })
+            $green.updateInCourse | Should -BeTrue
+            $green.verdict | Should -Be 'CONTENTION-PASS'
+            $green.cancelledBudget | Should -Be 0
+
+            # No overlap: the update ended before the first retention.
+            $late = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $openpath -DiagnosticLines @(
+                ('2026-10-08 10:05:00 [INFO] [OpenPath-NativeHost] stage=extension-diagnostic {"kind":"hold","dependencyHost":"i.redd.it","ts":' + ($runStartMs + 300000) + '}')
+            ) -CanaryMetrics ([pscustomobject]@{ holds = 1; readyCount = 1; readyP95Ms = 500; readyMaxMs = 500; outcomeCounts = [ordered]@{ ready = 1 } })
+            $late.updateInCourse | Should -BeFalse
+            $late.verdict | Should -Be 'CONTENTION-RED'
+            $late.reasons | Should -Contain 'update-not-in-course-at-first-retention'
+        }
+
+        It 'Classifies VM stalls, guest saturation and worker-only gaps' {
+            $workerGaps = @(Get-OpenPathFirstVisitWorkerGaps -OpenPathLines @(
+                    '2026-10-08 10:00:00 [INFO] [RuntimeDependency.Worker.ps1] [PID:2] Runtime dependency worker detected 5 queue file(s) queueFileAgeMs=5',
+                    '2026-10-08 10:00:10 [INFO] [RuntimeDependency.Worker.ps1] [PID:2] Runtime dependency worker applied queue batch: cycles=13 ms=10036 exitCode=0'
+                ))
+            $workerGaps.Count | Should -Be 1
+            $workerGaps[0].gapMs | Should -Be 10000
+            $gapStart = [long]$workerGaps[0].startMs
+
+            # A sampler gap covering the worker gap is a whole-VM stall.
+            $samplerGaps = @(Get-OpenPathFirstVisitSamplerGaps -Samples @(
+                    [pscustomobject]@{ t = $gapStart - 500 },
+                    [pscustomobject]@{ t = $gapStart + 5000 }
+                ))
+            $samplerGaps.Count | Should -Be 1
+            $samplerGaps[0].gapMs | Should -Be 5500
+            $vmStall = Get-OpenPathFirstVisitStallClassification -LogGaps $workerGaps -SamplerGaps $samplerGaps -SaturationWindows @() -HostPressure @()
+            $vmStall.gaps[0].classification | Should -Be 'vm-stall'
+            $vmStall.vmStall | Should -BeTrue
+
+            # CPU pinned through the worker gap is guest saturation with culprits.
+            $saturation = @(Get-OpenPathFirstVisitCpuSaturation -Samples @(
+                    [pscustomobject]@{ t = $gapStart - 500 },
+                    [pscustomobject]@{ t = $gapStart + 1000; systemCpu = 99; processes = [pscustomobject]@{ firefox = 80 } },
+                    [pscustomobject]@{ t = $gapStart + 4000; systemCpu = 97; processes = [pscustomobject]@{ firefox = 75 } }
+                ))
+            $saturation.Count | Should -Be 1
+            $saturation[0].processes | Should -Contain 'firefox'
+            $saturated = Get-OpenPathFirstVisitStallClassification -LogGaps $workerGaps -SamplerGaps @() -SaturationWindows $saturation -HostPressure @()
+            $saturated.gaps[0].classification | Should -Be 'guest-saturated'
+            $saturated.gaps[0].culprits | Should -Contain 'firefox'
+
+            # Sampler alive, CPU normal: only the worker paused.
+            $onlyWorker = Get-OpenPathFirstVisitStallClassification -LogGaps $workerGaps -SamplerGaps @() -SaturationWindows @() -HostPressure @([pscustomobject]@{ t = $gapStart + 2000; cpuSome = 1.2; ioSome = 0.3; qemuCpu = 350 })
+            $onlyWorker.gaps[0].classification | Should -Be 'worker-only'
+            $onlyWorker.classification | Should -Be 'worker-only'
+            $onlyWorker.gaps[0].hostPressure | Should -Match 'host cpu=1.2'
+
+            # A tick written right after the CPU census marks sampler self-busy,
+            # not a VM pause.
+            @(Get-OpenPathFirstVisitSamplerGaps -Samples @([pscustomobject]@{ t = 1000 }, [pscustomobject]@{ t = 5000; cpuSample = $true })).Count | Should -Be 0
+        }
+
+        It 'Normalizes the persisted scene start back to invariant ISO (Phase 7 L3)' {
+            (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value ([datetime]::new(2026, 10, 7, 13, 14, 47, [DateTimeKind]::Utc))) | Should -Be '2026-10-07T13:14:47.0000000Z'
+            (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value '2026-10-07T13:14:47.1234567Z') | Should -Be '2026-10-07T13:14:47.1234567Z'
+            (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value $null) | Should -Be ''
+        }
+
+        It 'Reports the canary reasons instead of no-verdict in the metrics (Phase 7 L3)' {
+            $plan = [pscustomobject]@{
+                anchors             = [pscustomobject]@{ a1 = [pscustomobject]@{ host = 'anchor1-x.192.168.1.150.sslip.io' } }
+                controlDependencies = @()
+                neverLearnable      = 'blocked9-x.192.168.1.150.sslip.io'
+            }
+            $canary = [pscustomobject]@{ status = 'CANARY-RED'; reasons = @('holds-not-ready:2') }
+            $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario 'first-visit-site' -Report $null -DiagnosticLines @() -StartupProfiles @() -FixtureState $null -Verdict $null -Canary $canary
+            $metrics.verdict | Should -Be 'CANARY-RED'
+            $metrics.reasons | Should -Contain 'holds-not-ready:2'
+        }
+
+        It 'Accepts update-contention and on-before-install dispatch inputs' {            $config = [pscustomobject]@{ hostAddress = '192.168.1.150' }
+            function New-Phase7FirstVisitPayload {
+                param([hashtable]$FirstVisit)
+                return [pscustomobject]@{ firstVisit = [pscustomobject]$FirstVisit }
+            }
+            $contention = Get-OpenPathFirstVisitSettings -Payload (New-Phase7FirstVisitPayload @{ scenario = 'first-visit-update-contention' }) -Config $config
+            $contention.UpdateContention | Should -BeTrue
+            $contention.SiteMode | Should -BeFalse
+            $before = Get-OpenPathFirstVisitSettings -Payload (New-Phase7FirstVisitPayload @{ scenario = 'first-visit-class-boot'; smartAppControl = 'on-before-install' }) -Config $config
+            $before.SmartAppControl | Should -Be 'on-before-install'
+            { Get-OpenPathFirstVisitSettings -Payload (New-Phase7FirstVisitPayload @{ scenario = 'first-visit-settled'; smartAppControl = 'on-before-install' }) -Config $config } | Should -Throw '*requires-class-boot*'
+            { Get-OpenPathFirstVisitSettings -Payload (New-Phase7FirstVisitPayload @{ scenario = 'first-visit-class-boot'; smartAppControl = 'maybe' }) -Config $config } | Should -Throw '*smart-app-control-invalid*'
+        }
+
+        It 'Schedules update-contention in the auto-run and the nightly' {
+            $planRun = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_run'
+            $planRun.scenarios | Should -Match 'update-contention'
+            $planNight = Get-OpenPathFirstVisitScenarioPlan -EventName 'schedule'
+            $planNight.scenarios | Should -Match 'update-contention'
+            $planDispatch = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_dispatch' -RequestedScenarios 'update-contention' -RequestedRepetitions '2'
+            $planDispatch.scenarios | Should -Be 'update-contention'
+            $planDispatch.repetitions | Should -Be 2
+        }
+
+        It 'Marks a failed retention as INFRA vm-stall when a whole-VM stall covers it' {
+            $canary = [pscustomobject]@{
+                scenario = 'first-visit-site'; source = 'canary'; canary = $true
+                canaryStatus = 'CANARY-RED'; canaryReasons = @('holds-not-ready:2')
+                siteNavigated = $true; infraVmStall = $true; reportPresent = $false
+                productReasons = @(); evidenceIncomplete = $false
+                verdict = [pscustomobject]@{ status = 'canary-red'; reasons = @('holds-not-ready:2') }
+            }
+            $outcome = Get-OpenPathFirstVisitSceneOutcome -VerdictFile $canary -Metrics $null -Scenario 'first-visit-site'
+            $outcome.category | Should -Be 'INFRA'
+            $outcome.error | Should -Be 'vm-stall'
+
+            # A canary failure without the stall flag stays CANARY-RED.
+            $canary.infraVmStall = $false
+            (Get-OpenPathFirstVisitSceneOutcome -VerdictFile $canary -Metrics $null -Scenario 'first-visit-site').category | Should -Be 'CANARY-RED'
+
+            # A settled/contention product failure with the same flag is INFRA too.
+            $settled = [pscustomobject]@{
+                scenario = 'first-visit-update-contention'; reportPresent = $true; productReasons = @('wave-missing')
+                evidenceIncomplete = $false; infraVmStall = $true
+                verdict = [pscustomobject]@{ status = 'failed'; reasons = @('wave1-missing') }
+            }
+            $settledOutcome = Get-OpenPathFirstVisitSceneOutcome -VerdictFile $settled -Metrics ([pscustomobject]@{ verdict = 'failed'; reasons = @('wave1-missing'); warmup = [pscustomobject]@{ productReasons = @() } }) -Scenario 'first-visit-update-contention'
+            $settledOutcome.category | Should -Be 'INFRA'
+            $settledOutcome.error | Should -Match '^vm-stall'
+        }
+
+        It 'Wires the Phase 7 scenario, samplers and SAC-before-install into the lane sources' {
+            $controllerPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\controllers\ProxmoxFirstVisit.ps1'
+            $controller = Get-Content -LiteralPath $controllerPath -Raw
+            $controller | Should -Match 'first-visit-update-contention'
+            $controller | Should -Match "-Step 'update-trigger'"
+            $controller | Should -Match '-Step ''stall-sampler-start'''
+            $controller | Should -Match '-Step ''stall-sampler-stop'''
+            $controller | Should -Match '-Step ''host-compile-state'''
+            $controller | Should -Match '-Step ''host-recompile'''
+            $controller | Should -Match 'on-before-install'
+            $controller | Should -Match 'Get-OpenPathFirstVisitUpdateContention'
+            $controller | Should -Match 'Get-OpenPathFirstVisitStallClassification'
+            $controller | Should -Match 'infraVmStall'
+
+            $guestPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\Invoke-OpenPathFirstVisitGuest.ps1'
+            $guest = Get-Content -LiteralPath $guestPath -Raw
+            $guest | Should -Match "'update-trigger' \{"
+            $guest | Should -Match "'stall-sampler-start' \{"
+            $guest | Should -Match "'stall-sampler-stop' \{"
+            $guest | Should -Match "'host-compile-state' \{"
+            $guest | Should -Match "'host-recompile' \{"
+            $guest | Should -Match 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure'
+            $guest | Should -Match 'schtasks\.exe'
+            $guest | Should -Match 'pressure'
+
+            $workflow = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\.github\workflows\windows-first-visit-lab.yml') -Raw
+            $workflow | Should -Match 'update-contention'
+            $workflow | Should -Match 'on-before-install'
+
+            Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\pressure-sampler.sh') | Should -BeTrue
         }
     }
 

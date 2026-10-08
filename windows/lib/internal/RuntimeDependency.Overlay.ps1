@@ -231,10 +231,43 @@ function Write-OpenPathRuntimeDependencyOverlay {
     }
 }
 
-function Set-OpenPathRuntimeDependencyOverlayApplied {
-    # marks the overlay's current content generation as reloaded into the local DNS service; called only after a successful Acrylic reload
+function Get-OpenPathRuntimeDependencyOverlayState {
+    # reads the overlay document generation and applied generation from disk; returns zeros when the file is absent or unreadable.
     [CmdletBinding()]
     param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
+
+    $state = [PSCustomObject]@{
+        Exists            = $false
+        Generation        = 0
+        AppliedGeneration = 0
+    }
+
+    if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) { return $state }
+
+    try {
+        $raw = Get-Content $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $state }
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        $state.Exists = $true
+        if ($parsed.PSObject.Properties['generation']) { $state.Generation = [int]$parsed.generation }
+        if ($parsed.PSObject.Properties['appliedGeneration']) { $state.AppliedGeneration = [int]$parsed.appliedGeneration }
+    }
+    catch {
+        return $state
+    }
+
+    return $state
+}
+
+function Set-OpenPathRuntimeDependencyOverlayApplied {
+    # marks an overlay content generation as reloaded into the local DNS service; called only after a successful Acrylic reload.
+    # -Generation stamps that exact generation (monotonic, never lowers an existing stamp); without it the current document generation is stamped.
+    [CmdletBinding()]
+    param(
+        [string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath),
+
+        [int]$Generation = -1
+    )
 
     if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) { return $false }
 
@@ -242,11 +275,12 @@ function Set-OpenPathRuntimeDependencyOverlayApplied {
         $raw = Get-Content $Path -Raw -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
         $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
-        $generation = if ($parsed.PSObject.Properties['generation']) { [int]$parsed.generation } else { 0 }
+        $documentGeneration = if ($parsed.PSObject.Properties['generation']) { [int]$parsed.generation } else { 0 }
+        $targetGeneration = if ($Generation -ge 0) { [Math]::Min([int]$Generation, $documentGeneration) } else { $documentGeneration }
         $appliedGeneration = if ($parsed.PSObject.Properties['appliedGeneration']) { [int]$parsed.appliedGeneration } else { 0 }
-        if ($appliedGeneration -ge $generation) { return $true }
+        if ($appliedGeneration -ge $targetGeneration) { return $true }
 
-        $parsed | Add-Member -MemberType NoteProperty -Name 'appliedGeneration' -Value $generation -Force
+        $parsed | Add-Member -MemberType NoteProperty -Name 'appliedGeneration' -Value $targetGeneration -Force
         $parsed | Add-Member -MemberType NoteProperty -Name 'appliedAt' -Value ((Get-Date).ToUniversalTime().ToString('o')) -Force
         $parsed | ConvertTo-Json -Depth 8 | Set-Content $Path -Encoding UTF8 -Force
 

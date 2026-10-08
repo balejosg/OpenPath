@@ -47,7 +47,12 @@ function Get-OpenPathFirstVisitScenarioPlan {
     )
     switch ($EventName) {
         'schedule' {
-            return [pscustomobject]@{ scenarios = 'settled,hot,class-boot,floor'; repetitions = 2; source = 'schedule' }
+            # Phase 7 L1: update-contention runs once in the nightly. The
+            # worst-case scene budget (30 min) caps the plan at 9 scenes
+            # (9 x 30 + 15 = 285 min <= 288 min = 80% of the 360-min workflow
+            # timeout), so the new scenario takes a single repetition while the
+            # historical four keep two.
+            return [pscustomobject]@{ scenarios = 'settled,hot,class-boot,floor,update-contention:1'; repetitions = 2; source = 'schedule' }
         }
         'workflow_dispatch' {
             $scenarios = if ([string]::IsNullOrWhiteSpace($RequestedScenarios)) { 'settled,class-boot' } else { $RequestedScenarios.Trim() }
@@ -59,7 +64,7 @@ function Get-OpenPathFirstVisitScenarioPlan {
             return [pscustomobject]@{ scenarios = $scenarios; repetitions = $repetitions; source = 'dispatch' }
         }
         default {
-            return [pscustomobject]@{ scenarios = 'settled,class-boot'; repetitions = 1; source = 'workflow_run' }
+            return [pscustomobject]@{ scenarios = 'settled,class-boot,update-contention'; repetitions = 1; source = 'workflow_run' }
         }
     }
 }

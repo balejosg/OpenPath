@@ -230,24 +230,43 @@ function Restore-OpenPathProtectedMode {
     <#
     .SYNOPSIS
         Restores protected DNS enforcement using the currently loaded OpenPath modules.
+    .PARAMETER PassThru
+        Returns the per-step evidence (restart, DNS flush, firewall) as an object
+        instead of the historical boolean result. Callers that stamp the runtime
+        dependency generation rely on it: the stamp is only valid after a
+        successful Acrylic restart and a DNS client flush.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [PSCustomObject]$Config = $null,
 
-        [switch]$SkipAcrylicRestart
+        [switch]$SkipAcrylicRestart,
+
+        [switch]$PassThru
     )
 
-    if (-not $PSCmdlet.ShouldProcess('OpenPath', 'Restore protected DNS enforcement')) {
-        return $false
+    $result = [ordered]@{
+        Executed           = $false
+        Restarted          = $null
+        Flushed            = $null
+        FirewallConfigured = $null
     }
 
+    if (-not $PSCmdlet.ShouldProcess('OpenPath', 'Restore protected DNS enforcement')) {
+        if ($PassThru) { return [PSCustomObject]$result }
+        return $false
+    }
+    $result.Executed = $true
+
     if (-not $SkipAcrylicRestart -and (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue)) {
-        Restart-AcrylicService | Out-Null
+        $result.Restarted = [bool](Restart-AcrylicService)
     }
 
     if (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue) {
-        Set-LocalDNS
+        # Set-LocalDNS throws when it cannot point the adapters or flush the
+        # client cache; reaching the next line is the flush evidence.
+        $null = Set-LocalDNS
+        $result.Flushed = $true
     }
 
     $enableFirewall = $true
@@ -256,12 +275,16 @@ function Restore-OpenPathProtectedMode {
     }
 
     if (-not $enableFirewall) {
+        $result.FirewallConfigured = $true
+        if ($PassThru) { return [PSCustomObject]$result }
         return $true
     }
 
     if (Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) {
         try {
             if (Test-FirewallActive) {
+                $result.FirewallConfigured = $true
+                if ($PassThru) { return [PSCustomObject]$result }
                 return $true
             }
         }
@@ -288,6 +311,8 @@ function Restore-OpenPathProtectedMode {
             if (-not $firewallConfigured) {
                 Write-OpenPathLog 'Restore-OpenPathProtectedMode: firewall configuration reported failure; rules may be partially applied' -Level WARN
             }
+            $result.FirewallConfigured = $firewallConfigured
+            if ($PassThru) { return [PSCustomObject]$result }
             return $firewallConfigured
         }
     }
@@ -296,6 +321,8 @@ function Restore-OpenPathProtectedMode {
         Enable-OpenPathFirewall | Out-Null
     }
 
+    $result.FirewallConfigured = $true
+    if ($PassThru) { return [PSCustomObject]$result }
     return $true
 }
 

@@ -230,10 +230,14 @@ function Invoke-OpenPathRuntimeDependencyWorkerApply {
         }
 
         $retries += 1
+        # Phase 7 P2: the dependency fast apply now contends with the Acrylic
+        # writers lock (short update scopes), not with the whole update cycle.
+        # Stay quiet for the first 30 seconds of continuous contention; a
+        # short-lived writer scope releasing is the expected case.
         if (($stopwatch.Elapsed.TotalSeconds - $lastLogMs) -ge $LogIntervalSeconds) {
             $lastLogMs = [int]$stopwatch.Elapsed.TotalSeconds
             if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
-                Write-OpenPathLog "Runtime dependency worker waiting for the update lock (retries=$retries pending=$pending)"
+                Write-OpenPathLog "Runtime dependency worker waiting $([int]$stopwatch.Elapsed.TotalSeconds) s for the Acrylic writers lock (retries=$retries pending=$pending)"
             }
         }
         if ($OnWait) { & $OnWait }

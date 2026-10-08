@@ -10,6 +10,10 @@ Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitResult.psm1') -
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitWarmup.psm1') -Force
 # Phase 6 C: real-site canary metrics/verdict (pure, tested).
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitSiteCanary.psm1') -Force
+# Phase 7 L1: update-contention analysis (pure, tested).
+Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitUpdateContention.psm1') -Force
+# Phase 7 P1: stall-gap classification (pure, tested).
+Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitStall.psm1') -Force
 
 $script:OpenPathFirstVisitCaptureOffsets = @(5, 10, 15, 20, 30, 60)
 $script:OpenPathFirstVisitRefreshSettleSeconds = 30
@@ -28,8 +32,29 @@ $script:OpenPathFirstVisitReportWaitSeconds = 120
 # and persisted after every step so a killed controller can still be measured.
 $script:OpenPathFirstVisitStepTrace = $null
 
-function Get-OpenPathFirstVisitHarnessSourcePath {
-    return (Join-Path (Split-Path -Parent $PSScriptRoot) 'first-visit\Invoke-OpenPathFirstVisitGuest.ps1')
+function ConvertTo-OpenPathFirstVisitSceneStartedIso {
+    <#
+    .SYNOPSIS
+    Normalizes the persisted scene start into invariant ISO-8601 UTC.
+    .DESCRIPTION
+    Phase 7 L3: ConvertFrom-Json turns the ISO string back into a [datetime];
+    formatting that with [string] uses the host locale (10/07/2026 13:14:47)
+    and no XPath SystemTime comparison can match it. This helper keeps the
+    value invariant whatever shape it arrives in.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Value = $null)
+
+    if ($Value -is [datetime]) {
+        return ([datetime]$Value).ToUniversalTime().ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($Value -is [DateTimeOffset]) {
+        return ([DateTimeOffset]$Value).ToUniversalTime().ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    return [string]$Value
+}
+
+function Get-OpenPathFirstVisitHarnessSourcePath {    return (Join-Path (Split-Path -Parent $PSScriptRoot) 'first-visit\Invoke-OpenPathFirstVisitGuest.ps1')
 }
 
 function Get-OpenPathFirstVisitLauncherSourcePath {
@@ -52,11 +77,12 @@ function Get-OpenPathFirstVisitSettings {
     if ([string]::IsNullOrWhiteSpace($hostAddress)) { throw 'first-visit-host-address-missing' }
     $upstream = if ($env:OPENPATH_FIRST_VISIT_DNS_UPSTREAM) { [string]$env:OPENPATH_FIRST_VISIT_DNS_UPSTREAM } else { '192.168.1.133' }
     # Phase 6 B: smart_app_control = unchanged (default) | on.
+    # Phase 7 L2: on-before-install applies SAC before the product install.
     $smartAppControl = if ($firstVisit) { [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'smartAppControl') } else { '' }
     if ([string]::IsNullOrWhiteSpace($smartAppControl)) { $smartAppControl = 'unchanged' }
     $smartAppControl = $smartAppControl.Trim().ToLowerInvariant()
-    if ($smartAppControl -notin @('unchanged', 'on')) { throw "first-visit-smart-app-control-invalid:$smartAppControl" }
-    if ($smartAppControl -eq 'on' -and $scenario -notlike '*class-boot*') {
+    if ($smartAppControl -notin @('unchanged', 'on', 'on-before-install')) { throw "first-visit-smart-app-control-invalid:$smartAppControl" }
+    if ($smartAppControl -in @('on', 'on-before-install') -and $scenario -notlike '*class-boot*') {
         throw 'first-visit-smart-app-control-requires-class-boot'
     }
     # Phase 6 C: real-site canary inputs (only the site scenario uses them).
@@ -66,6 +92,9 @@ function Get-OpenPathFirstVisitSettings {
     # Phase 6 C: `site` is the settled-like canary; `site-class-boot` runs the
     # same real-site plan through the class-boot refresh (reboot + logon).
     $siteMode = ($scenario -in @('first-visit-site', 'first-visit-site-class-boot'))
+    # Phase 7 L1: `update-contention` runs the settled-like visit with the
+    # product update started right before the browser launch.
+    $updateContention = ($scenario -eq 'first-visit-update-contention')
     if ($siteMode -and [string]::IsNullOrWhiteSpace($siteUrl)) { throw 'first-visit-site-url-required' }
     if ($siteMode) {
         # The URL and the domains travel through a bash command on the Proxmox
@@ -88,6 +117,7 @@ function Get-OpenPathFirstVisitSettings {
         SiteMode        = $siteMode
         SiteUrl         = $siteUrl.Trim()
         SiteDomains     = $siteDomains
+        UpdateContention = $updateContention
     }
 }
 
@@ -808,7 +838,11 @@ function Get-OpenPathFirstVisitMetrics {
         [AllowNull()][object]$SacControl = $null,
         [AllowNull()][object]$PostHostEvents = $null,
         [AllowNull()][object]$PostHostVerdict = $null,
-        [AllowNull()][object]$VisitDiagnostics = $null
+        [AllowNull()][object]$VisitDiagnostics = $null,
+        # Phase 7 P1: stall classification (sampler + host pressure + log gaps).
+        [AllowNull()][object]$Stall = $null,
+        # Phase 7 L2: smart_app_control=on-before-install evidence.
+        [AllowNull()][object]$OnBeforeInstall = $null
     )
     $hostProfile = @()
     foreach ($line in $StartupProfiles) {
@@ -893,8 +927,10 @@ function Get-OpenPathFirstVisitMetrics {
             controlDeps      = @($Plan.controlDependencies)
             neverLearnable   = [string]$Plan.neverLearnable
         }
-        verdict        = if ($Verdict) { [string]$Verdict.status } else { 'failed' }
-        reasons        = if ($Verdict) { @($Verdict.reasons) } else { @('no-verdict') }
+        verdict        = if ($Verdict) { [string]$Verdict.status } elseif ($Canary) { [string](Get-OpenPathLabField -InputObject $Canary -Name 'status') } else { 'failed' }
+        # Phase 7 L3: canary scenes have no page self-report; their reasons are
+        # the canary verdict reasons instead of the legacy `no-verdict` marker.
+        reasons        = if ($Verdict) { @($Verdict.reasons) } elseif ($Canary) { @(Get-OpenPathLabField -InputObject $Canary -Name 'reasons') } else { @('no-verdict') }
         waves          = if ($Verdict) { $Verdict.waves } else { $null }
         waveTimesMs    = if ($Verdict) { $Verdict.timesMs } else { $null }
         reloads        = if ($Verdict) { $Verdict.reloads } else { -1 }
@@ -933,6 +969,10 @@ function Get-OpenPathFirstVisitMetrics {
         sacControl     = $SacControl
         postHostEvents = $PostHostEvents
         visitDiagnostics = $VisitDiagnostics
+        # Phase 7 P1: every >2 s gap, classified with the sampler and host data.
+        stall          = $Stall
+        # Phase 7 L2: policy applied before install + compile/recompile evidence.
+        sacOnBeforeInstall = $OnBeforeInstall
     }
 }
 
@@ -988,7 +1028,7 @@ function Invoke-OpenPathFirstVisitPrepare {
     $firstVisit = Get-OpenPathFirstVisitSettings -Payload $Payload -Config $Config
     # Phase 6.1 C: the scene starts when prepare begins; every step carries the
     # mark so the CodeIntegrity XML queries share one window.
-    $sceneStartedAt = [DateTime]::UtcNow.ToString('o')
+    $sceneStartedAt = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
     $settings | Add-Member -NotePropertyName 'SceneStartedAt' -NotePropertyValue $sceneStartedAt -Force
     # Phase 5.3 B4: `control` is the historical alias of the floor scenario.
     $scenarioNormalized = if ($firstVisit.Scenario -eq 'first-visit-control') { 'first-visit-floor' } else { $firstVisit.Scenario }
@@ -1015,7 +1055,7 @@ New-Item -ItemType Directory -Path 'C:\OpenPathLab\first-visit' -Force | Out-Nul
 [IO.File]::WriteAllText('C:\OpenPathLab\first-visit\student-session-launch.ps1', $launcherLiteral, [Text.UTF8Encoding]::new(`$false))
 Write-Output 'launcher-staged'
 "@ 120 | Out-Null
-    foreach ($moduleName in @('FirstVisitWarmup.psm1', 'FirstVisitResult.psm1', 'FirstVisitDnsTopology.psm1', 'FirstVisitSiteCanary.psm1', 'FirstVisitLaunch.psm1', 'Test-OpenPathNativeHostAsStudent.ps1')) {
+    foreach ($moduleName in @('FirstVisitWarmup.psm1', 'FirstVisitResult.psm1', 'FirstVisitDnsTopology.psm1', 'FirstVisitSiteCanary.psm1', 'FirstVisitLaunch.psm1', 'FirstVisitStall.psm1', 'Test-OpenPathNativeHostAsStudent.ps1')) {
         $localModule = Join-Path (Get-OpenPathFirstVisitFixturesRoot) $moduleName
         if (-not (Test-Path -LiteralPath $localModule -PathType Leaf)) { throw "first-visit-helper-missing-$moduleName" }
         $published = & $Transport.PublishArtifact $Paths.StagingDir $localModule
@@ -1030,8 +1070,35 @@ Write-Output 'launcher-staged'
     try { & $Transport.RemoveHostStaging $Paths.StagingDir | Out-Null } catch { }
     $fixture = Start-OpenPathFirstVisitFixture -Config $Config -Transport $Transport -RunId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId')) -ArtifactsRoot ([string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')) -Scenario $scenarioNormalized -SiteUrl $firstVisit.SiteUrl -SiteDomains $firstVisit.SiteDomains
     Write-OpenPathFirstVisitGuestFixtureInfo -Transport $Transport -Vmid $Vmid -Settings $fixture.Settings -Plan $fixture.Plan
+    # Phase 7 L2: smart_app_control=on-before-install applies and enforces SAC
+    # BEFORE the product install, proven with the positive control. Everything
+    # after this point (install, compile, visit, recompile) runs with SAC
+    # already active from the start.
+    $sacPreInstall = $null
+    $sacPreInstallDecision = $null
+    $sacPreInstallApply = $null
+    if ($firstVisit.SmartAppControl -eq 'on-before-install') {
+        $sacApplyStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare-sac' -Step 'sac-apply' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
+        $sacPreInstallApply = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacApplyStep -Name 'body') -Name 'state') -Name 'sacApply'
+        & $Transport.RequestGuestReboot $Vmid | Out-Null
+        $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootId $TimeoutSeconds)
+        if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-sac-reboot-timeout' }
+        $sacPreInstall = Invoke-OpenPathFirstVisitSacAssessment -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -CycleLabel 'preinstall' -Phase 'prepare-sac'
+        $sacPreInstallDecision = Get-OpenPathFirstVisitSacDecision -SacState $sacPreInstall.state -SacControl $sacPreInstall.control
+        if (-not $sacPreInstallDecision.applied) {
+            throw "sac-not-enforced-before-install: umci=$($sacPreInstallDecision.umciEnforcementStatus) motwBlocked=$($sacPreInstallDecision.motwBlocked) plainRan=$($sacPreInstallDecision.plainRan)"
+        }
+        Write-Host ("first-visit SAC pre-install applied: umci=$($sacPreInstallDecision.umciEnforcementStatus) motwBlocked=$($sacPreInstallDecision.motwBlocked) plainRan=$($sacPreInstallDecision.plainRan)")
+    }
     $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
     $configure = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'configure' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
+    # Phase 7 L2: with SAC already enforced, capture the compiled native host
+    # state and run the product's own compile/ensure entrypoint.
+    $hostCompile = $null
+    if ($firstVisit.SmartAppControl -eq 'on-before-install') {
+        $hostCompileStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'host-compile-state' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 600 -AllowFailed
+        $hostCompile = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostCompileStep -Name 'body') -Name 'state') -Name 'hostCompile'
+    }
     # Production-like requirement: the student is logged in interactively before
     # any browser runs (the session launcher needs an active console session, and
     # W/W2/B all assume a real student desktop). The guest secret must match the
@@ -1150,12 +1217,13 @@ Write-Output 'autologon-on'
     # only counts as applied with the positive control (UMCI enforced AND the
     # MOTW copy blocked). One extra attempt re-enables Defender when the image
     # disables it by policy; after that the scene is INFRA sac-not-enforced.
-    $sacApply = $null
+    $sacApply = $sacPreInstallApply
     $sacApplySecond = $null
-    $sacState = $null
-    $sacControlPost = $null
-    $sacDecision = $null
+    $sacState = if ($sacPreInstall) { $sacPreInstall.state } else { $null }
+    $sacControlPost = if ($sacPreInstall) { $sacPreInstall.control } else { $null }
+    $sacDecision = $sacPreInstallDecision
     $sacCycles = @()
+    if ($sacPreInstall) { $sacCycles = @($sacPreInstall) }
     if ($firstVisit.SmartAppControl -eq 'on') {
         $sacApplyStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'sac-apply' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
         $sacApply = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacApplyStep -Name 'body') -Name 'state') -Name 'sacApply'
@@ -1259,6 +1327,11 @@ Write-Output 'autologon-on'
         sacControlPost      = $sacControlPost
         sacDecision         = $sacDecision
         sacCycles           = @($sacCycles)
+        # Phase 7 L2: on-before-install evidence (policy applied before the
+        # install, the compiled host with SAC active and its build/ensure log).
+        sacPreInstall       = $sacPreInstall
+        sacPreInstallDecision = $sacPreInstallDecision
+        hostCompile         = $hostCompile
         siteMode            = [bool]$firstVisit.SiteMode
         siteUrl             = [string]$firstVisit.SiteUrl
         siteDomains         = @($firstVisit.SiteDomains)
@@ -1318,6 +1391,91 @@ function Invoke-OpenPathFirstVisitVisit {
     return $visit
 }
 
+function Start-OpenPathFirstVisitSamplers {
+    <#
+    .SYNOPSIS
+    Starts the guest stall sampler and the Proxmox host pressure sampler.
+    .DESCRIPTION
+    Phase 7 P1: both run from just before the visit until after the collect so
+    every >2 s worker/native gap can be classified with data.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][object]$Settings,
+        [Parameter(Mandatory = $true)][string]$HarnessGuestPath,
+        [Parameter(Mandatory = $true)][string]$Staging
+    )
+    $result = [ordered]@{ guestSampler = $null; pressureStarted = $false; pressureOut = ''; error = '' }
+    try {
+        $step = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $Settings -Phase 'observe' -Step 'stall-sampler-start' -HarnessGuestPath $HarnessGuestPath -TimeoutSeconds 240
+        $result.guestSampler = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $step -Name 'body') -Name 'state') -Name 'stallSamplerStart'
+    }
+    catch {
+        $result.error = (($result.error + " guest-sampler: $([string]$_.Exception.Message)").Trim())
+    }
+    try {
+        $localScript = Join-Path (Get-OpenPathFirstVisitFixturesRoot) 'pressure-sampler.sh'
+        if (Test-Path -LiteralPath $localScript) {
+            & $Transport.CopyFileToHost $localScript "$Staging/pressure-sampler.sh" | Out-Null
+            $pressureOut = "$Staging/state/pressure-scene.jsonl"
+            # 2400 s is the upper bound of a scene; the stop still ends it early.
+            $startCommand = "setsid nohup bash $Staging/pressure-sampler.sh '$pressureOut' $Vmid 2400 > /dev/null 2>&1 < /dev/null & sleep 1; echo pressure-started"
+            $out = ([string](& $Transport.InvokeHostCommand @('bash', '-lc', $startCommand) '')).Trim()
+            $result.pressureStarted = ($out -match 'pressure-started')
+            $result.pressureOut = $pressureOut
+        }
+        else {
+            $result.error = (($result.error + ' pressure-sampler-missing').Trim())
+        }
+    }
+    catch {
+        $result.error = (($result.error + " pressure: $([string]$_.Exception.Message)").Trim())
+    }
+    return [PSCustomObject]$result
+}
+
+function Stop-OpenPathFirstVisitSamplers {
+    <#
+    .SYNOPSIS
+    Stops both samplers and returns the guest classification plus host pressure.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][object]$Settings,
+        [Parameter(Mandatory = $true)][string]$HarnessGuestPath,
+        [Parameter(Mandatory = $true)][string]$Staging
+    )
+    $result = [ordered]@{ guestSampler = $null; pressure = @(); pressureError = ''; error = '' }
+    try {
+        $step = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $Settings -Phase 'observe' -Step 'stall-sampler-stop' -HarnessGuestPath $HarnessGuestPath -TimeoutSeconds 300 -AllowFailed
+        $result.guestSampler = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $step -Name 'body') -Name 'state') -Name 'stallSampler'
+    }
+    catch {
+        $result.error = (($result.error + " guest-sampler-stop: $([string]$_.Exception.Message)").Trim())
+    }
+    try {
+        $fetchCommand = "pkill -f 'pressure-sampler[.]sh' > /dev/null 2>&1 || true; sleep 1; tail -n 2400 '$Staging/state/pressure-scene.jsonl' 2>/dev/null || true"
+        $pressureText = ([string](& $Transport.InvokeHostCommand @('bash', '-lc', $fetchCommand) '')).Trim()
+        $samples = New-Object System.Collections.Generic.List[object]
+        foreach ($line in @($pressureText -split "`n")) {
+            if (-not $line.Trim().StartsWith('{')) { continue }
+            try { $samples.Add(($line | ConvertFrom-Json)) | Out-Null } catch { }
+        }
+        $result.pressure = @($samples.ToArray())
+    }
+    catch {
+        $result.pressureError = [string]$_.Exception.Message
+    }
+    return [PSCustomObject]$result
+}
+
 function Invoke-OpenPathFirstVisitObserve {
     param(
         [Parameter(Mandatory = $true)][object]$Payload,
@@ -1331,8 +1489,14 @@ function Invoke-OpenPathFirstVisitObserve {
     $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
     $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
     # Phase 6.1 C: continue the scene clock started in prepare.
-    $sceneStartedAt = [string](Get-OpenPathLabField -InputObject $state -Name 'sceneStartedAt')
-    if (-not $sceneStartedAt) { $sceneStartedAt = [DateTime]::UtcNow.ToString('o') }
+    # Phase 7 L3: ConvertFrom-Json turns the ISO string into a [datetime], and
+    # [string] would then format it with the host locale (10/07/2026 13:14:47),
+    # which no XPath SystemTime comparison can match. Normalize back to
+    # invariant ISO-8601 UTC before it reaches the guest.
+    $sceneStartedAt = ConvertTo-OpenPathFirstVisitSceneStartedIso -Value (Get-OpenPathLabField -InputObject $state -Name 'sceneStartedAt')
+    if (-not $sceneStartedAt) {
+        $sceneStartedAt = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+    }
     $settings | Add-Member -NotePropertyName 'SceneStartedAt' -NotePropertyValue $sceneStartedAt -Force
     $firstVisit = Get-OpenPathLabField -InputObject $Payload -Name 'firstVisit'
     # Phase 5.2 C3: each phase owns its step trace.
@@ -1359,6 +1523,22 @@ function Invoke-OpenPathFirstVisitObserve {
     $evidenceDir = Join-Path $artifactsRoot 'guest-logs'
     New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
 
+    # Phase 7 P1: the sampler window covers the visit and the dependency
+    # fan-out (guest stall sampler + Proxmox host pressure). Started before the
+    # update-contention trigger/arm so the very first contention is sampled.
+    $observeStaging = "$([string](Get-OpenPathLabField -InputObject $Config -Name 'hostStagingRoot'))/$([string](Get-OpenPathLabField -InputObject $Payload -Name 'runId'))".Replace('//', '/')
+    $samplers = Start-OpenPathFirstVisitSamplers -Payload $Payload -Config $Config -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Staging $observeStaging
+    if ($samplers.error) { Write-Warning "first-visit samplers: $($samplers.error)" }
+
+    # Phase 7 L1: the update-contention scenario starts the product update
+    # right BEFORE the browser launch, so the dependency fast path has to
+    # contend with a real update cycle while the page fans out.
+    $updateTrigger = $null
+    if ($scenario -eq 'first-visit-update-contention') {
+        $triggerStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'update-trigger' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
+        $updateTrigger = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $triggerStep -Name 'body') -Name 'state') -Name 'updateTrigger'
+        Write-Host "first-visit update-contention trigger: mode=$([string](Get-OpenPathLabField -InputObject $updateTrigger -Name 'mode')) exit=$([string](Get-OpenPathLabField -InputObject $updateTrigger -Name 'exit'))"
+    }
     # 1) Arm the visit (wrapper + Run key) and refresh the session: logoff for
     #    settled/hot/control (the persistent host process stays warm), reboot for
     #    class-boot (Firefox starts within the class-boot window at logon).
@@ -1389,7 +1569,7 @@ function Invoke-OpenPathFirstVisitObserve {
         $sacStepError = ''
         $sacControlInfo = $null
         $sacPostDecision = $null
-        if ([string]$state.smartAppControl -eq 'on') {
+        if ([string]$state.smartAppControl -in @('on', 'on-before-install')) {
             $sacPostCycle = Invoke-OpenPathFirstVisitSacAssessment -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -CycleLabel 'postboot' -Phase 'observe'
             $sacStateInfo = $sacPostCycle.state
             $sacControlInfo = $sacPostCycle.control
@@ -1553,6 +1733,10 @@ function Invoke-OpenPathFirstVisitObserve {
     if ($mozExtract.Count -gt 0) {
         [IO.File]::WriteAllLines((Join-Path $evidenceDir 'moz-extract.txt'), $mozExtract, [Text.UTF8Encoding]::new($false))
     }
+    # Phase 7 P1: close the sampler window right after the collect (the worker
+    # log tail is already captured) and keep the evidence for the analysis.
+    $samplerEvidence = Stop-OpenPathFirstVisitSamplers -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Staging $observeStaging
+    if ($samplerEvidence.error) { Write-Warning "first-visit sampler stop: $($samplerEvidence.error)" }
     $security = $null
     $securityError = ''
     # Phase 5.2 E2: the student host probe is scene evidence, not a gate: its
@@ -1571,6 +1755,17 @@ function Invoke-OpenPathFirstVisitObserve {
     $hostProbeResult = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostProbeState -Name 'hostProbe') -Name 'result'
     if (-not $hostProbeError) {
         $hostProbeError = [string](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $hostProbeState -Name 'hostProbe') -Name 'error')
+    }
+    # Phase 7 L2: with SAC still enforced, force a host recompilation through the
+    # product's own ensure (delete the compiled exe + build manifest) and repeat
+    # the student probe. This is the auto-update path when the .cs changes.
+    $hostRecompile = $null
+    if ([string]$state.smartAppControl -eq 'on-before-install') {
+        try {
+            $recompileStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'host-recompile' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowFailed
+            $hostRecompile = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $recompileStep -Name 'body') -Name 'state') -Name 'hostRecompile'
+        }
+        catch { Write-Warning "first-visit host recompile step failed: $($_.Exception.Message)" }
     }
     # Phase 6 B: post-boot CodeIntegrity / language-mode / agent-state evidence
     # for every scenario (also with SAC=2), bounded and best-effort.
@@ -1622,19 +1817,30 @@ function Invoke-OpenPathFirstVisitObserve {
     # only INFRA does. The verdict document is written here (there is no page
     # self-report to persist before the collect).
     $canary = $null
-    if ($siteMode) {
+    $canaryMetrics = $null
+    if ($siteMode -or $scenario -eq 'first-visit-update-contention') {
         $canaryDiagnostics = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'canaryDiagnostics'))
         $canaryOverlayHosts = @(Get-OpenPathFirstVisitStringArray -Value (Get-OpenPathLabField -InputObject $collectState -Name 'overlayHosts'))
         # Phase 6.1 B: the canary verifies real navigation: the site host must
         # appear in an extension navigation diagnostic, otherwise the scene is
         # INFRA site-not-navigated (checked by the outcome classifier).
         $siteHost = ''
-        try {
-            $siteHost = [string](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $plan -Name 'anchors') -Name 'a1') -Name 'host')
+        if ($siteMode) {
+            try {
+                $siteHost = [string](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $plan -Name 'anchors') -Name 'a1') -Name 'host')
+            }
+            catch { }
         }
-        catch { }
         $canaryMetrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $canaryDiagnostics -OpenPathLines $openpathTail -SiteHost $siteHost
-        $canaryMoz = Select-OpenPathFirstVisitMozHostLines -MozLines $mozExtract -Hosts $canaryOverlayHosts -ReadyTimes (Get-OpenPathLabField -InputObject $canaryMetrics -Name 'readyTimes')
+        if ($siteMode) {
+            $canaryMoz = Select-OpenPathFirstVisitMozHostLines -MozLines $mozExtract -Hosts $canaryOverlayHosts -ReadyTimes (Get-OpenPathLabField -InputObject $canaryMetrics -Name 'readyTimes')
+        }
+        else {
+            # Phase 7 L1: the update-contention scene has no real-site MOZ
+            # extract; its negative-lookup evidence comes from the held hosts'
+            # own diagnostics only.
+            $canaryMoz = [ordered]@{ linesByHost = [ordered]@{}; negativesAfterReady = @(); negativeCount = 0 }
+        }
         $canaryVerdict = Get-OpenPathFirstVisitCanaryVerdict -Metrics $canaryMetrics -MozResult $canaryMoz
         $canary = [ordered]@{
             status              = [string]$canaryVerdict.status
@@ -1651,32 +1857,104 @@ function Invoke-OpenPathFirstVisitObserve {
             siteNavigationTs    = [long](Get-OpenPathLabField -InputObject $canaryMetrics -Name 'siteNavigationTs')
             navigationEvents    = @(Get-OpenPathLabField -InputObject $canaryMetrics -Name 'navigationEvents')
         }
-        $prepareHostEvidenceForCanary = Get-OpenPathLabField -InputObject $state -Name 'hostEvidence'
-        $verdictDocument = [ordered]@{
-            schemaVersion       = 1
-            scenario            = $scenario
-            source              = 'canary'
-            canary              = $true
-            canaryStatus        = [string]$canaryVerdict.status
-            canaryReasons       = @($canaryVerdict.reasons)
-            canaryMetrics       = $canaryMetrics
-            negativesAfterReady = @(Get-OpenPathLabField -InputObject $canaryMoz -Name 'negativesAfterReady')
-            siteHost            = $siteHost
-            siteNavigated       = [bool](Get-OpenPathLabField -InputObject $canaryMetrics -Name 'siteNavigated')
-            siteNavigationTs    = [long](Get-OpenPathLabField -InputObject $canaryMetrics -Name 'siteNavigationTs')
-            siteNavigationEvents = @(Get-OpenPathLabField -InputObject $canaryMetrics -Name 'navigationEvents')
-            reportPresent       = $false
-            verdict             = [ordered]@{
-                status  = if ([string]$canaryVerdict.status -eq 'CANARY-PASS') { 'canary-pass' } else { 'canary-red' }
-                reasons = @($canaryVerdict.reasons)
-                waves   = [ordered]@{}
-            }
-            productReasons      = @(Get-OpenPathLabField -InputObject $prepareHostEvidenceForCanary -Name 'productReasons')
-            hostStarted         = [bool](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $state -Name 'liveSignals') -Name 'hostStarted')
-            evidenceIncomplete  = [bool]$collectError
-            collectError        = $collectError
-            writtenAt           = [DateTime]::UtcNow.ToString('o')
+        if ($scenario -eq 'first-visit-update-contention') {
+            # Phase 7 L1: the acceptance analysis (update in course at the first
+            # retention, enqueue->ready p95 <= 3 s, zero cancelled-budget).
+            $contentionAnalysis = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $openpathTail -DiagnosticLines $canaryDiagnostics -CanaryMetrics $canaryMetrics
+            $canary['contention'] = $contentionAnalysis
+            $canary['updateTrigger'] = $updateTrigger
         }
+        $prepareHostEvidenceForCanary = Get-OpenPathLabField -InputObject $state -Name 'hostEvidence'
+        if ($siteMode) {
+            $verdictDocument = [ordered]@{
+                schemaVersion       = 1
+                scenario            = $scenario
+                source              = 'canary'
+                canary              = $true
+                canaryStatus        = [string]$canaryVerdict.status
+                canaryReasons       = @($canaryVerdict.reasons)
+                canaryMetrics       = $canaryMetrics
+                negativesAfterReady = @(Get-OpenPathLabField -InputObject $canaryMoz -Name 'negativesAfterReady')
+                siteHost            = $siteHost
+                siteNavigated       = [bool](Get-OpenPathLabField -InputObject $canaryMetrics -Name 'siteNavigated')
+                siteNavigationTs    = [long](Get-OpenPathLabField -InputObject $canaryMetrics -Name 'siteNavigationTs')
+                siteNavigationEvents = @(Get-OpenPathLabField -InputObject $canaryMetrics -Name 'navigationEvents')
+                reportPresent       = $false
+                verdict             = [ordered]@{
+                    status  = if ([string]$canaryVerdict.status -eq 'CANARY-PASS') { 'canary-pass' } else { 'canary-red' }
+                    reasons = @($canaryVerdict.reasons)
+                    waves   = [ordered]@{}
+                }
+                productReasons      = @(Get-OpenPathLabField -InputObject $prepareHostEvidenceForCanary -Name 'productReasons')
+                hostStarted         = [bool](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $state -Name 'liveSignals') -Name 'hostStarted')
+                evidenceIncomplete  = [bool]$collectError
+                collectError        = $collectError
+                writtenAt           = [DateTime]::UtcNow.ToString('o')
+            }
+            [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
+        }
+        elseif ($verdictDocument) {
+            # Phase 7 L1: the update-contention scene keeps its page self-report
+            # verdict and adds the canary/contention evidence to the same file.
+            $verdictDocument.canaryMetrics = $canaryMetrics
+            $verdictDocument.canaryStatus = [string]$canaryVerdict.status
+            $verdictDocument.canaryReasons = @($canaryVerdict.reasons)
+            $verdictDocument.contention = $canary['contention']
+            $verdictDocument.updateTrigger = $updateTrigger
+            [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
+        }
+    }
+    # Phase 7 P1: classify every >2 s worker gap with the sampler timeline and
+    # the host pressure; a whole-VM stall overlapping a not-ready retention is
+    # INFRA vm-stall, never a product/canary result.
+    $stall = $null
+    $infraVmStall = $false
+    if ($samplerEvidence) {
+        $guestStall = $samplerEvidence.guestSampler
+        $workerGaps = @(Get-OpenPathFirstVisitWorkerGaps -OpenPathLines $openpathTail)
+        $stall = Get-OpenPathFirstVisitStallClassification `
+            -LogGaps $workerGaps `
+            -SamplerGaps @(Get-OpenPathLabField -InputObject $guestStall -Name 'samplerGaps') `
+            -SaturationWindows @(Get-OpenPathLabField -InputObject $guestStall -Name 'saturationWindows') `
+            -HostPressure @($samplerEvidence.pressure)
+        if ($null -ne $canaryMetrics) {
+            $notReady = @()
+            foreach ($entry in @(Get-OpenPathLabField -InputObject $canaryMetrics -Name 'holdOutcomes')) {
+                if ([string](Get-OpenPathLabField -InputObject $entry -Name 'outcome') -ne 'ready') { $notReady += $entry }
+            }
+            foreach ($gap in @($stall.gaps)) {
+                if ([string]$gap.classification -ne 'vm-stall') { continue }
+                foreach ($entry in $notReady) {
+                    $ts = [long](Get-OpenPathLabField -InputObject $entry -Name 'ts')
+                    if ($ts -ge [long]$gap.startMs -and $ts -le [long]$gap.endMs) { $infraVmStall = $true }
+                }
+            }
+        }
+        $stall['infraVmStall'] = $infraVmStall
+        try {
+            $stallSamplesPath = Join-Path $artifactsRoot 'stall-samples.json'
+            $stallRecord = [ordered]@{
+                classification = $stall
+                guest = [ordered]@{
+                    sampleCount       = [int](Get-OpenPathLabField -InputObject $guestStall -Name 'sampleCount')
+                    maxSystemCpu      = Get-OpenPathLabField -InputObject $guestStall -Name 'maxSystemCpu'
+                    samplerGaps       = @(Get-OpenPathLabField -InputObject $guestStall -Name 'samplerGaps')
+                    saturationWindows = @(Get-OpenPathLabField -InputObject $guestStall -Name 'saturationWindows')
+                    decimated         = @(Get-OpenPathLabField -InputObject $guestStall -Name 'decimated')
+                }
+                hostPressure = @($samplerEvidence.pressure)
+                samplerError = $samplerEvidence.error
+            }
+            [IO.File]::WriteAllText($stallSamplesPath, ($stallRecord | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+        }
+        catch { Write-Warning "stall samples record failed: $($_.Exception.Message)" }
+        if ($stall.gaps.Count -gt 0) {
+            $gapSummary = @($stall.gaps | ForEach-Object { "$($_.classification):$($_.gapMs)ms" }) -join ' '
+            Write-Host "first-visit stall classification: $($stall.classification) gaps=[$gapSummary] vmStall=$($stall.vmStall) infraVmStall=$infraVmStall"
+        }
+    }
+    if ($verdictDocument -and $infraVmStall) {
+        $verdictDocument.infraVmStall = $true
         [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
     }
     # Phase 6 B: merge the post-boot host verdict into the persisted document
@@ -1687,7 +1965,19 @@ function Invoke-OpenPathFirstVisitObserve {
         $verdictDocument.blockedBySmartAppControl = [bool]$postHostVerdict.blockedBySmartAppControl
         [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
     }
-    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles $startupProfiles -FixtureState $metricsFixture -Verdict $verdict -LogLines $openpathTail -Diagnostics $collectDiagnostics -PrepareState $state -EvidenceIncomplete ([bool]$collectError) -CollectError $collectError -CollectTimings $collectTimings -HostProbe $hostProbeResult -HostProbeError $hostProbeError -Canary $canary -SacState $sacStateInfo -SacControl $sacControlInfo -PostHostEvents $postEvents -PostHostVerdict $postHostVerdict -VisitDiagnostics $visitDiagnostics
+    # Phase 7 L2: consolidated on-before-install evidence.
+    $sacOnBeforeInstall = $null
+    if ([string]$state.smartAppControl -eq 'on-before-install') {
+        $sacOnBeforeInstall = [ordered]@{
+            preInstallApply    = $state.sacApply
+            preInstallDecision = $state.sacPreInstallDecision
+            preInstallCycle    = $state.sacPreInstall
+            hostCompile        = $state.hostCompile
+            hostRecompile      = $hostRecompile
+            probe              = $hostProbeResult
+        }
+    }
+    $metrics = Get-OpenPathFirstVisitMetrics -Plan $plan -Scenario $scenario -Report $report -DiagnosticLines $diagnosticLines -StartupProfiles $startupProfiles -FixtureState $metricsFixture -Verdict $verdict -LogLines $openpathTail -Diagnostics $collectDiagnostics -PrepareState $state -EvidenceIncomplete ([bool]$collectError) -CollectError $collectError -CollectTimings $collectTimings -HostProbe $hostProbeResult -HostProbeError $hostProbeError -Canary $canary -SacState $sacStateInfo -SacControl $sacControlInfo -PostHostEvents $postEvents -PostHostVerdict $postHostVerdict -VisitDiagnostics $visitDiagnostics -Stall $stall -OnBeforeInstall $sacOnBeforeInstall
     if ($collectError) {
         # Same file, added fields only: the verdict written before the collect
         # is never replaced, the incompleteness is.

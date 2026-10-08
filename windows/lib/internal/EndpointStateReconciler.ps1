@@ -143,6 +143,11 @@ function Invoke-OpenPathEndpointStateRepairPlan {
     )
 
     $applied = @()
+    # Phase 7 P2: per-step evidence for the runtime dependency stamp. A stamp is
+    # only valid after a successful Acrylic restart and a DNS client flush, so
+    # the caller must be able to observe both from the plan execution.
+    $acrylicRunning = $null
+    $dnsFlushed = $null
     foreach ($action in @($Plan.Actions)) {
         switch ($action) {
             'ClearRuntimeDependencyOverlay' {
@@ -160,21 +165,28 @@ function Invoke-OpenPathEndpointStateRepairPlan {
                 Remove-BrowserPolicy -PreserveFirefoxManagedExtension
             }
             'RestoreProtectedMode' {
-                Restore-OpenPathProtectedMode -Config $Config | Out-Null
+                $protectedModeResult = Restore-OpenPathProtectedMode -Config $Config -PassThru
+                if ($protectedModeResult -is [PSCustomObject]) {
+                    if ($null -ne $protectedModeResult.Restarted) { $acrylicRunning = [bool]$protectedModeResult.Restarted }
+                    if ($null -ne $protectedModeResult.Flushed) { $dnsFlushed = [bool]$protectedModeResult.Flushed }
+                }
             }
             'RestoreProtectedModeNoRestart' {
-                Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart | Out-Null
+                $protectedModeResult = Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart -PassThru
+                if ($protectedModeResult -is [PSCustomObject]) {
+                    if ($null -ne $protectedModeResult.Flushed) { $dnsFlushed = [bool]$protectedModeResult.Flushed }
+                }
             }
             'SetAllBrowserPolicy' {
                 Set-AllBrowserPolicy -BlockedPaths $BlockedPaths -Config $Config
             }
             'StartAcrylicService' {
                 Write-OpenPathLog "Watchdog: Acrylic service not running, attempting restart..." -Level WARN
-                Start-AcrylicService
+                $acrylicRunning = [bool](Start-AcrylicService)
             }
             'RestartAcrylicService' {
                 Write-OpenPathLog "Watchdog: DNS resolution failed, restarting Acrylic..." -Level WARN
-                Restart-AcrylicService
+                $acrylicRunning = [bool](Restart-AcrylicService)
                 Start-Sleep -Seconds 3
             }
             'SetOpenPathFirewall' {
@@ -187,7 +199,8 @@ function Invoke-OpenPathEndpointStateRepairPlan {
             }
             'SetLocalDns' {
                 Write-OpenPathLog "Watchdog: Local DNS not configured, fixing..." -Level WARN
-                Set-LocalDNS
+                $null = Set-LocalDNS
+                $dnsFlushed = $true
             }
             'DisableBridgeFilters' {
                 Write-OpenPathLog "Watchdog: bridged VM networking detected, neutralizing bridge filters..." -Level WARN
@@ -208,5 +221,7 @@ function Invoke-OpenPathEndpointStateRepairPlan {
 
     return [PSCustomObject]@{
         AppliedActions = @($applied)
+        AcrylicRunning = $acrylicRunning
+        DnsFlushed     = $dnsFlushed
     }
 }

@@ -32,8 +32,12 @@ Describe 'First-visit lane budgets (Phase 5.2 C4)' {
     It 'keeps the scheduled plan inside 80 percent of the workflow timeout' {
         $script:WorkflowTimeoutMinutes | Should -BeGreaterThan 0
         $plan = Get-OpenPathFirstVisitScenarioPlan -EventName 'schedule'
-        $scenes = @($plan.scenarios -split ',').Count * [int]$plan.repetitions
-        $scenes | Should -Be 8
+        # Phase 7 L1: a `scenario:N` token caps its own repetitions.
+        $scenes = 0
+        foreach ($token in @($plan.scenarios -split ',')) {
+            if ($token -match ':(\d+)$') { $scenes += [int]$Matches[1] } else { $scenes += [int]$plan.repetitions }
+        }
+        $scenes | Should -Be 9
         $check = Test-OpenPathFirstVisitPlanFitsBudget -SceneCount $scenes -WorkflowTimeoutMinutes $script:WorkflowTimeoutMinutes
         $check.fits | Should -BeTrue -Because ("{0} scenes x {1} min + overhead = {2} min vs limit {3} min" -f $check.sceneCount, $check.sceneBudgetMinutes, $check.totalMinutes, $check.limitMinutes)
     }

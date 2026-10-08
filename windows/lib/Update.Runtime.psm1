@@ -361,7 +361,7 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
     param(
         [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot),
 
-        [string]$UpdateMutexName = 'Global\OpenPathUpdateLock',
+        [string]$WriteMutexName = 'Global\OpenPathAcrylicWriteLock',
 
         [int]$LockWaitTimeoutSeconds = 20,
 
@@ -418,23 +418,32 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
     }
 
     try {
-        $mutex = [System.Threading.Mutex]::new($false, $UpdateMutexName)
+        $mutex = [System.Threading.Mutex]::new($false, $WriteMutexName)
         try {
             $lockAcquired = $mutex.WaitOne(0)
             if (-not $lockAcquired -and $LockWaitTimeoutSeconds -gt 0) {
+                # Phase 7 P2: the update cycle holds its exclusion lock for the
+                # whole cycle, but only takes the Acrylic writers lock around the
+                # short shared-write scopes, so this wait is bounded by those.
+                # The worker's retry loop is the escalation path; it warns after
+                # 30 s of continuous contention instead of every attempt here.
                 $lockWaitTimeoutMs = [Math]::Max(0, $LockWaitTimeoutSeconds * 1000)
-                Write-OpenPathLog "Runtime dependency fast apply waiting up to $LockWaitTimeoutSeconds seconds for OpenPath update lock" -Level WARN
+                $lockWaitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                 $lockAcquired = $mutex.WaitOne($lockWaitTimeoutMs)
+                $lockWaitStopwatch.Stop()
+                if ($lockAcquired) {
+                    Write-OpenPathLog "Runtime dependency fast apply waited $($lockWaitStopwatch.ElapsedMilliseconds) ms for the Acrylic writers lock"
+                }
             }
         }
         catch [System.Threading.AbandonedMutexException] {
             $lockAcquired = $true
-            Write-OpenPathLog "OpenPath update lock was abandoned by a previous process - continuing runtime dependency fast apply" -Level WARN
+            Write-OpenPathLog "OpenPath Acrylic writers lock was abandoned by a previous process - continuing runtime dependency fast apply" -Level WARN
         }
 
         if (-not $lockAcquired) {
             $lockBusy = $true
-            Write-OpenPathLog "Another OpenPath update is already running - skipping runtime dependency fast apply" -Level WARN
+            Write-OpenPathLog "Another OpenPath writer is already running - skipping runtime dependency fast apply" -Level WARN
             return (& $buildFastApplyResult 1)
         }
 
@@ -615,6 +624,70 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
     return (& $buildFastApplyResult $exitCode)
 }
 
+function Invoke-OpenPathUpdateWritersLockScope {
+    <#
+    .SYNOPSIS
+    Runs an action while holding the global Acrylic writers lock.
+    .DESCRIPTION
+    Phase 7 P2: the update cycle holds Global\OpenPathUpdateLock for exclusion,
+    but the runtime dependency fast apply must not wait for the whole cycle.
+    Every writer of the shared Acrylic state (AcrylicHosts.txt, the INI and the
+    runtime dependency overlay/whitelist inputs) runs inside this short scope;
+    two writers can never overlap, while the long network/reconcile work of the
+    cycle stays outside it.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+
+        [string]$MutexName = 'Global\OpenPathAcrylicWriteLock',
+
+        [int]$TimeoutSeconds = 60,
+
+        [string]$Stage = ''
+    )
+
+    $mutex = $null
+    $lockAcquired = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, $MutexName)
+        try {
+            $lockAcquired = $mutex.WaitOne(0)
+            if (-not $lockAcquired -and $TimeoutSeconds -gt 0) {
+                $lockAcquired = $mutex.WaitOne([Math]::Max(0, $TimeoutSeconds * 1000))
+            }
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            $lockAcquired = $true
+        }
+
+        if (-not $lockAcquired) {
+            throw "Timed out waiting up to $TimeoutSeconds seconds for the OpenPath Acrylic writers lock"
+        }
+
+        $scopeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $scopeResult = & $Action
+        $scopeStopwatch.Stop()
+        if ($Stage) {
+            Write-OpenPathLog "OpenPath update writers scope=$Stage ms=$($scopeStopwatch.ElapsedMilliseconds)"
+        }
+        return $scopeResult
+    }
+    finally {
+        if ($lockAcquired -and $mutex) {
+            try {
+                $mutex.ReleaseMutex()
+            }
+            catch [System.ApplicationException] {
+                # Ignore if mutex ownership was not held at release time
+            }
+        }
+        if ($mutex) {
+            $mutex.Dispose()
+        }
+    }
+}
+
 function Invoke-OpenPathUpdateCycle {
     <#
     .SYNOPSIS
@@ -674,6 +747,18 @@ function Invoke-OpenPathUpdateCycle {
 
         if ($shouldRunUpdate) {
             Write-OpenPathLog "=== Starting openpath update ==="
+            # Phase 7 P2: per-stage breakdown so the cost each phase adds to the
+            # cycle (and whether it runs under the exclusion lock) is measurable
+            # from the guest log: `OpenPath update stage=<name> ms=<n> lock=cycle`.
+            $updateStages = [ordered]@{}
+            $updateStageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $writeUpdateStage = {
+                param([string]$Name)
+                $updateStageStopwatch.Stop()
+                $updateStages[$Name] = [int]$updateStageStopwatch.ElapsedMilliseconds
+                Write-OpenPathLog "OpenPath update stage=$Name ms=$($updateStageStopwatch.ElapsedMilliseconds) lock=cycle"
+                $updateStageStopwatch.Restart()
+            }
 
             $offlineHelperPath = Join-Path $OpenPathRoot 'lib\install\Installer.Offline.ps1'
             if (Test-Path $offlineHelperPath) {
@@ -688,24 +773,30 @@ function Invoke-OpenPathUpdateCycle {
                     Write-OpenPathLog "Pending enrollment retry could not run: $_" -Level WARN
                 }
             }
+            & $writeUpdateStage 'enrollment'
 
             $config = Get-OpenPathConfig
             $config = Sync-OpenPathMachineClientConfig -Config $config
+            & $writeUpdateStage 'config-sync'
             $portalActiveState = Write-OpenPathUpdatePortalActiveState `
                 -OpenPathRoot $OpenPathRoot `
                 -TriggerSource $TriggerSource
+            & $writeUpdateStage 'portal-state'
             $updateSettings = Get-OpenPathUpdatePolicySettings -Config $config
             $null = Invoke-OpenPathStartupLocalReconcile `
                 -WhitelistPath $whitelistPath `
                 -Config $config `
                 -SkipProtectedModeRestore:($TriggerSource -eq 'SSE')
+            & $writeUpdateStage 'reconcile'
             $null = Backup-OpenPathWhitelistState `
                 -WhitelistPath $whitelistPath `
                 -BackupPath $backupPath `
                 -EnableCheckpointRollback $updateSettings.EnableCheckpointRollback `
                 -MaxCheckpoints $updateSettings.MaxCheckpoints
+            & $writeUpdateStage 'backup'
 
             $downloadResult = Get-OpenPathWhitelistDownloadResult -Config $config
+            & $writeUpdateStage 'download'
 
             if ($downloadResult.DownloadFailed) {
                 $null = Handle-OpenPathDownloadFailure `
@@ -737,6 +828,16 @@ function Invoke-OpenPathUpdateCycle {
                     -StaleFailsafeStatePath $staleFailsafeStatePath `
                     -HealthActionSuffix $portalActiveState.HealthAction
             }
+            & $writeUpdateStage 'apply'
+            Write-OpenPathLog ("OpenPath update stages totalMs={0} enrollment={1} config-sync={2} portal-state={3} reconcile={4} backup={5} download={6} apply={7}" -f `
+                    (@($updateStages.Values) | Measure-Object -Sum).Sum, `
+                    $updateStages['enrollment'], `
+                    $updateStages['config-sync'], `
+                    $updateStages['portal-state'], `
+                    $updateStages['reconcile'], `
+                    $updateStages['backup'], `
+                    $updateStages['download'], `
+                    $updateStages['apply'])
         }
     }
     catch {

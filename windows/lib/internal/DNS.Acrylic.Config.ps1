@@ -137,9 +137,28 @@ function Update-AcrylicHost {
         }
         Write-OpenPathLog "Generating AcrylicHosts.txt with $(@($definition.EffectiveWhitelistedDomains).Count) domains..."
         $content = ConvertTo-AcrylicHostsContent -Definition $definition
-        $hostsWritten = [bool](Write-AcrylicHostsFile -Path $hostsPath -Content $content -SkipIfUnchanged)
-        if (-not $hostsWritten) {
-            Write-OpenPathLog "AcrylicHosts.txt unchanged; skipping rewrite"
+        # Phase 7 P3: the generated header carries a timestamp, so a re-render a
+        # second later is byte-different even when nothing effective changed.
+        # Comparing the effective content keeps the file (and its reload) stable
+        # instead of forcing an Acrylic restart for a header-only diff.
+        $existingHostsContent = ''
+        if (Test-Path -LiteralPath $hostsPath -ErrorAction SilentlyContinue) {
+            try {
+                $existingHostsContent = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction Stop
+            }
+            catch {
+                $existingHostsContent = ''
+            }
+        }
+        $hostsWritten = $false
+        if ($existingHostsContent -and (Test-AcrylicHostsContentEquivalent -Left $existingHostsContent -Right $content)) {
+            Write-OpenPathLog "AcrylicHosts.txt effective content unchanged; skipping rewrite"
+        }
+        else {
+            $hostsWritten = [bool](Write-AcrylicHostsFile -Path $hostsPath -Content $content -SkipIfUnchanged)
+            if (-not $hostsWritten) {
+                Write-OpenPathLog "AcrylicHosts.txt unchanged; skipping rewrite"
+            }
         }
 
         $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -BlockedSubdomains $definition.BlockedSubdomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains -CaptivePortalDomains $definition.CaptivePortalDomains

@@ -1602,4 +1602,4 @@ test -s "$dump"
     return $transport
 }
 
-Export-ModuleMember -Function Read-OpenPathProxmoxLabConfig, Invoke-OpenPathProxmoxControllerPhase, New-OpenPathProxmoxLabTransport, Test-OpenPathLabBlockedErrorCode, Invoke-OpenPathProxmoxLabLockRelease, Invoke-OpenPathProxmoxLabStaleLockReclaim, Get-OpenPathFirstVisitReportVerdict, Get-OpenPathFirstVisitMetrics, Get-OpenPathFirstVisitHarnessSourcePath, Get-OpenPathFirstVisitSettings, Get-OpenPathFirstVisitCapabilityArgument, Get-OpenPathFirstVisitBuildCapabilities
+Export-ModuleMember -Function Read-OpenPathProxmoxLabConfig, Invoke-OpenPathProxmoxControllerPhase, New-OpenPathProxmoxLabTransport, Test-OpenPathLabBlockedErrorCode, Invoke-OpenPathProxmoxLabLockRelease, Invoke-OpenPathProxmoxLabStaleLockReclaim, Get-OpenPathFirstVisitReportVerdict, Get-OpenPathFirstVisitMetrics, Get-OpenPathFirstVisitHarnessSourcePath, Get-OpenPathFirstVisitSettings, Get-OpenPathFirstVisitCapabilityArgument, Get-OpenPathFirstVisitBuildCapabilities, ConvertTo-OpenPathFirstVisitSceneStartedIso

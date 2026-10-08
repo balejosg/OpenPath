@@ -23,11 +23,18 @@ function Invoke-OpenPathUpdateRollback {
     $rollbackSucceeded = $false
     if ($checkpointRollbackEnabled -and $Config) {
         Write-UpdateCatchLog 'Attempting checkpoint rollback...' -Level WARN
-        $rollbackSucceeded = Restore-OpenPathCheckpoint -Config $Config -WhitelistPath $WhitelistPath -StaleFailsafeStatePath $StaleFailsafeStatePath
+        # Phase 7 P2: rollback writes the shared whitelist/mirror state under the
+        # Acrylic writers lock so a concurrent dependency fast apply cannot
+        # interleave with the rollback write.
+        $rollbackSucceeded = [bool](Invoke-OpenPathUpdateWritersLockScope -Stage 'checkpoint-rollback' -Action {
+                return (Restore-OpenPathCheckpoint -Config $Config -WhitelistPath $WhitelistPath -StaleFailsafeStatePath $StaleFailsafeStatePath)
+            })
         if ($rollbackSucceeded) {
             $rollbackMethod = 'checkpoint'
             if ($Config) {
-                Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
+                Invoke-OpenPathUpdateWritersLockScope -Stage 'checkpoint-rollback-mirror' -Action {
+                    Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath | Out-Null
+                } | Out-Null
             }
         }
     }
@@ -35,12 +42,14 @@ function Invoke-OpenPathUpdateRollback {
     if (-not $rollbackSucceeded -and (Test-Path $BackupPath)) {
         Write-UpdateCatchLog 'Falling back to backup whitelist rollback...' -Level WARN
         try {
-            Copy-Item $BackupPath $WhitelistPath -Force
-            if ($Config) {
-                Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
-            }
-            $backupSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
-            Update-AcrylicHost -WhitelistedDomains $backupSections.Whitelist -BlockedSubdomains $backupSections.BlockedSubdomains -ErrorAction SilentlyContinue
+            Invoke-OpenPathUpdateWritersLockScope -Stage 'backup-rollback' -Action {
+                Copy-Item $BackupPath $WhitelistPath -Force
+                if ($Config) {
+                    Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath | Out-Null
+                }
+                $backupSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
+                Update-AcrylicHost -WhitelistedDomains $backupSections.Whitelist -BlockedSubdomains $backupSections.BlockedSubdomains -ErrorAction SilentlyContinue
+            } | Out-Null
             if ($Config) {
                 Restore-OpenPathProtectedMode -Config $Config -ErrorAction SilentlyContinue | Out-Null
             }

@@ -52,6 +52,8 @@ function Get-OpenPathFirstVisitSceneOutcome {
     # Phase 6 C: the real-site canary never fails the run: CANARY-PASS and
     # CANARY-RED are both non-blocking categories; only INFRA is a failure.
     $isSite = ($Scenario -match 'first-visit-site')
+    # Phase 7 P1: a whole-VM stall overlapping a failed retention is INFRA.
+    $infraVmStall = [bool](Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'infraVmStall')
     $outcome = [ordered]@{
         category            = 'UNKNOWN'
         verdict             = 'unknown'
@@ -93,8 +95,16 @@ function Get-OpenPathFirstVisitSceneOutcome {
                 $outcome.error = 'site-not-navigated'
             }
             elseif ($canaryStatus -in @('CANARY-PASS', 'CANARY-RED')) {
-                $outcome.category = $canaryStatus
-                $outcome.error = ''
+                if ($infraVmStall -and $canaryStatus -eq 'CANARY-RED') {
+                    # Phase 7 P1: the retention that failed coincides with a
+                    # whole-VM stall; the lane must not blame the product.
+                    $outcome.category = 'INFRA'
+                    $outcome.error = 'vm-stall'
+                }
+                else {
+                    $outcome.category = $canaryStatus
+                    $outcome.error = ''
+                }
                 $canaryReasons = @(Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'canaryReasons')
                 if ($canaryReasons.Count -gt 0) { $outcome.reasons = @($canaryReasons) }
             }
@@ -143,6 +153,11 @@ function Get-OpenPathFirstVisitSceneOutcome {
             # product regression.
             $outcome.category = 'INFRA'
             $outcome.error = 'floor-not-green: ' + [string]$outcome.error
+        }
+        if ($infraVmStall -and $outcome.category -eq 'PRODUCT') {
+            # Phase 7 P1: the failure window coincides with a whole-VM stall.
+            $outcome.category = 'INFRA'
+            $outcome.error = ('vm-stall: ' + [string]$outcome.error).TrimEnd(' ', ':')
         }
         return [pscustomobject]$outcome
     }

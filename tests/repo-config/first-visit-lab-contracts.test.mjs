@@ -55,10 +55,13 @@ describe('first-visit lane contract', () => {
     assert.doesNotMatch(workflow, /gh workflow/u);
     const planModule = read('tests/e2e/ci/first-visit/FirstVisitLanePlan.psm1');
     assert.match(planModule, /fail-open/u);
-    assert.match(planModule, /'settled,class-boot'; repetitions = 1; source = 'workflow_run'/u);
     assert.match(
       planModule,
-      /'settled,hot,class-boot,floor'; repetitions = 2; source = 'schedule'/u
+      /'settled,class-boot,update-contention'; repetitions = 1; source = 'workflow_run'/u
+    );
+    assert.match(
+      planModule,
+      /'settled,hot,class-boot,floor,update-contention:1'; repetitions = 2; source = 'schedule'/u
     );
     assert.match(workflow, /actions\/upload-artifact@v7/u);
   });
@@ -245,9 +248,12 @@ describe('first-visit lane contract', () => {
     const planModule = read('tests/e2e/ci/first-visit/FirstVisitLanePlan.psm1');
     assert.match(
       planModule,
-      /'settled,hot,class-boot,floor'; repetitions = 2; source = 'schedule'/u
+      /'settled,hot,class-boot,floor,update-contention:1'; repetitions = 2; source = 'schedule'/u
     );
-    assert.match(planModule, /'settled,class-boot'; repetitions = 1; source = 'workflow_run'/u);
+    assert.match(
+      planModule,
+      /'settled,class-boot,update-contention'; repetitions = 1; source = 'workflow_run'/u
+    );
     assert.doesNotMatch(planModule, /site/u);
     const suite = read('tests/e2e/ci/run-windows-first-visit-suite.ps1');
     assert.match(suite, /first-visit-site-url-required/u);
@@ -370,5 +376,39 @@ describe('first-visit lane contract', () => {
     assert.match(budget, /\[switch\]\$SmartAppControl/u);
     const runner = read('tests/e2e/ci/run-windows-desktop-survival.ps1');
     assert.match(runner, /-SmartAppControl:\$smartAppControl/u);
+  });
+
+  test('the update-contention, stall and SAC-before-install wiring stays pure and dispatch-scoped (Phase 7)', () => {
+    const firstVisit = read('tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1');
+    assert.match(firstVisit, /first-visit-update-contention/u);
+    assert.match(firstVisit, /update-trigger/u);
+    assert.match(firstVisit, /stall-sampler-start/u);
+    assert.match(firstVisit, /stall-sampler-stop/u);
+    assert.match(firstVisit, /host-compile-state/u);
+    assert.match(firstVisit, /host-recompile/u);
+    assert.match(firstVisit, /on-before-install/u);
+    assert.match(firstVisit, /Get-OpenPathFirstVisitUpdateContention/u);
+    assert.match(firstVisit, /Get-OpenPathFirstVisitStallClassification/u);
+    assert.match(firstVisit, /infraVmStall/u);
+    const contention = read('tests/e2e/ci/first-visit/FirstVisitUpdateContention.psm1');
+    assert.match(contention, /CONTENTION-PASS/u);
+    assert.match(contention, /CONTENTION-RED/u);
+    assert.match(contention, /update-not-in-course-at-first-retention/u);
+    const stall = read('tests/e2e/ci/first-visit/FirstVisitStall.psm1');
+    assert.match(stall, /vm-stall/u);
+    assert.match(stall, /guest-saturated/u);
+    assert.match(stall, /worker-only/u);
+    const pressure = read('tests/e2e/ci/first-visit/pressure-sampler.sh');
+    assert.match(pressure, /pressure\/cpu/u);
+    assert.match(pressure, /-id /u);
+    const workflow = read(workflowPath);
+    assert.match(workflow, /update-contention/u);
+    assert.match(workflow, /on-before-install/u);
+    const outcome = read('tests/e2e/ci/first-visit/FirstVisitOutcome.psm1');
+    assert.match(outcome, /vm-stall/u);
+    // No real site ever lands in the repo: the Phase 7 analysis uses the
+    // fixture anchors only.
+    assert.doesNotMatch(contention, /reddit|bbc|youtube/iu);
+    assert.doesNotMatch(stall, /reddit|bbc|youtube/iu);
   });
 });

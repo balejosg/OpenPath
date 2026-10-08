@@ -25,3 +25,23 @@ function ConvertTo-AcrylicHostsContent {
 
     return (($lines -join "`n").TrimEnd() + "`n")
 }
+
+function Get-AcrylicHostsEffectiveContent {
+    # strips the volatile `# Generated:` header from a rendered hosts text so two
+    # renders of the same effective content compare equal.
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$Content = '')
+
+    return (@($Content -split "`n" | Where-Object { $_ -notmatch '^# Generated: ' }) -join "`n")
+}
+
+function Test-AcrylicHostsContentEquivalent {
+    # compares two rendered hosts contents ignoring the generated timestamp line.
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][string]$Left = '',
+        [AllowEmptyString()][string]$Right = ''
+    )
+
+    return ((Get-AcrylicHostsEffectiveContent -Content $Left) -eq (Get-AcrylicHostsEffectiveContent -Content $Right))
+}

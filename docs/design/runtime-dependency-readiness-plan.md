@@ -788,3 +788,53 @@ What remains open for Phase 4 (measured, not inferred):
 Phase 3B keeps its own scope: real-site canary, the MOZ_LOG analyzer inside the
 repo, the strict Linux profile in CI, the `firefox_registration_missing` flake
 and hardening SP-006.
+
+## Phase 7: the update cycle no longer parks the dependency fast path
+
+The 6.1 canary measured the classroom case "student logs in and opens the page
+while the startup update is running": the update held `Global\OpenPathUpdateLock`
+for its whole cycle (network, Acrylic restarts, policies, health), so
+`Invoke-OpenPathRuntimeDependencyFastApply` waited for the whole cycle and the
+first retention could exceed the 8 s image budget (class-boot red: 9.9 s / 9.3 s,
+two `cancelled-budget` holds per scene, three Acrylic restarts in 9 s).
+
+Breakdown of the update cycle with the lock held (6.1 class-boot r1, from
+`openpath.log`, one second resolution):
+
+| Stage                            | Before (lock held the whole cycle)   |
+| -------------------------------- | ------------------------------------ |
+| enrollment retry + config        | ~1.0 s (network)                     |
+| startup reconcile                | ~5.5 s (Acrylic restart + local DNS) |
+| backup + download                | ~1.0 s (network)                     |
+| apply (queue, restart, policies) | ~1.5 s                               |
+| total                            | ~7.5-9 s (8-14 s under load)         |
+
+Phase 7 P2 splits the lock responsibilities:
+
+- `Global\OpenPathUpdateLock` keeps serializing update _cycles_ (unchanged
+  skip semantics), but the dependency fast path no longer acquires it;
+- a new writers lock `Global\OpenPathAcrylicWriteLock` serializes only the
+  shared writers: the whitelist write, the native-host mirror, the runtime
+  dependency queue/overlay and the AcrylicHosts/INI writes. The update takes it
+  in short scopes (`Invoke-OpenPathUpdateWritersLockScope`); the fast apply takes
+  it for its own queue/apply/stamp scope. No two writers can overlap, while the
+  update's network I/O, restarts and policy work run outside it;
+- when the update itself drains the queue, it restarts Acrylic and flushes the
+  DNS client cache through its repair plan and then stamps exactly the overlay
+  generation it applied (`Set-OpenPathRuntimeDependencyOverlayApplied
+-Generation <applied>`); the stamp is monotonic and is only reachable with the
+  observed restart+flush evidence from `Invoke-OpenPathEndpointStateRepairPlan`.
+  The fast apply then only confirms the generation instead of paying a redundant
+  restart;
+- `Update-AcrylicHost` compares the effective hosts content ignoring the
+  `# Generated:` timestamp line, so a re-render that only moves the header no
+  longer rewrites the file or triggers a restart.
+
+The update cycle also logs a per-stage breakdown
+(`OpenPath update stage=<name> ms=<n> lock=cycle`) and each writers scope logs
+`OpenPath update writers scope=<stage> ms=<n>`, which is what the
+`update-contention` lab scenario uses to report the before/after lock hold.
+
+Measured before/after (Phase 7 lab runs) and the retention acceptance
+(enqueue->ready p95 <= 3 s, zero `cancelled-budget`) live in the Phase 7
+evidence summary, alongside the stall classification.

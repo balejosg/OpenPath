@@ -497,6 +497,51 @@ Describe "DNS Module" {
             }
         }
 
+        It "Stamps an explicit overlay generation monotonically for the update path" {
+            # Phase 7 P2: the update cycle stamps the exact generation its repair
+            # plan restarted for, while a concurrent fast apply may have already
+            # written a newer one. The marker must never go backwards.
+            InModuleScope DNS {
+                $overlayPath = Join-Path $TestDrive 'runtime-dependency-explicit-generation.json'
+                $first = [PSCustomObject]@{
+                    dependencyHost = 'cdn-explicit-one.example'
+                    anchorHost     = 'www.reddit.com'
+                    requestTypes   = @('script')
+                    firstSeen      = [DateTimeOffset]::UtcNow.ToString('o')
+                    lastSeen       = [DateTimeOffset]::UtcNow.ToString('o')
+                    expiresAt      = [DateTimeOffset]::UtcNow.AddDays(1).ToString('o')
+                    source         = 'firefox-webrequest-local'
+                }
+                $second = [PSCustomObject]@{
+                    dependencyHost = 'cdn-explicit-two.example'
+                    anchorHost     = 'www.reddit.com'
+                    requestTypes   = @('image')
+                    firstSeen      = [DateTimeOffset]::UtcNow.ToString('o')
+                    lastSeen       = [DateTimeOffset]::UtcNow.ToString('o')
+                    expiresAt      = [DateTimeOffset]::UtcNow.AddDays(1).ToString('o')
+                    source         = 'firefox-webrequest-local'
+                }
+                Write-OpenPathRuntimeDependencyOverlay -Entries @($first) -Path $overlayPath
+                Write-OpenPathRuntimeDependencyOverlay -Entries @($first, $second) -Path $overlayPath
+
+                $state = Get-OpenPathRuntimeDependencyOverlayState -Path $overlayPath
+                $state.Exists | Should -BeTrue
+                $state.Generation | Should -Be 2
+                $state.AppliedGeneration | Should -Be 0
+
+                (Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath -Generation 1) | Should -BeTrue
+                (Get-OpenPathRuntimeDependencyOverlayState -Path $overlayPath).AppliedGeneration | Should -Be 1
+
+                # Re-stamping an older generation never lowers the marker.
+                (Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath -Generation 1) | Should -BeTrue
+                (Get-OpenPathRuntimeDependencyOverlayState -Path $overlayPath).AppliedGeneration | Should -Be 1
+
+                # Without an explicit generation the document generation is stamped.
+                (Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath) | Should -BeTrue
+                (Get-OpenPathRuntimeDependencyOverlayState -Path $overlayPath).AppliedGeneration | Should -Be 2
+            }
+        }
+
         It "Skips rewriting generated Acrylic files whose content is unchanged" {
             InModuleScope DNS {
                 $path = Join-Path $TestDrive 'AcrylicHosts.txt'
@@ -509,6 +554,38 @@ Describe "DNS Module" {
 
                 (Write-AcrylicTextFile -Path $path -Content "line2`n" -Description 'test content' -SkipIfUnchanged) | Should -BeTrue
                 (Get-Content -LiteralPath $path -Raw) | Should -Be "line2`n"
+            }
+        }
+
+        It "Does not rewrite AcrylicHosts.txt when only the generated timestamp changed" {
+            # Phase 7 P3: the Update writes the hosts file, and seconds later the
+            # runtime dependency fast apply re-renders the same effective content.
+            # The `# Generated:` header changes on every render, so the file was
+            # rewritten and Acrylic was restarted for a byte-level diff only.
+            # The effective content (ignoring that header) must decide the write.
+            InModuleScope DNS {
+                $acrylicPath = Join-Path $TestDrive 'acrylic-timestamp'
+                New-Item -ItemType Directory -Path $acrylicPath -Force | Out-Null
+                $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
+
+                Mock Get-AcrylicPath { $acrylicPath }
+                Mock Set-AcrylicConfiguration { $true }
+                Mock Get-OpenPathConfig { [PSCustomObject]@{ captivePortalDomains = @() } }
+                Mock Get-OpenPathDnsSettings { [PSCustomObject]@{ PrimaryDNS = '1.1.1.1'; SecondaryDNS = '1.0.0.1'; MaxDomains = 50 } }
+                Mock Get-OpenPathRuntimeDependencyDomains { @() }
+
+                (Update-AcrylicHost -WhitelistedDomains @('example.com') -BlockedSubdomains @()) | Should -BeTrue
+                $firstContent = Get-Content -LiteralPath $hostsPath -Raw
+                $firstContent | Should -Match '(?m)^# Generated: '
+                # Simulate the timestamp of the file the Update just wrote.
+                $olderContent = $firstContent -replace '(?m)^# Generated: .*$', '# Generated: 2000-01-01 00:00:00'
+                Set-Content -LiteralPath $hostsPath -Value $olderContent -NoNewline -Encoding ascii
+
+                (Update-AcrylicHost -WhitelistedDomains @('example.com') -BlockedSubdomains @()) | Should -BeTrue
+
+                # Only the header would differ: the file must keep the previous
+                # generated stamp instead of being rewritten (and reloaded).
+                (Get-Content -LiteralPath $hostsPath -Raw) | Should -Be $olderContent
             }
         }
 

@@ -464,6 +464,44 @@ paying the per-request one-shot host cost again, look for
 switch `runtimeDependencyPersistentTransportDisabled` in
 `C:\OpenPath\data\config.json`.
 
+#### Dependency learning while an update runs (Phase 7)
+
+The startup update and the dependency fast apply share the Acrylic state. Two
+locks split the responsibilities:
+
+- `Global\OpenPathUpdateLock` serializes update **cycles** only (a second trigger
+  exits with `Another OpenPath update is already running - skipping this cycle`);
+- `Global\OpenPathAcrylicWriteLock` (writers lock) serializes the shared writers:
+  the whitelist write, the native-host mirror, the overlay and AcrylicHosts/INI.
+  The update takes it in short scopes; the fast apply takes it for its own apply
+  and stamp.
+
+Log lines to read, in order:
+
+```
+OpenPath update stage=<name> ms=<n> lock=cycle          # per-stage breakdown of the cycle
+OpenPath update writers scope=<stage> ms=<n>            # how long the writers lock was held
+Runtime dependency fast apply waited <n> ms for the Acrylic writers lock
+Runtime dependency worker waiting 37 s for the Acrylic writers lock (retries=...)
+OpenPath update stamped runtime dependency overlay appliedGeneration=N
+```
+
+- a short `fast apply waited` is normal (the update's write scopes are tens of
+  milliseconds); a wait in the seconds means the writers lock is stuck: check for
+  a long `writers scope=` line or a fast apply holding it while Acrylic restarts;
+- `Runtime dependency worker waiting ...` is the escalation warning and only
+  appears after 30 s of continuous contention; before that the worker just
+  retries (it never drops a batch);
+- the update stamps the overlay generation it applied only after its repair plan
+  restarted Acrylic and flushed the DNS client cache; the fast apply then only
+  confirms the generation. A redundant Acrylic restart after an update means the
+  hosts write decision did not see equivalent content: check for
+  `AcrylicHosts.txt effective content unchanged; skipping rewrite` (the
+  `# Generated:` header is ignored on purpose).
+- A whole-VM pause (hypervisor) shows up as the same >2 s gap in the guest
+  sampler (`stall-samples.json` in the lab evidence) and is classified
+  `vm-stall`; it is infrastructure, not the product.
+
 ### Watchdog or Integrity Fallback Triggered
 
 ```powershell

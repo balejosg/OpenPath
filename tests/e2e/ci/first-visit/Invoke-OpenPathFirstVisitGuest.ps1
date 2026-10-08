@@ -73,6 +73,13 @@ if (Test-Path -LiteralPath $launchModulePath) {
     try { Import-Module -Name $launchModulePath -Force -ErrorAction Stop; $script:LaunchModuleLoaded = $true }
     catch { $script:ModuleLoadError = (($script:ModuleLoadError + " launch: $($_.Exception.Message)").Trim()) }
 }
+# Phase 7 P1: stall-gap classification for the sampler evidence.
+$script:StallModuleLoaded = $false
+$stallModulePath = Join-Path $PSScriptRoot 'FirstVisitStall.psm1'
+if (Test-Path -LiteralPath $stallModulePath) {
+    try { Import-Module -Name $stallModulePath -Force -ErrorAction Stop; $script:StallModuleLoaded = $true }
+    catch { $script:ModuleLoadError = (($script:ModuleLoadError + " stall: $($_.Exception.Message)").Trim()) }
+}
 $OpenPathRoot = 'C:\OpenPath'
 $LabRoot = 'C:\OpenPathLab'
 $script:VisitRoot = 'C:\OpenPath\lab\first-visit'
@@ -981,6 +988,197 @@ switch ($Step) {
         $script:Body.arm = [ordered]@{ mode = 'reboot'; cmd = $cmdPath; refresh = (Start-VisitRefresh -Mode 'reboot') }
         Complete-Step
     }
+    'stall-sampler-start' {
+        # Phase 7 P1: a 50 ms guest timeline (high-resolution counter + clock)
+        # plus a per-second CPU census (firefox, worker powershell, MsMpEng,
+        # Acrylic, system). The stop step classifies any >2 s worker gap that
+        # overlaps it; a 30-minute lifetime is the safety net.
+        Save-PartialResult
+        $scriptPath = 'C:\OpenPathLab\first-visit\stall-sampler.ps1'
+        $outPath = 'C:\OpenPathLab\first-visit\stall-samples.jsonl'
+        $stopPath = 'C:\OpenPathLab\first-visit\stall-sampler.stop'
+        Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stopPath -Force -ErrorAction SilentlyContinue
+        $sampler = @'
+$ErrorActionPreference = 'SilentlyContinue'
+$out = 'C:\OpenPathLab\first-visit\stall-samples.jsonl'
+$stopFile = 'C:\OpenPathLab\first-visit\stall-sampler.stop'
+$logical = [Environment]::ProcessorCount
+if ($logical -lt 1) { $logical = 1 }
+$deadline = (Get-Date).AddMinutes(30)
+$lastCpuTs = 0
+$tick = 0
+while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $counter = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $line = '{"t":' + $now + ',"c":' + $counter + '}'
+    [System.IO.File]::AppendAllText($out, $line + [Environment]::NewLine)
+    $tick++
+    if ($tick % 20 -eq 0 -and ($now - $lastCpuTs) -ge 900) {
+        $lastCpuTs = $now
+        $system = 0
+        $processes = [ordered]@{}
+        try {
+            $perf = @(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction Stop)
+            $total = @($perf | Where-Object { $_.Name -eq '_Total' } | Select-Object -First 1)
+            if ($total.Count -gt 0) { $system = [math]::Round([double]$total[0].PercentProcessorTime / $logical, 1) }
+            $byId = @{}
+            foreach ($entry in $perf) { $byId[[int]$entry.IDProcess] = $entry }
+            $workerCpu = $null
+            foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'")) {
+                if ([string]$proc.CommandLine -match 'RuntimeDependencyWorker' -and $byId.ContainsKey([int]$proc.ProcessId)) {
+                    $value = [math]::Round([double]$byId[[int]$proc.ProcessId].PercentProcessorTime / $logical, 1)
+                    if ($null -eq $workerCpu -or $value -gt $workerCpu) { $workerCpu = $value }
+                }
+            }
+            foreach ($name in @('firefox', 'MsMpEng', 'AcrylicService')) {
+                foreach ($entry in $perf) {
+                    if ([string]$entry.Name -eq $name) {
+                        $value = [math]::Round([double]$entry.PercentProcessorTime / $logical, 1)
+                        if ($processes.Contains($name)) { if ($value -gt [double]$processes[$name]) { $processes[$name] = $value } }
+                        else { $processes[$name] = $value }
+                    }
+                }
+            }
+            if ($null -ne $workerCpu) { $processes['worker'] = $workerCpu }
+        }
+        catch { }
+        $cpuSample = [ordered]@{ t = $now; cpuSample = $true; systemCpu = $system; processes = ([PSCustomObject]$processes) }
+        [System.IO.File]::AppendAllText($out, ($cpuSample | ConvertTo-Json -Compress -Depth 4) + [Environment]::NewLine)
+    }
+    Start-Sleep -Milliseconds 50
+}
+'@
+        New-Dir (Split-Path -Parent $scriptPath)
+        [IO.File]::WriteAllText($scriptPath, $sampler, [Text.UTF8Encoding]::new($false))
+        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -PassThru -WindowStyle Hidden
+        $script:Body.stallSamplerStart = [ordered]@{
+            pid       = [int]$proc.Id
+            script    = $scriptPath
+            out       = $outPath
+            stop      = $stopPath
+            startedAt = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        Complete-Step
+    }
+    'stall-sampler-stop' {
+        # Phase 7 P1: stop the sampler and return the classified timeline. Gaps
+        # and saturation windows are computed with the staged pure module so the
+        # controller only merges host pressure and the worker log gaps.
+        Save-PartialResult
+        $outPath = 'C:\OpenPathLab\first-visit\stall-samples.jsonl'
+        $stopPath = 'C:\OpenPathLab\first-visit\stall-sampler.stop'
+        $result = [ordered]@{
+            stopped           = $false
+            sampleCount       = 0
+            samplerGaps       = @()
+            saturationWindows = @()
+            maxSystemCpu      = -1
+            decimated         = @()
+            error             = ''
+        }
+        try {
+            [IO.File]::WriteAllText($stopPath, 'stop', [Text.UTF8Encoding]::new($false))
+            $deadline = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $deadline) {
+                $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue | Where-Object { [string]$_.CommandLine -match 'stall-sampler' })
+                if ($procs.Count -eq 0) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            foreach ($proc in $procs) { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue }
+            $result.stopped = $true
+        }
+        catch { $result.error = [string]$_.Exception.Message }
+        if (Test-Path -LiteralPath $outPath) {
+            $raw = @([System.IO.File]::ReadAllLines($outPath))
+            $result.sampleCount = $raw.Count
+            $samples = New-Object System.Collections.Generic.List[object]
+            foreach ($line in $raw) {
+                if (-not $line) { continue }
+                try { $samples.Add(($line | ConvertFrom-Json)) | Out-Null } catch { }
+            }
+            if ($script:StallModuleLoaded) {
+                $result.samplerGaps = @(Get-OpenPathFirstVisitSamplerGaps -Samples $samples.ToArray())
+                $result.saturationWindows = @(Get-OpenPathFirstVisitCpuSaturation -Samples $samples.ToArray())
+            }
+            else {
+                $result.error = (($result.error + ' stall-module-not-loaded').Trim())
+            }
+            $maxCpu = -1.0
+            foreach ($sample in $samples) {
+                if ($null -ne $sample.systemCpu -and [double]$sample.systemCpu -gt $maxCpu) { $maxCpu = [double]$sample.systemCpu }
+            }
+            $result.maxSystemCpu = [math]::Round($maxCpu, 1)
+            $decimated = New-Object System.Collections.Generic.List[object]
+            for ($i = 0; $i -lt $samples.Count; $i += 20) {
+                if ($decimated.Count -ge 900) { break }
+                $decimated.Add($samples[$i]) | Out-Null
+            }
+            $result.decimated = @($decimated.ToArray())
+        }
+        $script:Body.stallSampler = $result
+        Complete-Step
+    }
+    'update-trigger' {
+        # Phase 7 L1: start the product update right before the visit so the
+        # dependency fast path contends with a real update cycle. The scheduled
+        # task is the product entrypoint; schtasks.exe is invoked by absolute
+        # path. A direct script start is only a fallback when schtasks cannot
+        # run AND no update is already in course (log tail), never a second
+        # concurrent cycle on purpose.
+        Save-PartialResult
+        $schtasks = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+        $taskName = 'OpenPath-Update'
+        $scriptName = Join-Path $OpenPathRoot 'scripts\Update-OpenPath.ps1'
+        $logPath = Join-Path $OpenPathRoot 'data\logs\openpath.log'
+        $trigger = [ordered]@{
+            schtasks       = $schtasks
+            task           = $taskName
+            scriptPath     = $scriptName
+            startedAt      = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+            mode           = ''
+            exit           = -1
+            out            = @()
+            processId      = 0
+            logLinesBefore = 0
+            logLinesAfter  = 0
+            tail           = @()
+        }
+        if (Test-Path -LiteralPath $logPath) {
+            $trigger.logLinesBefore = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue).Count
+        }
+        if (Test-Path -LiteralPath $schtasks) {
+            $run = Invoke-Cmd $schtasks @('/Run', '/TN', $taskName)
+            $trigger.exit = [int]$run.exit
+            $trigger.out = @($run.out | Select-Object -First 10)
+            if ($run.exit -eq 0) { $trigger.mode = 'schtasks' }
+        }
+        if ($trigger.mode -ne 'schtasks') {
+            $inCourse = $false
+            if (Test-Path -LiteralPath $logPath) {
+                $tailNow = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue | Select-Object -Last 80)
+                $startedRecently = @($tailNow | Where-Object { $_ -match '=== Starting openpath update ===' })
+                $completedRecently = @($tailNow | Where-Object { $_ -match 'OpenPath update completed|OpenPath update stages totalMs=' })
+                $inCourse = ($startedRecently.Count -gt $completedRecently.Count)
+            }
+            if (-not $inCourse -and (Test-Path -LiteralPath $scriptName)) {
+                $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptName) -PassThru -WindowStyle Hidden
+                $trigger.mode = 'direct'
+                $trigger.processId = [int]$proc.Id
+            }
+            elseif ($inCourse) { $trigger.mode = 'already-in-course' }
+        }
+        # Give the update a moment to log its start line so a failed trigger is
+        # visible in the step result.
+        Start-Sleep -Seconds 2
+        if (Test-Path -LiteralPath $logPath) {
+            $tail = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue | Select-Object -Last 60)
+            $trigger.logLinesAfter = $tail.Count
+            $trigger.tail = @($tail | Where-Object { $_ -match 'Starting openpath update|OpenPath update stage|Runtime dependency' } | Select-Object -Last 6)
+        }
+        $script:Body.updateTrigger = $trigger
+        Complete-Step
+    }
     'visit' {
         $plan = Get-FixturePlan
         $siteMode = [bool]$plan.siteMode
@@ -1394,6 +1592,109 @@ switch ($Step) {
             if ($probeResult.events8004Measured -ne $true) { $script:Failures.Add('student-host-probe-8004-unmeasured') | Out-Null }
             elseif ($probeResult.deniedPowershell -ne $true) { $script:Failures.Add('student-host-probe-powershell-not-denied') | Out-Null }
         }
+        Complete-Step
+    }
+    'host-compile-state' {
+        # Phase 7 L2: measure the compiled native host with SAC already active.
+        # Calls the product's own ensure entrypoint (install/self-update use the
+        # same one) and records the build artifacts and the CodeIntegrity XML.
+        Save-PartialResult
+        $nativeRoot = 'C:\OpenPath\browser-extension\firefox\native'
+        $state = [ordered]@{
+            nativeRoot       = $nativeRoot
+            executable       = $null
+            buildManifest    = $null
+            buildDiagnostics = $null
+            ensureRaw        = ''
+            ensure           = $null
+            ensureError      = ''
+            codeIntegrity    = $null
+        }
+        foreach ($entry in @(
+                @{ name = 'executable'; file = 'OpenPath-NativeHost.exe' },
+                @{ name = 'buildManifest'; file = 'OpenPath-NativeHost.manifest.json' },
+                @{ name = 'buildDiagnostics'; file = 'OpenPath-NativeHost.build.json' }
+            )) {
+            $path = Join-Path $nativeRoot $entry.file
+            try {
+                if (Test-Path -LiteralPath $path -PathType Leaf) {
+                    $state[$entry.name] = [ordered]@{
+                        path   = $path
+                        bytes  = (Get-Item -LiteralPath $path).Length
+                        sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+                    }
+                }
+            }
+            catch { }
+        }
+        try {
+            $ensureScript = "Import-Module 'C:\OpenPath\lib\ScriptBootstrap.psm1' -Force; Initialize-OpenPathScriptSession -OpenPathRoot 'C:\OpenPath' -DependentModules @('Browser') -ScriptName 'lab-host-ensure.ps1' | Out-Null; Invoke-OpenPathFirefoxNativeHostCompiledEnsure | ConvertTo-Json -Depth 6 -Compress"
+            $state.ensureRaw = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $ensureScript 2>&1 | Out-String).Trim()
+            $jsonLine = @($state.ensureRaw -split "`n" | Where-Object { $_ -and $_.Trim().StartsWith('{') }) | Select-Object -Last 1
+            if ($jsonLine) { $state.ensure = ($jsonLine.Trim() | ConvertFrom-Json) }
+        }
+        catch { $state.ensureError = [string]$_.Exception.Message }
+        try { $state.codeIntegrity = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 200 -MaxBytes 524288 } catch { }
+        $script:Body.hostCompile = $state
+        Complete-Step
+    }
+    'host-recompile' {
+        # Phase 7 L2: with SAC still enforced, delete the compiled host + its
+        # build manifest and call the product ensure again (the auto-update path
+        # when the .cs changes); then repeat the student probe.
+        Save-PartialResult
+        $nativeRoot = 'C:\OpenPath\browser-extension\firefox\native'
+        $recompile = [ordered]@{
+            nativeRoot    = $nativeRoot
+            deleted       = [ordered]@{ executable = $false; buildManifest = $false; buildDiagnostics = $false }
+            ensureRaw     = ''
+            ensure        = $null
+            ensureError   = ''
+            probe         = $null
+            probeError    = ''
+            probeOutput   = ''
+            codeIntegrity = $null
+        }
+        foreach ($entry in @(
+                @{ name = 'executable'; file = 'OpenPath-NativeHost.exe' },
+                @{ name = 'buildManifest'; file = 'OpenPath-NativeHost.manifest.json' },
+                @{ name = 'buildDiagnostics'; file = 'OpenPath-NativeHost.build.json' }
+            )) {
+            $path = Join-Path $nativeRoot $entry.file
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                try {
+                    Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                    $recompile.deleted[$entry.name] = -not (Test-Path -LiteralPath $path -PathType Leaf)
+                }
+                catch { }
+            }
+        }
+        try {
+            $ensureScript = "Import-Module 'C:\OpenPath\lib\ScriptBootstrap.psm1' -Force; Initialize-OpenPathScriptSession -OpenPathRoot 'C:\OpenPath' -DependentModules @('Browser') -ScriptName 'lab-host-ensure.ps1' | Out-Null; Invoke-OpenPathFirefoxNativeHostCompiledEnsure | ConvertTo-Json -Depth 6 -Compress"
+            $recompile.ensureRaw = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $ensureScript 2>&1 | Out-String).Trim()
+            $jsonLine = @($recompile.ensureRaw -split "`n" | Where-Object { $_ -and $_.Trim().StartsWith('{') }) | Select-Object -Last 1
+            if ($jsonLine) { $recompile.ensure = ($jsonLine.Trim() | ConvertFrom-Json) }
+        }
+        catch { $recompile.ensureError = [string]$_.Exception.Message }
+        $probeScript = Join-Path $PSScriptRoot 'Test-OpenPathNativeHostAsStudent.ps1'
+        if (-not (Test-Path -LiteralPath $probeScript)) {
+            $recompile.probeError = 'student-host-probe-script-missing'
+        }
+        else {
+            try {
+                $launcherPath = 'C:\OpenPathLab\first-visit\student-session-launch.ps1'
+                $probeWork = 'C:\OpenPathLab\phase7\l2'
+                $probeOutput = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probeScript -HostExe 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.exe' -StudentUserName $StudentUserName -LauncherPath $launcherPath -WorkDir $probeWork 2>&1 | Out-String).Trim()
+                $recompile.probeOutput = $probeOutput.Substring(0, [Math]::Min(2000, $probeOutput.Length))
+                $probeResultPath = Join-Path $probeWork 'b6-result.json'
+                if (Test-Path -LiteralPath $probeResultPath) {
+                    $recompile.probe = Get-Content -LiteralPath $probeResultPath -Raw | ConvertFrom-Json
+                }
+            }
+            catch { $recompile.probeError = [string]$_.Exception.Message }
+        }
+        try { $recompile.codeIntegrity = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 200 -MaxBytes 524288 } catch { }
+        $script:Body.hostRecompile = $recompile
         Complete-Step
     }
     'host-signals' {

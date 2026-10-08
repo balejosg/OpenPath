@@ -470,4 +470,67 @@ Describe "Runtime dependency worker" {
             )
         }
     }
+
+    Context "Writers lock wait warning" {
+        It "stays quiet during a short busy round and warns once the interval elapses" {
+            # Phase 7 P2: the fast apply now contends with the short Acrylic
+            # writers scopes, so a short busy round is expected and must not
+            # warn; the worker warns only after the (30 s default) interval.
+            $quietQueue = Join-Path $TestDrive 'warn-quiet-queue'
+            New-Item -ItemType Directory -Path $quietQueue -Force | Out-Null
+            Set-Content -Path (Join-Path $quietQueue 'request-1.json') -Value '{}' -Encoding UTF8
+            $script:warnLogs = @()
+            function Write-OpenPathLog {
+                param([string]$Message, [string]$Level = 'INFO')
+                $script:warnLogs += [string]$Message
+            }
+
+            try {
+                $script:warnCalls = 0
+                $quietApply = {
+                    $script:warnCalls++
+                    Remove-Item -LiteralPath (Join-Path $quietQueue 'request-1.json') -Force -ErrorAction SilentlyContinue
+                    return @{ ExitCode = 1; LockBusy = $true }
+                }
+                $result = Invoke-OpenPathRuntimeDependencyWorkerApply `
+                    -ApplyAction $quietApply `
+                    -QueuePath $quietQueue `
+                    -RetryDelayMs 10
+                $result.LockBusy | Should -BeTrue
+                @($script:warnLogs | Where-Object { $_ -match 'writers lock' }).Count | Should -Be 0
+
+                $busyQueue = Join-Path $TestDrive 'warn-busy-queue'
+                New-Item -ItemType Directory -Path $busyQueue -Force | Out-Null
+                Set-Content -Path (Join-Path $busyQueue 'request-1.json') -Value '{}' -Encoding UTF8
+                $script:warnCalls = 0
+                $busyApply = {
+                    $script:warnCalls++
+                    if ($script:warnCalls -lt 3) { return @{ ExitCode = 1; LockBusy = $true } }
+                    return @{ ExitCode = 0; LockBusy = $false }
+                }
+                $null = Invoke-OpenPathRuntimeDependencyWorkerApply `
+                    -ApplyAction $busyApply `
+                    -QueuePath $busyQueue `
+                    -RetryDelayMs 10 `
+                    -LogIntervalSeconds 0
+                @($script:warnLogs | Where-Object { $_ -match 'Acrylic writers lock' }).Count | Should -BeGreaterThan 0
+            }
+            finally {
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "defaults the first wait warning to the 30 s interval" {
+            $workerContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Worker.ps1") -Raw
+            Assert-ContentContainsAll -Content $workerContent -Needles @(
+                '[int]$LogIntervalSeconds = 30',
+                'for the Acrylic writers lock (retries=$retries pending=$pending)'
+            )
+            $fastApplyContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1") -Raw
+            # No immediate warning on every fast-apply attempt: only the measured
+            # wait is logged, and the worker escalates after 30 s.
+            $fastApplyContent | Should -Match 'waited \$\(\$lockWaitStopwatch\.ElapsedMilliseconds\) ms for the Acrylic writers lock'
+            $fastApplyContent | Should -Not -Match 'fast apply waiting up to'
+        }
+    }
 }
