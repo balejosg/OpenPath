@@ -70,6 +70,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Send-OpenPathHealthReport',
         'Sync-OpenPathFirefoxNativeHostState',
         'Invoke-OpenPathRuntimeDependencyQueue',
+        'Get-OpenPathRuntimeDependencyOverlayState',
         'Set-OpenPathRuntimeDependencyOverlayApplied',
         'Test-OpenPathCaptivePortalState',
         'Update-OpenPathCaptivePortalObservation',

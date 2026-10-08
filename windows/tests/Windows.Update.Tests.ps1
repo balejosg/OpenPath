@@ -537,8 +537,26 @@ Describe "Update Script" {
         }
     }
 
-    Context "Dependency writers lock scoping" {
-        BeforeAll {
+    Context "Update runtime resolution of shared helpers" {
+        It "exports the overlay state helper the update apply path uses" {
+            # Phase 7 fix: the update apply path reads the overlay state in the
+            # writers scope. A shared helper that is not exported by its module
+            # (and not listed as a session requirement) breaks the real install
+            # update with "not recognized" (Windows E2E run 37731855999).
+            $dnsPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "lib" "DNS.psm1")).Path
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $script = "Import-Module '$($dnsPath -replace "'", "''")' -Force -ErrorAction SilentlyContinue; " +
+            "if (Get-Command -Name Get-OpenPathRuntimeDependencyOverlayState -ErrorAction SilentlyContinue) { 'resolved' } else { 'missing' }"
+            $result = & pwsh -NoProfile -Command $script | Select-Object -Last 1
+            $result | Should -Be 'resolved'
+
+            # The update runtime session must also require it, so a future move
+            # fails the session bootstrap instead of the first update cycle.
+            (Get-Content -LiteralPath $runtimePath -Raw) | Should -Match "'Get-OpenPathRuntimeDependencyOverlayState'"
+        }
+    }
+
+    Context "Dependency writers lock scoping" {        BeforeAll {
             $cycleLockScript = {
                 param([string]$MutexName, $Ready, $Release)
                 $mutex = [System.Threading.Mutex]::new($false, $MutexName)
