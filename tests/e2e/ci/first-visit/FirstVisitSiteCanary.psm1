@@ -128,8 +128,9 @@ function Get-OpenPathFirstVisitCanaryMetrics {
     $sortedDurations = @($readyDurations.ToArray() | Sort-Object)
     $readyP50 = if ($sortedDurations.Count -gt 0) { $sortedDurations[[int][math]::Floor(($sortedDurations.Count - 1) / 2)] } else { -1 }
     $readyMax = if ($sortedDurations.Count -gt 0) { $sortedDurations[-1] } else { -1 }
-    # Phase 7 L1: the update-contention acceptance bounds the enqueue->ready p95.
-    $readyP95 = if ($sortedDurations.Count -gt 0) { $sortedDurations[[int][math]::Floor(($sortedDurations.Count - 1) * 0.95)] } else { -1 }
+    # Phase 7 L1: the update-contention acceptance bounds the enqueue->ready p95
+    # by nearest rank (ceil(0.95 * n)); with six samples it must bound the max.
+    $readyP95 = if ($sortedDurations.Count -gt 0) { $sortedDurations[[int][math]::Ceiling($sortedDurations.Count * 0.95) - 1] } else { -1 }
     $lastReadyFromNavigationMs = -1
     if ($null -ne $navigationTs -and $null -ne $lastReadyTs) {
         $delta = [long]$lastReadyTs - [long]$navigationTs

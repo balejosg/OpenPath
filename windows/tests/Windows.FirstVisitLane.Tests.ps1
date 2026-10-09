@@ -1553,6 +1553,24 @@ PrimaryServerAddress=198.51.100.7
             $metrics.serviceWorkerHolds | Should -Be 1
         }
 
+        It 'Computes the retention to ready p95 by nearest rank (Phase 7 L1 fix)' {
+            # Reviewer regression vector from run 37788016988 r2: with six
+            # retentions the p95 must land on ceil(0.95 * 6) = the maximum.
+            $durations = 1620, 1634, 2065, 2125, 2126, 4295
+            $lines = @()
+            $ts = 1000
+            foreach ($duration in $durations) {
+                $hostName = "cdn$duration.example.invalid"
+                $ts += 250
+                $lines += (ConvertTo-DiagLine @{ ts = $ts; kind = 'hold'; dependencyHost = $hostName; tabId = 5; type = 'script' })
+                $ts += 250
+                $lines += (ConvertTo-DiagLine @{ ts = $ts; kind = 'hold-outcome'; dependencyHost = $hostName; outcome = 'ready'; ms = $duration; tabId = 5 })
+            }
+            $metrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $lines
+            $metrics.readyCount | Should -Be 6
+            $metrics.readyP95Ms | Should -Be 4295
+        }
+
         It 'Fails the canary when any hold is not ready, a negative follow-up appears or reloads exceed one' {
             $metrics = Get-OpenPathFirstVisitCanaryMetrics -DiagnosticLines $script:canaryLines
             $verdict = Get-OpenPathFirstVisitCanaryVerdict -Metrics $metrics -MozResult ([pscustomobject]@{ negativeCount = 0 })
@@ -1960,6 +1978,14 @@ PrimaryServerAddress=198.51.100.7
             $before.SmartAppControl | Should -Be 'on-before-install'
             { Get-OpenPathFirstVisitSettings -Payload (New-Phase7FirstVisitPayload @{ scenario = 'first-visit-settled'; smartAppControl = 'on-before-install' }) -Config $config } | Should -Throw '*requires-class-boot*'
             { Get-OpenPathFirstVisitSettings -Payload (New-Phase7FirstVisitPayload @{ scenario = 'first-visit-class-boot'; smartAppControl = 'maybe' }) -Config $config } | Should -Throw '*smart-app-control-invalid*'
+        }
+
+        It 'Binds on-before-install through the suite runner parameter set' {
+            $runnerPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\run-windows-first-visit-suite.ps1'
+            $runner = Get-Command -Name $runnerPath
+            $validateSet = @($runner.Parameters['SmartAppControl'].Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] })
+            $validateSet.Count | Should -BeGreaterThan 0
+            $validateSet[0].ValidValues | Should -Contain 'on-before-install'
         }
 
         It 'Schedules update-contention in the auto-run and the nightly' {

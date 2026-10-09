@@ -27,8 +27,9 @@ param(
     [string]$ControllerCommand,
     [string[]]$Scenarios = @('settled', 'class-boot'),
     [ValidateRange(1, 20)][int]$Repetitions = 1,
-    # Phase 6 B: unchanged (default) | on. `on` only makes sense for class-boot.
-    [ValidateSet('unchanged', 'on')][string]$SmartAppControl = 'unchanged',
+    # Phase 6 B / Phase 7 L2: unchanged (default) | on | on-before-install
+    # (SAC before install only makes sense for class-boot).
+    [ValidateSet('unchanged', 'on', 'on-before-install')][string]$SmartAppControl = 'unchanged',
     # Phase 6 C: real-site canary inputs (site scenario only).
     [string]$SiteUrl = '',
     [string]$SiteWhitelist = ''
