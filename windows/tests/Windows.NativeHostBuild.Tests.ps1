@@ -444,11 +444,22 @@ Describe 'Compiled native host (Phase 5)' {
 
         It 'Rejects an executable signed by an untrusted self-signed certificate and compiles (Windows only)' {
             if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') { return }
+            $compilerPath = Get-OpenPathNativeHostCompilerPath
+            if (-not $compilerPath) { Set-ItResult -Skipped -Because 'the in-box csc.exe is not available'; return }
             $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=OpenPath Test Signer' -CertStoreLocation 'Cert:\CurrentUser\My'
             try {
+                # A tiny fresh PE with no catalog fallback: a Microsoft system
+                # binary would let Get-AuthenticodeSignature read its catalog
+                # signature after a failed embed and hide what is being tested.
+                $controlSource = Join-Path $script:Root 'self-signed-control.cs'
+                Set-Content -LiteralPath $controlSource -Value 'public static class OpenPathSignedTest { public static void Main() { } }' -Encoding ASCII
                 $selfSignedPath = Join-Path $script:Root 'self-signed-candidate.exe'
-                Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\cmd.exe') -Destination $selfSignedPath -Force
-                $null = Set-AuthenticodeSignature -LiteralPath $selfSignedPath -Certificate $certificate -HashAlgorithm SHA256
+                $compile = Invoke-OpenPathNativeHostCompilation -SourcePath $controlSource -OutputPath $selfSignedPath -CompilerPath $compilerPath
+                $compile.Success | Should -BeTrue -Because "test fixture compilation failed: $($compile.Output)"
+                $signResult = Set-AuthenticodeSignature -LiteralPath $selfSignedPath -Certificate $certificate -HashAlgorithm SHA256
+                $signResult.Status | Should -Not -Be 'NotSigned' -Because "Set-AuthenticodeSignature: $($signResult.Status) $($signResult.StatusMessage)"
+                $signatureAfterSign = Get-AuthenticodeSignature -LiteralPath $selfSignedPath
+                $signatureAfterSign.SignatureType | Should -Be 'Authenticode' -Because "the fixture must carry an embedded signature, got SignatureType=$($signatureAfterSign.SignatureType) Status=$($signatureAfterSign.Status)"
                 $selfSignedSha = (Get-FileHash -LiteralPath $selfSignedPath -Algorithm SHA256).Hash.ToLowerInvariant()
                 $selfSignedPin = [pscustomobject]@{ Subject = 'CN=OpenPath Test Signer'; Issuer = [string]$certificate.Issuer; Description = '' }
                 $verification = Test-OpenPathNativeHostSignedExecutable -ExecutablePath $selfSignedPath -ExpectedSha256 $selfSignedSha -Pin $selfSignedPin
