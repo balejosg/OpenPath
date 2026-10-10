@@ -22,6 +22,19 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Threading;
+using System.Reflection;
+
+// Phase 8: assembly metadata the SignPath artifact configuration enforces
+// (product name "OpenPath" and one product version per build). Keep the
+// version in sync with VERSION when the release version changes.
+[assembly: AssemblyProduct("OpenPath")]
+[assembly: AssemblyTitle("OpenPath Native Host")]
+[assembly: AssemblyDescription("OpenPath Windows native messaging host")]
+[assembly: AssemblyCompany("OpenPath")]
+[assembly: AssemblyCopyright("OpenPath contributors")]
+[assembly: AssemblyVersion("4.1.0.0")]
+[assembly: AssemblyFileVersion("4.1.0.0")]
+[assembly: AssemblyInformationalVersion("4.1.0")]
 
 namespace OpenPathNativeHost
 {

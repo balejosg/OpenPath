@@ -389,6 +389,11 @@ $firefoxNativeHostArtifacts = @(
     "$OpenPathRoot\browser-extension\firefox\native\OpenPathNativeHost.cs",
     "$OpenPathRoot\browser-extension\firefox\native\OpenPath-NativeHost.manifest.json",
     "$OpenPathRoot\browser-extension\firefox\native\OpenPath-NativeHost.build.json",
+    # Phase 8: staged prebuilt signed host (the recursive native-host removal
+    # below covers them too; kept explicit so a layout change cannot leave a
+    # stale signed binary behind).
+    "$OpenPathRoot\native-host\signed\OpenPath-NativeHost.exe",
+    "$OpenPathRoot\native-host\signed\OpenPath-NativeHost.signing.json",
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.State.ps1",
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Protocol.ps1",
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Actions.ps1",
@@ -409,6 +414,9 @@ foreach ($artifactPath in $firefoxNativeHostArtifacts) {
 
 # Phase 5: the compiled-host source directory in the install root.
 Remove-Item (Join-Path $OpenPathRoot 'native-host') -Recurse -Force -ErrorAction SilentlyContinue
+
+# Phase 8: the offline payload manifest kept for the signed-host anchor.
+Remove-Item (Join-Path $OpenPathRoot 'payload-manifest.json') -Force -ErrorAction SilentlyContinue
 
 # Chrome/Edge registry
 $regPaths = @(

@@ -914,6 +914,30 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'summary' -Action {
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
+# Phase 8: with Smart App Control already enforced, tell the administrator what
+# will not work when no valid native host is available. Warning only: the
+# install never aborts and never changes the SAC state.
+$phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'sac-native-host-notice' -Action {
+    try {
+        $sacState = Get-OpenPathSmartAppControlState
+        if ($sacState.State -eq 'enforcement') {
+            $nativeHostHealth = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $config
+            if (-not ($nativeHostHealth.UsesCompiledHost -and $nativeHostHealth.CompiledHealthy)) {
+                Write-InstallerWarning '  WARNING: Smart App Control is enforced and no valid native host is available.'
+                Write-InstallerWarning '  While Smart App Control blocks the unsigned native host, these features will not work for restricted students:'
+                Write-InstallerWarning '    - whitelist path and subdomain rules in Firefox;'
+                Write-InstallerWarning '    - the request-access screen and approval propagation;'
+                Write-InstallerWarning '    - runtime dependency learning for allowed sites;'
+                Write-InstallerWarning '    - captive portal recovery.'
+                Write-InstallerWarning "  Reason: $($nativeHostHealth.ReasonCode). Sign the native host (Phase 8.1) or disable Smart App Control to restore them."
+            }
+        }
+    }
+    catch {
+        Write-InstallerWarning "  WARNING: Could not evaluate the Smart App Control native host posture: $_"
+    }
+}
+
 if ($pendingEnrollment) {
     Write-InstallerNotice 'OpenPath is installed. Enrollment is pending; it will retry automatically on the next startup with connectivity.'
     exit 60

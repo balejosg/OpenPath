@@ -1183,15 +1183,15 @@ test('required Windows CI runs Pester in an untracked child host without success
       ) &&
       windowsHostedJobBlock.includes('-TimeoutSeconds 840') &&
       windowsHostedJobBlock.includes('-ShardIndex ${{ matrix.shard }}') &&
-      windowsHostedJobBlock.includes('-ShardCount 5'),
+      windowsHostedJobBlock.includes('-ShardCount 6'),
     'ci.yml should run deterministic isolated Pester shards in hosted mode with distinct result paths'
   );
   assert.ok(
-    windowsJobBlock.includes('shard: [1, 2, 3, 4, 5]') &&
-      windowsHostedJobBlock.includes('shard: [1, 2, 3, 4, 5]') &&
+    windowsJobBlock.includes('shard: [1, 2, 3, 4, 5, 6]') &&
+      windowsHostedJobBlock.includes('shard: [1, 2, 3, 4, 5, 6]') &&
       windowsJobBlock.includes('-ShardIndex ${{ matrix.shard }}') &&
-      windowsJobBlock.includes('-ShardCount 5'),
-    'both required Windows gates should cover the same five deterministic shards'
+      windowsJobBlock.includes('-ShardCount 6'),
+    'both required Windows gates should cover the same six deterministic shards'
   );
   assert.ok(
     windowsHostedJobBlock.includes(
@@ -1345,8 +1345,11 @@ test('required Windows CI runs Pester in an untracked child host without success
   assert.ok(
     windowsPesterShardPlan.includes("$heavySuiteName = 'Windows.AppControl.Tests.ps1'") &&
       windowsPesterShardPlan.includes('$remainingSuitePaths') &&
-      windowsPesterShardPlan.includes('$ShardCount - 1'),
-    'the Windows Pester shard plan should reserve the heavy AppControl suite and balance the remaining leaf suites separately'
+      windowsPesterShardPlan.includes('$heavyPartitionTags') &&
+      windowsPesterShardPlan.includes('AppControlShardA1') &&
+      windowsPesterShardPlan.includes('AppControlShardB2') &&
+      windowsPesterShardPlan.includes('needs at least'),
+    'the Windows Pester shard plan should reserve the measured four-way AppControl split and fail closed below six shards'
   );
   assert.ok(
     windowsPesterRunner.includes('Import-Module (Join-Path $PSScriptRoot') &&
@@ -1363,6 +1366,11 @@ test('required Windows CI runs Pester in an untracked child host without success
       "throw 'Windows Pester suite discovery returned no leaf test files.'"
     ),
     'the isolated Pester runner should fail fast if Windows Pester suite discovery finds no executable leaf suites'
+  );
+  assert.ok(
+    windowsPesterRunner.includes('[AllowEmptyCollection()][string[]]$SuiteXmlPaths') &&
+      windowsPesterRunner.includes('file timed out ($leaf, ${effectiveTimeout}s)'),
+    'the isolated Pester runner should report a file timeout as a file line instead of a parameter-binding error when no suite XML was produced'
   );
   assert.ok(
     windowsPesterRunner.includes('$config.Run.PassThru = $true'),

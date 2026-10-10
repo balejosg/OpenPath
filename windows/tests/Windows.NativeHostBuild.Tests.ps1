@@ -215,8 +215,11 @@ Describe 'Compiled native host (Phase 5)' {
             $moduleText | Should -Match 'Build-OpenPathFirefoxNativeHostExecutable'
             $moduleText | Should -Match 'Get-OpenPathNativeHostLaunchPath -NativeRoot \$nativeRoot'
             $moduleText | Should -Match 'path = \$launchPath'
-            # The build failure path must keep the PowerShell host registered.
-            $moduleText | Should -Match 'keeping the PowerShell host fallback'
+            # Phase 8: the availability message is logged once per state change
+            # with the product reason code; with the classroom AppControl
+            # boundary the restricted student has no PowerShell fallback at all.
+            $moduleText | Should -Match 'Write-OpenPathNativeHostFallbackState'
+            $moduleText | Should -Match 'Restricted student users have no native host'
         }
 
         It 'Removes the compiled host artifacts on unregister' {
@@ -244,8 +247,14 @@ Describe 'Compiled native host (Phase 5)' {
             ([regex]::Matches($script:SourceText, 'GetSystemExecutablePath\("schtasks\.exe"\)')).Count | Should -Be 2
         }
 
-        It 'Uses no dynamic code, reflection or optional assemblies' {
-            $script:SourceText | Should -Not -Match 'System\.Reflection'
+        It 'Uses no dynamic code, runtime reflection or optional assemblies' {
+            # Phase 8: the assembly metadata attributes need `using
+            # System.Reflection`; runtime reflection stays forbidden.
+            $reflectionUsages = @(
+                $script:SourceText -split "`r?`n" |
+                    Where-Object { $_ -match 'System\.Reflection' -and $_ -notmatch '^using System\.Reflection;$' }
+            )
+            $reflectionUsages.Count | Should -Be 0
             $script:SourceText | Should -Not -Match 'Assembly\.Load'
             $script:SourceText | Should -Not -Match 'Add-Type'
             $script:SourceText | Should -Not -Match 'System\.Web'
@@ -291,6 +300,182 @@ Describe 'Compiled native host (Phase 5)' {
             $uninstallText | Should -Match 'OpenPath-NativeHost\.exe'
             $uninstallText | Should -Match 'OpenPathNativeHost\.cs'
             $uninstallText | Should -Match 'OpenPath-NativeHost\.manifest\.json'
+        }
+    }
+
+    Context 'Signed prebuilt host (Phase 8)' {
+        BeforeEach {
+            . $script:BuildModulePath
+            $script:Root = Join-Path $TestDrive ('native-signed-' + [guid]::NewGuid().ToString('N'))
+            $script:NativeRoot = Join-Path $script:Root 'browser-extension\firefox\native'
+            $script:SignedRoot = Join-Path $script:Root 'native-host\signed'
+            New-Item -ItemType Directory -Path $script:NativeRoot, $script:SignedRoot -Force | Out-Null
+            $script:Source = Join-Path $script:Root 'OpenPathNativeHost.cs'
+            Set-Content -LiteralPath $script:Source -Value '// fixture source' -Encoding ASCII
+            $script:SignedExe = Join-Path $script:SignedRoot 'OpenPath-NativeHost.exe'
+            Set-Content -LiteralPath $script:SignedExe -Value 'MZ-signed-executable' -Encoding ASCII
+            $script:SignedMetadataPath = Join-Path $script:SignedRoot 'OpenPath-NativeHost.signing.json'
+            $script:SignedSha = (Get-FileHash -LiteralPath $script:SignedExe -Algorithm SHA256).Hash.ToLowerInvariant()
+            $script:SourceSha = (Get-FileHash -LiteralPath $script:Source -Algorithm SHA256).Hash.ToLowerInvariant()
+            $script:Pin = [pscustomobject]@{
+                Subject     = 'CN=SignPath Foundation'
+                Issuer      = 'CN=SignPath Issuing CA'
+                Description = 'OpenPath native host'
+            }
+            $script:GoodSignature = {
+                param($path)
+                [pscustomobject]@{
+                    Status        = 'Valid'
+                    StatusMessage = 'ok'
+                    Subject       = 'CN=SignPath Foundation'
+                    Issuer        = 'CN=SignPath Issuing CA'
+                    Thumbprint    = 'ABCDEF'
+                    Timestamped   = $true
+                    Description   = 'OpenPath native host'
+                }
+            }
+            $script:HealthyProcess = {
+                param($executablePath)
+                [pscustomobject]@{ Healthy = $true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 5; Error = '' }
+            }
+        }
+
+        It 'Fails closed while the publisher pin is empty' {
+            $verification = Test-OpenPathNativeHostSignedExecutable -ExecutablePath $script:SignedExe -ExpectedSha256 $script:SignedSha
+            $verification.Valid | Should -BeFalse
+            $verification.Reason | Should -Be 'signature-pin-not-configured'
+        }
+
+        It 'Accepts a coherent signature and rejects every mismatch' {
+            $good = Test-OpenPathNativeHostSignedExecutable -ExecutablePath $script:SignedExe -ExpectedSha256 $script:SignedSha -Pin $script:Pin -SignatureReader $script:GoodSignature
+            $good.Valid | Should -BeTrue
+            $good.Reason | Should -Be 'signature-valid'
+
+            $zeros = ('0' * 64) -join ''
+            (Test-OpenPathNativeHostSignedExecutable -ExecutablePath $script:SignedExe -ExpectedSha256 $zeros -Pin $script:Pin -SignatureReader $script:GoodSignature).Reason | Should -Be 'signed-sha256-mismatch'
+            (Test-OpenPathNativeHostSignedExecutable -ExecutablePath $script:SignedExe -ExpectedSha256 $script:SignedSha -Pin $script:Pin -SignatureReader { param($p) [pscustomobject]@{ Status = 'UnknownError'; StatusMessage = 'untrusted root'; Timestamped = $true } }).Reason | Should -Match 'signature-invalid'
+            (Test-OpenPathNativeHostSignedExecutable -ExecutablePath $script:SignedExe -ExpectedSha256 $script:SignedSha -Pin $script:Pin -SignatureReader { param($p) [pscustomobject]@{ Status = 'Valid'; Subject = 'CN=SignPath Foundation'; Issuer = 'CN=SignPath Issuing CA'; Timestamped = $false } }).Reason | Should -Be 'signature-not-timestamped'
+            (Test-OpenPathNativeHostSignedExecutable -ExecutablePath $script:SignedExe -ExpectedSha256 $script:SignedSha -Pin $script:Pin -SignatureReader { param($p) [pscustomobject]@{ Status = 'Valid'; Subject = 'CN=Someone Else'; Issuer = 'CN=SignPath Issuing CA'; Timestamped = $true } }).Reason | Should -Be 'signature-subject-mismatch'
+            (Test-OpenPathNativeHostSignedExecutable -ExecutablePath $script:SignedExe -ExpectedSha256 $script:SignedSha -Pin $script:Pin -SignatureReader { param($p) [pscustomobject]@{ Status = 'Valid'; Subject = 'CN=SignPath Foundation'; Issuer = 'CN=Other CA'; Timestamped = $true } }).Reason | Should -Be 'signature-issuer-mismatch'
+            (Test-OpenPathNativeHostSignedExecutable -ExecutablePath $script:SignedExe -ExpectedSha256 $script:SignedSha -Pin $script:Pin -SignatureReader { param($p) [pscustomobject]@{ Status = 'Valid'; Subject = 'CN=SignPath Foundation'; Issuer = 'CN=SignPath Issuing CA'; Timestamped = $true; Description = 'Something else' } }).Reason | Should -Be 'signature-description-mismatch'
+        }
+
+        It 'Anchors the candidate on the payload manifest and installs it without compiling' {
+            $manifestPath = Join-Path $script:Root 'payload-manifest.json'
+            @{ schemaVersion = 1; payloads = @(@{ path = 'native-host/signed/OpenPath-NativeHost.exe'; sha256 = $script:SignedSha }) } |
+                ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+            @{ sourceSha256 = $script:SourceSha; executableSha256 = $script:SignedSha; signerSubject = 'CN=SignPath Foundation'; signerIssuer = 'CN=SignPath Issuing CA' } |
+                ConvertTo-Json | Set-Content -LiteralPath $script:SignedMetadataPath -Encoding UTF8
+
+            $compileTracker = [pscustomobject]@{ Calls = 0 }
+            $neverCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                [pscustomobject]@{ ExitCode = 1; Output = 'compilation must not run' }
+            }.GetNewClosure()
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -PayloadManifestPath $manifestPath -SignaturePin $script:Pin -SignatureReader $script:GoodSignature -CompilerInvoker $neverCompiler -ProcessInvoker $script:HealthyProcess
+            $result.Status | Should -Be 'Built'
+            $result.HostSource | Should -Be 'signed-prebuilt'
+            $result.BuiltNow | Should -BeTrue
+            $compileTracker.Calls | Should -Be 0
+            $manifest = Get-Content -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.manifest.json') -Raw | ConvertFrom-Json
+            $manifest.hostSource | Should -Be 'signed-prebuilt'
+            $manifest.signerSubject | Should -Be 'CN=SignPath Foundation'
+            $manifest.anchorSource | Should -Be 'payload-manifest'
+            $manifest.sourceSha256 | Should -Be $script:SourceSha
+        }
+
+        It 'Rejects a candidate missing from the payload manifest and compiles instead' {
+            @{ schemaVersion = 1; payloads = @() } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $script:Root 'payload-manifest.json') -Encoding UTF8
+            $compileTracker = [pscustomobject]@{ Calls = 0 }
+            $goodCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                Set-Content -LiteralPath $outputPath -Value 'MZ-compiled' -Encoding ASCII
+                [pscustomobject]@{ ExitCode = 0; Output = '' }
+            }.GetNewClosure()
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -SignaturePin $script:Pin -SignatureReader $script:GoodSignature -CompilerInvoker $goodCompiler -ProcessInvoker $script:HealthyProcess
+            $result.Status | Should -Be 'Built'
+            $result.HostSource | Should -Be 'compiled'
+            $result.SignatureRejectedReason | Should -Be 'signed-candidate-payload-anchor-missing'
+            $compileTracker.Calls | Should -Be 1
+        }
+
+        It 'A valid signed candidate bypasses the compile backoff' {
+            @{ status = 'HealthCheckFailed'; error = 'fixture'; sourceSha256 = $script:SourceSha; attempts = 1; attemptedAt = (Get-Date).ToUniversalTime().ToString('o') } |
+                ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.build.json') -Encoding UTF8
+            @{ sourceSha256 = $script:SourceSha; executableSha256 = $script:SignedSha } |
+                ConvertTo-Json | Set-Content -LiteralPath $script:SignedMetadataPath -Encoding UTF8
+            $compileTracker = [pscustomobject]@{ Calls = 0 }
+            $neverCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                [pscustomobject]@{ ExitCode = 1; Output = 'compilation must not run' }
+            }.GetNewClosure()
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -SignaturePin $script:Pin -SignatureReader $script:GoodSignature -CompilerInvoker $neverCompiler -ProcessInvoker $script:HealthyProcess
+            $result.BackoffActive | Should -BeFalse
+            $result.Status | Should -Be 'Built'
+            $result.HostSource | Should -Be 'signed-prebuilt'
+            $compileTracker.Calls | Should -Be 0
+        }
+
+        It 'Records the rejected signature reason when the fallback compiles' {
+            $zeros = ('0' * 64) -join ''
+            @{ sourceSha256 = $script:SourceSha; executableSha256 = $zeros } |
+                ConvertTo-Json | Set-Content -LiteralPath $script:SignedMetadataPath -Encoding UTF8
+            $compileTracker = [pscustomobject]@{ Calls = 0 }
+            $goodCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                Set-Content -LiteralPath $outputPath -Value 'MZ-compiled' -Encoding ASCII
+                [pscustomobject]@{ ExitCode = 0; Output = '' }
+            }.GetNewClosure()
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -SignaturePin $script:Pin -SignatureReader $script:GoodSignature -CompilerInvoker $goodCompiler -ProcessInvoker $script:HealthyProcess
+            $result.Status | Should -Be 'Built'
+            $result.HostSource | Should -Be 'compiled'
+            $result.SignatureRejectedReason | Should -Be 'signed-sha256-mismatch'
+            $diagnostics = Get-Content -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.build.json') -Raw | ConvertFrom-Json
+            $diagnostics.signatureRejectedReason | Should -Be 'signed-sha256-mismatch'
+        }
+
+        It 'Rejects an executable signed by an untrusted self-signed certificate and compiles (Windows only)' {
+            if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') { return }
+            $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=OpenPath Test Signer' -CertStoreLocation 'Cert:\CurrentUser\My'
+            try {
+                $selfSignedPath = Join-Path $script:Root 'self-signed-candidate.exe'
+                Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\cmd.exe') -Destination $selfSignedPath -Force
+                $null = Set-AuthenticodeSignature -LiteralPath $selfSignedPath -Certificate $certificate -HashAlgorithm SHA256
+                $selfSignedSha = (Get-FileHash -LiteralPath $selfSignedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                $selfSignedPin = [pscustomobject]@{ Subject = 'CN=OpenPath Test Signer'; Issuer = [string]$certificate.Issuer; Description = '' }
+                $verification = Test-OpenPathNativeHostSignedExecutable -ExecutablePath $selfSignedPath -ExpectedSha256 $selfSignedSha -Pin $selfSignedPin
+                $verification.Valid | Should -BeFalse
+                $verification.Reason | Should -Match 'signature-invalid'
+
+                # The staged candidate is rejected outright, so the product compiles.
+                Copy-Item -LiteralPath $selfSignedPath -Destination $script:SignedExe -Force
+                $stagedSha = (Get-FileHash -LiteralPath $script:SignedExe -Algorithm SHA256).Hash.ToLowerInvariant()
+                @{ sourceSha256 = $script:SourceSha; executableSha256 = $stagedSha } |
+                    ConvertTo-Json | Set-Content -LiteralPath $script:SignedMetadataPath -Encoding UTF8
+                $compileTracker = [pscustomobject]@{ Calls = 0 }
+                $goodCompiler = {
+                    param($sourcePath, $outputPath)
+                    $compileTracker.Calls = $compileTracker.Calls + 1
+                    Set-Content -LiteralPath $outputPath -Value 'MZ-compiled' -Encoding ASCII
+                    [pscustomobject]@{ ExitCode = 0; Output = '' }
+                }.GetNewClosure()
+
+                $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -SignaturePin $selfSignedPin -CompilerInvoker $goodCompiler -ProcessInvoker $script:HealthyProcess
+                $result.Status | Should -Be 'Built'
+                $result.HostSource | Should -Be 'compiled'
+                $compileTracker.Calls | Should -Be 1
+            }
+            finally {
+                Remove-Item -LiteralPath $certificate.PSPath -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }

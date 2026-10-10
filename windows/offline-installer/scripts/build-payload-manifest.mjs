@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const REQUIRED_REPO_PATHS = ['VERSION'];
 const REQUIRED_EXTENSION_ARTIFACTS = [
@@ -13,9 +14,65 @@ const REQUIRED_PAYLOAD_FILES = [
   'payloads/acrylic/Acrylic-Portable.zip',
   'payloads/firefox-esr/Firefox-Setup-esr.exe',
 ];
+const NATIVE_HOST_SOURCE_RELATIVE_PATH = ['windows', 'native-host', 'OpenPathNativeHost.cs'];
+const NATIVE_HOST_SIGNED_DIRECTORY = ['windows', 'native-host', 'signed'];
+const NATIVE_HOST_SIGNED_EXECUTABLE = 'OpenPath-NativeHost.exe';
+const NATIVE_HOST_SIGNED_METADATA = 'OpenPath-NativeHost.signing.json';
 
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+// Phase 8: the offline template ships the prebuilt signed native host when the
+// signing channel has produced it for the current C# source. The staged pair
+// must be internally consistent or the build fails instead of shipping a
+// signed binary whose anchor hash belongs to a different source.
+export function resolveNativeHostSigning(repoRoot) {
+  const sourcePath = join(repoRoot, ...NATIVE_HOST_SOURCE_RELATIVE_PATH);
+  const signedRoot = join(repoRoot, ...NATIVE_HOST_SIGNED_DIRECTORY);
+  const executablePath = join(signedRoot, NATIVE_HOST_SIGNED_EXECUTABLE);
+  const metadataPath = join(signedRoot, NATIVE_HOST_SIGNED_METADATA);
+  const sourceSha256 = existsSync(sourcePath) ? sha256File(sourcePath) : '';
+  const result = { nativeHostSigned: false, nativeHostSourceSha256: sourceSha256 };
+  if (!existsSync(executablePath) && !existsSync(metadataPath)) {
+    return result;
+  }
+  if (!existsSync(executablePath) || !existsSync(metadataPath)) {
+    return {
+      ...result,
+      error:
+        'staged signed native host is incomplete: the executable and its signing metadata must be staged together',
+    };
+  }
+  const executableSha256 = sha256File(executablePath);
+  let metadata;
+  try {
+    metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+  } catch (error) {
+    return { ...result, error: `unreadable native host signing metadata: ${error.message}` };
+  }
+  const metadataSource = String(metadata.sourceSha256 ?? '').toLowerCase();
+  const metadataExecutable = String(metadata.executableSha256 ?? '').toLowerCase();
+  if (metadataSource !== sourceSha256) {
+    return {
+      ...result,
+      error: `staged signed native host was built from ${metadataSource || '<missing>'} but the current source is ${sourceSha256}`,
+    };
+  }
+  if (metadataExecutable !== executableSha256) {
+    return {
+      ...result,
+      error: `staged signed native host sha256 ${executableSha256} does not match its signing metadata ${metadataExecutable || '<missing>'}`,
+    };
+  }
+  return {
+    ...result,
+    nativeHostSigned: true,
+    nativeHostExecutableSha256: executableSha256,
+    nativeHostSignerSubject: metadata.signerSubject ?? null,
+    nativeHostSignerIssuer: metadata.signerIssuer ?? null,
+    nativeHostTimestamped: metadata.timestamped === true,
+  };
 }
 
 function listFilesRecursive(root, excludedPaths = new Set()) {
@@ -175,9 +232,33 @@ function main() {
 
   entries.sort((left, right) => left.path.localeCompare(right.path));
 
+  const nativeHostSigning = resolveNativeHostSigning(repoRoot);
+  if (nativeHostSigning.error) {
+    errors.push(nativeHostSigning.error);
+  }
+  if (errors.length > 0) {
+    console.error('Offline installer payload inventory incomplete:');
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+
   const manifest = {
     schemaVersion: 1,
     generatedFor: 'OpenPath-Windows-Setup-Template',
+    // Phase 8: whether the prebuilt signed native host for the current source
+    // travels in the payload, and the anchor metadata for it.
+    nativeHostSigned: nativeHostSigning.nativeHostSigned,
+    nativeHostSourceSha256: nativeHostSigning.nativeHostSourceSha256,
+    ...(nativeHostSigning.nativeHostSigned
+      ? {
+          nativeHostExecutableSha256: nativeHostSigning.nativeHostExecutableSha256,
+          nativeHostSignerSubject: nativeHostSigning.nativeHostSignerSubject,
+          nativeHostSignerIssuer: nativeHostSigning.nativeHostSignerIssuer,
+          nativeHostTimestamped: nativeHostSigning.nativeHostTimestamped,
+        }
+      : {}),
     payloads: entries,
   };
 
@@ -186,4 +267,6 @@ function main() {
   console.log(`Wrote payload manifest with ${entries.length} entries to ${outputPath}`);
 }
 
-main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}

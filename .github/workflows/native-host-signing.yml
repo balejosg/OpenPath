@@ -1,0 +1,183 @@
+name: Native Host Signing
+
+# Phase 8: compile the Firefox native host from source and sign it through the
+# SignPath Foundation OSS channel. This is a dedicated workflow on purpose: the
+# manual approval can take arbitrarily long, and neither REL nor the CI may wait
+# on it. All jobs run on GitHub-hosted runners (SignPath OSS requirement) and
+# only main can reach the signing environment.
+#
+# Without the code-signing environment secret/variables the workflow compiles
+# and uploads the unsigned artifact, skips the signature with a visible warning
+# and ends green. A signed executable is published exactly once per source
+# hash on the rolling `native-host-signing` release; a later run for the same
+# hash detects it and stops without signing again. A bounded collect timeout
+# can be recovered without re-approval by dispatching this workflow with the
+# existing signing_request_id input.
+
+on:
+  workflow_dispatch:
+    inputs:
+      signing_request_id:
+        description: 'Existing SignPath signing request to collect (skips compile and submit)'
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - 'windows/native-host/OpenPathNativeHost.cs'
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: native-host-signing
+  cancel-in-progress: false
+
+jobs:
+  signing:
+    name: Compile, sign and publish the native host
+    runs-on: windows-latest
+    environment: code-signing
+    if: github.repository == 'balejosg/OpenPath' && github.ref == 'refs/heads/main'
+    env:
+      SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' && vars.SIGNPATH_PROJECT_SLUG != '' && vars.SIGNPATH_SIGNING_POLICY_SLUG != '' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Compute the source hash and look for an existing signed executable
+        id: state
+        shell: pwsh
+        run: |
+          $sourceSha = (Get-FileHash -LiteralPath 'windows/native-host/OpenPathNativeHost.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "source_sha256=$sourceSha" >> $env:GITHUB_OUTPUT
+          $assetNames = @()
+          try {
+            $assetNames = @(gh api "repos/${{ github.repository }}/releases/tags/native-host-signing" --jq '.assets[].name' 2>$null)
+          }
+          catch { $assetNames = @() }
+          $hasSigned = ($assetNames -contains "OpenPath-NativeHost-$sourceSha.exe") -and
+            ($assetNames -contains "OpenPath-NativeHost-$sourceSha.signing.json")
+          "signed_exists=$($hasSigned.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          $requestId = '${{ inputs.signing_request_id }}'
+          $collectOnly = ([bool]$requestId) -and (-not $hasSigned)
+          "collect_only=$($collectOnly.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          if ($requestId) { "signing_request_id=$requestId" >> $env:GITHUB_OUTPUT }
+          if ($hasSigned) {
+            Write-Host 'A signed native host already exists for this source hash; nothing to do.'
+          }
+
+      - name: Compile the native host from source
+        if: steps.state.outputs.signed_exists == 'false' && steps.state.outputs.collect_only == 'false'
+        shell: pwsh
+        run: |
+          . (Resolve-Path 'windows/lib/internal/NativeHost.Build.ps1')
+          New-Item -ItemType Directory -Path signing-input -Force | Out-Null
+          $outputPath = Join-Path (Get-Location) 'signing-input\OpenPath-NativeHost.exe'
+          $compilerPath = Get-OpenPathNativeHostCompilerPath
+          if (-not $compilerPath) { throw 'in-box csc.exe was not found on the runner' }
+          $result = Invoke-OpenPathNativeHostCompilation -SourcePath (Resolve-Path 'windows/native-host/OpenPathNativeHost.cs').Path -OutputPath $outputPath -CompilerPath $compilerPath
+          if (-not $result.Success) {
+            Write-Host $result.Output
+            throw "native host compilation failed with exit code $($result.ExitCode)"
+          }
+          $exeHash = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Compiled unsigned native host sha256=$exeHash"
+
+      - name: Upload the unsigned artifact
+        id: upload
+        if: steps.state.outputs.signed_exists == 'false' && steps.state.outputs.collect_only == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-host-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: signing-input/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Submit the signing request
+        id: submit
+        if: env.SIGNPATH_CONFIGURED == 'true' && steps.state.outputs.signed_exists == 'false' && steps.state.outputs.collect_only == 'false'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          wait-for-completion: false
+
+      - name: Collect the signed artifact (bounded wait)
+        if: env.SIGNPATH_CONFIGURED == 'true' && steps.state.outputs.signed_exists == 'false'
+        shell: pwsh
+        env:
+          REQUEST_ID: ${{ steps.submit.outputs.signing-request-id != '' && steps.submit.outputs.signing-request-id || inputs.signing_request_id }}
+        run: |
+          if (-not $env:REQUEST_ID) { throw 'No signing request id to collect (submit skipped and no input).' }
+          Install-Module -Name SignPath -MinimumVersion 4.0.0 -MaximumVersion 4.999.999 -Force -Scope CurrentUser
+          New-Item -ItemType Directory -Path signed -Force | Out-Null
+          Get-SignedArtifact `
+            -OrganizationId '${{ vars.SIGNPATH_ORGANIZATION_ID }}' `
+            -ApiToken '${{ secrets.SIGNPATH_API_TOKEN }}' `
+            -SigningRequestId $env:REQUEST_ID `
+            -OutputArtifactPath (Join-Path (Get-Location) 'signed\OpenPath-NativeHost-signed.zip') `
+            -WaitForCompletionTimeoutInSeconds 2700
+          Expand-Archive -LiteralPath 'signed\OpenPath-NativeHost-signed.zip' -DestinationPath 'signed' -Force
+
+      - name: Verify the Authenticode signature
+        if: env.SIGNPATH_CONFIGURED == 'true' && steps.state.outputs.signed_exists == 'false'
+        shell: pwsh
+        env:
+          REQUEST_ID: ${{ steps.submit.outputs.signing-request-id != '' && steps.submit.outputs.signing-request-id || inputs.signing_request_id }}
+        run: |
+          $exe = Get-ChildItem -Path signed -Recurse -Filter 'OpenPath-NativeHost.exe' -File | Select-Object -First 1
+          if (-not $exe) { throw 'The signed package did not contain OpenPath-NativeHost.exe.' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $exe.FullName
+          if ($signature.Status -ne 'Valid') { throw "Signed executable failed Authenticode validation: $($signature.Status) $($signature.StatusMessage)" }
+          if (-not $signature.TimeStamperCertificate) { throw 'Signed executable has no timestamp countersignature.' }
+          $sourceSha = '${{ steps.state.outputs.source_sha256 }}'
+          $executableSha = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $metadata = [ordered]@{
+            schemaVersion      = 1
+            sourceSha256       = $sourceSha
+            executableSha256   = $executableSha
+            signerSubject      = [string]$signature.SignerCertificate.Subject
+            signerIssuer       = [string]$signature.SignerCertificate.Issuer
+            signerThumbprint   = [string]$signature.SignerCertificate.Thumbprint
+            timestamped        = $true
+            signingRequestId   = $env:REQUEST_ID
+            signedAtUtc        = [DateTime]::UtcNow.ToString('o')
+          }
+          New-Item -ItemType Directory -Path signing-output -Force | Out-Null
+          Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path 'signing-output' "OpenPath-NativeHost-$sourceSha.exe") -Force
+          $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path 'signing-output' "OpenPath-NativeHost-$sourceSha.signing.json") -Encoding UTF8
+          Write-Host "Verified signed native host sha256=$executableSha subject=$($metadata.signerSubject)"
+
+      - name: Publish the signed executable on the rolling signing release
+        if: env.SIGNPATH_CONFIGURED == 'true' && steps.state.outputs.signed_exists == 'false'
+        shell: pwsh
+        run: |
+          $tag = 'native-host-signing'
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title 'Native host signing artifacts' --notes 'Signed OpenPath native messaging host executables, one pair per source sha256. Created by the Native Host Signing workflow.' --prerelease
+          }
+          $assets = Get-ChildItem -Path signing-output -File
+          gh release upload $tag @($assets.FullName) --clobber
+          Write-Host "Published $($assets.Count) signing assets for source ${{ steps.state.outputs.source_sha256 }}"
+
+      - name: Notice when the signing channel is not configured
+        if: env.SIGNPATH_CONFIGURED == 'false'
+        shell: pwsh
+        run: |
+          Write-Host '::warning title=Native host signing skipped::The code-signing environment secret/variables are not configured. The unsigned artifact is available as a workflow artifact and no signing request was sent.'
+
+      - name: Notice when a signed executable already exists
+        if: steps.state.outputs.signed_exists == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "::notice title=Native host signing skipped::A signed executable already exists for source ${{ steps.state.outputs.source_sha256 }}; the signing request was not repeated."

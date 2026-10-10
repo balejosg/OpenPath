@@ -120,7 +120,7 @@ jobs:
             linux_bound=true
           fi
 
-          if echo "$changed_files" | grep -Eq '^(windows/|tests/e2e/Windows-E2E\.Tests\.ps1|tests/e2e/ci/run-windows-pester-isolated\.ps1|tests/e2e/ci/run-windows-[^/]+\.ps1|tests/e2e/ci/acrylic-dns-spike-helpers\.ps1|tests/e2e/ci/desktop-survival/|tests/windows-(desktop-survival|policy-converter-contrast)-|scripts/(lib/windows-desktop-survival-evidence|validate-windows-(desktop-survival|policy-converter-contrast)-evidence)\.mjs|\.github/workflows/ci\.yml$)'; then
+          if echo "$changed_files" | grep -Eq '^(windows/|tests/e2e/Windows-E2E\.Tests\.ps1|tests/e2e/ci/run-windows-pester-isolated\.ps1|tests/e2e/ci/WindowsPesterShardPlan\.psm1|tests/e2e/ci/run-windows-[^/]+\.ps1|tests/e2e/ci/acrylic-dns-spike-helpers\.ps1|tests/e2e/ci/desktop-survival/|tests/windows-(desktop-survival|policy-converter-contrast)-|scripts/(lib/windows-desktop-survival-evidence|validate-windows-(desktop-survival|policy-converter-contrast)-evidence)\.mjs|\.github/workflows/ci\.yml$)'; then
             windows_bound=true
           fi
           if echo "$changed_files" | grep -Eq "^($windows_offline_installer_pattern)$"; then
@@ -199,7 +199,7 @@ jobs:
   # Job 2: Windows Agent Tests
   # ============================================
   test-windows:
-    name: Windows Agent Tests (Pester, shard ${{ matrix.shard }}/5)
+    name: Windows Agent Tests (Pester, shard ${{ matrix.shard }}/6)
     runs-on: [self-hosted, Windows, X64, proxmox, openpath]
     timeout-minutes: 25
     needs: detect-relevant-changes
@@ -209,7 +209,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - name: Checkout code
@@ -235,7 +235,7 @@ jobs:
             -ProgressPath windows-pester-progress-${{ matrix.shard }}.json `
             -TimeoutSeconds 840 `
             -ShardIndex ${{ matrix.shard }} `
-            -ShardCount 5
+            -ShardCount 6
 
       - name: Parse Windows PowerShell sources with PowerShell 7
         shell: pwsh
@@ -278,7 +278,7 @@ jobs:
   # This runs the same isolated Pester suite on GitHub-hosted Windows capacity
   # without replacing the pinned self-hosted target-platform lane.
   test-windows-hosted:
-    name: Windows Agent Tests (Pester, hosted, shard ${{ matrix.shard }}/5)
+    name: Windows Agent Tests (Pester, hosted, shard ${{ matrix.shard }}/6)
     runs-on: windows-2025
     timeout-minutes: 20
     needs: detect-relevant-changes
@@ -288,7 +288,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - name: Checkout code
@@ -309,7 +309,7 @@ jobs:
             -ProgressPath windows-hosted-pester-progress-${{ matrix.shard }}.json `
             -TimeoutSeconds 840 `
             -ShardIndex ${{ matrix.shard }} `
-            -ShardCount 5
+            -ShardCount 6
 
       - name: Parse Windows PowerShell sources with PowerShell 7
         shell: pwsh

@@ -37,7 +37,7 @@ Describe "AppControl Module" {
         Mock Get-OpenPathAdministratorUserSids { @('S-1-5-21-0-0-0-1500') } -ModuleName AppControl
     }
 
-    Context 'issue 256 strict application allowlist' {
+    Context 'issue 256 strict application allowlist' -Tag 'AppControlShardB2' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
 
@@ -394,7 +394,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context 'issue 254 compatibility policy' {
+    Context 'issue 254 compatibility policy' -Tag 'AppControlShardB2' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
         }
@@ -431,7 +431,7 @@ Describe "AppControl Module" {
             $spec.UnapprovedBrowserDenyPaths | Should -Contain 'D:\ManagedApps\Brave\*\brave.exe'
         }
     }
-    Context 'PolicyConverter activation boundary' {
+    Context 'PolicyConverter activation boundary' -Tag 'AppControlShardB1' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
             # The compatibility inbox probe needs real Appx inventory; these
@@ -756,7 +756,7 @@ Describe "AppControl Module" {
         function global:Get-LocalGroup { throw 'not found' }
     }
 
-    Context "New-OpenPathNonAdminAppLockerPolicySpec" {
+    Context "New-OpenPathNonAdminAppLockerPolicySpec" -Tag 'AppControlShardB2' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
         }
@@ -1793,7 +1793,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context "Effective AppLocker probe validation" {
+    Context "Effective AppLocker probe validation" -Tag 'AppControlShardB1' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
         }
@@ -1994,7 +1994,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context "Structured AppControl health contract" -Tag 'AppControlShardA' {
+    Context "Structured AppControl health contract" {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
         }
@@ -2208,7 +2208,7 @@ Describe "AppControl Module" {
             Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthRuntimeEvaluationCallCount, Variable:\opHealthRuntimeFirstPath, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthInboxAppDecision, Variable:\opHealthPreviousSystemRoot, Variable:\opHealthRequestedTargetSid -ErrorAction SilentlyContinue
         }
 
-        It "returns a deterministic healthy contract and keeps the boolean compatibility seam" {
+        It "returns a deterministic healthy contract and keeps the boolean compatibility seam" -Tag 'AppControlShardA1' {
             $health = Get-OpenPathNonAdminAppControlHealth
 
             $health.Healthy | Should -BeTrue
@@ -2226,7 +2226,7 @@ Describe "AppControl Module" {
             Test-OpenPathNonAdminAppControlActive | Should -BeTrue
         }
 
-        It "keeps degraded browser inventory fail-closed only for strict profile" {
+        It "keeps degraded browser inventory fail-closed only for strict profile" -Tag 'AppControlShardA1' {
             Mock Get-OpenPathBrowserInventory {
                 [pscustomobject]@{ DiscoveryStatus = 'Degraded' }
             } -ModuleName AppControl
@@ -2240,7 +2240,7 @@ Describe "AppControl Module" {
             @($strict.ReasonCodes) | Should -Contain 'appcontrol_browser_inventory_degraded'
         }
 
-        It "reports unavailable AppLocker management capability" {
+        It "reports unavailable AppLocker management capability" -Tag 'AppControlShardA1' {
             Mock Test-OpenPathAppControlAvailable { $false } -ModuleName AppControl
             $health = Get-OpenPathNonAdminAppControlHealth
 
@@ -2249,7 +2249,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes) | Should -Be @('appcontrol_capability_unavailable')
         }
 
-        It "preserves the requested AuditOnly mode in the health contract" {
+        It "preserves the requested AuditOnly mode in the health contract" -Tag 'AppControlShardA1' {
             $global:opHealthPolicyMode = 'AuditOnly'
             $health = Get-OpenPathNonAdminAppControlHealth -Mode AuditOnly
 
@@ -2257,7 +2257,7 @@ Describe "AppControl Module" {
             $health.Healthy | Should -BeTrue
         }
 
-        It "distinguishes local policy absence from invalidity" {
+        It "distinguishes local policy absence from invalidity" -Tag 'AppControlShardA1' {
             $global:opHealthLocalPolicyState = 'absent'
             $absent = Get-OpenPathNonAdminAppControlHealth
             $absent.LocalPolicyPresent | Should -BeFalse
@@ -2273,7 +2273,7 @@ Describe "AppControl Module" {
             @($invalid.ReasonCodes) | Should -Not -Contain 'appcontrol_local_policy_absent'
         }
 
-        It "distinguishes effective policy absence from invalidity" {
+        It "distinguishes effective policy absence from invalidity" -Tag 'AppControlShardA1' {
             $global:opHealthEffectivePolicyState = 'absent'
             $absent = Get-OpenPathNonAdminAppControlHealth
             $absent.EffectivePolicyPresent | Should -BeFalse
@@ -2289,7 +2289,7 @@ Describe "AppControl Module" {
             @($invalid.ReasonCodes) | Should -Not -Contain 'appcontrol_effective_policy_absent'
         }
 
-        It "reports a missing current OpenPath restricted target instead of trusting the BUILTIN Users fallback" {
+        It "reports a missing current OpenPath restricted target instead of trusting the BUILTIN Users fallback" -Tag 'AppControlShardA1' {
             $global:opHealthTargetMissing = $true
             $health = Get-OpenPathNonAdminAppControlHealth
 
@@ -2298,7 +2298,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes) | Should -Contain 'appcontrol_restricted_target_missing'
         }
 
-        It "distinguishes empty group, unresolved SID, and missing admissible profile" {
+        It "distinguishes empty group, unresolved SID, and missing admissible profile" -Tag 'AppControlShardA1' {
             $cases = @(
                 @{ State = 'group-empty'; Detail = 'group-empty'; GroupSid = $global:opHealthGroupSid; TargetSid = '' },
                 @{ State = 'group-sid-missing'; Detail = 'group-sid-unresolvable'; GroupSid = ''; TargetSid = '' },
@@ -2318,7 +2318,7 @@ Describe "AppControl Module" {
             }
         }
 
-        It "validates a restricted identity before first login without materializing a profile" {
+        It "validates a restricted identity before first login without materializing a profile" -Tag 'AppControlShardA1' {
             $global:opHealthTargetState = 'profile-missing'
 
             $health = Get-OpenPathNonAdminAppControlHealth
@@ -2335,7 +2335,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes) | Should -Not -Contain 'appcontrol_restricted_target_missing'
         }
 
-        It "preserves an explicitly requested restricted SID through health target resolution" {
+        It "preserves an explicitly requested restricted SID through health target resolution" -Tag 'AppControlShardA1' {
             $requestedSid = 'S-1-5-21-10-20-30-2222'
             Mock Get-OpenPathAppControlProbeTarget {
                 param([string]$TargetSid)
@@ -2357,7 +2357,7 @@ Describe "AppControl Module" {
             $health.ValidationMode | Should -Be 'profileless'
         }
 
-        It "reports a stopped Application Identity service" {
+        It "reports a stopped Application Identity service" -Tag 'AppControlShardA1' {
             $global:opHealthAppIdStatus = 'Stopped'
             $health = Get-OpenPathNonAdminAppControlHealth
 
@@ -2366,7 +2366,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes) | Should -Contain 'appcontrol_appidsvc_not_running'
         }
 
-        It "reports an arbitrary executable allowed by the effective evaluator" {
+        It "reports an arbitrary executable allowed by the effective evaluator" -Tag 'AppControlShardA1' {
             $global:opHealthArbitraryDecision = 'AllowedByDefault'
             $health = Get-OpenPathNonAdminAppControlHealth
 
@@ -2376,7 +2376,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "reports an unapproved Edge executable allowed by the effective evaluator" {
+        It "reports an unapproved Edge executable allowed by the effective evaluator" -Tag 'AppControlShardA1' {
             $global:opHealthEdgeDecision = 'Allowed'
             $health = Get-OpenPathNonAdminAppControlHealth
 
@@ -2385,7 +2385,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "accepts DeniedByDefault as a valid denied Edge decision" {
+        It "accepts DeniedByDefault as a valid denied Edge decision" -Tag 'AppControlShardA1' {
             $global:opHealthEdgeDecision = 'DeniedByDefault'
             $health = Get-OpenPathNonAdminAppControlHealth
 
@@ -2394,7 +2394,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes) | Should -BeNullOrEmpty
         }
 
-        It "reports an approved Firefox executable that is not allowed by the effective evaluator" {
+        It "reports an approved Firefox executable that is not allowed by the effective evaluator" -Tag 'AppControlShardA1' {
             $global:opHealthFirefoxDecision = 'Denied'
             $health = Get-OpenPathNonAdminAppControlHealth
 
@@ -2403,7 +2403,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "fails before runtime evaluation for an unavailable or empty effective policy" {
+        It "fails before runtime evaluation for an unavailable or empty effective policy" -Tag 'AppControlShardA2' {
             foreach ($state in @('absent', 'empty')) {
                 $global:opHealthRuntimeEffectiveObjectState = $state
                 $health = Get-OpenPathNonAdminAppControlHealth
@@ -2416,7 +2416,7 @@ Describe "AppControl Module" {
             }
         }
 
-        It "reports generic runtime failure when Test-AppLockerPolicy throws or returns no decisions" {
+        It "reports generic runtime failure when Test-AppLockerPolicy throws or returns no decisions" -Tag 'AppControlShardA2' {
             foreach ($state in @('throw', 'no-decisions')) {
                 $global:opHealthRuntimeEvaluatorState = $state
                 $health = Get-OpenPathNonAdminAppControlHealth
@@ -2429,7 +2429,7 @@ Describe "AppControl Module" {
             }
         }
 
-        It "reports generic runtime failure when a probe decision is missing" {
+        It "reports generic runtime failure when a probe decision is missing" -Tag 'AppControlShardA2' {
             $global:opHealthRuntimeEvaluatorState = 'partial'
             $health = Get-OpenPathNonAdminAppControlHealth
 
@@ -2440,7 +2440,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "reports generic runtime failure for equal-count duplicate or unknown decisions" {
+        It "reports generic runtime failure for equal-count duplicate or unknown decisions" -Tag 'AppControlShardA2' {
             foreach ($state in @('duplicate', 'unknown')) {
                 $global:opHealthRuntimeDecisionCoverageState = $state
                 $health = Get-OpenPathNonAdminAppControlHealth
@@ -2453,7 +2453,7 @@ Describe "AppControl Module" {
             }
         }
 
-        It "reports generic runtime failure when Edge or Firefox samples cannot be resolved" {
+        It "reports generic runtime failure when Edge or Firefox samples cannot be resolved" -Tag 'AppControlShardA2' {
             foreach ($label in @('Edge', 'Firefox')) {
                 $global:opHealthSampleFailureLabel = $label
                 $health = Get-OpenPathNonAdminAppControlHealth
@@ -2466,7 +2466,7 @@ Describe "AppControl Module" {
             }
         }
 
-        It "requires every sampled Edge decision to be Denied" {
+        It "requires every sampled Edge decision to be Denied" -Tag 'AppControlShardA2' {
             $global:opHealthSampleCount = 2
             $global:opHealthEdgeDecision = 'mixed'
             $health = Get-OpenPathNonAdminAppControlHealth
@@ -2477,7 +2477,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "requires every sampled approved Firefox decision to be Allowed" {
+        It "requires every sampled approved Firefox decision to be Allowed" -Tag 'AppControlShardA2' {
             $global:opHealthSampleCount = 2
             $global:opHealthFirefoxDecision = 'mixed'
             $health = Get-OpenPathNonAdminAppControlHealth
@@ -2488,7 +2488,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "reports unavailable runtime evaluation" {
+        It "reports unavailable runtime evaluation" -Tag 'AppControlShardA2' {
             Mock Get-Command {
                 return $null
             } -ModuleName AppControl -ParameterFilter { $Name -eq 'Test-AppLockerPolicy' }
@@ -2500,7 +2500,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "reports failed probe cleanup independently of valid runtime decisions" {
+        It "reports failed probe cleanup independently of valid runtime decisions" -Tag 'AppControlShardA2' {
             Mock Remove-OpenPathAppControlEvaluationProbeSet {
                 param([object]$ProbeSet)
                 foreach ($probePath in @($ProbeSet.Paths)) {
@@ -2523,7 +2523,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "reports a partial probe creation cleanup failure" {
+        It "reports a partial probe creation cleanup failure" -Tag 'AppControlShardA2' {
             Mock New-OpenPathAppControlEvaluationProbeSet {
                 param($Target, [ref]$CleanupSucceeded)
                 $CleanupSucceeded.Value = $false
@@ -2542,7 +2542,7 @@ Describe "AppControl Module" {
             $remainingProbeFiles.Count | Should -Be 0
         }
 
-        It "always includes a reason when a covered runtime health check is unhealthy" {
+        It "always includes a reason when a covered runtime health check is unhealthy" -Tag 'AppControlShardA2' {
             $assertHasReason = {
                 param([object]$Snapshot)
                 $Snapshot.Healthy | Should -BeFalse
@@ -2566,7 +2566,7 @@ Describe "AppControl Module" {
             & $assertHasReason (Get-OpenPathNonAdminAppControlHealth)
         }
 
-        It "deduplicates reasons in stable observation order without diagnostic values" {
+        It "deduplicates reasons in stable observation order without diagnostic values" -Tag 'AppControlShardA2' {
             $global:opHealthAppIdStatus = 'Stopped'
             $global:opHealthLocalPolicyState = 'absent'
             $global:opHealthEffectivePolicyState = 'absent'
@@ -2582,7 +2582,7 @@ Describe "AppControl Module" {
             ($codes -join ' ') | Should -Not -Match '[\\/:]|https?://|S-1-|[A-Za-z]:\\'
         }
 
-        It "keeps inbox Microsoft packaged apps allowed in compatibility health" {
+        It "keeps inbox Microsoft packaged apps allowed in compatibility health" -Tag 'AppControlShardA2' {
             $package = [pscustomobject]@{
                 Name = 'Microsoft.WindowsCalculator'
                 PackageFullName = 'Microsoft.WindowsCalculator_11.0.0.0_x64__8wekyb3d8bbwe'
@@ -2600,7 +2600,7 @@ Describe "AppControl Module" {
             $inboxDecisions[0].Observed | Should -Be 'Allowed'
         }
 
-        It "fails compatibility health when an inbox packaged app is denied by the effective policy" {
+        It "fails compatibility health when an inbox packaged app is denied by the effective policy" -Tag 'AppControlShardA2' {
             $global:opHealthInboxAppDecision = 'DeniedByDefault'
             $package = [pscustomobject]@{
                 Name = 'Microsoft.WindowsNotepad'
@@ -2620,7 +2620,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context "Compatibility inbox packaged app preflight" {
+    Context "Compatibility inbox packaged app preflight" -Tag 'AppControlShardB2' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
             # The health context removes the file-level platform shims; keep the
@@ -2677,7 +2677,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context "AppControl packaged app evaluation probe" {
+    Context "AppControl packaged app evaluation probe" -Tag 'AppControlShardB2' {
         It "returns a policy denial only when the caller opts out of the fail-closed throw" {
             function global:Test-AppLockerPolicy {
                 param($XmlPolicy, $Packages, $User, $ErrorAction)
@@ -2711,7 +2711,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context "AppControl sample path resolution" {
+    Context "AppControl sample path resolution" -Tag 'AppControlShardB2' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
         }
@@ -2753,7 +2753,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context "Profileless controlled probe lifecycle" {
+    Context "Profileless controlled probe lifecycle" -Tag 'AppControlShardB2' {
         It "creates real machine-scoped and strict Program Files PEs and removes every probe" {
             $sourcePath = Join-Path $TestDrive 'probe-source.exe'
             $programDataPath = Join-Path $TestDrive 'ProgramData'
@@ -2796,7 +2796,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context "Restricted group SID and membership sync" {
+    Context "Restricted group SID and membership sync" -Tag 'AppControlShardB2' {
         AfterEach {
             Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
             function global:Get-LocalGroup { throw 'not found' }
@@ -3030,7 +3030,7 @@ Describe "AppControl Module" {
         Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
     }
 
-    Context "P0 Windows runtime and strict boundary regressions" {
+    Context "P0 Windows runtime and strict boundary regressions" -Tag 'AppControlShardB2' {
         BeforeEach {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
         }

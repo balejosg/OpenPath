@@ -314,6 +314,28 @@ Policy:
   success. Hosted proves portable Windows capacity; self-hosted proves the
   pinned target platform.
 
+## Windows Pester shard rebalance (Phase 8 C1)
+
+Measured self-hosted AppControl shard durations from the progress artifacts
+(`windows-pester-progress-*.json`):
+
+| Run           | SHA        | Tag half (`AppControlShardA`)         | Remainder half |
+| ------------- | ---------- | ------------------------------------- | -------------- |
+| `37772525981` | `355f50de` | 507.2 s                               | 423.6 s        |
+| `37738941329` | `2e0ec2d5` | 553.9 s                               | (not measured) |
+| `37886766064` | `35e81d83` | killed at 825 s (the 29 tests passed) | 675.5 s        |
+
+Neither half met the 70 % budget target (577.5 s of the 825 s single-file
+budget) and the tag half crossed it. The plan now splits the heavy suite into
+four measured partitions on shards 1-4 (`AppControlShardA1/A2/B1/B2`, sized
+from the per-test times in the same artifacts: 243 s / 258 s / 211 s / 207 s on
+a normal day, under half of the target even at the worst observed ~1.6x
+slowdown) and spreads the remaining leaf suites over shards 5-6 (six-shard
+matrix). Shard counts below six fail closed instead of recreating the
+over-budget split, and a file timeout is reported as
+`file timed out (<file>, <s>)` instead of the empty-array parameter-binding
+error.
+
 ## Remaining Optimization Questions
 
 - Measure sustained queue pressure with the hosted Windows gate before adding

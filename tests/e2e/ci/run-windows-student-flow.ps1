@@ -67,6 +67,18 @@ function Write-Step {
     Write-Host $Message -ForegroundColor Cyan
 }
 
+function Protect-OpenPathDiagnosticText {
+    # redacts the per-machine whitelist token, token query parameters and
+    # machineToken JSON values from diagnostic text before it is persisted.
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+    $redacted = $Text -replace '/w/[^/\s?#]+/whitelist\.txt', '/w/[redacted]/whitelist.txt'
+    $redacted = $redacted -replace '(?i)(token=)[^&\s"'']+', '$1[redacted]'
+    $redacted = $redacted -replace '(?i)("machineToken"\s*:\s*")[^"]+', '$1[redacted]'
+    return $redacted
+}
+
 function Write-DiagnosticNote {
     param(
         [Parameter(Mandatory = $true)][string]$Message
@@ -74,7 +86,7 @@ function Write-DiagnosticNote {
 
     $diagnosticTracePath = Join-Path $script:ArtifactsRoot 'windows-student-policy-trace.log'
     $timestamp = (Get-Date).ToString('o')
-    Add-Content -Path $diagnosticTracePath -Value "$timestamp $Message"
+    Add-Content -Path $diagnosticTracePath -Value "$timestamp $(Protect-OpenPathDiagnosticText -Text $Message)"
 }
 
 function Write-TimingEvidence {
@@ -1873,6 +1885,112 @@ function Write-WindowsDiagnostics {
         "ERROR: $($_.Exception.Message)"
     }
 
+    # Phase 8 H1: the compiled native host state is collected so a Fallback
+    # (including the 1 h compile backoff armed by a previous failure) is
+    # diagnosable from the uploaded artifacts instead of only from the product
+    # log line.
+    $nativeHostRoot = 'C:\OpenPath\browser-extension\firefox\native'
+    $nativeHostArtifactDir = Join-Path $script:ArtifactsRoot 'native-host'
+    New-Item -ItemType Directory -Path $nativeHostArtifactDir -Force | Out-Null
+
+    $nativeHostFileOutput = foreach ($fileName in @(
+            'OpenPath-NativeHost.build.json',
+            'OpenPath-NativeHost.manifest.json',
+            'whitelist_native_host.json'
+        )) {
+        $candidatePath = Join-Path $nativeHostRoot $fileName
+        "=== Native Host File $candidatePath ==="
+        if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
+            Protect-OpenPathDiagnosticText -Text (Get-Content -LiteralPath $candidatePath -Raw)
+            Copy-Item -LiteralPath $candidatePath -Destination (Join-Path $nativeHostArtifactDir $fileName) -Force
+        }
+        else {
+            'MISSING'
+        }
+    }
+
+    $nativeHostExecutablePath = Join-Path $nativeHostRoot 'OpenPath-NativeHost.exe'
+    $nativeHostExecutableHash = ''
+    $nativeHostExecutableState = $null
+    $nativeHostExecutableOutput = "=== Native Host Executable $nativeHostExecutablePath ==="
+    if (Test-Path -LiteralPath $nativeHostExecutablePath -PathType Leaf) {
+        $nativeHostExecutableState = Get-Item -LiteralPath $nativeHostExecutablePath
+        $nativeHostExecutableHash = (Get-FileHash -LiteralPath $nativeHostExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $nativeHostExecutableOutput = @(
+            $nativeHostExecutableOutput
+            "sha256=$nativeHostExecutableHash"
+            "size=$($nativeHostExecutableState.Length) mtimeUtc=$($nativeHostExecutableState.LastWriteTimeUtc.ToString('o'))"
+        ) | Out-String
+        Copy-Item -LiteralPath $nativeHostExecutablePath -Destination (Join-Path $nativeHostArtifactDir 'OpenPath-NativeHost.exe') -Force
+    }
+    else {
+        $nativeHostExecutableOutput = @($nativeHostExecutableOutput, 'MISSING') | Out-String
+    }
+
+    $nativeHostDirectoryOutput = try {
+        @(
+            "=== Native Host Directory $nativeHostRoot ==="
+            if (Test-Path -LiteralPath $nativeHostRoot) {
+                (Get-ChildItem -LiteralPath $nativeHostRoot -Force -ErrorAction Stop |
+                    Select-Object Name, Length, LastWriteTimeUtc | Format-Table -AutoSize | Out-String)
+            }
+            else {
+                'MISSING'
+            }
+        )
+    }
+    catch {
+        "ERROR: $($_.Exception.Message)"
+    }
+
+    $nativeHostRegistryOutput = foreach ($hostRegistryPath in @(
+            'HKLM\SOFTWARE\Mozilla\NativeMessagingHosts\whitelist_native_host',
+            'HKLM\SOFTWARE\WOW6432Node\Mozilla\NativeMessagingHosts\whitelist_native_host'
+        )) {
+        "=== Native Messaging Registry $hostRegistryPath ==="
+        $registryValue = (reg.exe QUERY $hostRegistryPath /ve 2>$null | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($registryValue)) { 'MISSING' } else { $registryValue }
+    }
+
+    $nativeHostUserLogOutput = foreach ($userDirectory in @(Get-ChildItem -Path 'C:\Users' -Directory -ErrorAction SilentlyContinue)) {
+        $userLogPath = Join-Path $userDirectory.FullName 'AppData\Local\OpenPath\native-host.log'
+        if (-not (Test-Path -LiteralPath $userLogPath -PathType Leaf)) { continue }
+        $userLogContent = $null
+        try { $userLogContent = Protect-OpenPathDiagnosticText -Text (Get-Content -LiteralPath $userLogPath -Raw -ErrorAction Stop) }
+        catch { continue }
+        $artifactLogName = "native-host-$($userDirectory.Name).log"
+        Set-Content -LiteralPath (Join-Path $nativeHostArtifactDir $artifactLogName) -Value $userLogContent -Encoding UTF8
+        @(
+            "=== Native Host User Log $userLogPath (redacted copy: native-host/$artifactLogName) ==="
+            (($userLogContent -split "`r?`n" | Select-Object -Last 60) -join "`n")
+        )
+    }
+
+    $nativeHostBuildJsonPath = Join-Path $nativeHostRoot 'OpenPath-NativeHost.build.json'
+    $nativeHostManifestJsonPath = Join-Path $nativeHostRoot 'OpenPath-NativeHost.manifest.json'
+    $nativeHostMessagingManifestPath = Join-Path $nativeHostRoot 'whitelist_native_host.json'
+    $nativeHostStateJson = [ordered]@{
+        schemaVersion    = 1
+        collectedAtUtc   = [DateTime]::UtcNow.ToString('o')
+        nativeRoot       = $nativeHostRoot
+        buildDiagnostics = $(if (Test-Path -LiteralPath $nativeHostBuildJsonPath -PathType Leaf) { Get-Content -LiteralPath $nativeHostBuildJsonPath -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue } else { $null })
+        buildManifest    = $(if (Test-Path -LiteralPath $nativeHostManifestJsonPath -PathType Leaf) { Get-Content -LiteralPath $nativeHostManifestJsonPath -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue } else { $null })
+        executable       = $(if ($nativeHostExecutableState) {
+                [ordered]@{
+                    path     = $nativeHostExecutablePath
+                    sha256   = $nativeHostExecutableHash
+                    size     = [long]$nativeHostExecutableState.Length
+                    mtimeUtc = $nativeHostExecutableState.LastWriteTimeUtc.ToString('o')
+                }
+            }
+            else { $null })
+        messagingManifest = [ordered]@{
+            path       = $nativeHostMessagingManifestPath
+            targetPath = $(try { [string](Get-Content -LiteralPath $nativeHostMessagingManifestPath -Raw | ConvertFrom-Json).path } catch { '' })
+        }
+    }
+    $nativeHostStateJson | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $nativeHostArtifactDir 'native-host-state.json') -Encoding UTF8
+
     $dnsProbeOutput = foreach ($probeHost in @(
             'google.com',
             'portal.127.0.0.1.sslip.io',
@@ -1899,9 +2017,9 @@ function Write-WindowsDiagnostics {
         '=== OpenPath Firewall DNS Rules ==='
         (Get-NetFirewallRule -DisplayName 'OpenPath-DNS-*' -ErrorAction SilentlyContinue | Format-Table DisplayName, Enabled, Direction, Action -AutoSize | Out-String)
         '=== OpenPath Config ==='
-        $(if (Test-Path 'C:\OpenPath\data\config.json') { Get-Content 'C:\OpenPath\data\config.json' -Raw } else { 'Config file missing' })
+        $(if (Test-Path 'C:\OpenPath\data\config.json') { Protect-OpenPathDiagnosticText -Text (Get-Content 'C:\OpenPath\data\config.json' -Raw) } else { 'Config file missing' })
         '=== Student Scenario ==='
-        $(if (Test-Path (Join-Path $script:ArtifactsRoot 'student-scenario.json')) { Get-Content (Join-Path $script:ArtifactsRoot 'student-scenario.json') -Raw } else { 'Student scenario missing' })
+        $(if (Test-Path (Join-Path $script:ArtifactsRoot 'student-scenario.json')) { Protect-OpenPathDiagnosticText -Text (Get-Content (Join-Path $script:ArtifactsRoot 'student-scenario.json') -Raw) } else { 'Student scenario missing' })
         '=== Installed Runtime Evidence ==='
         ($runtimeEvidenceOutput | Out-String)
         '=== Acrylic File Evidence ==='
@@ -1910,12 +2028,22 @@ function Write-WindowsDiagnostics {
         ($acrylicServiceProcessOutput | Out-String)
         '=== Acrylic Event Log Evidence ==='
         ($acrylicEventLogOutput | Out-String)
+        '=== Native Host State ==='
+        ($nativeHostFileOutput | Out-String)
+        '=== Native Host Executable Evidence ==='
+        ($nativeHostExecutableOutput | Out-String)
+        '=== Native Host Directory ==='
+        ($nativeHostDirectoryOutput | Out-String)
+        '=== Native Messaging Registry ==='
+        ($nativeHostRegistryOutput | Out-String)
+        '=== Native Host User Logs ==='
+        ($nativeHostUserLogOutput | Out-String)
         '=== DNS Probes ==='
         ($dnsProbeOutput | Out-String)
         '=== Whitelist ==='
-        $(if (Test-Path $whitelistPath) { Get-Content $whitelistPath -Raw } else { 'Whitelist file missing' })
+        $(if (Test-Path $whitelistPath) { Protect-OpenPathDiagnosticText -Text (Get-Content $whitelistPath -Raw) } else { 'Whitelist file missing' })
         '=== OpenPath Log Tail ==='
-        $(if (Test-Path $logPath) { Get-Content $logPath -Tail 200 | Out-String } else { 'OpenPath log missing' })
+        $(if (Test-Path $logPath) { Protect-OpenPathDiagnosticText -Text (Get-Content $logPath -Tail 200 | Out-String) } else { 'OpenPath log missing' })
     ) | Set-Content -Path $diagnosticPath -Encoding UTF8
 }
 

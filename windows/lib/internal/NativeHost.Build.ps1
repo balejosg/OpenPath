@@ -120,6 +120,251 @@ function Get-OpenPathSmartAppControlState {
     return [pscustomobject]$state
 }
 
+function Get-OpenPathNativeHostSignaturePin {
+    <#
+    .SYNOPSIS
+        Publisher pin for the prebuilt Authenticode-signed native host.
+    .DESCRIPTION
+        Phase 8: constants only. Empty until Phase 8.1 activates the SignPath
+        Foundation signing channel; an empty pin fails closed, so a prebuilt
+        executable is never trusted before the publisher identity is known.
+        Subject/Issuer are the certificate values the submission must present.
+        Description is the authenticated SpcSpOpusInfo program description when
+        the pin declares one (SignPath Foundation signs many projects, so the
+        subject alone does not identify OpenPath).
+    #>
+    [CmdletBinding()]
+    param()
+
+    return [ordered]@{
+        Subject     = ''
+        Issuer      = ''
+        Description = ''
+    }
+}
+
+function Get-OpenPathNativeHostSignatureProjection {
+    <#
+    .SYNOPSIS
+        Normalizes Get-AuthenticodeSignature for the native host verification.
+    .DESCRIPTION
+        Read-only. The Description comes from the signature object when the
+        platform exposes it; an empty value means the pin cannot rely on it.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$ExecutablePath)
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $ExecutablePath -ErrorAction Stop
+    $subject = ''
+    $issuer = ''
+    $thumbprint = ''
+    if ($signature.SignerCertificate) {
+        $subject = [string]$signature.SignerCertificate.Subject
+        $issuer = [string]$signature.SignerCertificate.Issuer
+        $thumbprint = [string]$signature.SignerCertificate.Thumbprint
+    }
+    $description = ''
+    if ($signature.PSObject.Properties['Description']) { $description = [string]$signature.Description }
+    return [ordered]@{
+        Status        = [string]$signature.Status
+        StatusMessage = [string]$signature.StatusMessage
+        Subject       = $subject
+        Issuer        = $issuer
+        Thumbprint    = $thumbprint
+        Timestamped   = ($null -ne $signature.TimeStamperCertificate)
+        Description   = $description
+    }
+}
+
+function Find-OpenPathNativeHostSignedCandidate {
+    <#
+    .SYNOPSIS
+        Locates the staged signed native host and its anchor hash.
+    .DESCRIPTION
+        Phase 8: the offline template and the scripts zip stage
+        native-host\signed\OpenPath-NativeHost.exe next to
+        OpenPath-NativeHost.signing.json. The primary anchor is the payload
+        manifest entry for that relative path; when the manifest exists without
+        the entry the candidate is rejected (an offline install must never
+        trust a signed file it did not ship a hash for). Without a payload
+        manifest (development checkouts, scripts zip) the staging metadata hash
+        anchors the verification.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [string]$SourceSha256 = '',
+        [string]$PayloadManifestPath = ''
+    )
+
+    $candidate = [ordered]@{
+        Found          = $false
+        ExecutablePath = ''
+        MetadataPath   = ''
+        ExpectedSha256 = ''
+        AnchorSource   = ''
+        SourceSha256   = ''
+        Reason         = 'signed-candidate-missing'
+    }
+    $signedRoot = Join-Path $OpenPathRoot 'native-host\signed'
+    $executablePath = Join-Path $signedRoot 'OpenPath-NativeHost.exe'
+    $metadataPath = Join-Path $signedRoot 'OpenPath-NativeHost.signing.json'
+    if (-not (Test-Path -LiteralPath $executablePath -PathType Leaf)) { return [pscustomobject]$candidate }
+    $candidate.Found = $true
+    $candidate.ExecutablePath = $executablePath
+
+    $metadataSource = ''
+    $metadataHash = ''
+    if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
+        $candidate.MetadataPath = $metadataPath
+        try {
+            $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+            if ($metadata.PSObject.Properties['sourceSha256']) { $metadataSource = ([string]$metadata.sourceSha256).ToLowerInvariant() }
+            if ($metadata.PSObject.Properties['executableSha256']) { $metadataHash = ([string]$metadata.executableSha256).ToLowerInvariant() }
+        }
+        catch { }
+    }
+    $candidate.SourceSha256 = $metadataSource
+    if ($SourceSha256 -and $metadataSource -and $metadataSource -ne $SourceSha256.ToLowerInvariant()) {
+        $candidate.Reason = 'signed-candidate-source-mismatch'
+        return [pscustomobject]$candidate
+    }
+
+    if (-not $PayloadManifestPath) { $PayloadManifestPath = Join-Path $OpenPathRoot 'payload-manifest.json' }
+    if (Test-Path -LiteralPath $PayloadManifestPath -PathType Leaf) {
+        $entryHash = ''
+        try {
+            $manifest = Get-Content -LiteralPath $PayloadManifestPath -Raw | ConvertFrom-Json
+            $entry = @($manifest.payloads) |
+                Where-Object { $_.path -and (($_.path -replace '\\', '/') -eq 'native-host/signed/OpenPath-NativeHost.exe') } |
+                Select-Object -First 1
+            if ($entry) { $entryHash = ([string]$entry.sha256).ToLowerInvariant() }
+        }
+        catch { $entryHash = '' }
+        if (-not $entryHash) {
+            $candidate.Reason = 'signed-candidate-payload-anchor-missing'
+            return [pscustomobject]$candidate
+        }
+        $candidate.ExpectedSha256 = $entryHash
+        $candidate.AnchorSource = 'payload-manifest'
+    }
+    elseif ($metadataHash) {
+        $candidate.ExpectedSha256 = $metadataHash
+        $candidate.AnchorSource = 'signing-metadata'
+    }
+    if (-not $candidate.ExpectedSha256) {
+        $candidate.Reason = 'signed-candidate-anchor-missing'
+        return [pscustomobject]$candidate
+    }
+    $candidate.Reason = 'signed-candidate-found'
+    return [pscustomobject]$candidate
+}
+
+function Test-OpenPathNativeHostSignedExecutable {
+    <#
+    .SYNOPSIS
+        Verifies a staged prebuilt native host against the anchor hash and the
+        publisher pin.
+    .DESCRIPTION
+        Phase 8: the sha256 must equal the anchor hash (payload manifest), the
+        Authenticode signature must be Valid with a timestamp and the signer
+        subject/issuer must equal the pin; a pinned description must match when
+        the signature exposes one. Never runs an executable that does not pass.
+        Read-only and best-effort.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256,
+        [AllowNull()][object]$Pin = $null,
+        # Test seam: returns the normalized signature projection for a path.
+        [scriptblock]$SignatureReader = $null
+    )
+
+    $result = [ordered]@{
+        Valid            = $false
+        Reason           = ''
+        ExecutableSha256 = ''
+        Status           = ''
+        StatusMessage    = ''
+        Subject          = ''
+        Issuer           = ''
+        Thumbprint       = ''
+        Timestamped      = $false
+        Description      = ''
+    }
+    if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
+        $result.Reason = 'signed-executable-missing'
+        return [pscustomobject]$result
+    }
+    try {
+        $result.ExecutableSha256 = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    catch {
+        $result.Reason = 'signed-hash-unreadable'
+        return [pscustomobject]$result
+    }
+    if (-not $ExpectedSha256 -or $result.ExecutableSha256 -ne $ExpectedSha256.ToLowerInvariant()) {
+        $result.Reason = 'signed-sha256-mismatch'
+        return [pscustomobject]$result
+    }
+
+    if ($null -eq $Pin) { $Pin = Get-OpenPathNativeHostSignaturePin }
+    $pinSubject = [string]$Pin.Subject
+    $pinIssuer = [string]$Pin.Issuer
+    $pinDescription = [string]$Pin.Description
+    if ([string]::IsNullOrWhiteSpace($pinSubject) -or [string]::IsNullOrWhiteSpace($pinIssuer)) {
+        $result.Reason = 'signature-pin-not-configured'
+        return [pscustomobject]$result
+    }
+
+    try {
+        if ($SignatureReader) { $signature = & $SignatureReader $ExecutablePath }
+        else { $signature = Get-OpenPathNativeHostSignatureProjection -ExecutablePath $ExecutablePath }
+    }
+    catch {
+        $result.Reason = "signature-read-failed: $($_.Exception.Message)"
+        return [pscustomobject]$result
+    }
+    $result.Status = [string]$signature.Status
+    $result.StatusMessage = [string]$signature.StatusMessage
+    $result.Subject = [string]$signature.Subject
+    $result.Issuer = [string]$signature.Issuer
+    $result.Thumbprint = [string]$signature.Thumbprint
+    $result.Timestamped = [bool]$signature.Timestamped
+    $result.Description = [string]$signature.Description
+
+    if ($result.Status -ne 'Valid') {
+        $result.Reason = if ($result.StatusMessage) { "signature-invalid: $($result.StatusMessage)" } else { 'signature-invalid' }
+        return [pscustomobject]$result
+    }
+    if (-not $result.Timestamped) {
+        $result.Reason = 'signature-not-timestamped'
+        return [pscustomobject]$result
+    }
+    if (-not $result.Subject.Trim().Equals($pinSubject.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+        $result.Reason = 'signature-subject-mismatch'
+        return [pscustomobject]$result
+    }
+    if (-not $result.Issuer.Trim().Equals($pinIssuer.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+        $result.Reason = 'signature-issuer-mismatch'
+        return [pscustomobject]$result
+    }
+    if (-not [string]::IsNullOrWhiteSpace($pinDescription)) {
+        if ([string]::IsNullOrWhiteSpace($result.Description)) {
+            $result.Reason = 'signature-description-unavailable'
+            return [pscustomobject]$result
+        }
+        if (-not $result.Description.Trim().Equals($pinDescription.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+            $result.Reason = 'signature-description-mismatch'
+            return [pscustomobject]$result
+        }
+    }
+    $result.Valid = $true
+    $result.Reason = 'signature-valid'
+    return [pscustomobject]$result
+}
+
 function Invoke-OpenPathNativeHostCompilation {
     <#
     .SYNOPSIS
@@ -315,10 +560,14 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         [Parameter(Mandatory = $true)][string]$NativeRoot,
         [Parameter(Mandatory = $true)][string]$OpenPathRoot,
         [string]$SourcePath = '',
+        [string]$PayloadManifestPath = '',
         [switch]$Force,
         # Test seams.
         [scriptblock]$CompilerInvoker = $null,
         [scriptblock]$ProcessInvoker = $null,
+        [scriptblock]$SignatureReader = $null,
+        # Test seam: overrides the empty-until-Phase-8.1 publisher pin.
+        [AllowNull()][object]$SignaturePin = $null,
         [string]$CompilerPath = ''
     )
 
@@ -339,6 +588,12 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         # is unchanged; the state fields explain a Fallback without a build.
         BackoffActive   = $false
         NextAttemptAt   = ''
+        # Phase 8: which channel produced the installed host ('signed-prebuilt'
+        # or 'compiled') and the signature outcome that gated the candidate.
+        HostSource      = ''
+        Signature       = $null
+        SignedCandidatePath = ''
+        SignatureRejectedReason = ''
     }
     $writeDiagnostics = {
         param([string]$Status, [string]$Error)
@@ -363,6 +618,8 @@ function Build-OpenPathFirefoxNativeHostExecutable {
                 attemptedAt     = $attemptedAt.ToString('o')
                 nextAttemptAt   = if ($Status -eq 'Built') { '' } else { $attemptedAt.AddSeconds(3600).ToString('o') }
                 smartAppControl = Get-OpenPathSmartAppControlState
+                hostSource      = $result.HostSource
+                signatureRejectedReason = $result.SignatureRejectedReason
                 checkedAt       = $attemptedAt.ToString('o')
             }
             [IO.File]::WriteAllText($diagnosticsPath, ($diagnostics | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
@@ -382,6 +639,21 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         if ($sourceExists) { $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant() }
         $result.SourceSha256 = $sourceHash
 
+        # Phase 8: a valid signed executable for the current source is preferred
+        # over compiling; a rejected candidate is recorded and never executed.
+        $signedCandidate = Find-OpenPathNativeHostSignedCandidate -OpenPathRoot $OpenPathRoot -SourceSha256 $sourceHash -PayloadManifestPath $PayloadManifestPath
+        $signedVerification = $null
+        if ($signedCandidate.Found -and $signedCandidate.Reason -eq 'signed-candidate-found') {
+            $signedVerification = Test-OpenPathNativeHostSignedExecutable -ExecutablePath $signedCandidate.ExecutablePath -ExpectedSha256 $signedCandidate.ExpectedSha256 -Pin $SignaturePin -SignatureReader $SignatureReader
+            $result.Signature = $signedVerification
+            $result.SignedCandidatePath = $signedCandidate.ExecutablePath
+            if (-not $signedVerification.Valid) { $result.SignatureRejectedReason = $signedVerification.Reason }
+        }
+        elseif ($signedCandidate.Found) {
+            $result.SignatureRejectedReason = $signedCandidate.Reason
+        }
+        $signedUsable = ($signedVerification -and $signedVerification.Valid)
+
         $existing = $null
         if ((Test-Path -LiteralPath $manifestPath -PathType Leaf) -and (Test-Path -LiteralPath $executablePath -PathType Leaf)) {
             try { $existing = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $existing = $null }
@@ -390,16 +662,24 @@ function Build-OpenPathFirefoxNativeHostExecutable {
             [string]$existing.sourceSha256 -eq $sourceHash -and
             [string]$existing.executableSha256 -eq (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant() -and
             [string]$existing.healthStatus -eq 'healthy') {
-            $result.Status = 'BuildSkipped'
-            $result.ExecutablePath = $executablePath
-            $result.ExecutableSha256 = [string]$existing.executableSha256
-            return [pscustomobject]$result
+            # An installed signed host is final; a compiled host is replaced
+            # once a valid signed candidate for the same source shows up.
+            $existingIsSigned = ([string]$existing.hostSource -eq 'signed-prebuilt')
+            if ($existingIsSigned -or -not $signedUsable) {
+                $result.Status = 'BuildSkipped'
+                $result.ExecutablePath = $executablePath
+                $result.ExecutableSha256 = [string]$existing.executableSha256
+                $result.HostSource = if ($existingIsSigned) { 'signed-prebuilt' } else { 'compiled' }
+                return [pscustomobject]$result
+            }
         }
 
         # Phase 5.2 D2: honour the failure backoff while the source is
         # unchanged (a new source hash clears it), so a broken compiler or a
-        # missing payload can never trigger a compile loop.
-        if (-not $Force -and (Test-Path -LiteralPath $diagnosticsPath -PathType Leaf)) {
+        # missing payload can never trigger a compile loop. Phase 8: a valid
+        # signed candidate bypasses the backoff because no compilation is
+        # involved.
+        if (-not $Force -and -not $signedUsable -and (Test-Path -LiteralPath $diagnosticsPath -PathType Leaf)) {
             $previousFailure = $null
             try { $previousFailure = Get-Content -LiteralPath $diagnosticsPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $previousFailure = $null }
             if ($previousFailure -and ($failedDiagnosticStatuses -contains [string]$previousFailure.status)) {
@@ -414,6 +694,60 @@ function Build-OpenPathFirefoxNativeHostExecutable {
                     return [pscustomobject]$result
                 }
             }
+        }
+
+        if ($signedUsable) {
+            # Phase 8: install the verified prebuilt with the same atomic swap,
+            # temporary copy and SYSTEM health ping as the compiled path.
+            $temporaryExecutable = "$executablePath.$([guid]::NewGuid().ToString('N')).tmp"
+            try {
+                Copy-Item -LiteralPath $signedCandidate.ExecutablePath -Destination $temporaryExecutable -Force
+            }
+            catch {
+                $result.Error = "signed-candidate-copy-failed: $($_.Exception.Message)"
+                & $writeDiagnostics 'Failed' $result.Error
+                if (Test-Path -LiteralPath $executablePath -PathType Leaf) { $result.ExecutablePath = $executablePath }
+                return [pscustomobject]$result
+            }
+            $health = Test-OpenPathNativeHostExecutable -ExecutablePath $temporaryExecutable -ProcessInvoker $ProcessInvoker
+            $result.Health = $health
+            if (-not $health.Healthy) {
+                $result.Error = if ($health.Error) { [string]$health.Error } else { 'native-host-health-check-failed' }
+                Remove-Item -LiteralPath $temporaryExecutable -Force -ErrorAction SilentlyContinue
+                & $writeDiagnostics 'HealthCheckFailed' $result.Error
+                if (Test-Path -LiteralPath $executablePath -PathType Leaf) { $result.ExecutablePath = $executablePath }
+                return [pscustomobject]$result
+            }
+            Move-Item -LiteralPath $temporaryExecutable -Destination $executablePath -Force
+            $executableHash = (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $result.ExecutablePath = $executablePath
+            $result.ExecutableSha256 = $executableHash
+            $result.BuiltNow = $true
+            $result.Status = 'Built'
+            $result.HostSource = 'signed-prebuilt'
+            $signingMetadata = $null
+            if (Test-Path -LiteralPath $signedCandidate.MetadataPath -PathType Leaf) {
+                try { $signingMetadata = Get-Content -LiteralPath $signedCandidate.MetadataPath -Raw | ConvertFrom-Json } catch { $signingMetadata = $null }
+            }
+            $manifest = [ordered]@{
+                schemaVersion    = 1
+                source           = [IO.Path]::GetFileName($SourcePath)
+                sourceSha256     = $sourceHash
+                executable       = [IO.Path]::GetFileName($executablePath)
+                executableSha256 = $executableHash
+                protocolVersion  = [int]$health.ProtocolVersion
+                healthStatus     = 'healthy'
+                compiledAt       = [DateTime]::UtcNow.ToString('o')
+                hostSource       = 'signed-prebuilt'
+                signerSubject    = if ($signingMetadata -and $signingMetadata.PSObject.Properties['signerSubject']) { [string]$signingMetadata.signerSubject } else { $signedVerification.Subject }
+                signerIssuer     = if ($signingMetadata -and $signingMetadata.PSObject.Properties['signerIssuer']) { [string]$signingMetadata.signerIssuer } else { $signedVerification.Issuer }
+                signerThumbprint = if ($signingMetadata -and $signingMetadata.PSObject.Properties['signerThumbprint']) { [string]$signingMetadata.signerThumbprint } else { $signedVerification.Thumbprint }
+                timestamped      = [bool]$signedVerification.Timestamped
+                anchorSource     = [string]$signedCandidate.AnchorSource
+            }
+            [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+            & $writeDiagnostics 'Built' ''
+            return [pscustomobject]$result
         }
 
         if (-not $sourceExists) {
@@ -455,6 +789,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         $result.ExecutableSha256 = $executableHash
         $result.BuiltNow = $true
         $result.Status = 'Built'
+        $result.HostSource = 'compiled'
         $manifest = [ordered]@{
             schemaVersion    = 1
             source           = [IO.Path]::GetFileName($SourcePath)
@@ -464,6 +799,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
             protocolVersion  = [int]$health.ProtocolVersion
             healthStatus     = 'healthy'
             compiledAt       = [DateTime]::UtcNow.ToString('o')
+            hostSource       = 'compiled'
         }
         [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
         & $writeDiagnostics 'Built' ''

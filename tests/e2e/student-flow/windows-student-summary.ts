@@ -49,11 +49,34 @@ function readExcerpt(filePath: string): string {
   return truncated ? `${excerpt}\n... [truncated]` : excerpt;
 }
 
+// Phase 8 H1: the compiled native host state (build diagnostics, build
+// manifest, executable hash and messaging manifest target) must be visible in
+// the failure/success summary, not only inside windows-diagnostics.txt.
+function readNativeHostState(artifactsDir: string): string {
+  const statePath = path.join(artifactsDir, 'native-host', 'native-host-state.json');
+  if (!fs.existsSync(statePath)) {
+    return 'native-host/native-host-state.json: missing';
+  }
+
+  const content = redactSensitiveValues(fs.readFileSync(statePath, 'utf8').trim());
+  if (!content) {
+    return 'native-host/native-host-state.json: empty';
+  }
+
+  return content.length > 4000 ? `${content.slice(0, 4000)}\n... [truncated]` : content;
+}
+
 function buildSections(artifactsDir: string): SummarySection[] {
-  return SUMMARY_FILES.map((fileName) => ({
+  const sections = SUMMARY_FILES.map((fileName) => ({
     fileName,
     excerpt: readExcerpt(path.join(artifactsDir, fileName)),
   }));
+  sections.push({
+    fileName: 'native-host/native-host-state.json',
+    excerpt: readNativeHostState(artifactsDir),
+  });
+
+  return sections;
 }
 
 export function buildWindowsStudentSummary({

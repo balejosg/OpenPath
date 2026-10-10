@@ -17,39 +17,41 @@ Describe 'Windows Pester shard plan' {
         $plan.ExcludeTag | Should -BeNullOrEmpty
     }
 
-    It 'keeps the heavy suite alone on shard 1 and every other suite on shard 2 when ShardCount is 2' {
-        $shard1 = Get-WindowsPesterShardPlan -AllSuitePaths $allPaths -ShardIndex 1 -ShardCount 2
-        $shard2 = Get-WindowsPesterShardPlan -AllSuitePaths $allPaths -ShardIndex 2 -ShardCount 2
-        @($shard1.SuitePaths) | Should -Be @($heavyPath)
-        @($shard2.SuitePaths).Count | Should -Be 41
-        $shard1.Tag | Should -BeNullOrEmpty
-        $shard1.ExcludeTag | Should -BeNullOrEmpty
-        $shard2.Tag | Should -BeNullOrEmpty
-        $shard2.ExcludeTag | Should -BeNullOrEmpty
-    }
-
-    It 'splits the heavy suite by tag on shards 1 and 2 and covers the rest exactly once with ShardCount 5' {
+    It 'splits the measured AppControl partitions over shards 1-4 and the rest over the remainder with ShardCount 6' {
         $plans = @(
-            1..5 | ForEach-Object {
-                Get-WindowsPesterShardPlan -AllSuitePaths $allPaths -ShardIndex $_ -ShardCount 5
+            1..6 | ForEach-Object {
+                Get-WindowsPesterShardPlan -AllSuitePaths $allPaths -ShardIndex $_ -ShardCount 6
             }
         )
-        @($plans[0].SuitePaths) | Should -Be @($heavyPath)
-        @($plans[1].SuitePaths) | Should -Be @($heavyPath)
-        $plans[0].Tag | Should -Be 'AppControlShardA'
-        $plans[0].ExcludeTag | Should -BeNullOrEmpty
-        $plans[1].Tag | Should -BeNullOrEmpty
-        $plans[1].ExcludeTag | Should -Be 'AppControlShardA'
-        for ($shard = 3; $shard -le 5; $shard++) {
+        $expectedTags = @(
+            'AppControlShardA1',
+            'AppControlShardA2',
+            'AppControlShardB1',
+            'AppControlShardB2'
+        )
+        for ($shard = 1; $shard -le 4; $shard++) {
+            @($plans[$shard - 1].SuitePaths) | Should -Be @($heavyPath)
+            $plans[$shard - 1].Tag | Should -Be $expectedTags[$shard - 1]
+            $plans[$shard - 1].ExcludeTag | Should -BeNullOrEmpty
+        }
+
+        for ($shard = 5; $shard -le 6; $shard++) {
             $plans[$shard - 1].Tag | Should -BeNullOrEmpty
             $plans[$shard - 1].ExcludeTag | Should -BeNullOrEmpty
         }
 
-        $remainder = @($plans[2].SuitePaths) + @($plans[3].SuitePaths) + @($plans[4].SuitePaths)
+        $remainder = @($plans[4].SuitePaths) + @($plans[5].SuitePaths)
         $remainder.Count | Should -Be 41
         @($remainder | Sort-Object -Unique).Count | Should -Be 41
         foreach ($path in $remainingPaths) {
             @($remainder) | Should -Contain $path
+        }
+    }
+
+    It 'fails closed for shard counts that cannot bound the measured heavy suite' {
+        foreach ($shardCount in 2..5) {
+            { Get-WindowsPesterShardPlan -AllSuitePaths $allPaths -ShardIndex 1 -ShardCount $shardCount } |
+                Should -Throw '*needs at least 6 shards*'
         }
     }
 
@@ -63,7 +65,7 @@ Describe 'Windows Pester shard plan' {
     }
 
     It 'fails closed when a shard selects no test files' {
-        { Get-WindowsPesterShardPlan -AllSuitePaths @($heavyPath) -ShardIndex 3 -ShardCount 5 } |
+        { Get-WindowsPesterShardPlan -AllSuitePaths @($heavyPath) -ShardIndex 6 -ShardCount 6 } |
             Should -Throw '*selected no test files*'
     }
 }

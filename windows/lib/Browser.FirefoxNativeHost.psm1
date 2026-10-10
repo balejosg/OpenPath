@@ -241,14 +241,15 @@ function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
             SourceSha256 = ''; ExecutableSha256 = ''; Health = $null
         }
     }
-    if ($result.BackoffActive) {
-        Write-OpenPathLog "Compiled native host refresh is in failure backoff until $($result.NextAttemptAt): $($result.Error)" -Level WARN
+    # Phase 8: availability is logged once per state change with the product
+    # reason code; the classroom boundary turns a Fallback into an ERROR
+    # because the restricted student cannot run the PowerShell fallback.
+    if ($result.Status -in @('Built', 'BuildSkipped')) {
+        Write-OpenPathLog "Compiled native host ensured ($($result.Status), source=$($result.HostSource), sha256=$($result.ExecutableSha256))."
+        Remove-Item -LiteralPath (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'fallback-state.json') -Force -ErrorAction SilentlyContinue
     }
-    elseif ($result.Status -eq 'Fallback') {
-        Write-OpenPathLog "Compiled native host refresh failed; keeping the previous host: $($result.Error)" -Level WARN
-    }
-    elseif ($result.Status -in @('Built', 'BuildSkipped')) {
-        Write-OpenPathLog "Compiled native host ensured ($($result.Status), sha256=$($result.ExecutableSha256))."
+    else {
+        Write-OpenPathNativeHostFallbackState -Config $Config -BuildResult $result
     }
     return $result
 }
@@ -283,12 +284,14 @@ function Get-OpenPathFirefoxNativeHostCompiledHealth {
         $boundaryActive = [bool]$Config.enableNonAdminAppControl
     }
     $health = [ordered]@{
-        BoundaryActive   = $boundaryActive
-        RegisteredPath   = ''
-        UsesCompiledHost = $false
-        CompiledHealthy  = $false
-        CompileStatus    = ''
-        ReasonCode       = ''
+        BoundaryActive          = $boundaryActive
+        RegisteredPath          = ''
+        UsesCompiledHost        = $false
+        CompiledHealthy         = $false
+        CompileStatus           = ''
+        HostSource              = ''
+        SignatureRejectedReason = ''
+        ReasonCode              = ''
     }
     try {
         $manifestPath = $ManifestPath
@@ -314,6 +317,7 @@ function Get-OpenPathFirefoxNativeHostCompiledHealth {
         }
     }
     catch { }
+    if ($buildManifest -and $buildManifest.PSObject.Properties['hostSource']) { $health.HostSource = [string]$buildManifest.hostSource }
     if ((Test-Path -LiteralPath $executablePath -PathType Leaf) -and $buildManifest -and ([string]$buildManifest.healthStatus -eq 'healthy')) {
         try {
             $healthy = ([string]$buildManifest.executableSha256 -eq (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant())
@@ -333,13 +337,81 @@ function Get-OpenPathFirefoxNativeHostCompiledHealth {
     if (-not $boundaryActive) { return [pscustomobject]$health }
     if ($health.UsesCompiledHost -and $health.CompiledHealthy) { return [pscustomobject]$health }
     $status = if ($diagnostics) { [string]$diagnostics.status } else { '' }
+    $buildError = if ($diagnostics -and $diagnostics.PSObject.Properties['error']) { [string]$diagnostics.error } else { '' }
+    $signatureRejected = if ($diagnostics -and $diagnostics.PSObject.Properties['signatureRejectedReason']) { [string]$diagnostics.signatureRejectedReason } else { '' }
     $health.CompileStatus = $status
+    $health.SignatureRejectedReason = $signatureRejected
     $sac = Get-OpenPathSmartAppControlState
+    # Phase 8: the product's own failure text names Smart App Control when it
+    # enforced the block, so that cause wins over the generic health-ping code;
+    # a rejected prebuilt signature gets its own code as well.
+    $sacEvidence = ($sac.State -eq 'enforcement') -and ($buildError -match '(?i)smart app control')
     $health.ReasonCode = if ($status -in @('CompilationFailed', 'SourceMissing', 'Failed')) { 'native_host_compile_failed' }
+        elseif ($sacEvidence) { 'native_host_smart_app_control_blocked' }
+        elseif ($signatureRejected -and -not $health.CompiledHealthy) { 'native_host_signature_invalid' }
         elseif ($status -eq 'HealthCheckFailed') { 'native_host_health_ping_failed' }
         elseif ($sac.State -eq 'enforcement' -and -not $health.CompiledHealthy) { 'native_host_smart_app_control_blocked' }
         else { 'native_host_compiled_unavailable' }
     return [pscustomobject]$health
+}
+
+function Write-OpenPathNativeHostFallbackState {
+    <#
+    .SYNOPSIS
+        Logs the native host availability once per state change.
+    .DESCRIPTION
+        Phase 8: with the classroom AppControl boundary active the restricted
+        student cannot run the PowerShell fallback, so a Fallback means the
+        users have no native host at all; that is an ERROR carrying the product
+        reason code. Without the boundary the PowerShell fallback still works
+        and the message stays a WARN. The state file deduplicates repeated
+        refreshes and is cleared as soon as a healthy host is available again.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Config = $null,
+        [AllowNull()][object]$BuildResult = $null
+    )
+
+    $boundaryActive = $false
+    if ($Config -and $Config.PSObject.Properties['enableNonAdminAppControl']) {
+        $boundaryActive = [bool]$Config.enableNonAdminAppControl
+    }
+    $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
+    $statePath = Join-Path $nativeRoot 'fallback-state.json'
+    $health = $null
+    try { $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $Config } catch { $health = $null }
+    $hostAvailable = ($health -and $health.UsesCompiledHost -and $health.CompiledHealthy)
+    if ($hostAvailable) {
+        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+        return
+    }
+    $reason = if ($health) { [string]$health.ReasonCode } else { '' }
+    if (-not $reason) { $reason = 'native_host_compiled_unavailable' }
+    $status = if ($BuildResult) { [string]$BuildResult.Status } else { '' }
+    $backoffUntil = if ($BuildResult -and $BuildResult.BackoffActive) { [string]$BuildResult.NextAttemptAt } else { '' }
+    $previous = $null
+    try { if (Test-Path -LiteralPath $statePath -PathType Leaf) { $previous = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json } } catch { $previous = $null }
+    if ($previous -and ([string]$previous.reason -eq $reason) -and ([string]$previous.status -eq $status)) { return }
+    $errorText = if ($BuildResult) { [string]$BuildResult.Error } else { '' }
+    $message = if ($boundaryActive) {
+        "Restricted student users have no native host: the PowerShell fallback is denied by AppControl. reason=$reason status=$status backoff=$backoffUntil error=$errorText"
+    }
+    else {
+        "Compiled native host unavailable; the unrestricted PowerShell host fallback stays registered. reason=$reason status=$status backoff=$backoffUntil error=$errorText"
+    }
+    Write-OpenPathLog $message -Level $(if ($boundaryActive) { 'ERROR' } else { 'WARN' })
+    try {
+        $state = [ordered]@{
+            reason         = $reason
+            status         = $status
+            backoffUntil   = $backoffUntil
+            boundaryActive = $boundaryActive
+            updatedAt      = [DateTime]::UtcNow.ToString('o')
+        }
+        Write-OpenPathUtf8NoBomFile -Path $statePath -Value ($state | ConvertTo-Json -Depth 4)
+    }
+    catch { }
 }
 
 function Register-OpenPathFirefoxNativeHost {
@@ -381,18 +453,18 @@ function Register-OpenPathFirefoxNativeHost {
     # Phase 5: compile the C# host when the source changed and point the
     # manifest at it only after a framed ping health check. Any failure keeps
     # the cmd/PowerShell host registered (never a manifest pointing at a
-    # missing or unhealthy executable).
+    # missing or unhealthy executable). Phase 8: the availability message is
+    # logged once per state change after the manifest is written so the reason
+    # codes see the fresh registration.
+    $buildResult = $null
     try {
         $buildResult = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $script:OpenPathRoot
-        if ($buildResult.Status -eq 'Fallback') {
-            Write-OpenPathLog "Compiled native host unavailable; keeping the PowerShell host fallback. $($buildResult.Error)" -Level WARN
-        }
-        elseif ($buildResult.Status -in @('Built', 'BuildSkipped')) {
-            Write-OpenPathLog "Compiled native host ready ($($buildResult.Status), sha256=$($buildResult.ExecutableSha256))."
+        if ($buildResult.Status -in @('Built', 'BuildSkipped')) {
+            Write-OpenPathLog "Compiled native host ready ($($buildResult.Status), source=$($buildResult.HostSource), sha256=$($buildResult.ExecutableSha256))."
         }
     }
     catch {
-        Write-OpenPathLog "Compiled native host build failed; keeping the PowerShell host fallback: $_" -Level WARN
+        Write-OpenPathLog "Compiled native host build failed: $_" -Level WARN
     }
 
     $manifestPath = Get-OpenPathFirefoxNativeHostManifestPath
@@ -412,6 +484,8 @@ function Register-OpenPathFirefoxNativeHost {
     }
 
     Sync-OpenPathFirefoxNativeHostState -Config $Config -ClearWhitelist:$ClearWhitelist | Out-Null
+    # Phase 8: truthful availability state after the fresh manifest is in place.
+    Write-OpenPathNativeHostFallbackState -Config $Config -BuildResult $buildResult
     return $true
 }
 
@@ -451,6 +525,7 @@ Export-ModuleMember -Function @(
     'Sync-OpenPathFirefoxNativeHostState',
     'Invoke-OpenPathFirefoxNativeHostCompiledEnsure',
     'Get-OpenPathFirefoxNativeHostCompiledHealth',
+    'Write-OpenPathNativeHostFallbackState',
     'Register-OpenPathFirefoxNativeHost',
     'Unregister-OpenPathFirefoxNativeHost'
 )

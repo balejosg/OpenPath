@@ -1787,6 +1787,65 @@ PrimaryServerAddress=198.51.100.7
             (Get-FirstVisitHostSignalsVerdict -Live ([pscustomobject]@{ hostStarted = $false }) -Events $null -Capabilities 'native-host-log' -CodeIntegrityEvents $auditOnly).blockedBySmartAppControl | Should -BeFalse
         }
 
+        It 'Names a Smart App Control block from the product build evidence (Phase 8 H2)' {
+            $hostCompile = [ordered]@{
+                buildDiagnostics = [pscustomobject]@{
+                    status = 'HealthCheckFailed'
+                    error  = 'health-check-timeout (Smart App Control is enforcing and may block the unsigned compiled host)'
+                }
+                healthReasonCode = ''
+            }
+            $verdict = Get-FirstVisitHostSignalsVerdict -Live ([pscustomobject]@{ hostStarted = $false }) -Events $null -Capabilities 'native-host-log' -CodeIntegrityEvents $null -SmartAppControlState 'On' -HostCompile $hostCompile
+            $verdict.blockedBySmartAppControl | Should -BeTrue
+            $verdict.productReasons | Should -Contain 'native-host-blocked-by-smart-app-control'
+            $verdict.productSacEvidence.buildError | Should -Match 'Smart App Control'
+            # The compiled-health reason code alone is enough too.
+            $fromReason = Get-FirstVisitHostSignalsVerdict -Live ([pscustomobject]@{ hostStarted = $false }) -Events $null -Capabilities 'native-host-log' -HostCompile ([pscustomobject]@{ healthReasonCode = 'native_host_smart_app_control_blocked' })
+            $fromReason.blockedBySmartAppControl | Should -BeTrue
+            # A generic fallback without the product SAC marker keeps the AppControl classification.
+            $generic = Get-FirstVisitHostSignalsVerdict -Live ([pscustomobject]@{ hostStarted = $false }) -Events $null -Capabilities 'native-host-log' -HostCompile ([pscustomobject]@{ buildDiagnostics = [pscustomobject]@{ error = 'native-host-compile-backoff' } })
+            $generic.blockedBySmartAppControl | Should -BeFalse
+        }
+
+        It 'Records both positive-control samples per checkpoint (Phase 8 H2)' {
+            $state = [pscustomobject]@{ deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 2 } }
+            $blockedThenRan = [pscustomobject]@{
+                plainSamples = @(
+                    [pscustomobject]@{ started = $true; exitCode = 7 },
+                    [pscustomobject]@{ started = $true; exitCode = 7 }
+                )
+                motwSamples  = @(
+                    [pscustomobject]@{ started = $false; error = 'blocked by policy'; nativeError = 1260 },
+                    [pscustomobject]@{ started = $true; exitCode = 7 }
+                )
+            }
+            $decision = Get-OpenPathFirstVisitSacDecision -SacState $state -SacControl $blockedThenRan
+            $decision.applied | Should -BeTrue
+            @($decision.motwSamples).Count | Should -Be 2
+            $decision.motwBlockedCount | Should -Be 1
+            $decision.positiveControlConsistent | Should -BeFalse
+            $consistent = Get-OpenPathFirstVisitSacDecision -SacState $state -SacControl ([pscustomobject]@{
+                    plainSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }, [pscustomobject]@{ started = $true; exitCode = 7 })
+                    motwSamples  = @([pscustomobject]@{ started = $false }, [pscustomobject]@{ started = $false })
+                })
+            $consistent.applied | Should -BeTrue
+            $consistent.positiveControlConsistent | Should -BeTrue
+        }
+
+        It 'Bounds the CodeIntegrity XML with a real truncated flag (Phase 8 H2)' {
+            $two = '<Event xmlns="http://x"><System><EventID>3033</EventID></System></Event><Event xmlns="http://x"><System><EventID>3077</EventID></System></Event>'
+            $bounded = Get-FirstVisitCodeIntegrityBounded -Xml $two -MaxEvents 1
+            $bounded.events | Should -Be 2
+            $bounded.truncated | Should -BeTrue
+            $fits = Get-FirstVisitCodeIntegrityBounded -Xml '<Event xmlns="http://x"><System><EventID>3033</EventID></System></Event>' -MaxEvents 5
+            $fits.truncated | Should -BeFalse
+            $long = ('<Event xmlns="http://x"><System><EventID>3033</EventID></System></Event>' * 400)
+            $cut = Get-FirstVisitCodeIntegrityBounded -Xml $long
+            $cut.truncated | Should -BeTrue
+            $cut.xml.Length | Should -Be 8204
+            $cut.xml.EndsWith('...truncated') | Should -BeTrue
+        }
+
         It 'Requires the site host to be navigated or the scene is INFRA site-not-navigated' {
             $lines = @(
                 (ConvertTo-DiagLine61 @{ ts = 1000; kind = 'navigation'; source = 'onCommitted'; host = 'www.example.invalid' }),

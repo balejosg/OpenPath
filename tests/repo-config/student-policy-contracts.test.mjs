@@ -2209,4 +2209,44 @@ describe('repository verification contract', () => {
       'package-lock.json should install drizzle-orm at the workspace root for hoisted drizzle-kit resolution'
     );
   });
+  test('Windows student-policy diagnostics redact machine tokens and collect the native host state', () => {
+    const flow = readText('tests/e2e/ci/run-windows-student-flow.ps1');
+    const summary = readText('tests/e2e/student-flow/windows-student-summary.ts');
+
+    assert.ok(
+      flow.includes('function Protect-OpenPathDiagnosticText'),
+      'the flow must define the diagnostic token redactor'
+    );
+    assert.ok(
+      flow.includes('$(Protect-OpenPathDiagnosticText -Text $Message)'),
+      'trace notes must be redacted before they are persisted'
+    );
+    assert.ok(
+      flow.includes(
+        "Protect-OpenPathDiagnosticText -Text (Get-Content 'C:\\OpenPath\\data\\config.json' -Raw)"
+      ),
+      'the OpenPath config dump must be redacted'
+    );
+    assert.ok(
+      flow.includes('Protect-OpenPathDiagnosticText -Text (Get-Content $logPath -Tail 200'),
+      'the OpenPath log tail must be redacted'
+    );
+    assert.ok(
+      flow.includes("'native-host-state.json'"),
+      'the flow must persist a compact native host state for the artifacts'
+    );
+    assert.ok(
+      flow.includes('OpenPath-NativeHost.build.json') &&
+        flow.includes('OpenPath-NativeHost.manifest.json'),
+      'the flow must collect the native host build diagnostics and build manifest'
+    );
+    assert.ok(
+      flow.includes('native-host-$($userDirectory.Name).log'),
+      'the flow must collect a redacted per-user native host log'
+    );
+    assert.ok(
+      summary.includes('readNativeHostState') && summary.includes("'native-host'"),
+      'the step summary must surface the native host state section'
+    );
+  });
 });

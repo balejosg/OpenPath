@@ -218,6 +218,41 @@ function Select-FirstVisitSmartAppControlEvidence {
     return @($evidence.ToArray())
 }
 
+function Get-FirstVisitCodeIntegrityBounded {
+    <#
+    .SYNOPSIS
+    Bounds a raw CodeIntegrity XML capture and reports the real loss.
+    .DESCRIPTION
+    Phase 8 H2: the guest reads the events newest first (the query filters the
+    decision ids and the scene window), so a size cut drops the oldest events
+    instead of the relevant recent ones. truncated is true when the awaited
+    count cap, the byte cap or the persisted-string cap removed anything.
+    #>
+    param(
+        [AllowNull()][string]$Xml = '',
+        [int]$MaxEvents = 200,
+        [int]$MaxBytes = 1048576,
+        [int]$MaxPersistedChars = 8192
+    )
+
+    $text = if ($null -eq $Xml) { '' } else { [string]$Xml }
+    $events = ([regex]::Matches($text, '(?s)<Event\s')).Count
+    $truncated = ($events -gt $MaxEvents)
+    if ($text.Length -gt $MaxBytes) {
+        $text = $text.Substring(0, $MaxBytes)
+        $truncated = $true
+    }
+    if ($text.Length -gt $MaxPersistedChars) {
+        $text = $text.Substring(0, $MaxPersistedChars) + '...truncated'
+        $truncated = $true
+    }
+    return [ordered]@{
+        xml       = $text
+        truncated = $truncated
+        events    = $events
+    }
+}
+
 function Get-OpenPathFirstVisitSacDecision {
     <#
     .SYNOPSIS
@@ -239,25 +274,34 @@ function Get-OpenPathFirstVisitSacDecision {
     $umciApplied = ($null -ne $umci -and [int]$umci -eq 2)
     $plain = Get-FirstVisitWarmupField -InputObject $SacControl -Name 'plain'
     $motw = Get-FirstVisitWarmupField -InputObject $SacControl -Name 'motw'
+    # Phase 8 H2: two samples per checkpoint. The samples travel in the
+    # decision so a control that flips within the scene is visible; the signal
+    # counts when any sample shows it (a block is the SAC-positive direction).
+    $plainSamples = @(Get-FirstVisitWarmupField -InputObject $SacControl -Name 'plainSamples' | Where-Object { $null -ne $_ })
+    if ($plainSamples.Count -eq 0 -and $plain) { $plainSamples = @($plain) }
+    $motwSamples = @(Get-FirstVisitWarmupField -InputObject $SacControl -Name 'motwSamples' | Where-Object { $null -ne $_ })
+    if ($motwSamples.Count -eq 0 -and $motw) { $motwSamples = @($motw) }
     $plainRan = $false
-    if ($plain) {
-        $plainStarted = Get-FirstVisitWarmupField -InputObject $plain -Name 'started'
-        $plainExit = Get-FirstVisitWarmupField -InputObject $plain -Name 'exitCode'
-        $plainRan = ([bool]$plainStarted) -and ($null -ne $plainExit) -and ([int]$plainExit -in @(0, 7))
+    foreach ($sample in $plainSamples) {
+        $sampleStarted = Get-FirstVisitWarmupField -InputObject $sample -Name 'started'
+        $sampleExit = Get-FirstVisitWarmupField -InputObject $sample -Name 'exitCode'
+        if (([bool]$sampleStarted) -and ($null -ne $sampleExit) -and ([int]$sampleExit -in @(0, 7))) { $plainRan = $true }
     }
-    $motwStarted = $null
-    $motwBlocked = $false
-    if ($motw) {
-        $motwStarted = [bool](Get-FirstVisitWarmupField -InputObject $motw -Name 'started')
-        $motwBlocked = (-not $motwStarted)
-    }
+    $motwStarted = if ($motwSamples.Count -gt 0) { [bool](Get-FirstVisitWarmupField -InputObject $motwSamples[0] -Name 'started') } else { $null }
+    $motwStartedCount = @($motwSamples | Where-Object { [bool](Get-FirstVisitWarmupField -InputObject $_ -Name 'started') }).Count
+    $motwBlockedCount = $motwSamples.Count - $motwStartedCount
+    $motwBlocked = ($motwSamples.Count -gt 0) -and ($motwBlockedCount -gt 0)
     return [ordered]@{
-        umciEnforcementStatus = if ($null -ne $umci) { [int]$umci } else { -1 }
-        umciApplied           = $umciApplied
-        plainRan              = $plainRan
-        motwStarted           = $motwStarted
-        motwBlocked           = $motwBlocked
-        applied               = ($umciApplied -and $motwBlocked)
+        umciEnforcementStatus     = if ($null -ne $umci) { [int]$umci } else { -1 }
+        umciApplied               = $umciApplied
+        plainRan                  = $plainRan
+        motwStarted               = $motwStarted
+        motwBlocked               = $motwBlocked
+        plainSamples              = @($plainSamples)
+        motwSamples               = @($motwSamples)
+        motwBlockedCount          = $motwBlockedCount
+        positiveControlConsistent = ($motwSamples.Count -eq 0) -or ($motwStartedCount -eq 0) -or ($motwBlockedCount -eq 0)
+        applied                   = ($umciApplied -and $motwBlocked)
     }
 }
 
@@ -286,13 +330,40 @@ function Get-FirstVisitHostSignalsVerdict {
         [string]$WindowStart = '',
         # Phase 6 B: Smart App Control evidence and the effective state.
         [AllowNull()][object]$CodeIntegrityEvents = $null,
-        [string]$SmartAppControlState = ''
+        [string]$SmartAppControlState = '',
+        # Phase 8 H2: product-side evidence for the SAC block (the build
+        # diagnostics error written by the failed compiled-host build and the
+        # compiled-health reason code), so the classification does not depend on
+        # the lane only capturing the matching CodeIntegrity event.
+        [AllowNull()][object]$HostCompile = $null,
+        [AllowNull()][object]$HostRecompile = $null
     )
     $hostStarted = [bool](Get-FirstVisitWarmupField -InputObject $Live -Name 'hostStarted')
     $evidence = @(Select-FirstVisitAppControlEvidence -Events $Events -StudentUserName $StudentUserName -WindowStart $WindowStart)
     $blocked = ($evidence.Count -gt 0)
     $sacEvidence = @(Select-FirstVisitSmartAppControlEvidence -Events $CodeIntegrityEvents)
-    $sacBlocked = (@($sacEvidence | Where-Object { $_.blocking }).Count -gt 0)
+    $sacBlockedFromEvents = (@($sacEvidence | Where-Object { $_.blocking }).Count -gt 0)
+    $productSacEvidence = [ordered]@{}
+    foreach ($source in @($HostCompile, $HostRecompile)) {
+        if ($null -eq $source) { continue }
+        foreach ($errorHolder in @(
+                (Get-FirstVisitWarmupField -InputObject $source -Name 'buildDiagnostics'),
+                (Get-FirstVisitWarmupField -InputObject $source -Name 'buildDiagnosticsJson'),
+                (Get-FirstVisitWarmupField -InputObject $source -Name 'ensure')
+            )) {
+            $buildError = [string](Get-FirstVisitWarmupField -InputObject $errorHolder -Name 'error')
+            if ($buildError -and ($buildError -match '(?i)smart app control')) {
+                if (-not $productSacEvidence.Contains('buildError')) { $productSacEvidence['buildError'] = $buildError }
+            }
+        }
+        $healthReason = [string](Get-FirstVisitWarmupField -InputObject $source -Name 'healthReasonCode')
+        if (-not $healthReason) {
+            $health = Get-FirstVisitWarmupField -InputObject $source -Name 'health'
+            $healthReason = [string](Get-FirstVisitWarmupField -InputObject $health -Name 'ReasonCode')
+        }
+        if ($healthReason -eq 'native_host_smart_app_control_blocked') { $productSacEvidence['reasonCode'] = $healthReason }
+    }
+    $sacBlocked = ($sacBlockedFromEvents -or ($productSacEvidence.Keys.Count -gt 0))
     $hostLogCapable = $false
     $backgroundStartCapable = $false
     $diagnosticBatchCapable = $false
@@ -321,6 +392,7 @@ function Get-FirstVisitHostSignalsVerdict {
         diagnosticBatchCapable = $diagnosticBatchCapable
         smartAppControlState = [string]$SmartAppControlState
         blockedBySmartAppControl = $sacBlocked
+        productSacEvidence = $productSacEvidence
     }
     return [ordered]@{
         status               = if ($productReasons.Count -eq 0) { 'passed' } else { 'failed' }
@@ -329,8 +401,9 @@ function Get-FirstVisitHostSignalsVerdict {
         blockedBySmartAppControl = $sacBlocked
         appControlEvidence   = $evidence
         smartAppControlEvidence = $sacEvidence
+        productSacEvidence   = $productSacEvidence
         signals              = $signals
     }
 }
 
-Export-ModuleMember -Function Get-FirstVisitPreconditionVerdict, Get-FirstVisitHostSignalsVerdict, Get-OpenPathFirstVisitSacDecision, Select-FirstVisitAppControlEvidence, Select-FirstVisitSmartAppControlEvidence
+Export-ModuleMember -Function Get-FirstVisitPreconditionVerdict, Get-FirstVisitHostSignalsVerdict, Get-OpenPathFirstVisitSacDecision, Select-FirstVisitAppControlEvidence, Select-FirstVisitSmartAppControlEvidence, Get-FirstVisitCodeIntegrityBounded

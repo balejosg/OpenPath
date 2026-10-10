@@ -237,7 +237,7 @@ function Read-PesterXmlSummary {
 
 function Merge-PesterXml {
     param(
-        [Parameter(Mandatory = $true)][string[]]$SuiteXmlPaths,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$SuiteXmlPaths,
         [Parameter(Mandatory = $true)][string]$OutputPath
     )
     $total = 0; $failures = 0; $notRun = 0; $skipped = 0; $errors = 0; $inconclusive = 0; $ignored = 0
@@ -491,7 +491,9 @@ function Invoke-WindowsPesterSuite {
         if ($timedOut) {
             $fileProgress.status = 'timeout'
             $fileProgress.reason = "file exceeded ${effectiveTimeout}s and was killed"
-            if (-not $firstFailureMessage) { $firstFailureMessage = "file timeout: $leaf" }
+            # Phase 8 C1: a file timeout must surface as an explicit file line,
+            # never as a parameter-binding error when no suite XML was written.
+            if (-not $firstFailureMessage) { $firstFailureMessage = "file timed out ($leaf, ${effectiveTimeout}s)" }
         }
         elseif ($effectiveExit -ne 0) {
             $fileProgress.status = 'failed'
@@ -510,6 +512,7 @@ function Invoke-WindowsPesterSuite {
 
     Merge-PesterXml -SuiteXmlPaths @($suiteXmlPaths) -OutputPath $ResultsPath
     if (-not (Test-Path $ResultsPath)) {
+        if ($firstFailureMessage) { throw "Windows Pester suite produced no suite XML. $firstFailureMessage" }
         throw 'Windows Pester suite did not produce windows-test-results.xml.'
     }
 

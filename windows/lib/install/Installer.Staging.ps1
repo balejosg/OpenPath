@@ -293,6 +293,17 @@ function Copy-OpenPathInstallerRuntime {
         throw 'Offline installs require the compiled native host source (native-host\OpenPathNativeHost.cs missing)'
     }
 
+    # Phase 8: keep the payload manifest in the install root so the signed
+    # native host verification can anchor on its sha256 entry (the primary
+    # anchor). Offline installs already verify this manifest before
+    # installation; the scripts-zip install has no manifest and the product
+    # falls back to the signing metadata hash.
+    $payloadManifestSource = Join-Path $ScriptDir 'payload-manifest.json'
+    if (Test-Path -LiteralPath $payloadManifestSource -PathType Leaf) {
+        Copy-Item -LiteralPath $payloadManifestSource -Destination (Join-Path $OpenPathRoot 'payload-manifest.json') -Force
+        Write-InstallerVerbose "  Payload manifest staged in $OpenPathRoot\payload-manifest.json"
+    }
+
     $firefoxReleaseCandidates = @(
         (Join-Path $ScriptDir 'firefox-release'),
         (Join-Path $ScriptDir 'browser-extension\firefox-release'),

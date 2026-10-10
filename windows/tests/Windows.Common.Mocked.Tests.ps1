@@ -604,6 +604,36 @@ download.mozilla.org/firefox/releases
             }
         }
 
+        It "Carries the compiled native host reason code into the payload (Phase 8)" {
+            $script:capturedBody = $null
+
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl = 'https://api.example.com'
+                    whitelistUrl = 'https://api.example.com/w/token123/whitelist.txt'
+                    version = '4.1.0'
+                }
+            } -ModuleName Common
+
+            Mock Invoke-RestMethod {
+                param(
+                    [string]$Uri,
+                    [string]$Method,
+                    [hashtable]$Headers,
+                    [string]$Body
+                )
+
+                $script:capturedBody = $Body
+                return @{ result = @{ data = @{ json = @{ ok = $true } } } }
+            } -ModuleName Common
+
+            $result = Send-OpenPathHealthReport -Status 'DEGRADED' -ReasonCodes @('native_host_smart_app_control_blocked') -Version '4.1.0'
+            $result | Should -BeTrue
+
+            $payload = $script:capturedBody | ConvertFrom-Json
+            @($payload.reasonCodes) | Should -Be @('native_host_smart_app_control_blocked')
+        }
+
         It "Omits reasonCodes when no stable codes are supplied" {
             $script:capturedBody = $null
 

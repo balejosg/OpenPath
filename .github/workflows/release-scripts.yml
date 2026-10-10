@@ -81,6 +81,12 @@ jobs:
         shell: pwsh
         run: node windows/offline-installer/scripts/download-pinned-payloads.mjs --repo-root .
 
+      - name: Stage the signed native host for the current source hash
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node windows/offline-installer/scripts/fetch-native-host-signed-artifact.mjs --repo-root .
+
       - name: Install pinned NSIS 3.10
         run: choco install nsis --version=3.10 -y --no-progress
 
@@ -628,6 +634,11 @@ jobs:
             --timeout-minutes 90 \
             --poll-seconds 30
 
+      - name: Stage the signed native host for the current source hash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node windows/offline-installer/scripts/fetch-native-host-signed-artifact.mjs --repo-root .
+
       - name: Package Linux scripts
         run: |
           echo "🐧 Packaging Linux installation scripts..."
@@ -809,7 +820,8 @@ jobs:
             ## 🚀 Installation Scripts Release
 
             **Version:** ${{ steps.vars.outputs.version }}  
-            **Commit:** ${{ steps.vars.outputs.short_sha }}
+            **Commit:** ${{ steps.vars.outputs.short_sha }}  
+            **Code signing policy:** [README — Code signing policy](https://github.com/balejosg/OpenPath/blob/main/README.md#code-signing-policy)
 
             ### 📦 Assets
 

@@ -359,29 +359,100 @@ function Invoke-SacControlRun {
     return $info
 }
 
+function Invoke-NativeHostCompileEnsureProbe {
+    # Phase 8 H2: runs the product's compiled-host ensure entrypoint with the
+    # same bootstrap the installer uses, but with stdout and stderr captured
+    # separately and a fixed parse path. The Phase 7 evidence was unreadable
+    # because the unapproved-verb Import-Module warnings filled the 8 KiB
+    # persisted-string cap before the JSON line; warnings are suppressed now and
+    # the streams travel independently with their own truncation flag.
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkDir
+    )
+
+    $probe = [ordered]@{
+        exit          = -1
+        stdout        = ''
+        stderr        = ''
+        raw           = ''
+        rawTruncated  = $false
+        ensure        = $null
+        health        = $null
+        status        = ''
+        backoffActive = $false
+        error         = ''
+        errorMessage  = ''
+        scriptPath    = ''
+    }
+    New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
+    $scriptPath = Join-Path $WorkDir 'ensure-native-host.ps1'
+    $probe.scriptPath = $scriptPath
+    $script = @'
+$WarningPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+Import-Module 'C:\OpenPath\lib\ScriptBootstrap.psm1' -Force
+Initialize-OpenPathScriptSession -OpenPathRoot 'C:\OpenPath' -DependentModules @('Browser') -ScriptName 'lab-host-ensure.ps1' | Out-Null
+$ensure = Invoke-OpenPathFirefoxNativeHostCompiledEnsure
+$health = $null
+try { $health = Get-OpenPathFirefoxNativeHostCompiledHealth } catch { $health = $null }
+[ordered]@{ ensure = $ensure; health = $health } | ConvertTo-Json -Depth 8 -Compress
+'@
+    [IO.File]::WriteAllText($scriptPath, $script, [Text.UTF8Encoding]::new($false))
+    $stderrPath = Join-Path $WorkDir 'ensure.stderr.txt'
+    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    try {
+        $stdout = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath 2>$stderrPath | Out-String)
+        $probe.exit = [int]$LASTEXITCODE
+        $stderrText = ''
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            $stderrText = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+        }
+        $probe.stdout = ConvertTo-FirstVisitPlainString -Value $stdout
+        $probe.stderr = ConvertTo-FirstVisitPlainString -Value $stderrText
+        $probe.raw = ConvertTo-FirstVisitPlainString -Value ($stdout + "`n" + $stderrText)
+        $probe.rawTruncated = ($stdout.Length -gt 8192) -or ($stderrText.Length -gt 8192)
+        $jsonLine = @($stdout -split "`n" | Where-Object { $_ -and $_.Trim().StartsWith('{') }) | Select-Object -Last 1
+        if ($jsonLine) {
+            $payload = $jsonLine.Trim() | ConvertFrom-Json
+            $probe.ensure = $payload.ensure
+            $probe.health = $payload.health
+            if ($payload.ensure) {
+                if ($payload.ensure.PSObject.Properties['Status']) { $probe.status = [string]$payload.ensure.Status }
+                if ($payload.ensure.PSObject.Properties['BackoffActive']) { $probe.backoffActive = [bool]$payload.ensure.BackoffActive }
+                if ($payload.ensure.PSObject.Properties['Error']) { $probe.error = [string]$payload.ensure.Error }
+            }
+        }
+    }
+    catch {
+        $probe.errorMessage = [string]$_.Exception.Message
+    }
+    return $probe
+}
+
 function Get-CodeIntegrityXmlEvents {
-    # Phase 6.1 C: XML keeps FileName, PolicyId and the correlation ids; the
-    # text format loses them. Bounded to MaxEvents and ~1 MB per call, oldest
-    # first from the scene start.
+    # Phase 6.1 C / Phase 8 H2: XML keeps FileName, PolicyId and the correlation
+    # ids; the text format loses them. The query is bounded to the scene start,
+    # filtered to the decision ids and read newest first, so a size or count cut
+    # drops the oldest events instead of the relevant recent ones. truncated
+    # reports the real loss (count cap, byte cap or the persisted-string cap).
     param(
         [string]$SinceIso = '',
         [int]$MaxEvents = 200,
-        [int]$MaxBytes = 1048576
+        [int]$MaxBytes = 1048576,
+        [int[]]$EventIds = @(3033, 3034, 3076, 3077, 3089)
     )
-    $query = '*'
-    if ($SinceIso) { $query = "*[System[TimeCreated[@SystemTime>='$SinceIso']]]" }
-    $result = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$query", "/c:$MaxEvents", '/rd:false', '/f:xml')
+    $idFilter = @($EventIds | ForEach-Object { "EventID=$_" }) -join ' or '
+    $query = if ($SinceIso) { "*[System[($idFilter) and TimeCreated[@SystemTime>='$SinceIso']]]" } else { "*[System[($idFilter)]]" }
+    $requested = $MaxEvents + 1
+    $result = Invoke-Cmd 'wevtutil.exe' @('qe', 'Microsoft-Windows-CodeIntegrity/Operational', "/q:$query", "/c:$requested", '/rd:true', '/f:xml')
     $text = (@($result.out) -join "`r`n")
-    $truncated = $false
-    if ($text.Length -gt $MaxBytes) {
-        $text = $text.Substring(0, $MaxBytes)
-        $truncated = $true
-    }
+    $bounded = Get-FirstVisitCodeIntegrityBounded -Xml $text -MaxEvents $MaxEvents -MaxBytes $MaxBytes
     return [ordered]@{
         exit      = $result.exit
-        xml       = $text
-        truncated = $truncated
-        events    = ([regex]::Matches($text, '(?s)<Event\s')).Count
+        xml       = $bounded.xml
+        truncated = $bounded.truncated
+        events    = $bounded.events
+        eventIds  = @($EventIds)
     }
 }
 
@@ -1675,14 +1746,27 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         Save-PartialResult
         $nativeRoot = 'C:\OpenPath\browser-extension\firefox\native'
         $state = [ordered]@{
-            nativeRoot       = $nativeRoot
-            executable       = $null
-            buildManifest    = $null
-            buildDiagnostics = $null
-            ensureRaw        = ''
-            ensure           = $null
-            ensureError      = ''
-            codeIntegrity    = $null
+            nativeRoot          = $nativeRoot
+            executable          = $null
+            buildManifest       = $null
+            buildDiagnostics    = $null
+            buildDiagnosticsJson = $null
+            buildManifestJson   = $null
+            messagingManifestJson = $null
+            ensureRaw           = ''
+            ensureStdout        = ''
+            ensureStderr        = ''
+            ensureExit          = -1
+            ensureRawTruncated  = $false
+            ensure              = $null
+            ensureStatus        = ''
+            ensureBackoffActive = $false
+            ensureErrorMessage  = ''
+            health              = $null
+            healthReasonCode    = ''
+            ensureError         = ''
+            openpathLogTail     = ''
+            codeIntegrity       = $null
         }
         foreach ($entry in @(
                 @{ name = 'executable'; file = 'OpenPath-NativeHost.exe' },
@@ -1701,13 +1785,43 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             }
             catch { }
         }
+        # Phase 8 H2: the build diagnostics/manifest contents and the native
+        # messaging manifest are the product evidence behind a Fallback.
+        foreach ($entry in @(
+                @{ name = 'buildDiagnosticsJson'; file = 'OpenPath-NativeHost.build.json' },
+                @{ name = 'buildManifestJson'; file = 'OpenPath-NativeHost.manifest.json' },
+                @{ name = 'messagingManifestJson'; file = 'whitelist_native_host.json' }
+            )) {
+            $path = Join-Path $nativeRoot $entry.file
+            try {
+                if (Test-Path -LiteralPath $path -PathType Leaf) {
+                    $raw = ConvertTo-FirstVisitPlainString -Value (Get-Content -LiteralPath $path -Raw)
+                    $parsed = $null
+                    try { $parsed = $raw | ConvertFrom-Json -ErrorAction Stop } catch { $parsed = $null }
+                    $state[$entry.name] = if ($parsed) { $parsed } else { $raw }
+                }
+            }
+            catch { }
+        }
         try {
-            $ensureScript = "Import-Module 'C:\OpenPath\lib\ScriptBootstrap.psm1' -Force; Initialize-OpenPathScriptSession -OpenPathRoot 'C:\OpenPath' -DependentModules @('Browser') -ScriptName 'lab-host-ensure.ps1' | Out-Null; Invoke-OpenPathFirefoxNativeHostCompiledEnsure | ConvertTo-Json -Depth 6 -Compress"
-            $state.ensureRaw = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $ensureScript 2>&1 | Out-String).Trim()
-            $jsonLine = @($state.ensureRaw -split "`n" | Where-Object { $_ -and $_.Trim().StartsWith('{') }) | Select-Object -Last 1
-            if ($jsonLine) { $state.ensure = ($jsonLine.Trim() | ConvertFrom-Json) }
+            $ensureProbe = Invoke-NativeHostCompileEnsureProbe -WorkDir 'C:\OpenPathLab\phase8\host-compile'
+            $state.ensureRaw = $ensureProbe.raw
+            $state.ensureStdout = $ensureProbe.stdout
+            $state.ensureStderr = $ensureProbe.stderr
+            $state.ensureExit = $ensureProbe.exit
+            $state.ensureRawTruncated = $ensureProbe.rawTruncated
+            $state.ensure = $ensureProbe.ensure
+            $state.ensureStatus = $ensureProbe.status
+            $state.ensureBackoffActive = $ensureProbe.backoffActive
+            $state.ensureErrorMessage = $ensureProbe.error
+            $state.health = $ensureProbe.health
+            if ($ensureProbe.health -and $ensureProbe.health.PSObject.Properties['ReasonCode']) { $state.healthReasonCode = [string]$ensureProbe.health.ReasonCode }
+            if ($ensureProbe.errorMessage) { $state.ensureError = $ensureProbe.errorMessage }
         }
         catch { $state.ensureError = [string]$_.Exception.Message }
+        # Phase 8 H2: the product log tail after the ensure attempt, so the same
+        # step carries the "keeping the PowerShell host fallback" reason line.
+        try { $state.openpathLogTail = ConvertTo-FirstVisitPlainString -Value (((Get-Content -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Tail 120 -ErrorAction Stop) -join "`n")) } catch { }
         try { $state.codeIntegrity = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 200 -MaxBytes 524288 } catch { }
         $script:Body.hostCompile = $state
         Complete-Step
@@ -1719,15 +1833,26 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         Save-PartialResult
         $nativeRoot = 'C:\OpenPath\browser-extension\firefox\native'
         $recompile = [ordered]@{
-            nativeRoot    = $nativeRoot
-            deleted       = [ordered]@{ executable = $false; buildManifest = $false; buildDiagnostics = $false }
-            ensureRaw     = ''
-            ensure        = $null
-            ensureError   = ''
-            probe         = $null
-            probeError    = ''
-            probeOutput   = ''
-            codeIntegrity = $null
+            nativeRoot            = $nativeRoot
+            deleted               = [ordered]@{ executable = $false; buildManifest = $false; buildDiagnostics = $false }
+            ensureRaw             = ''
+            ensureStdout          = ''
+            ensureStderr          = ''
+            ensureExit            = -1
+            ensureRawTruncated    = $false
+            ensure                = $null
+            ensureStatus          = ''
+            ensureBackoffActive   = $false
+            ensureErrorMessage    = ''
+            health                = $null
+            healthReasonCode      = ''
+            buildDiagnosticsJson  = $null
+            ensureError           = ''
+            probe                 = $null
+            probeError            = ''
+            probeOutput           = ''
+            openpathLogTail       = ''
+            codeIntegrity         = $null
         }
         foreach ($entry in @(
                 @{ name = 'executable'; file = 'OpenPath-NativeHost.exe' },
@@ -1744,12 +1869,33 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             }
         }
         try {
-            $ensureScript = "Import-Module 'C:\OpenPath\lib\ScriptBootstrap.psm1' -Force; Initialize-OpenPathScriptSession -OpenPathRoot 'C:\OpenPath' -DependentModules @('Browser') -ScriptName 'lab-host-ensure.ps1' | Out-Null; Invoke-OpenPathFirefoxNativeHostCompiledEnsure | ConvertTo-Json -Depth 6 -Compress"
-            $recompile.ensureRaw = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $ensureScript 2>&1 | Out-String).Trim()
-            $jsonLine = @($recompile.ensureRaw -split "`n" | Where-Object { $_ -and $_.Trim().StartsWith('{') }) | Select-Object -Last 1
-            if ($jsonLine) { $recompile.ensure = ($jsonLine.Trim() | ConvertFrom-Json) }
+            $ensureProbe = Invoke-NativeHostCompileEnsureProbe -WorkDir 'C:\OpenPathLab\phase8\host-recompile'
+            $recompile.ensureRaw = $ensureProbe.raw
+            $recompile.ensureStdout = $ensureProbe.stdout
+            $recompile.ensureStderr = $ensureProbe.stderr
+            $recompile.ensureExit = $ensureProbe.exit
+            $recompile.ensureRawTruncated = $ensureProbe.rawTruncated
+            $recompile.ensure = $ensureProbe.ensure
+            $recompile.ensureStatus = $ensureProbe.status
+            $recompile.ensureBackoffActive = $ensureProbe.backoffActive
+            $recompile.ensureErrorMessage = $ensureProbe.error
+            $recompile.health = $ensureProbe.health
+            if ($ensureProbe.health -and $ensureProbe.health.PSObject.Properties['ReasonCode']) { $recompile.healthReasonCode = [string]$ensureProbe.health.ReasonCode }
+            if ($ensureProbe.errorMessage) { $recompile.ensureError = $ensureProbe.errorMessage }
         }
         catch { $recompile.ensureError = [string]$_.Exception.Message }
+        # Phase 8 H2: the build diagnostics the ensure just wrote (or refreshed)
+        # are the product evidence for the Fallback reason.
+        $buildDiagnosticsPath = Join-Path $nativeRoot 'OpenPath-NativeHost.build.json'
+        try {
+            if (Test-Path -LiteralPath $buildDiagnosticsPath -PathType Leaf) {
+                $rawDiagnostics = ConvertTo-FirstVisitPlainString -Value (Get-Content -LiteralPath $buildDiagnosticsPath -Raw)
+                $parsedDiagnostics = $null
+                try { $parsedDiagnostics = $rawDiagnostics | ConvertFrom-Json -ErrorAction Stop } catch { $parsedDiagnostics = $null }
+                $recompile.buildDiagnosticsJson = if ($parsedDiagnostics) { $parsedDiagnostics } else { $rawDiagnostics }
+            }
+        }
+        catch { }
         $probeScript = Join-Path $PSScriptRoot 'Test-OpenPathNativeHostAsStudent.ps1'
         if (-not (Test-Path -LiteralPath $probeScript)) {
             $recompile.probeError = 'student-host-probe-script-missing'
@@ -1767,6 +1913,7 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             }
             catch { $recompile.probeError = [string]$_.Exception.Message }
         }
+        try { $recompile.openpathLogTail = ConvertTo-FirstVisitPlainString -Value (((Get-Content -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Tail 120 -ErrorAction Stop) -join "`n")) } catch { }
         try { $recompile.codeIntegrity = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 200 -MaxBytes 524288 } catch { }
         $script:Body.hostRecompile = $recompile
         Complete-Step
@@ -2072,6 +2219,10 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             Set-Content -LiteralPath $motwPath -Stream 'Zone.Identifier' -Value $zone -Encoding ASCII
             $control.plain = Invoke-SacControlRun -Path $plainPath
             $control.motw = Invoke-SacControlRun -Path $motwPath
+            # Phase 8 H2: two samples per checkpoint so a control that flips
+            # within the scene is visible instead of collapsing to one reading.
+            $control.plainSamples = @($control.plain, (Invoke-SacControlRun -Path $plainPath))
+            $control.motwSamples = @($control.motw, (Invoke-SacControlRun -Path $motwPath))
             $control.codeIntegrity = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 60 -MaxBytes 262144
         }
         catch { $control.error = [string]$_.Exception.Message }

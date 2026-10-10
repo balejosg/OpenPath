@@ -1789,7 +1789,7 @@ function Invoke-OpenPathFirstVisitObserve {
     $postHostVerdict = $null
     if ($postEvents) {
         $postLive = [pscustomobject]@{ hostStarted = (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $state -Name 'liveSignals') -Name 'hostStarted') }
-        $postHostVerdict = Get-FirstVisitHostSignalsVerdict -Live $postLive -Events $postEvents -CodeIntegrityEvents $postEvents -Capabilities ([string]$state.capabilities.CapabilityArgument) -StudentUserName $settings.StudentUserName -SmartAppControlState ([string](Get-OpenPathLabField -InputObject $sacStateInfo -Name 'smartAppControlState'))
+        $postHostVerdict = Get-FirstVisitHostSignalsVerdict -Live $postLive -Events $postEvents -CodeIntegrityEvents $postEvents -Capabilities ([string]$state.capabilities.CapabilityArgument) -StudentUserName $settings.StudentUserName -SmartAppControlState ([string](Get-OpenPathLabField -InputObject $sacStateInfo -Name 'smartAppControlState')) -HostCompile $state.hostCompile -HostRecompile $hostRecompile
     }
     if ($scenario -in @('first-visit-settled', 'first-visit-floor') -and -not $siteMode) {
         try {

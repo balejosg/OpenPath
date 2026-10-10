@@ -100,3 +100,29 @@ await test('buildWindowsStudentAnnotations converts redacted diagnostics into bo
   assert.doesNotMatch(annotations.join('\n'), /real-machine-token/);
   assert.match(annotations.join('\n'), /\[redacted\]/);
 });
+
+await test('buildWindowsStudentSummary surfaces the native host state and redacts its tokens', () => {
+  const artifactsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpath-windows-student-summary-'));
+  fs.mkdirSync(path.join(artifactsDir, 'native-host'), { recursive: true });
+  fs.writeFileSync(
+    path.join(artifactsDir, 'native-host', 'native-host-state.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      nativeRoot: 'C:\\OpenPath\\browser-extension\\firefox\\native',
+      buildDiagnostics: { status: 'HealthCheckFailed', error: 'health-check-timeout', attempts: 2 },
+      messagingManifest: {
+        path: 'C:\\OpenPath\\browser-extension\\firefox\\native\\whitelist_native_host.json',
+        targetPath: 'C:\\OpenPath\\browser-extension\\firefox\\native\\OpenPath-NativeHost.cmd',
+      },
+      whitelistUrl: 'http://127.0.0.1:3201/w/real-machine-token/whitelist.txt',
+    }),
+    'utf8'
+  );
+
+  const summary = buildWindowsStudentSummary({ artifactsDir, mode: 'failure' });
+
+  assert.match(summary, /native-host\/native-host-state\.json/);
+  assert.match(summary, /HealthCheckFailed/);
+  assert.match(summary, /OpenPath-NativeHost\.cmd/);
+  assert.doesNotMatch(summary, /real-machine-token/);
+});

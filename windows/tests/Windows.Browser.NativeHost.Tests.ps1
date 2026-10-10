@@ -3020,4 +3020,30 @@ Describe "Compiled native host health (Phase 5.2 D3)" {
         $pingHealth = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:BoundaryConfig -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
         $pingHealth.ReasonCode | Should -Be "native_host_health_ping_failed"
     }
+
+    It "Exposes whether the installed host came from the signed prebuilt or the compiler (Phase 8)" {
+        $exePath = Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.exe"
+        Set-Content -LiteralPath $exePath -Value "MZ-fake" -Encoding ASCII
+        [ordered]@{
+            healthStatus = "healthy"
+            hostSource   = "signed-prebuilt"
+            executableSha256 = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            sourceSha256 = "0" * 64
+        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.manifest.json") -Encoding UTF8
+        [ordered]@{ path = $exePath } | ConvertTo-Json | Set-Content -LiteralPath $script:NativeHealthManifest -Encoding UTF8
+        $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:BoundaryConfig -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
+        $health.HostSource | Should -Be "signed-prebuilt"
+        $health.ReasonCode | Should -Be ""
+    }
+
+    It "Flags a rejected prebuilt signature as native_host_signature_invalid (Phase 8)" {
+        [ordered]@{
+            status = "HealthCheckFailed"
+            error  = "signature-invalid: untrusted root"
+            signatureRejectedReason = "signature-invalid: untrusted root"
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:NativeHealthNativeRoot "OpenPath-NativeHost.build.json") -Encoding UTF8
+        $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:BoundaryConfig -NativeRoot $script:NativeHealthNativeRoot -OpenPathRoot $script:NativeHealthRoot -ManifestPath $script:NativeHealthManifest
+        $health.SignatureRejectedReason | Should -Match "signature-invalid"
+        $health.ReasonCode | Should -Be "native_host_signature_invalid"
+    }
 }

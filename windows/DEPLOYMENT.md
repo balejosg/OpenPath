@@ -257,6 +257,39 @@ diagnostics record that state and the fallback keeps working. See
 [`docs/design/windows-native-host-under-appcontrol.md`](../docs/design/windows-native-host-under-appcontrol.md)
 and [`docs/extension-native-host-contract.md`](../docs/extension-native-host-contract.md).
 
+### Smart App Control deployments
+
+With SAC enforced, the PowerShell/cmd fallback does not exist for the
+restricted student (`powershell.exe`/`pwsh.exe` are denied by the AppLocker
+boundary), so an unsigned compiled host means **no native host at all**. The
+product prefers a prebuilt Authenticode-signed executable when the install
+payload carries one (`native-host\signed\OpenPath-NativeHost.exe` plus its
+`OpenPath-NativeHost.signing.json`, anchored on the payload manifest sha256 and
+the publisher pin); otherwise it compiles, and only a valid signature is ever
+executed. The signing channel is documented in
+[`docs/design/windows-native-host-signing.md`](../docs/design/windows-native-host-signing.md).
+
+What the administrator sees:
+
+- If SAC is enforced and no valid host is available, the installer finishes
+  with a warning listing the features that will not work for restricted
+  students: whitelist path/subdomain rules in Firefox, the request-access
+  screen and approval propagation, runtime dependency learning and captive
+  portal recovery.
+- The watchdog health report carries the product reason code
+  (`native_host_smart_app_control_blocked`, `native_host_signature_invalid`,
+  `native_host_compile_failed`, `native_host_health_ping_failed`,
+  `native_host_compiled_unavailable`) and turns the report DEGRADED.
+- `C:\OpenPath\browser-extension\firefox\native\fallback-state.json` records the
+  last logged availability state (reason, status, boundary flag) so repeated
+  refreshes do not spam the log; the log line is an ERROR only when the
+  classroom boundary is active.
+- The install never changes the SAC state and never aborts because of it.
+
+Before the signing channel is activated (Phase 8.1), an SAC-enforced classroom
+is expected to stay in this "SAC active, not supported" state; the diagnostic
+paths above make it visible without breaking the rest of the deployment.
+
 ```powershell
 # Registered launch path (.exe = compiled host, .cmd = fallback)
 (Get-Content 'C:\OpenPath\browser-extension\firefox\native\whitelist_native_host.json' -Raw | ConvertFrom-Json).path

@@ -303,6 +303,30 @@ ensure result), the forced recompilation with SAC still active
 (`host-recompile`: delete the compiled exe + build manifest, call the product
 ensure, repeat the student probe) and the CodeIntegrity XML window.
 
+### Phase 8: SAC evidence quality
+
+- `host-recompile` now captures the product ensure **stdout and stderr
+  separately** (plus the exit code, a truncation flag and the parsed
+  `Status`/`BackoffActive`/`Error`), because the previous merged capture was
+  unreadable: the unapproved-verb `Import-Module` warnings filled the 8 KiB
+  persisted-string cap before the JSON result. The ensure script suppresses
+  those warnings, so the parse is stable.
+- Both host steps record the **contents** of `OpenPath-NativeHost.build.json`,
+  the build manifest and the native messaging manifest, plus the product
+  `healthReasonCode` and the `openpath.log` tail taken after the step.
+- `blockedBySmartAppControl` is derived from product evidence, not only from
+  the lane's CodeIntegrity capture: the `native_host_smart_app_control_blocked`
+  reason code, or a build diagnostics error that names Smart App Control
+  (the product appends `(Smart App Control is enforcing ...)` to the failure).
+  The lane reason remains `native-host-blocked-by-smart-app-control`.
+- The CodeIntegrity XML query is filtered to the decision ids
+  (3033/3034/3076/3077/3089) and reads **newest first**, so a size cut drops the
+  oldest events; `truncated` is now real (count cap, byte cap or the 8 KiB
+  persisted-string cap).
+- The positive control runs **two samples per checkpoint** (plain and MOTW) and
+  records both; `positiveControlConsistent` flags a control that flips within
+  the scene while the decision still counts any blocked MOTW sample.
+
 ## Smart App Control and canary runbooks
 
 ```bash

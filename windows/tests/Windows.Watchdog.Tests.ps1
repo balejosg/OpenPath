@@ -468,6 +468,67 @@ Describe "Watchdog Script" {
             }
         }
 
+        It "Surfaces the compiled native host reason code in the watchdog health result (Phase 8)" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            . $helperPath
+
+            function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
+            function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+            function global:Get-OpenPathNonAdminAppControlHealth { param($Mode, $ApprovedBrowsers) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
+            Mock Get-OpenPathWatchdogTaskHealth { [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
+            function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $true }
+            function global:Get-OpenPathFirefoxNativeHostCompiledHealth {
+                param($Config)
+                [pscustomobject]@{
+                    BoundaryActive  = $true
+                    ReasonCode      = 'native_host_smart_app_control_blocked'
+                    UsesCompiledHost = $false
+                    CompiledHealthy = $false
+                }
+            }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $true }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+            function global:Increment-WatchdogFailCount { return 1 }
+            function global:Reset-WatchdogFailCount { return 0 }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $config = [pscustomobject]@{
+                    enableNonAdminAppControl = $true
+                    nonAdminAppControlMode = 'Enforced'
+                    approvedStudentBrowsers = @('Firefox')
+                }
+                $checkResult = Invoke-OpenPathWatchdogChecks `
+                    -Config $config `
+                    -PortalModeActive $false `
+                    -CaptiveState 'Direct' `
+                    -OpenPathRoot 'C:\OpenPath' `
+                    -StaleFailsafeStatePath 'C:\OpenPath\data\stale-failsafe-state.json'
+
+                $checkResult.ReasonCodes | Should -Contain 'native_host_smart_app_control_blocked'
+            }
+            finally {
+                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Get-OpenPathNonAdminAppControlHealth -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathWatchdogTaskHealth, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathFirefoxNativeHostCompiledHealth -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Surfaces AppControl effective policy invalid when repair returns true but effective verification returns false" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             . $helperPath
