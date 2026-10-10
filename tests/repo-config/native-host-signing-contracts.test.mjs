@@ -83,6 +83,27 @@ test('signing workflow searches for an existing signed hash before signing again
   );
 });
 
+test('signing workflow probes the release without leaving a failing native exit code', () => {
+  const workflow = readText(WORKFLOW);
+
+  // The Actions pwsh wrapper appends `exit $LASTEXITCODE`; a deliberately
+  // failing native probe (a missing release) would fail the whole step without
+  // any error text. The probe must be a catchable PowerShell call and the
+  // script must not end with a stale failing exit code.
+  assert.ok(
+    workflow.includes('Invoke-RestMethod'),
+    'the existence probe must use a catchable PowerShell call, not a failing native command'
+  );
+  assert.ok(
+    !workflow.includes('gh api "repos/${{ github.repository }}/releases/tags/native-host-signing"'),
+    'the release probe must not fail through the native gh exit code'
+  );
+  assert.ok(
+    workflow.includes('$LASTEXITCODE = 0'),
+    'the workflow must reset a tolerated native exit code before the step ends'
+  );
+});
+
 test('signing workflow skips the signature visibly when the secret is absent', () => {
   const workflow = readText(WORKFLOW);
 

@@ -25,6 +25,7 @@ on:
     branches: [main]
     paths:
       - 'windows/native-host/OpenPathNativeHost.cs'
+      - '.github/workflows/native-host-signing.yml'
 
 permissions:
   actions: read
@@ -55,9 +56,14 @@ jobs:
         run: |
           $sourceSha = (Get-FileHash -LiteralPath 'windows/native-host/OpenPathNativeHost.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           "source_sha256=$sourceSha" >> $env:GITHUB_OUTPUT
+          # A missing release is the normal case before the first signature:
+          # probe with a catchable PowerShell call, never with a failing native
+          # command (the Actions pwsh wrapper appends `exit $LASTEXITCODE` and
+          # would fail the step without an error message).
           $assetNames = @()
           try {
-            $assetNames = @(gh api "repos/${{ github.repository }}/releases/tags/native-host-signing" --jq '.assets[].name' 2>$null)
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/native-host-signing" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'openpath-native-host-signing' } -ErrorAction Stop
+            $assetNames = @($release.assets | ForEach-Object { [string]$_.name })
           }
           catch { $assetNames = @() }
           $hasSigned = ($assetNames -contains "OpenPath-NativeHost-$sourceSha.exe") -and
@@ -70,6 +76,7 @@ jobs:
           if ($hasSigned) {
             Write-Host 'A signed native host already exists for this source hash; nothing to do.'
           }
+          $LASTEXITCODE = 0
 
       - name: Compile the native host from source
         if: steps.state.outputs.signed_exists == 'false' && steps.state.outputs.collect_only == 'false'
