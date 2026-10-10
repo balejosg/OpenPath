@@ -52,7 +52,8 @@ Describe "Installer" {
                 'browser-inventory',
                 'integrity',
                 'timing',
-                'summary'
+                'summary',
+                'sac-native-host-notice'
             )
             $plan.Context.OpenPathRoot | Should -Be 'C:\OpenPath'
             $plan.Context.ScriptDir | Should -Be 'C:\pkg\windows'
@@ -147,7 +148,8 @@ Describe "Installer" {
                 'browser-inventory',
                 'integrity',
                 'timing',
-                'summary'
+                'summary',
+                'sac-native-host-notice'
             )
 
             foreach ($phaseName in $phaseNames) {
@@ -2780,6 +2782,31 @@ Describe "Uninstaller" {
                 'Remove-Item -Path $providerPath -Recurse -Force -ErrorAction SilentlyContinue'
             )
             $content.Contains('& reg.exe DELETE $registryPath /f 2>$null | Out-Null') | Should -BeFalse
+        }
+    }
+
+    Context 'Phase plan coverage (Phase 8)' {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot '..' 'lib' 'install' 'Installer.Plan.ps1')
+        }
+
+        It 'Only invokes install phases that exist in the install plan' {
+            $plan = New-OpenPathInstallPlan -Parameters @{} -OpenPathRoot 'C:\OpenPath' -ScriptDir 'C:\pkg\windows'
+            $phaseNames = @($plan.Phases | ForEach-Object { [string]$_.Name })
+            $phaseNames | Should -Contain 'summary'
+            # A warning phase that is not declared in the plan makes
+            # Get-OpenPathInstallPhaseFromPlan throw after the summary has been
+            # written, which turns a completed install into a failed one.
+            $installerText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'Install-OpenPath.ps1') -Raw
+            $usedPhases = @(
+                [regex]::Matches($installerText, "Invoke-OpenPathPlanned(?:Warning)?Phase\s+-Name\s+'([^']+)'") |
+                    ForEach-Object { [string]$_.Groups[1].Value } |
+                    Sort-Object -Unique
+            )
+            $usedPhases.Count | Should -BeGreaterThan 8
+            foreach ($phaseName in $usedPhases) {
+                $phaseNames | Should -Contain $phaseName -Because "Install-OpenPath.ps1 invokes phase '$phaseName'"
+            }
         }
     }
 }

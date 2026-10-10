@@ -130,6 +130,10 @@ function New-OpenPathInstallPlan {
         New-OpenPathInstallPhase -Name 'integrity' -RecoveryHint 'Check installed file permissions before generating integrity baseline.'
         New-OpenPathInstallPhase -Name 'timing' -Inputs @{ TimingOutputPath = $Parameters.TimingOutputPath } -RecoveryHint 'Check timing output path permissions.'
         New-OpenPathInstallPhase -Name 'summary' -RecoveryHint 'Check collected installer context before reporting summary.'
+        # Phase 8: warning-only notice about Smart App Control blocking the
+        # unsigned native host. Declared here because the planned-phase lookup
+        # throws for unknown names, and it runs after the summary.
+        New-OpenPathInstallPhase -Name 'sac-native-host-notice' -RecoveryHint 'Review the Smart App Control posture and the native host signature state.'
     )
 
     [pscustomobject]@{
