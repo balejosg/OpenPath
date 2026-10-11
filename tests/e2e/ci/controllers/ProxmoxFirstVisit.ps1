@@ -1083,12 +1083,21 @@ Write-Output 'launcher-staged'
         & $Transport.RequestGuestReboot $Vmid | Out-Null
         $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $bootId $TimeoutSeconds)
         if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'first-visit-sac-reboot-timeout' }
-        $sacPreInstall = Invoke-OpenPathFirstVisitSacAssessment -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -CycleLabel 'preinstall' -Phase 'prepare-sac'
-        $sacPreInstallDecision = Get-OpenPathFirstVisitSacDecision -SacState $sacPreInstall.state -SacControl $sacPreInstall.control
-        if (-not $sacPreInstallDecision.applied) {
-            throw "sac-not-enforced-before-install: umci=$($sacPreInstallDecision.umciEnforcementStatus) motwBlocked=$($sacPreInstallDecision.motwBlocked) plainRan=$($sacPreInstallDecision.plainRan)"
+        # Phase 8b: the positive control flips within minutes (permissive SAC
+        # window). Re-sample the assessment (bounded) before rejecting the
+        # machine; the gate still requires UMCI enforcement plus a blocked MOTW
+        # sample. Lab dispatch 38141964263 landed in the permissive window and
+        # failed a single-shot gate even though SAC was enforced.
+        $sacPreInstallCycle = Invoke-OpenPathFirstVisitSacAssessmentUntilApplied -Assess {
+            param($attempt)
+            Invoke-OpenPathFirstVisitSacAssessment -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath -CycleLabel "preinstall-r$attempt" -Phase 'prepare-sac'
         }
-        Write-Host ("first-visit SAC pre-install applied: umci=$($sacPreInstallDecision.umciEnforcementStatus) motwBlocked=$($sacPreInstallDecision.motwBlocked) plainRan=$($sacPreInstallDecision.plainRan)")
+        $sacPreInstall = $sacPreInstallCycle.assessment
+        $sacPreInstallDecision = $sacPreInstallCycle.decision
+        if (-not $sacPreInstallDecision.applied) {
+            throw "sac-not-enforced-before-install: umci=$($sacPreInstallDecision.umciEnforcementStatus) motwBlocked=$($sacPreInstallDecision.motwBlocked) plainRan=$($sacPreInstallDecision.plainRan) attempts=$($sacPreInstallCycle.attempts)"
+        }
+        Write-Host ("first-visit SAC pre-install applied: umci=$($sacPreInstallDecision.umciEnforcementStatus) motwBlocked=$($sacPreInstallDecision.motwBlocked) plainRan=$($sacPreInstallDecision.plainRan) attempts=$($sacPreInstallCycle.attempts)")
     }
     $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
     $configure = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'configure' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900

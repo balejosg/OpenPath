@@ -2171,6 +2171,60 @@ PrimaryServerAddress=198.51.100.7
         }
     }
 
+    Context 'SAC pre-install re-sampling (Phase 8b)' {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitWarmup.psm1') -Force
+        }
+
+        It 'Re-samples the pre-install assessment until the control proves enforcement' {
+            $state = [pscustomobject]@{ deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 2 } }
+            $permissive = [pscustomobject]@{
+                plain = [pscustomobject]@{ started = $true; exitCode = 7 }
+                motw  = [pscustomobject]@{ started = $true; exitCode = 7 }
+            }
+            $blocked = [pscustomobject]@{
+                plain = [pscustomobject]@{ started = $true; exitCode = 7 }
+                motw  = [pscustomobject]@{ started = $false; nativeError = 1260; error = 'blocked by policy' }
+            }
+            $calls = New-Object System.Collections.ArrayList
+            $sleeps = New-Object System.Collections.ArrayList
+            $sequence = @($permissive, $permissive, $blocked)
+            $assess = {
+                param($attempt)
+                $null = $calls.Add([int]$attempt)
+                [pscustomobject]@{ label = "preinstall-r$attempt"; state = $state; control = $sequence[[Math]::Min($attempt, 3) - 1] }
+            }.GetNewClosure()
+            $delay = { param($seconds) $null = $sleeps.Add([int]$seconds) }.GetNewClosure()
+
+            $result = Invoke-OpenPathFirstVisitSacAssessmentUntilApplied -Assess $assess -MaxAttempts 3 -DelaySeconds 7 -Delay $delay
+            $result.applied | Should -BeTrue
+            $result.attempts | Should -Be 3
+            (@($calls) -join ',') | Should -Be '1,2,3'
+            (@($sleeps) -join ',') | Should -Be '7,7'
+
+            # A machine that never proves enforcement still fails, bounded.
+            $never = { param($attempt) [pscustomobject]@{ state = $state; control = $permissive } }.GetNewClosure()
+            $failed = Invoke-OpenPathFirstVisitSacAssessmentUntilApplied -Assess $never -MaxAttempts 2 -DelaySeconds 5 -Delay { param($seconds) }
+            $failed.applied | Should -BeFalse
+            $failed.attempts | Should -Be 2
+
+            # An unenforced UMCI state never counts, blocked control or not.
+            $noUmci = [pscustomobject]@{ deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 0 } }
+            $unenforced = { param($attempt) [pscustomobject]@{ state = $noUmci; control = $blocked } }.GetNewClosure()
+            (Invoke-OpenPathFirstVisitSacAssessmentUntilApplied -Assess $unenforced -MaxAttempts 1 -DelaySeconds 1 -Delay { param($seconds) }).applied | Should -BeFalse
+        }
+
+        It 'Wires the pre-install gate through the bounded re-sampling' {
+            $controllerPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\controllers\ProxmoxFirstVisit.ps1'
+            $controllerText = Get-Content -LiteralPath (Resolve-Path $controllerPath).Path -Raw
+            $controllerText | Should -Match 'Invoke-OpenPathFirstVisitSacAssessmentUntilApplied'
+            # The re-sampled gate still requires the positive control and reports the attempts.
+            $controllerText | Should -Match 'Get-OpenPathFirstVisitSacDecision'
+            $controllerText | Should -Match 'attempts=\$\(\$sacPreInstallCycle\.attempts\)'
+            $controllerText | Should -Match 'preinstall-r\$attempt'
+        }
+    }
+
     Context 'MOZ collector survives the regex automatic variable (Phase 6.1 fix)' -Tag 'Phase61' {
         BeforeAll {
             $harnessPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\Invoke-OpenPathFirstVisitGuest.ps1'

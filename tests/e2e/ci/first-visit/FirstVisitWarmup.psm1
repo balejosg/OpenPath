@@ -406,4 +406,47 @@ function Get-FirstVisitHostSignalsVerdict {
     }
 }
 
-Export-ModuleMember -Function Get-FirstVisitPreconditionVerdict, Get-FirstVisitHostSignalsVerdict, Get-OpenPathFirstVisitSacDecision, Select-FirstVisitAppControlEvidence, Select-FirstVisitSmartAppControlEvidence, Get-FirstVisitCodeIntegrityBounded
+function Invoke-OpenPathFirstVisitSacAssessmentUntilApplied {
+    <#
+    .SYNOPSIS
+    Phase 8b: re-samples the SAC assessment until the positive control proves
+    enforcement (bounded).
+    .DESCRIPTION
+    The SAC positive control flips within minutes on the lab image: right after
+    apply the MOTW copy is blocked (4551), a few minutes later both copies run
+    (permissive window) and later both are blocked again. A single checkpoint
+    landing in the permissive window rejects an otherwise valid machine (lab
+    dispatch 38141964263: umci=2, motwBlocked=False). Re-sample up to
+    MaxAttempts times with DelaySeconds between attempts; the verdict still
+    requires UMCI enforcement plus a blocked MOTW sample, so a truly
+    unenforced machine still fails after the bounded attempts.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Assess,
+        [int]$MaxAttempts = 3,
+        [int]$DelaySeconds = 120,
+        # Test seam: replaces Start-Sleep; receives the delay in seconds.
+        [scriptblock]$Delay = $null
+    )
+
+    $attempt = 0
+    $assessment = $null
+    $decision = $null
+    while ($attempt -lt $MaxAttempts) {
+        $attempt++
+        $assessment = & $Assess $attempt
+        $decision = Get-OpenPathFirstVisitSacDecision `
+            -SacState (Get-FirstVisitWarmupField -InputObject $assessment -Name 'state') `
+            -SacControl (Get-FirstVisitWarmupField -InputObject $assessment -Name 'control')
+        if ($decision.applied) {
+            return [ordered]@{ applied = $true; attempts = $attempt; assessment = $assessment; decision = $decision }
+        }
+        if ($attempt -lt $MaxAttempts) {
+            if ($Delay) { & $Delay $DelaySeconds } else { Start-Sleep -Seconds $DelaySeconds }
+        }
+    }
+    return [ordered]@{ applied = $false; attempts = $attempt; assessment = $assessment; decision = $decision }
+}
+
+Export-ModuleMember -Function Get-FirstVisitPreconditionVerdict, Get-FirstVisitHostSignalsVerdict, Get-OpenPathFirstVisitSacDecision, Invoke-OpenPathFirstVisitSacAssessmentUntilApplied, Select-FirstVisitAppControlEvidence, Select-FirstVisitSmartAppControlEvidence, Get-FirstVisitCodeIntegrityBounded
