@@ -153,6 +153,81 @@ function Get-OpenPathInstallerChecks {
     return $checks
 }
 
+function Get-OpenPathInstallerPrivacyNotice {
+    <#
+    .SYNOPSIS
+        Lines describing what the agent sends and to which server (Phase 8b R5).
+    .DESCRIPTION
+        SignPath Foundation condition 9: the privacy notice is shown during the
+        installation and recorded for unattended installs. The text lists the
+        transfers the product cannot work without (enrollment, whitelist sync,
+        health reports, student requests), the configured server and the "no
+        third parties" statement. The whitelist URL carries the per-machine
+        token, so it is always displayed redacted.
+    #>
+    param(
+        [string]$ApiUrl = '',
+        [string]$WhitelistUrl = ''
+    )
+
+    if (-not $ApiUrl -or -not $WhitelistUrl) {
+        try {
+            $config = Get-OpenPathConfig
+            if ($config) {
+                if (-not $ApiUrl -and $config.PSObject.Properties['apiUrl'] -and $config.apiUrl) { $ApiUrl = [string]$config.apiUrl }
+                if (-not $WhitelistUrl -and $config.PSObject.Properties['whitelistUrl'] -and $config.whitelistUrl) { $WhitelistUrl = [string]$config.whitelistUrl }
+            }
+        }
+        catch {
+            # Notice generation must never break the installer.
+        }
+    }
+    $serverDisplay = if ($ApiUrl) { $ApiUrl.TrimEnd('/') } else { 'the server configured in data\config.json' }
+    $whitelistDisplay = if ($WhitelistUrl) {
+        $WhitelistUrl -replace '/w/[^/\s?#]+/', '/w/[redacted]/'
+    }
+    else {
+        'the whitelist URL configured in data\config.json'
+    }
+    return @(
+        'Privacy: this agent sends data only to the server configured during installation; nothing is sent to third parties.',
+        "- Server: $serverDisplay",
+        "- Whitelist source: $whitelistDisplay",
+        '- Enrollment (alta): the machine name and classroom identifiers register this computer with the server.',
+        '- Whitelist sync: the agent downloads the classroom whitelist and identifies the machine with its machine token.',
+        "- Health reports: hostname, DNS and service state, agent version and reason codes (POST $serverDisplay/trpc/healthReports.submit).",
+        '- Student requests: when a student asks for access from the blocked page, the requested domain and the student reason are submitted to the server.',
+        '- These transfers cannot be disabled: they are how classroom enforcement works.'
+    )
+}
+
+function Write-OpenPathInstallerPrivacyNotice {
+    <#
+    .SYNOPSIS
+        Shows and records the privacy notice (Phase 8b R5).
+    .DESCRIPTION
+        Interactive installs display the notice as an operator message; every
+        install records it in the product log, which is the persistent record
+        for silent/unattended installs (the NSIS /S path discards the console).
+    #>
+    param(
+        [switch]$Unattended,
+        [string]$ApiUrl = '',
+        [string]$WhitelistUrl = ''
+    )
+
+    $lines = @(Get-OpenPathInstallerPrivacyNotice -ApiUrl $ApiUrl -WhitelistUrl $WhitelistUrl)
+    if (-not $Unattended) {
+        foreach ($line in $lines) {
+            Write-InstallerNotice "  $line"
+        }
+    }
+    foreach ($line in $lines) {
+        try { Write-OpenPathLog "Privacy notice: $line" } catch { }
+    }
+    return $lines
+}
+
 function Write-OpenPathInstallerSummary {
     # prints the post-install verification table and useful operator commands; silently
     # dismisses the progress bar when not in verbose mode.
@@ -169,6 +244,8 @@ function Write-OpenPathInstallerSummary {
 
         [string]$WhitelistUrl = '',
 
+        [string]$ApiUrl = '',
+
         [Parameter(Mandatory = $true)]
         [string]$AgentVersion,
 
@@ -177,6 +254,13 @@ function Write-OpenPathInstallerSummary {
     )
 
     if ($VerbosePreference -ne 'Continue') {
+        # Phase 8b R5: the table below is suppressed in quiet/unattended mode,
+        # but the privacy notice is a compliance record and belongs in the
+        # install summary; interactive installs show it in the privacy-notice
+        # phase instead of duplicating it here.
+        foreach ($line in @(Get-OpenPathInstallerPrivacyNotice -ApiUrl $ApiUrl -WhitelistUrl $WhitelistUrl)) {
+            Write-Host "  $line"
+        }
         if (-not [Console]::IsOutputRedirected) {
             Write-Progress -Activity 'Installing OpenPath' -Completed
         }

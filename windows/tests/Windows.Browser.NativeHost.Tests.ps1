@@ -3046,4 +3046,14 @@ Describe "Compiled native host health (Phase 5.2 D3)" {
         $health.SignatureRejectedReason | Should -Match "signature-invalid"
         $health.ReasonCode | Should -Be "native_host_signature_invalid"
     }
+
+    It "Re-exports the compiled ensure/health entrypoints for every Browser consumer (Phase 8b)" {
+        # The self-update retry, the watchdog health report and the installer
+        # SAC notice resolve these through Browser.psm1 (Get-Command guarded);
+        # while they stayed private the paths silently skipped the check.
+        Import-Module $browserModulePath -Force -Global -ErrorAction Stop
+        $exported = @((Get-Module -Name "Browser" | Select-Object -Last 1).ExportedFunctions.Keys)
+        $exported | Should -Contain "Invoke-OpenPathFirefoxNativeHostCompiledEnsure"
+        $exported | Should -Contain "Get-OpenPathFirefoxNativeHostCompiledHealth"
+    }
 }

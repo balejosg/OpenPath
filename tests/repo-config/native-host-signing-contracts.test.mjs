@@ -125,6 +125,55 @@ test('signing workflow skips the signature visibly when the secret is absent', (
   );
 });
 
+test('signing workflow passes the token through the environment, never through run scripts', () => {
+  const workflow = readText(WORKFLOW);
+
+  // A secret interpolated into `run:` text ends up in the generated script
+  // (and potentially in a log line); the token must travel via the environment.
+  for (const chunk of workflow.split('\n      - ').slice(1)) {
+    const runIndex = chunk.indexOf('run: |');
+    if (runIndex < 0) {
+      continue;
+    }
+    const stepName = chunk.split('\n')[0].trim();
+    assert.ok(
+      !chunk.slice(runIndex).includes('${{ secrets.'),
+      `no secret may be interpolated inside a run script (step: ${stepName})`
+    );
+  }
+
+  assert.ok(
+    workflow.includes('SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}'),
+    'the secret must be exposed to the collect step through the environment'
+  );
+  assert.ok(
+    workflow.includes('-ApiToken $env:SIGNPATH_API_TOKEN'),
+    'the collect script must read the token from the environment'
+  );
+  assert.ok(
+    workflow.includes('SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}'),
+    'the organization id must be exposed to the collect step through the environment'
+  );
+  assert.ok(
+    workflow.includes('-OrganizationId $env:SIGNPATH_ORGANIZATION_ID'),
+    'the collect script must read the organization id from the environment'
+  );
+});
+
+test('signing workflow installs the SignPath PowerShell module at one pinned version', () => {
+  const workflow = readText(WORKFLOW);
+
+  assert.match(
+    workflow,
+    /Install-Module -Name SignPath -RequiredVersion \d+\.\d+\.\d+/u,
+    'the SignPath module must be installed at an exact pinned version'
+  );
+  assert.ok(
+    !workflow.includes('-MinimumVersion') && !workflow.includes('-MaximumVersion'),
+    'a version range would let the collect contract drift with a PSGallery release'
+  );
+});
+
 test('native host assembly metadata pins the product name and one version per build', () => {
   const source = readText('windows/native-host/OpenPathNativeHost.cs');
 

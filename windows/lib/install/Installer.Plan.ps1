@@ -130,6 +130,10 @@ function New-OpenPathInstallPlan {
         New-OpenPathInstallPhase -Name 'integrity' -RecoveryHint 'Check installed file permissions before generating integrity baseline.'
         New-OpenPathInstallPhase -Name 'timing' -Inputs @{ TimingOutputPath = $Parameters.TimingOutputPath } -RecoveryHint 'Check timing output path permissions.'
         New-OpenPathInstallPhase -Name 'summary' -RecoveryHint 'Check collected installer context before reporting summary.'
+        # Phase 8b: privacy notice (SignPath Foundation condition 9). Warning
+        # only: it displays and records what the agent sends and to which
+        # server; it never changes behavior or blocks the install.
+        New-OpenPathInstallPhase -Name 'privacy-notice' -RecoveryHint 'Review the privacy notice content against the configured API and whitelist URLs.'
         # Phase 8: warning-only notice about Smart App Control blocking the
         # unsigned native host. Declared here because the planned-phase lookup
         # throws for unknown names, and it runs after the summary.

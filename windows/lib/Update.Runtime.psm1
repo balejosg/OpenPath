@@ -789,6 +789,16 @@ function Invoke-OpenPathUpdateCycle {
                 -Config $config `
                 -SkipProtectedModeRestore:($TriggerSource -eq 'SSE')
             & $writeUpdateStage 'reconcile'
+            # Phase 8b R1: refresh the compiled native host on every update
+            # cycle (Update task every 5 min, SSE) so a transient install-time
+            # failure no longer leaves the classroom without the host until the
+            # daily agent self-update. The ensure is backoff-gated by cause
+            # (health 5/15/60 minutes, compilation one hour), so a healthy or
+            # backing-off machine pays a source hash and a manifest read.
+            if (Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure' -ErrorAction SilentlyContinue) {
+                try { Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $config | Out-Null } catch { }
+            }
+            & $writeUpdateStage 'native-host'
             $null = Backup-OpenPathWhitelistState `
                 -WhitelistPath $whitelistPath `
                 -BackupPath $backupPath `
@@ -830,12 +840,13 @@ function Invoke-OpenPathUpdateCycle {
                     -HealthActionSuffix $portalActiveState.HealthAction
             }
             & $writeUpdateStage 'apply'
-            Write-OpenPathLog ("OpenPath update stages totalMs={0} enrollment={1} config-sync={2} portal-state={3} reconcile={4} backup={5} download={6} apply={7}" -f `
+            Write-OpenPathLog ("OpenPath update stages totalMs={0} enrollment={1} config-sync={2} portal-state={3} reconcile={4} native-host={5} backup={6} download={7} apply={8}" -f `
                     (@($updateStages.Values) | Measure-Object -Sum).Sum, `
                     $updateStages['enrollment'], `
                     $updateStages['config-sync'], `
                     $updateStages['portal-state'], `
                     $updateStages['reconcile'], `
+                    $updateStages['native-host'], `
                     $updateStages['backup'], `
                     $updateStages['download'], `
                     $updateStages['apply'])

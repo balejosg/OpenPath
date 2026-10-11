@@ -359,6 +359,69 @@ function Invoke-SacControlRun {
     return $info
 }
 
+function Invoke-FirstVisitSacControlProbe {
+    # Phase 6.1 C / Phase 8 H2 / Phase 8b R2: positive control for Smart App
+    # Control. Compiles a trivial console exe with the in-box .NET Framework
+    # csc.exe, keeps a MOTW (ZoneId=3) and a plain copy, runs two samples of
+    # each and returns the measurements. No binary ever enters the repository;
+    # the scratch directory is removed before returning. Used by the
+    # sac-control step and by the host recompilation checkpoint.
+    param(
+        [string]$WorkDir = 'C:\Windows\Temp\openpath-sac-control',
+        [int]$TimeoutMs = 10000
+    )
+
+    $result = [ordered]@{
+        ran           = $false
+        dir           = $WorkDir
+        csc           = ''
+        compileExit   = -1
+        compileOutput = @()
+        plain         = $null
+        motw          = $null
+        plainSamples  = @()
+        motwSamples   = @()
+        cleaned       = $false
+        error         = ''
+    }
+    try {
+        $result.ran = $true
+        New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
+        $source = Join-Path $WorkDir 'control.cs'
+        [IO.File]::WriteAllText($source, 'public static class OpenPathSacControl { public static void Main() { System.Environment.ExitCode = 7; } }', [Text.UTF8Encoding]::new($false))
+        $candidates = @(
+            (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
+            (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
+        )
+        $csc = @($candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
+        if ($csc.Count -eq 0) { throw 'csc-not-found' }
+        $result.csc = [string]$csc[0]
+        $compile = Invoke-Cmd ([string]$csc[0]) @('/nologo', '/target:exe', ("/out:" + (Join-Path $WorkDir 'control.exe')), $source)
+        $result.compileExit = $compile.exit
+        $result.compileOutput = @($compile.out | Select-Object -First 10)
+        $compiled = Join-Path $WorkDir 'control.exe'
+        if ($compile.exit -ne 0 -or -not (Test-Path -LiteralPath $compiled)) { throw "compile-failed:$($compile.exit)" }
+        $plainPath = Join-Path $WorkDir 'control-plain.exe'
+        $motwPath = Join-Path $WorkDir 'control-motw.exe'
+        Copy-Item -LiteralPath $compiled -Destination $plainPath -Force
+        Copy-Item -LiteralPath $compiled -Destination $motwPath -Force
+        $zone = "[ZoneTransfer]`r`nZoneId=3`r`nReferrerUrl=https://example.invalid/`r`nHostUrl=https://example.invalid/control.exe"
+        Set-Content -LiteralPath $motwPath -Stream 'Zone.Identifier' -Value $zone -Encoding ASCII
+        $result.plain = Invoke-SacControlRun -Path $plainPath -TimeoutMs $TimeoutMs
+        $result.motw = Invoke-SacControlRun -Path $motwPath -TimeoutMs $TimeoutMs
+        # Phase 8 H2: two samples per checkpoint so a control that flips
+        # within the scene is visible instead of collapsing to one reading.
+        $result.plainSamples = @($result.plain, (Invoke-SacControlRun -Path $plainPath -TimeoutMs $TimeoutMs))
+        $result.motwSamples = @($result.motw, (Invoke-SacControlRun -Path $motwPath -TimeoutMs $TimeoutMs))
+    }
+    catch { $result.error = [string]$_.Exception.Message }
+    finally {
+        try { Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        $result.cleaned = -not (Test-Path -LiteralPath $WorkDir)
+    }
+    return $result
+}
+
 function Invoke-NativeHostCompileEnsureProbe {
     # Phase 8 H2: runs the product's compiled-host ensure entrypoint with the
     # same bootstrap the installer uses, but with stdout and stderr captured
@@ -387,14 +450,20 @@ function Invoke-NativeHostCompileEnsureProbe {
     New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
     $scriptPath = Join-Path $WorkDir 'ensure-native-host.ps1'
     $probe.scriptPath = $scriptPath
+    # Phase 8b: the ensure/health entrypoints live in Browser.FirefoxNativeHost.psm1;
+    # the previous Browser-only bootstrap never exported them, so the emitted
+    # script failed with "term not recognized" and the probe recorded an empty
+    # ensure. Import the defining module (and Common for the config) directly.
     $script = @'
 $WarningPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
-Import-Module 'C:\OpenPath\lib\ScriptBootstrap.psm1' -Force
-Initialize-OpenPathScriptSession -OpenPathRoot 'C:\OpenPath' -DependentModules @('Browser') -ScriptName 'lab-host-ensure.ps1' | Out-Null
-$ensure = Invoke-OpenPathFirefoxNativeHostCompiledEnsure
+Import-Module 'C:\OpenPath\lib\Common.psm1' -Force -Global -ErrorAction Stop
+Import-Module 'C:\OpenPath\lib\Browser.FirefoxNativeHost.psm1' -Force -ErrorAction Stop
+$config = $null
+try { $config = Get-OpenPathConfig } catch { $config = $null }
+$ensure = Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $config
 $health = $null
-try { $health = Get-OpenPathFirefoxNativeHostCompiledHealth } catch { $health = $null }
+try { $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $config } catch { $health = $null }
 [ordered]@{ ensure = $ensure; health = $health } | ConvertTo-Json -Depth 8 -Compress
 '@
     [IO.File]::WriteAllText($scriptPath, $script, [Text.UTF8Encoding]::new($false))
@@ -1827,14 +1896,21 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         Complete-Step
     }
     'host-recompile' {
-        # Phase 7 L2: with SAC still enforced, delete the compiled host + its
-        # build manifest and call the product ensure again (the auto-update path
-        # when the .cs changes); then repeat the student probe.
+        # Phase 7 L2 / Phase 8b R2: with SAC still enforced (and the positive
+        # control usually in blocking mode after the visit), force a real
+        # recompilation through the product ensure and measure it: stop the
+        # running host so the executable can leave the disk, delete it, run the
+        # ensure (with the smart-app-control state of this exact moment), run a
+        # second ensure to observe the cause-based backoff, then repeat the
+        # student probe.
         Save-PartialResult
         $nativeRoot = 'C:\OpenPath\browser-extension\firefox\native'
         $recompile = [ordered]@{
             nativeRoot            = $nativeRoot
+            processesStopped      = 0
+            retiredExecutable     = ''
             deleted               = [ordered]@{ executable = $false; buildManifest = $false; buildDiagnostics = $false }
+            sacControl            = $null
             ensureRaw             = ''
             ensureStdout          = ''
             ensureStderr          = ''
@@ -1844,6 +1920,8 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             ensureStatus          = ''
             ensureBackoffActive   = $false
             ensureErrorMessage    = ''
+            ensureBackoff         = $null
+            ensureBackoffError    = ''
             health                = $null
             healthReasonCode      = ''
             buildDiagnosticsJson  = $null
@@ -1854,22 +1932,48 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             openpathLogTail       = ''
             codeIntegrity         = $null
         }
+        # R2: a running messaging host holds the image; stop it (bounded) before
+        # the delete. Windows lets a running image be renamed but not deleted,
+        # so the fallback below still forces a fresh compile.
+        try {
+            foreach ($hostProcess in @(Get-Process -Name 'OpenPath-NativeHost' -ErrorAction SilentlyContinue)) {
+                try { Stop-Process -Id $hostProcess.Id -Force -ErrorAction Stop; $recompile.processesStopped = $recompile.processesStopped + 1 } catch { }
+            }
+            $stopDeadline = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $stopDeadline -and @(Get-Process -Name 'OpenPath-NativeHost' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Start-Sleep -Milliseconds 500
+            }
+        }
+        catch { }
         foreach ($entry in @(
                 @{ name = 'executable'; file = 'OpenPath-NativeHost.exe' },
                 @{ name = 'buildManifest'; file = 'OpenPath-NativeHost.manifest.json' },
                 @{ name = 'buildDiagnostics'; file = 'OpenPath-NativeHost.build.json' }
             )) {
             $path = Join-Path $nativeRoot $entry.file
-            if (Test-Path -LiteralPath $path -PathType Leaf) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            $removed = $false
+            foreach ($attempt in @(1, 2, 3)) {
+                try { Remove-Item -LiteralPath $path -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 750 }
+                $removed = -not (Test-Path -LiteralPath $path -PathType Leaf)
+                if ($removed) { break }
+            }
+            if (-not $removed -and ($entry.name -eq 'executable')) {
                 try {
-                    Remove-Item -LiteralPath $path -Force -ErrorAction Stop
-                    $recompile.deleted[$entry.name] = -not (Test-Path -LiteralPath $path -PathType Leaf)
+                    $retiredPath = "$path.retired-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+                    Move-Item -LiteralPath $path -Destination $retiredPath -Force -ErrorAction Stop
+                    $recompile.retiredExecutable = $retiredPath
                 }
                 catch { }
+                $removed = -not (Test-Path -LiteralPath $path -PathType Leaf)
             }
+            $recompile.deleted[$entry.name] = $removed
         }
+        # R2: the positive control at the recompilation moment: if the host is
+        # blocked, this shows whether the whole checkpoint was in blocking mode.
+        try { $recompile.sacControl = Invoke-FirstVisitSacControlProbe } catch { }
         try {
-            $ensureProbe = Invoke-NativeHostCompileEnsureProbe -WorkDir 'C:\OpenPathLab\phase8\host-recompile'
+            $ensureProbe = Invoke-NativeHostCompileEnsureProbe -WorkDir 'C:\OpenPathLab\phase8b\host-recompile'
             $recompile.ensureRaw = $ensureProbe.raw
             $recompile.ensureStdout = $ensureProbe.stdout
             $recompile.ensureStderr = $ensureProbe.stderr
@@ -1884,6 +1988,23 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             if ($ensureProbe.errorMessage) { $recompile.ensureError = $ensureProbe.errorMessage }
         }
         catch { $recompile.ensureError = [string]$_.Exception.Message }
+        # Phase 8b R1/R2: a second ensure observes the cause-based backoff the
+        # first failure armed (5/15/60 minutes for health failures). The call
+        # short-circuits without compiling while the backoff is active.
+        try {
+            $backoffProbe = Invoke-NativeHostCompileEnsureProbe -WorkDir 'C:\OpenPathLab\phase8b\host-recompile-backoff'
+            $recompile.ensureBackoff = [ordered]@{
+                exit          = $backoffProbe.exit
+                stdout        = $backoffProbe.stdout
+                stderr        = $backoffProbe.stderr
+                ensure        = $backoffProbe.ensure
+                status        = $backoffProbe.status
+                backoffActive = $backoffProbe.backoffActive
+                error         = $backoffProbe.error
+                nextAttemptAt = if ($backoffProbe.ensure -and $backoffProbe.ensure.PSObject.Properties['NextAttemptAt']) { [string]$backoffProbe.ensure.NextAttemptAt } else { '' }
+            }
+        }
+        catch { $recompile.ensureBackoffError = [string]$_.Exception.Message }
         # Phase 8 H2: the build diagnostics the ensure just wrote (or refreshed)
         # are the product evidence for the Fallback reason.
         $buildDiagnosticsPath = Join-Path $nativeRoot 'OpenPath-NativeHost.build.json'
@@ -2175,63 +2296,32 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         # directory is removed afterwards.
         Save-PartialResult
         $languageMode = [string]$ExecutionContext.SessionState.LanguageMode
-        $control = [ordered]@{
-            ran           = $false
-            languageMode  = $languageMode
-            dir           = 'C:\Windows\Temp\openpath-sac-control'
-            csc           = ''
-            compileExit   = -1
-            compileOutput = @()
-            plain         = $null
-            motw          = $null
-            codeIntegrity = $null
-            cleaned       = $false
-            error         = ''
-        }
         if ($languageMode -ne 'FullLanguage') {
-            $control.error = "constrained-language:$languageMode"
+            $control = [ordered]@{
+                ran           = $false
+                languageMode  = $languageMode
+                dir           = 'C:\Windows\Temp\openpath-sac-control'
+                csc           = ''
+                compileExit   = -1
+                compileOutput = @()
+                plain         = $null
+                motw          = $null
+                plainSamples  = @()
+                motwSamples   = @()
+                codeIntegrity = $null
+                cleaned       = $false
+                error         = "constrained-language:$languageMode"
+            }
             $script:Body.sacControl = $control
             Complete-Step
         }
-        try {
-            $control.ran = $true
-            $dir = $control.dir
-            New-Item -ItemType Directory -Path $dir -Force | Out-Null
-            $source = Join-Path $dir 'control.cs'
-            [IO.File]::WriteAllText($source, 'public static class OpenPathSacControl { public static void Main() { System.Environment.ExitCode = 7; } }', [Text.UTF8Encoding]::new($false))
-            $candidates = @(
-                (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
-                (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
-            )
-            $csc = @($candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
-            if ($csc.Count -eq 0) { throw 'csc-not-found' }
-            $control.csc = [string]$csc[0]
-            $compile = Invoke-Cmd ([string]$csc[0]) @('/nologo', '/target:exe', ("/out:" + (Join-Path $dir 'control.exe')), $source)
-            $control.compileExit = $compile.exit
-            $control.compileOutput = @($compile.out | Select-Object -First 10)
-            $compiled = Join-Path $dir 'control.exe'
-            if ($compile.exit -ne 0 -or -not (Test-Path -LiteralPath $compiled)) { throw "compile-failed:$($compile.exit)" }
-            $plainPath = Join-Path $dir 'control-plain.exe'
-            $motwPath = Join-Path $dir 'control-motw.exe'
-            Copy-Item -LiteralPath $compiled -Destination $plainPath -Force
-            Copy-Item -LiteralPath $compiled -Destination $motwPath -Force
-            $zone = "[ZoneTransfer]`r`nZoneId=3`r`nReferrerUrl=https://example.invalid/`r`nHostUrl=https://example.invalid/control.exe"
-            Set-Content -LiteralPath $motwPath -Stream 'Zone.Identifier' -Value $zone -Encoding ASCII
-            $control.plain = Invoke-SacControlRun -Path $plainPath
-            $control.motw = Invoke-SacControlRun -Path $motwPath
-            # Phase 8 H2: two samples per checkpoint so a control that flips
-            # within the scene is visible instead of collapsing to one reading.
-            $control.plainSamples = @($control.plain, (Invoke-SacControlRun -Path $plainPath))
-            $control.motwSamples = @($control.motw, (Invoke-SacControlRun -Path $motwPath))
+        else {
+            $control = Invoke-FirstVisitSacControlProbe
+            $control.languageMode = $languageMode
             $control.codeIntegrity = Get-CodeIntegrityXmlEvents -SinceIso $SceneStartedAt -MaxEvents 60 -MaxBytes 262144
+            $script:Body.sacControl = $control
+            Complete-Step
         }
-        catch { $control.error = [string]$_.Exception.Message }
-        finally {
-            try { Remove-Item -LiteralPath $control.dir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
-            $control.cleaned = -not (Test-Path -LiteralPath $control.dir)
-        }
-        $script:Body.sacControl = $control
-        Complete-Step
     }
     'sac-apply' {
         # Phase 6 B: simulate "an installed machine to which Windows turns SAC

@@ -554,6 +554,28 @@ Describe "Update Script" {
             # fails the session bootstrap instead of the first update cycle.
             (Get-Content -LiteralPath $runtimePath -Raw) | Should -Match "'Get-OpenPathRuntimeDependencyOverlayState'"
         }
+
+        It "resolves and retries the compiled native host on every update cycle (Phase 8b)" {
+            # The ensure/health entrypoints live in Browser.FirefoxNativeHost.psm1
+            # and were private to it, so the self-update retry, the watchdog
+            # health report and the installer SAC notice skipped them silently.
+            $browserPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "lib" "Browser.psm1")).Path
+            $script = "Import-Module '$($browserPath -replace "'", "''")' -Force -ErrorAction SilentlyContinue; " +
+            "if ((Get-Command -Name Invoke-OpenPathFirefoxNativeHostCompiledEnsure -ErrorAction SilentlyContinue) -and " +
+            "(Get-Command -Name Get-OpenPathFirefoxNativeHostCompiledHealth -ErrorAction SilentlyContinue)) { 'resolved' } else { 'missing' }"
+            $result = & pwsh -NoProfile -Command $script | Select-Object -Last 1
+            $result | Should -Be 'resolved'
+
+            # The update cycle (Update task every 5 minutes, SSE) retries the
+            # ensure under the cause-based backoff, so a transient install-time
+            # failure no longer waits for the daily agent self-update.
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimeContent = Get-Content -LiteralPath $runtimePath -Raw
+            $cycleBody = $runtimeContent.Substring($runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle'))
+            $cycleBody | Should -Match "Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure'"
+            $cycleBody | Should -Match "writeUpdateStage 'native-host'"
+            $cycleBody | Should -Match 'native-host=\{5\}'
+        }
     }
 
     Context "Dependency writers lock scoping" {        BeforeAll {

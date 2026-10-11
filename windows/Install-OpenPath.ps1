@@ -909,10 +909,21 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'summary' -Action {
         -ClassroomId $ClassroomId `
         -MachineRegistered $machineRegistered `
         -WhitelistUrl $WhitelistUrl `
+        -ApiUrl $apiBaseUrl `
         -AgentVersion $agentVersion `
         -PrimaryDNS $primaryDNS
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+# Phase 8b: privacy notice (SignPath Foundation condition 9): what the agent
+# sends and to which server. Warning only: it never changes behavior, never
+# prompts and never blocks the install (the whitelist URL is logged redacted).
+$phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'privacy-notice' -Action {
+    Write-OpenPathInstallerPrivacyNotice `
+        -Unattended:$Unattended `
+        -ApiUrl $apiBaseUrl `
+        -WhitelistUrl $WhitelistUrl | Out-Null
+}
 
 # Phase 8: with Smart App Control already enforced, tell the administrator what
 # will not work when no valid native host is available. Warning only: the

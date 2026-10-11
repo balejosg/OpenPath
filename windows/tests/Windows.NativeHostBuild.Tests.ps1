@@ -489,4 +489,199 @@ Describe 'Compiled native host (Phase 5)' {
             }
         }
     }
+
+    Context 'Transient health retry and cause-based backoff (Phase 8b)' {
+        BeforeEach {
+            . $script:BuildModulePath
+            $script:Root = Join-Path $TestDrive ('native-retry-' + [guid]::NewGuid().ToString('N'))
+            $script:NativeRoot = Join-Path $script:Root 'browser-extension\firefox\native'
+            New-Item -ItemType Directory -Path $script:NativeRoot -Force | Out-Null
+            $script:Source = Join-Path $script:Root 'OpenPathNativeHost.cs'
+            Set-Content -LiteralPath $script:Source -Value '// fixture source' -Encoding ASCII
+            $compileTracker = [pscustomobject]@{ Calls = 0 }
+            $script:CompileTracker = $compileTracker
+            $script:GoodCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                Set-Content -LiteralPath $outputPath -Value 'MZ-fake-executable' -Encoding ASCII
+                [pscustomobject]@{ ExitCode = 0; Output = '' }
+            }.GetNewClosure()
+            $script:BadCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                [pscustomobject]@{ ExitCode = 1; Output = 'source.cs(1,1): error CS0000: fixture' }
+            }.GetNewClosure()
+            $script:HealthyProcess = {
+                param($executablePath, $timeoutSeconds)
+                [pscustomobject]@{ Healthy = $true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 12; Error = '' }
+            }
+            $script:AlwaysTimeoutProcess = {
+                param($executablePath, $timeoutSeconds)
+                [pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 20100; Error = 'health-check-timeout' }
+            }
+            $script:PingCalls = New-Object System.Collections.ArrayList
+            $pingCalls = $script:PingCalls
+            $script:TimeoutThenHealthyProcess = {
+                param($executablePath, $timeoutSeconds)
+                $null = $pingCalls.Add([int]$timeoutSeconds)
+                if ($pingCalls.Count -eq 1) {
+                    [pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 20100; Error = 'health-check-timeout' }
+                }
+                else {
+                    [pscustomobject]@{ Healthy = $true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 20; Error = '' }
+                }
+            }.GetNewClosure()
+            $script:AppControlBlockedProcess = {
+                param($executablePath, $timeoutSeconds)
+                [pscustomobject]@{
+                    Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 300
+                    Error = 'Exception calling "Start" with "1" argument(s): "An Application Control policy has blocked this file"'
+                }
+            }
+            $script:DiagnosticsPath = Join-Path $script:NativeRoot 'OpenPath-NativeHost.build.json'
+        }
+
+        It 'Classifies only timeout and AppControl-launch failures as retryable' {
+            . $script:BuildModulePath
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-timeout' })) | Should -BeTrue
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'An Application Control policy has blocked this file' })) | Should -BeTrue
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-length' })) | Should -BeFalse
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-response' })) | Should -BeFalse
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $true; Error = '' })) | Should -BeFalse
+            (Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts 1) | Should -Be 5
+            (Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts 2) | Should -Be 15
+            (Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts 3) | Should -Be 60
+            (Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts 9) | Should -Be 60
+        }
+
+        It 'Retries a timed-out ping once with a longer timeout before building' {
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:TimeoutThenHealthyProcess
+            $result.Status | Should -Be 'Built'
+            @($script:PingCalls).Count | Should -Be 2
+            [int]$script:PingCalls[0] | Should -Be 20
+            [int]$script:PingCalls[1] | Should -BeGreaterThan 20
+            $result.Health.Attempts | Should -Be 2
+            $manifest = Get-Content -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.manifest.json') -Raw | ConvertFrom-Json
+            $manifest.healthStatus | Should -Be 'healthy'
+        }
+
+        It 'Retries an AppControl 4551 launch denial once and only then backs off' {
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:AppControlBlockedProcess
+            $result.Status | Should -Be 'Fallback'
+            $result.Health.Attempts | Should -Be 2
+            (Test-Path -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.exe')) | Should -BeFalse
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.status | Should -Be 'HealthCheckFailed'
+            $diagnostics.error | Should -Match 'application control policy has blocked'
+            $diagnostics.pingAttempts | Should -Be 2
+            $diagnostics.attempts | Should -Be 1
+            $diagnostics.healthAttempts | Should -Be 1
+            $diagnostics.retryDelayMinutes | Should -Be 5
+        }
+
+        It 'Keeps the previous healthy executable when a new source fails health after the retry' {
+            Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:HealthyProcess | Out-Null
+            $executable = Join-Path $script:NativeRoot 'OpenPath-NativeHost.exe'
+            $previousHash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash
+            Set-Content -LiteralPath $script:Source -Value '// changed source' -Encoding ASCII
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:AlwaysTimeoutProcess
+            $result.Status | Should -Be 'Fallback'
+            $result.ExecutablePath | Should -Be $executable
+            (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash | Should -Be $previousHash
+            $manifest = Get-Content -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.manifest.json') -Raw | ConvertFrom-Json
+            $manifest.healthStatus | Should -Be 'healthy'
+        }
+
+        It 'Grows the health backoff 5 -> 15 -> 60 minutes and caps the retries per hour' {
+            $build = {
+                Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:AlwaysTimeoutProcess
+            }
+            $setAttemptedAtMinutesAgo = {
+                param([int]$MinutesAgo)
+                $doc = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+                $doc.attemptedAt = (Get-Date).ToUniversalTime().AddMinutes(-$MinutesAgo).ToString('o')
+                $doc | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $script:DiagnosticsPath -Encoding UTF8
+            }
+
+            $first = & $build
+            $first.Status | Should -Be 'Fallback'
+            $script:CompileTracker.Calls | Should -Be 1
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.healthAttempts | Should -Be 1
+            $diagnostics.retryDelayMinutes | Should -Be 5
+            [math]::Round((([datetime]$diagnostics.nextAttemptAt) - ([datetime]$diagnostics.attemptedAt)).TotalMinutes) | Should -Be 5
+
+            # The immediate second ensure is refused without compiling.
+            $second = & $build
+            $second.Status | Should -Be 'Fallback'
+            $second.BackoffActive | Should -BeTrue
+            $second.Error | Should -Be 'native-host-health-backoff'
+            $script:CompileTracker.Calls | Should -Be 1
+            $second.NextAttemptAt | Should -Not -BeNullOrEmpty
+
+            # Six minutes later the retry compiles again and grows to 15.
+            & $setAttemptedAtMinutesAgo -MinutesAgo 6
+            $third = & $build
+            $third.Status | Should -Be 'Fallback'
+            $script:CompileTracker.Calls | Should -Be 2
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.healthAttempts | Should -Be 2
+            $diagnostics.retryDelayMinutes | Should -Be 15
+
+            # The grown delay is honoured, then the streak reaches 60.
+            $blocked = & $build
+            $blocked.BackoffActive | Should -BeTrue
+            $script:CompileTracker.Calls | Should -Be 2
+            & $setAttemptedAtMinutesAgo -MinutesAgo 16
+            $fourth = & $build
+            $script:CompileTracker.Calls | Should -Be 3
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.healthAttempts | Should -Be 3
+            $diagnostics.retryDelayMinutes | Should -Be 60
+
+            # One hour per retry from now on: no compile loop.
+            & $setAttemptedAtMinutesAgo -MinutesAgo 61
+            $fifth = & $build
+            $script:CompileTracker.Calls | Should -Be 4
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.healthAttempts | Should -Be 4
+            $diagnostics.retryDelayMinutes | Should -Be 60
+            $immediate = & $build
+            $immediate.BackoffActive | Should -BeTrue
+            $immediate.Error | Should -Be 'native-host-health-backoff'
+            $script:CompileTracker.Calls | Should -Be 4
+        }
+
+        It 'Keeps the one-hour backoff for compilation failures and resets the counters with a new source' {
+            $first = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:BadCompiler -ProcessInvoker $script:HealthyProcess
+            $first.Status | Should -Be 'Fallback'
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.status | Should -Be 'CompilationFailed'
+            $diagnostics.healthAttempts | Should -Be 0
+            $diagnostics.retryDelayMinutes | Should -Be 60
+
+            $second = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:BadCompiler -ProcessInvoker $script:HealthyProcess
+            $second.BackoffActive | Should -BeTrue
+            $second.Error | Should -Be 'native-host-compile-backoff'
+            $script:CompileTracker.Calls | Should -Be 1
+
+            # A new source hash clears the backoff and the success resets the counters.
+            Set-Content -LiteralPath $script:Source -Value '// new source' -Encoding ASCII
+            $third = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:HealthyProcess
+            $third.Status | Should -Be 'Built'
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.status | Should -Be 'Built'
+            $diagnostics.attempts | Should -Be 1
+            $diagnostics.healthAttempts | Should -Be 0
+
+            # A failure after a success restarts the health streak at 1.
+            $fourth = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:AlwaysTimeoutProcess -Force
+            $fourth.Status | Should -Be 'Fallback'
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.attempts | Should -Be 1
+            $diagnostics.healthAttempts | Should -Be 1
+            $diagnostics.retryDelayMinutes | Should -Be 5
+        }
+    }
 }

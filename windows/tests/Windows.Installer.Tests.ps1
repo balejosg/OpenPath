@@ -53,6 +53,7 @@ Describe "Installer" {
                 'integrity',
                 'timing',
                 'summary',
+                'privacy-notice',
                 'sac-native-host-notice'
             )
             $plan.Context.OpenPathRoot | Should -Be 'C:\OpenPath'
@@ -149,6 +150,7 @@ Describe "Installer" {
                 'integrity',
                 'timing',
                 'summary',
+                'privacy-notice',
                 'sac-native-host-notice'
             )
 
@@ -2807,6 +2809,67 @@ Describe "Uninstaller" {
             foreach ($phaseName in $usedPhases) {
                 $phaseNames | Should -Contain $phaseName -Because "Install-OpenPath.ps1 invokes phase '$phaseName'"
             }
+        }
+    }
+
+    Context 'Privacy notice (Phase 8b R5)' {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot '..' 'lib' 'install' 'Installer.Plan.ps1')
+            . (Join-Path $PSScriptRoot '..' 'lib' 'install' 'Installer.Runtime.ps1')
+        }
+
+        It 'Describes every transfer and the configured server without leaking the token' {
+            $lines = @(Get-OpenPathInstallerPrivacyNotice -ApiUrl 'https://api.example.test/' -WhitelistUrl 'https://api.example.test/w/secret-token-123/whitelist.txt')
+            $text = $lines -join "`n"
+            $text | Should -Match 'nothing is sent to third parties'
+            $text | Should -Match 'Enrollment \(alta\)'
+            $text | Should -Match 'Whitelist sync'
+            $text | Should -Match 'Health reports'
+            $text | Should -Match 'Student requests'
+            $text | Should -Match 'https://api\.example\.test/trpc/healthReports\.submit'
+            $text | Should -Match '/w/\[redacted\]/whitelist\.txt'
+            $text.Contains('secret-token-123') | Should -BeFalse
+            $text | Should -Match 'cannot be disabled'
+        }
+
+        It 'Prints the notice as part of the unattended install summary' {
+            $captured = New-Object System.Collections.ArrayList
+            Mock Write-Host { param($Object) $null = $captured.Add([string]$Object) }
+            Mock Write-Progress { }
+            $previousVerbose = $VerbosePreference
+            try {
+                $VerbosePreference = 'SilentlyContinue'
+                Write-OpenPathInstallerSummary `
+                    -ClassroomModeRequested $true `
+                    -MachineRegistered 'REGISTERED' `
+                    -AgentVersion '9.9.9' `
+                    -PrimaryDNS '127.0.0.1' `
+                    -WhitelistUrl 'https://api.example.test/w/secret-token-123/whitelist.txt' `
+                    -ApiUrl 'https://api.example.test'
+            }
+            finally {
+                $VerbosePreference = $previousVerbose
+            }
+            $joined = $captured -join "`n"
+            $joined | Should -Match 'nothing is sent to third parties'
+            $joined | Should -Match 'Enrollment \(alta\)'
+            $joined.Contains('secret-token-123') | Should -BeFalse
+        }
+
+        It 'Plans and invokes the notice as a warning phase after the summary' {
+            $plan = New-OpenPathInstallPlan -Parameters @{} -OpenPathRoot 'C:\OpenPath' -ScriptDir 'C:\pkg\windows'
+            $phaseNames = @($plan.Phases | ForEach-Object { [string]$_.Name })
+            $phaseNames | Should -Contain 'privacy-notice'
+            $phaseNames.IndexOf('privacy-notice') | Should -BeGreaterThan $phaseNames.IndexOf('summary')
+            $phaseNames.IndexOf('privacy-notice') | Should -BeLessThan $phaseNames.IndexOf('sac-native-host-notice')
+
+            $installerText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'Install-OpenPath.ps1') -Raw
+            $installerText | Should -Match "Invoke-OpenPathPlannedWarningPhase -Name 'privacy-notice'"
+
+            # Interactive display plus the persistent product log for silent installs.
+            $runtimeText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'lib' 'install' 'Installer.Runtime.ps1') -Raw
+            $runtimeText | Should -Match 'Write-InstallerNotice "  \$line"'
+            $runtimeText | Should -Match 'Write-OpenPathLog "Privacy notice: \$line"'
         }
     }
 }

@@ -412,6 +412,13 @@ Export-ModuleMember -Function @(
     'Register-OpenPathFirefoxNativeHost',
     'Sync-OpenPathFirefoxNativeHostArtifacts',
     'Sync-OpenPathFirefoxNativeHostState',
+    # Phase 8b: the compiled-host ensure/health entrypoints were only visible
+    # inside their module, so the self-update retry, the watchdog health report
+    # and the installer SAC notice silently skipped them (Get-Command found
+    # nothing). They are re-exported here so every Browser consumer resolves
+    # them.
+    'Invoke-OpenPathFirefoxNativeHostCompiledEnsure',
+    'Get-OpenPathFirefoxNativeHostCompiledHealth',
     'Unregister-OpenPathFirefoxNativeHost',
     'Sync-OpenPathFirefoxManagedExtensionPolicy',
     'Test-OpenPathFirefoxManagedExtensionReady',

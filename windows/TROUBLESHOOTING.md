@@ -587,23 +587,54 @@ host") because the restricted student cannot run `powershell.exe`/`pwsh.exe`.
 Without the boundary the PowerShell/cmd fallback still works and the message
 stays a WARN.
 
-### Why is the compiled host in a one-hour backoff?
+### Why is the compiled host in a retry backoff?
 
 `OpenPath-NativeHost.build.json` records the failure status, error, attempt
-count and `nextAttemptAt`; a failed attempt backs off for one hour while the
-source is unchanged (a new source hash, a successful build or a valid signed
-candidate for the hash clears it). The backoff applies to compilation only.
-Known ways it can be armed, in order of likelihood, with the current evidence
-(Phase 8 H1; the student-policy E2E now uploads the whole host state plus the
-per-user `native-host.log` so the next occurrence is decidable):
+counts and `nextAttemptAt`; a failed attempt backs off while the source is
+unchanged (a new source hash, a successful build or a valid signed candidate
+for the hash clears it). Phase 8b: the delay depends on the cause.
+
+| Diagnosis (status)                               | Delay before the next attempt                    |
+| ------------------------------------------------ | ------------------------------------------------ |
+| `HealthCheckFailed`                              | growing 5 -> 15 -> 60 minutes (`healthAttempts`) |
+| `CompilationFailed` / `SourceMissing` / `Failed` | one hour, steady                                 |
+
+A health failure first retries the same executable once with a longer ping
+timeout (45 s instead of 20 s, `pingAttempts: 2`) before it is declared: the
+first execution of a freshly compiled binary can pay a one-time Smart App
+Control / Code Integrity evaluation or an antivirus scan, and the AppControl
+4551 launch denial is not always repeatable. After three health failures the
+schedule stays at one attempt per hour: there is never a compile loop, and a
+success resets the counters.
+
+Who retries: every update cycle (the `OpenPath-Update` task runs it every 5
+minutes and SSE events trigger the same cycle) calls the ensure under the
+backoff, the daily `OpenPath-AgentUpdate` task retries it, and so do
+install/enrollment and `OpenPath.ps1 self-update`. A healthy host makes a
+cycle pay a source hash and a manifest read (`BuildSkipped`); while a backoff
+is active the ensure returns immediately with `native-host-health-backoff` or
+`native-host-compile-backoff` and `BackoffActive = true`.
+
+With Smart App Control, an unsigned executable's **first execution** decides
+whether it may run: it can start during a permissive window and keep running
+(the decision sticks per file hash), or be denied with the 4551 "An
+Application Control policy has blocked this file" error. A denial of the first
+execution is retried once with the longer timeout and then follows the health
+backoff; the previous healthy executable stays in place through all of it.
+
+Known ways the backoff can be armed, in order of likelihood, with the current
+evidence (Phase 8 H1/8b; the student-policy E2E uploads the whole host state
+plus the per-user `native-host.log` so the next occurrence is decidable):
 
 1. A transient first failure during install/enrollment (health-ping timeout or
-   a Defender/AV scan of the freshly written executable).
+   a Defender/AV scan of the freshly written executable) - retried inside the
+   same ensure since Phase 8b.
 2. The atomic swap failing because a running Firefox native host holds the
    destination executable (the E2E keeps Firefox open; the swap replaces
    `OpenPath-NativeHost.exe` while it may be running).
 3. A failure record from a previous generation surviving a reinstall without
    uninstall (same source hash, so the backoff applies to the new install).
 
-Compare `attempts`, `attemptedAt` and `status` in the diagnostics file with the
-install/enrollment timestamps before assuming a new failure.
+Compare `attempts`, `healthAttempts`, `attemptedAt` and `status` in the
+diagnostics file with the install/enrollment timestamps before assuming a new
+failure; `pingAttempts` shows whether the longer retry already ran.

@@ -123,13 +123,19 @@ jobs:
         shell: pwsh
         env:
           REQUEST_ID: ${{ steps.submit.outputs.signing-request-id != '' && steps.submit.outputs.signing-request-id || inputs.signing_request_id }}
+          # The token and ids travel through the environment, never interpolated
+          # into the script text (a log line could echo them).
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
         run: |
           if (-not $env:REQUEST_ID) { throw 'No signing request id to collect (submit skipped and no input).' }
-          Install-Module -Name SignPath -MinimumVersion 4.0.0 -MaximumVersion 4.999.999 -Force -Scope CurrentUser
+          # Exact pinned version: the collect contract must not drift with a
+          # PSGallery release.
+          Install-Module -Name SignPath -RequiredVersion 4.4.6 -Force -Scope CurrentUser
           New-Item -ItemType Directory -Path signed -Force | Out-Null
           Get-SignedArtifact `
-            -OrganizationId '${{ vars.SIGNPATH_ORGANIZATION_ID }}' `
-            -ApiToken '${{ secrets.SIGNPATH_API_TOKEN }}' `
+            -OrganizationId $env:SIGNPATH_ORGANIZATION_ID `
+            -ApiToken $env:SIGNPATH_API_TOKEN `
             -SigningRequestId $env:REQUEST_ID `
             -OutputArtifactPath (Join-Path (Get-Location) 'signed\OpenPath-NativeHost-signed.zip') `
             -WaitForCompletionTimeoutInSeconds 2700

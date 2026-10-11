@@ -2123,6 +2123,54 @@ PrimaryServerAddress=198.51.100.7
         }
     }
 
+    Context 'Host recompilation measurement (Phase 8b)' {
+        BeforeAll {
+            $script:Guest8bPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\Invoke-OpenPathFirstVisitGuest.ps1'
+            $script:Guest8bText = Get-Content -LiteralPath (Resolve-Path $script:Guest8bPath).Path -Raw
+        }
+
+        It 'Imports the module that defines the ensure in the direct probe' {
+            # The Phase 7/8 probe bootstrapped `-DependentModules Browser`, which
+            # never exports Invoke-OpenPathFirefoxNativeHostCompiledEnsure; the
+            # emitted script failed with "term not recognized" and recorded an
+            # empty ensure. The probe must import the defining module directly.
+            $probeStart = $script:Guest8bText.IndexOf('function Invoke-NativeHostCompileEnsureProbe')
+            $probeBody = $script:Guest8bText.Substring($probeStart, 4000)
+            $probeBody | Should -Match "Import-Module 'C:\\OpenPath\\lib\\Browser\.FirefoxNativeHost\.psm1' -Force"
+            $probeBody | Should -Match "Import-Module 'C:\\OpenPath\\lib\\Common\.psm1' -Force -Global"
+            $probeBody | Should -Match 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config \$config'
+            $probeBody | Should -Not -Match 'DependentModules'
+        }
+
+        It 'Stops the running host and verifies the deletion before recompiling' {
+            $stepStart = $script:Guest8bText.IndexOf("'host-recompile' {")
+            $stepBody = $script:Guest8bText.Substring($stepStart, 12000)
+            # The executable is held by a running messaging host: stop it first,
+            # then delete with retries and a rename fallback.
+            $stepBody | Should -Match "Get-Process -Name 'OpenPath-NativeHost'"
+            $stepBody | Should -Match 'Stop-Process -Id \$hostProcess\.Id -Force'
+            $stepBody | Should -Match 'Move-Item -LiteralPath \$path -Destination \$retiredPath -Force'
+            $stopIndex = $stepBody.IndexOf("Get-Process -Name 'OpenPath-NativeHost'")
+            $deleteIndex = $stepBody.IndexOf('Remove-Item -LiteralPath $path -Force -ErrorAction Stop')
+            ($stopIndex -ge 0 -and $deleteIndex -gt $stopIndex) | Should -BeTrue
+            $stepBody | Should -Match '\$recompile\.deleted\[\$entry\.name\] = \$removed'
+        }
+
+        It 'Records the second ensure (backoff) and the SAC control at the recompilation moment' {
+            $stepStart = $script:Guest8bText.IndexOf("'host-recompile' {")
+            $stepBody = $script:Guest8bText.Substring($stepStart, 12000)
+            $stepBody | Should -Match 'ensureBackoff'
+            $stepBody | Should -Match 'backoffActive = \$backoffProbe\.backoffActive'
+            $stepBody | Should -Match '\$recompile\.sacControl = Invoke-FirstVisitSacControlProbe'
+            # The helper is defined once and shared with the sac-control step.
+            ([regex]::Matches($script:Guest8bText, 'function Invoke-FirstVisitSacControlProbe \{')).Count | Should -Be 1
+            ([regex]::Matches($script:Guest8bText, 'Invoke-FirstVisitSacControlProbe')).Count | Should -BeGreaterOrEqual 2
+            $sacStepStart = $script:Guest8bText.IndexOf("'sac-control' {")
+            $sacStepBody = $script:Guest8bText.Substring($sacStepStart, 2200)
+            $sacStepBody | Should -Match '\$control = Invoke-FirstVisitSacControlProbe'
+        }
+    }
+
     Context 'MOZ collector survives the regex automatic variable (Phase 6.1 fix)' -Tag 'Phase61' {
         BeforeAll {
             $harnessPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\Invoke-OpenPathFirstVisitGuest.ps1'

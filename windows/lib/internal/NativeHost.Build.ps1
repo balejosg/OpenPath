@@ -433,7 +433,8 @@ function Test-OpenPathNativeHostExecutable {
     param(
         [Parameter(Mandatory = $true)][string]$ExecutablePath,
         [int]$TimeoutSeconds = 20,
-        # Test seam: replaces the process launch.
+        # Test seam: replaces the process launch. The effective timeout travels
+        # as the second argument so the Phase 8b retry is observable.
         [scriptblock]$ProcessInvoker = $null
     )
 
@@ -447,7 +448,7 @@ function Test-OpenPathNativeHostExecutable {
     }
     if ($ProcessInvoker) {
         try {
-            $invoked = & $ProcessInvoker $ExecutablePath
+            $invoked = & $ProcessInvoker $ExecutablePath $TimeoutSeconds
             foreach ($name in @('Healthy', 'Version', 'ProtocolVersion', 'Capabilities', 'ElapsedMs', 'Error')) {
                 if ($null -ne $invoked -and $invoked.PSObject.Properties[$name]) { $result[$name] = $invoked.$name }
             }
@@ -542,6 +543,107 @@ function Test-OpenPathNativeHostExecutable {
     return [pscustomobject]$result
 }
 
+function Test-OpenPathNativeHostHealthFailureRetryable {
+    <#
+    .SYNOPSIS
+        Whether a failed framed ping deserves the single longer retry.
+    .DESCRIPTION
+        Phase 8b: two first-run failures are transient by nature.
+          - health-check-timeout: the process launch pays a one-time Smart App
+            Control / Code Integrity evaluation (the kernel holds CreateProcess
+            before the host writes its pong), or an antivirus scans the freshly
+            written executable.
+          - The AppControl 4551 launch denial ("An Application Control policy
+            has blocked this file"): the very first execution decides whether
+            the unsigned binary may run at all; a retry observes the settled
+            decision instead of a racing one.
+        Everything else (frame/protocol errors, missing executable) is
+        deterministic and is not retried.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Health)
+
+    if (-not $Health -or $Health.Healthy) { return $false }
+    $errorText = if ($Health.PSObject.Properties['Error']) { [string]$Health.Error } else { '' }
+    if (-not $errorText) { return $false }
+    if ($errorText -eq 'health-check-timeout') { return $true }
+    if ($errorText -match '(?i)application control policy has blocked') { return $true }
+    return $false
+}
+
+function Test-OpenPathNativeHostExecutableWithRetry {
+    <#
+    .SYNOPSIS
+        Framed ping with one longer retry for the transient first-run failures.
+    .DESCRIPTION
+        Phase 8b: when the first ping times out or the launch is denied by the
+        AppControl 4551 error, the same executable is pinged once more with a
+        45 s timeout. The value stays below the 5-minute update-cycle cadence
+        (the retry never overlaps the next scheduled ensure) and more than
+        doubles the 20 s first attempt, covering the one-time CI evaluation
+        plus the framed handshake. The returned health object records Attempts
+        (1 or 2) so diagnostics and lab evidence can show the retry.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [int]$TimeoutSeconds = 20,
+        [int]$RetryTimeoutSeconds = 45,
+        [scriptblock]$ProcessInvoker = $null
+    )
+
+    $health = Test-OpenPathNativeHostExecutable -ExecutablePath $ExecutablePath -TimeoutSeconds $TimeoutSeconds -ProcessInvoker $ProcessInvoker
+    $attempts = 1
+    if (Test-OpenPathNativeHostHealthFailureRetryable -Health $health) {
+        $attempts = 2
+        $health = Test-OpenPathNativeHostExecutable -ExecutablePath $ExecutablePath -TimeoutSeconds $RetryTimeoutSeconds -ProcessInvoker $ProcessInvoker
+    }
+    $health | Add-Member -NotePropertyName Attempts -NotePropertyValue $attempts -Force
+    return $health
+}
+
+function Get-OpenPathNativeHostHealthRetryDelayMinutes {
+    <#
+    .SYNOPSIS
+        Growing health-failure retry delay: 5 -> 15 -> 60 minutes.
+    .DESCRIPTION
+        Phase 8b: the health failure streak caps the compile attempts per hour
+        (attempts at 0, +5, +20 minutes, then once per hour), so a persistent
+        block never becomes a compile loop while a transient failure recovers
+        on the next update cycle (5-minute task) instead of staying broken for
+        an hour.
+    #>
+    [CmdletBinding()]
+    param([int]$HealthAttempts = 1)
+
+    if ($HealthAttempts -le 1) { return 5 }
+    if ($HealthAttempts -eq 2) { return 15 }
+    return 60
+}
+
+function Get-OpenPathNativeHostFailureRetryDelayMinutes {
+    <#
+    .SYNOPSIS
+        Retry delay for a stored failure record: cause-based.
+    .DESCRIPTION
+        Phase 8b: health failures grow (5/15/60 via the health streak);
+        compilation, source and unexpected failures keep the steady one-hour
+        delay so a broken compiler can never become a compile loop.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Failure)
+
+    if (-not $Failure) { return 60 }
+    $status = if ($Failure.PSObject.Properties['status']) { [string]$Failure.status } else { '' }
+    if ($status -ne 'HealthCheckFailed') { return 60 }
+    $streak = 1
+    if ($Failure.PSObject.Properties['healthAttempts']) {
+        try { $streak = [int]$Failure.healthAttempts } catch { $streak = 1 }
+    }
+    if ($streak -lt 1) { $streak = 1 }
+    return (Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts $streak)
+}
+
 function Build-OpenPathFirefoxNativeHostExecutable {
     <#
     .SYNOPSIS
@@ -598,25 +700,49 @@ function Build-OpenPathFirefoxNativeHostExecutable {
     $writeDiagnostics = {
         param([string]$Status, [string]$Error)
         try {
-            $attempts = 1
-            $previousAttempts = 0
+            # Phase 8b: attempts are consecutive failures for the same source
+            # (reset by a success or a new source hash); health failures keep
+            # their own streak so the retry delay can grow (5 -> 15 -> 60
+            # minutes) while compilation failures keep the steady hour.
+            $previous = $null
             if (Test-Path -LiteralPath $diagnosticsPath -PathType Leaf) {
-                try {
-                    $previousDiagnostics = Get-Content -LiteralPath $diagnosticsPath -Raw -ErrorAction Stop | ConvertFrom-Json
-                    if ($previousDiagnostics.PSObject.Properties['attempts']) { $previousAttempts = [int]$previousDiagnostics.attempts }
-                }
-                catch { }
+                try { $previous = Get-Content -LiteralPath $diagnosticsPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $previous = $null }
             }
-            $attempts = $previousAttempts + 1
+            $sameSourceFailure = $false
+            $previousAttempts = 0
+            $previousHealthAttempts = 0
+            $previousStatus = ''
+            if ($previous) {
+                $previousSource = if ($previous.PSObject.Properties['sourceSha256']) { [string]$previous.sourceSha256 } else { '' }
+                $previousStatus = if ($previous.PSObject.Properties['status']) { [string]$previous.status } else { '' }
+                if (($previousSource -eq $result.SourceSha256) -and ($failedDiagnosticStatuses -contains $previousStatus)) {
+                    $sameSourceFailure = $true
+                    if ($previous.PSObject.Properties['attempts']) { $previousAttempts = [int]$previous.attempts }
+                    if ($previous.PSObject.Properties['healthAttempts']) { $previousHealthAttempts = [int]$previous.healthAttempts }
+                }
+            }
+            $attempts = if ($Status -eq 'Built') { 1 } elseif ($sameSourceFailure) { $previousAttempts + 1 } else { 1 }
+            $healthAttempts = 0
+            if ($Status -eq 'HealthCheckFailed') {
+                $healthAttempts = if ($sameSourceFailure -and ($previousStatus -eq 'HealthCheckFailed')) { $previousHealthAttempts + 1 } else { 1 }
+            }
+            $retryDelayMinutes = if ($Status -eq 'Built') { 0 }
+                elseif ($Status -eq 'HealthCheckFailed') { Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts $healthAttempts }
+                else { 60 }
             $attemptedAt = [DateTime]::UtcNow
+            $pingAttempts = 0
+            if ($result.Health -and $result.Health.PSObject.Properties['Attempts']) { $pingAttempts = [int]$result.Health.Attempts }
             $diagnostics = [ordered]@{
                 status          = $Status
                 error           = $Error
                 sourcePath      = $result.SourcePath
                 sourceSha256    = $result.SourceSha256
                 attempts        = $attempts
+                healthAttempts  = $healthAttempts
+                retryDelayMinutes = $retryDelayMinutes
+                pingAttempts    = $pingAttempts
                 attemptedAt     = $attemptedAt.ToString('o')
-                nextAttemptAt   = if ($Status -eq 'Built') { '' } else { $attemptedAt.AddSeconds(3600).ToString('o') }
+                nextAttemptAt   = if ($Status -eq 'Built') { '' } else { $attemptedAt.AddMinutes($retryDelayMinutes).ToString('o') }
                 smartAppControl = Get-OpenPathSmartAppControlState
                 hostSource      = $result.HostSource
                 signatureRejectedReason = $result.SignatureRejectedReason
@@ -678,7 +804,8 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         # unchanged (a new source hash clears it), so a broken compiler or a
         # missing payload can never trigger a compile loop. Phase 8: a valid
         # signed candidate bypasses the backoff because no compilation is
-        # involved.
+        # involved. Phase 8b: the delay depends on the cause (health failures
+        # grow 5 -> 15 -> 60 minutes; everything else keeps one hour).
         if (-not $Force -and -not $signedUsable -and (Test-Path -LiteralPath $diagnosticsPath -PathType Leaf)) {
             $previousFailure = $null
             try { $previousFailure = Get-Content -LiteralPath $diagnosticsPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $previousFailure = $null }
@@ -686,12 +813,15 @@ function Build-OpenPathFirefoxNativeHostExecutable {
                 $sameSource = ([string]$previousFailure.sourceSha256 -eq $sourceHash)
                 $attemptedAt = $null
                 try { $attemptedAt = ([datetime]$previousFailure.attemptedAt).ToUniversalTime() } catch { $attemptedAt = $null }
-                if ($sameSource -and $attemptedAt -and (((Get-Date).ToUniversalTime() - $attemptedAt).TotalSeconds -lt 3600)) {
-                    $result.Error = 'native-host-compile-backoff'
-                    $result.BackoffActive = $true
-                    $result.NextAttemptAt = $attemptedAt.AddSeconds(3600).ToString('o')
-                    if (Test-Path -LiteralPath $executablePath -PathType Leaf) { $result.ExecutablePath = $executablePath }
-                    return [pscustomobject]$result
+                if ($sameSource -and $attemptedAt) {
+                    $delayMinutes = Get-OpenPathNativeHostFailureRetryDelayMinutes -Failure $previousFailure
+                    if (((Get-Date).ToUniversalTime() - $attemptedAt).TotalSeconds -lt ($delayMinutes * 60)) {
+                        $result.Error = if ([string]$previousFailure.status -eq 'HealthCheckFailed') { 'native-host-health-backoff' } else { 'native-host-compile-backoff' }
+                        $result.BackoffActive = $true
+                        $result.NextAttemptAt = $attemptedAt.AddMinutes($delayMinutes).ToString('o')
+                        if (Test-Path -LiteralPath $executablePath -PathType Leaf) { $result.ExecutablePath = $executablePath }
+                        return [pscustomobject]$result
+                    }
                 }
             }
         }
@@ -709,7 +839,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
                 if (Test-Path -LiteralPath $executablePath -PathType Leaf) { $result.ExecutablePath = $executablePath }
                 return [pscustomobject]$result
             }
-            $health = Test-OpenPathNativeHostExecutable -ExecutablePath $temporaryExecutable -ProcessInvoker $ProcessInvoker
+            $health = Test-OpenPathNativeHostExecutableWithRetry -ExecutablePath $temporaryExecutable -ProcessInvoker $ProcessInvoker
             $result.Health = $health
             if (-not $health.Healthy) {
                 $result.Error = if ($health.Error) { [string]$health.Error } else { 'native-host-health-check-failed' }
@@ -767,13 +897,19 @@ function Build-OpenPathFirefoxNativeHostExecutable {
             return [pscustomobject]$result
         }
 
-        $health = Test-OpenPathNativeHostExecutable -ExecutablePath $temporaryExecutable -ProcessInvoker $ProcessInvoker
+        $health = Test-OpenPathNativeHostExecutableWithRetry -ExecutablePath $temporaryExecutable -ProcessInvoker $ProcessInvoker
         $result.Health = $health
         if (-not $health.Healthy) {
             $result.Error = if ($health.Error) { [string]$health.Error } else { 'native-host-health-check-failed' }
             $sac = Get-OpenPathSmartAppControlState
             if ($sac.State -eq 'enforcement') {
                 $result.Error = "$($result.Error) (Smart App Control is enforcing and may block the unsigned compiled host)"
+            }
+            elseif ([string]$health.Error -match '(?i)application control policy has blocked') {
+                # Phase 8b: the launch denial is the Code Integrity decision
+                # itself, named even when the registry state does not read as
+                # enforcement (it lags per-boot and evaluation windows).
+                $result.Error = "$($result.Error) (an Application Control policy blocked the unsigned compiled host at launch)"
             }
             Remove-Item -LiteralPath $temporaryExecutable -Force -ErrorAction SilentlyContinue
             & $writeDiagnostics 'HealthCheckFailed' $result.Error

@@ -79,6 +79,22 @@ function Protect-OpenPathDiagnosticText {
     return $redacted
 }
 
+function Protect-OpenPathStudentScenarioArtifact {
+    # R3: the reconciled scenario file carries the per-machine token (the
+    # machineToken value and the /w/<token>/ whitelist URL) and the whole
+    # artifact directory is uploaded. Redact it in place only after every suite
+    # has run, so the raw token never leaves the runner.
+    param([string]$ArtifactsRoot = $script:ArtifactsRoot)
+
+    $scenarioPath = Join-Path $ArtifactsRoot 'student-scenario.json'
+    if (-not (Test-Path -LiteralPath $scenarioPath -PathType Leaf)) { return }
+    $raw = Get-Content -LiteralPath $scenarioPath -Raw
+    $redacted = Protect-OpenPathDiagnosticText -Text $raw
+    if ($redacted -ne $raw) {
+        [System.IO.File]::WriteAllText($scenarioPath, $redacted, [System.Text.UTF8Encoding]::new($false))
+    }
+}
+
 function Write-DiagnosticNote {
     param(
         [Parameter(Mandatory = $true)][string]$Message
@@ -1783,6 +1799,23 @@ function Write-WindowsDiagnostics {
     $diagnosticPath = Join-Path $script:ArtifactsRoot 'windows-diagnostics.txt'
     $whitelistPath = 'C:\OpenPath\data\whitelist.txt'
     $logPath = 'C:\OpenPath\data\logs\openpath.log'
+    # R5: the install-time privacy notice (SignPath condition 9) is recorded in
+    # the product log by the privacy-notice phase; extract it so the artifact
+    # shows what a silent (-Unattended / /S) install recorded for the operator.
+    $privacyNoticeOutput = try {
+        $privacyLines = @()
+        if (Test-Path $logPath) {
+            $privacyLines = @(
+                Select-String -LiteralPath $logPath -Pattern 'Privacy notice:' -SimpleMatch -ErrorAction Stop |
+                    Select-Object -First 20 |
+                    ForEach-Object { Protect-OpenPathDiagnosticText -Text $_.Line }
+            )
+        }
+        @(
+            if ($privacyLines.Count -gt 0) { $privacyLines } else { 'MISSING' }
+        )
+    }
+    catch { @("ERROR: $($_.Exception.Message)") }
     $acrylicArtifactDir = Join-Path $script:ArtifactsRoot 'acrylic'
     $runtimeArtifactDir = Join-Path $script:ArtifactsRoot 'installed-runtime'
     $acrylicFiles = @(
@@ -2044,6 +2077,8 @@ function Write-WindowsDiagnostics {
         $(if (Test-Path $whitelistPath) { Protect-OpenPathDiagnosticText -Text (Get-Content $whitelistPath -Raw) } else { 'Whitelist file missing' })
         '=== OpenPath Log Tail ==='
         $(if (Test-Path $logPath) { Protect-OpenPathDiagnosticText -Text (Get-Content $logPath -Tail 200 | Out-String) } else { 'OpenPath log missing' })
+        '=== Installer Privacy Notice (product log) ==='
+        ($privacyNoticeOutput | Out-String)
     ) | Set-Content -Path $diagnosticPath -Encoding UTF8
 }
 
@@ -2344,6 +2379,16 @@ catch {
 }
 finally {
     $cleanupError = $null
+
+    # R3: every suite has run; redact the per-machine token from the scenario
+    # artifact in place before it is uploaded. Runs first in the cleanup so a
+    # later cleanup failure can never leave the raw token behind.
+    try {
+        Invoke-TimedStep -Name 'Redact student scenario artifact' -ScriptBlock { Protect-OpenPathStudentScenarioArtifact }
+    }
+    catch {
+        if ($null -eq $cleanupError) { $cleanupError = $_ }
+    }
 
     try {
         Invoke-TimedStep -Name 'Uninstall OpenPath client' -ScriptBlock {
