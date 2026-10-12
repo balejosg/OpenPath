@@ -825,8 +825,6 @@ using System;
 public static class OpenPathPingExitFixture {
     public static int Main() {
         Console.Error.WriteLine("fixture-exit-stderr: the host refused to start");
-        Console.Out.WriteLine("partial-before-exit");
-        Console.Out.Flush();
         return 3;
     }
 }
