@@ -554,6 +554,37 @@ Describe 'Compiled native host (Phase 5)' {
             (Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts 9) | Should -Be 60
         }
 
+        It 'Retries a clean immediate exit of a freshly written candidate once (Phase 8d D4)' {
+            # The win11-pro-full first-execution anomaly: the candidate closes
+            # stdout and exits 0 before reading the ping; the second launch of
+            # the same binary answers. A non-zero exit stays deterministic.
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-exited'; ExitCode = 0; HasExited = $true })) | Should -BeTrue
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-exited'; ExitCode = 3; HasExited = $true })) | Should -BeFalse
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-exited'; HasExited = $true })) | Should -BeTrue
+
+            $script:PingQueue = New-Object System.Collections.ArrayList
+            $null = $script:PingQueue.Add([pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 2764; Error = 'health-check-exited'; StartMs = 100; Pid = 41; HasExited = $true; ExitCode = 0; CpuMs = 125; Stderr = '' })
+            $null = $script:PingQueue.Add([pscustomobject]@{ Healthy = $true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 220; Error = ''; StartMs = 5000; Pid = 42; HasExited = $false; ExitCode = $null; CpuMs = 210; Stderr = '' })
+            $queue = $script:PingQueue
+            $process = {
+                param($executablePath, $timeoutSeconds)
+                $record = $queue[0]
+                $queue.RemoveAt(0)
+                $record
+            }.GetNewClosure()
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $process
+
+            $result.Status | Should -Be 'Built'
+            $result.Health.Attempts | Should -Be 2
+            $script:CompileTracker.Calls | Should -Be 1
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            @($diagnostics.lastPings).Count | Should -Be 2
+            $diagnostics.lastPings[0].error | Should -Be 'health-check-exited'
+            $diagnostics.lastPings[1].healthy | Should -BeTrue
+            (Test-Path -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.exe')) | Should -BeTrue
+        }
+
         It 'Retries a timed-out ping once with a longer timeout before building' {
             $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:TimeoutThenHealthyProcess
             $result.Status | Should -Be 'Built'

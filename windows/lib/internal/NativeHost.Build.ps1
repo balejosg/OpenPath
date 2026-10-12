@@ -665,6 +665,12 @@ function Test-OpenPathNativeHostHealthFailureRetryable {
             has blocked this file"): the very first execution decides whether
             the unsigned binary may run at all; a retry observes the settled
             decision instead of a racing one.
+        Phase 8d D4: the win11-pro-full runner also shows a first-execution
+        anomaly where the freshly written candidate closes its stdout and exits
+        with code 0 before reading the ping (empty stderr, no CodeIntegrity or
+        Defender event) while a second launch of the same binary answers in
+        ~0.2 s. A clean exit (code 0 or unavailable) is therefore retried once
+        against the same candidate; a non-zero exit stays deterministic.
         Everything else (frame/protocol errors, missing executable) is
         deterministic and is not retried.
     #>
@@ -676,6 +682,13 @@ function Test-OpenPathNativeHostHealthFailureRetryable {
     if (-not $errorText) { return $false }
     if ($errorText -eq 'health-check-timeout') { return $true }
     if ($errorText -match '(?i)application control policy has blocked') { return $true }
+    if ($errorText -eq 'health-check-exited') {
+        $exitCode = $null
+        if ($Health.PSObject.Properties['ExitCode'] -and $null -ne $Health.ExitCode) {
+            try { $exitCode = [int]$Health.ExitCode } catch { $exitCode = $null }
+        }
+        return ($null -eq $exitCode -or $exitCode -eq 0)
+    }
     return $false
 }
 

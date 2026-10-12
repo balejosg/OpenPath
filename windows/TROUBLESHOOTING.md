@@ -403,6 +403,11 @@ as `exited` (exit code plus stderr), `hung-no-cpu` (the process is alive without
 CPU: blocked before managed code executes - kernel, antivirus or Code
 Integrity; check the CodeIntegrity and Defender events for that window) or
 `hung-cpu` (alive and consuming CPU: a host bug; check its native-host.log).
+A clean immediate exit (code 0, empty stderr, no CodeIntegrity/Defender event)
+is the win11-pro-full first-execution anomaly: the freshly written candidate
+closes stdout before reading the ping while a second launch of the same binary
+answers in ~0.2 s, so the ping is retried once against the same candidate
+(never a compile loop; a non-zero exit stays deterministic).
 
 **Smart App Control oscillates; `csc` is not deterministic.** In lab scenes
 the SAC positive control flips within minutes: right after the policy is

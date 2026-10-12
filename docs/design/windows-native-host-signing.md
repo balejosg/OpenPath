@@ -187,7 +187,10 @@ Product response:
   stderr), `hung-no-cpu` (alive without CPU: blocked before managed code -
   kernel, antivirus or Code Integrity; check the CodeIntegrity/Defender events
   of the window) or `hung-cpu` (alive with CPU: host bug; check its
-  native-host.log).
+  native-host.log). The runner's clean first-execution exit (code 0, empty
+  stderr, no CodeIntegrity/Defender event: the candidate closes stdout before
+  the ping while its second launch answers in ~0.2 s) is retried once against
+  the same candidate; a non-zero exit stays deterministic.
 - The E2E harness reports the final state from the complete `openpath.log` (with
   rotations), the manifest destination, the product health (child
   `Get-OpenPathFirefoxNativeHostCompiledHealth` with the machine PSModulePath,
