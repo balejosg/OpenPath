@@ -1309,7 +1309,7 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
 
         It 'Plans scenarios per trigger' {
             $schedule = Get-OpenPathFirstVisitScenarioPlan -EventName 'schedule'
-            $schedule.scenarios | Should -Be 'settled,hot,class-boot,floor,update-contention:1,host-recovery:1'
+            $schedule.scenarios | Should -Be 'settled,hot:1,class-boot,floor,update-contention:1,host-recovery:1'
             $schedule.repetitions | Should -Be 2
             $afterRel = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_run'
             $afterRel.scenarios | Should -Be 'settled,class-boot,update-contention'

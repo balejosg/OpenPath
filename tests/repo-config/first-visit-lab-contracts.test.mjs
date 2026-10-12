@@ -61,7 +61,7 @@ describe('first-visit lane contract', () => {
     );
     assert.match(
       planModule,
-      /'settled,hot,class-boot,floor,update-contention:1,host-recovery:1'; repetitions = 2; source = 'schedule'/u
+      /'settled,hot:1,class-boot,floor,update-contention:1,host-recovery:1'; repetitions = 2; source = 'schedule'/u
     );
     assert.match(workflow, /actions\/upload-artifact@v7/u);
   });
@@ -249,7 +249,7 @@ describe('first-visit lane contract', () => {
     const planModule = read('tests/e2e/ci/first-visit/FirstVisitLanePlan.psm1');
     assert.match(
       planModule,
-      /'settled,hot,class-boot,floor,update-contention:1,host-recovery:1'; repetitions = 2; source = 'schedule'/u
+      /'settled,hot:1,class-boot,floor,update-contention:1,host-recovery:1'; repetitions = 2; source = 'schedule'/u
     );
     assert.match(
       planModule,

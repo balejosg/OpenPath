@@ -48,12 +48,11 @@ function Get-OpenPathFirstVisitScenarioPlan {
     switch ($EventName) {
         'schedule' {
             # Phase 7 L1: update-contention runs once in the nightly. Phase 8d
-            # D1: host-recovery also runs once (dispatch only otherwise). The
-            # worst-case scene budget (30 min) caps the plan at 10 scenes
-            # (10 x 30 + 15 = 315 min <= 360-min workflow timeout), so the new
-            # scenarios take a single repetition while the historical four keep
-            # two.
-            return [pscustomobject]@{ scenarios = 'settled,hot,class-boot,floor,update-contention:1,host-recovery:1'; repetitions = 2; source = 'schedule' }
+            # D1: host-recovery also runs once (dispatch only otherwise), so the
+            # hot scene drops to a single sample to keep the design budget:
+            # 9 scenes x 30 min + 15 = 285 min <= 288 min = 80% of the 360-min
+            # workflow timeout.
+            return [pscustomobject]@{ scenarios = 'settled,hot:1,class-boot,floor,update-contention:1,host-recovery:1'; repetitions = 2; source = 'schedule' }
         }
         'workflow_dispatch' {
             $scenarios = if ([string]::IsNullOrWhiteSpace($RequestedScenarios)) { 'settled,class-boot' } else { $RequestedScenarios.Trim() }

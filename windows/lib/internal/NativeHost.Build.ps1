@@ -598,6 +598,25 @@ function Test-OpenPathNativeHostExecutable {
                 $stdoutRead = $process.StandardOutput.BaseStream.ReadAsync($payload, $offset, $length - $offset)
             }
         }
+        # A host that closes stdout immediately can exit before any slice ran:
+        # drain its pending stderr with a bounded wait so the extract is not
+        # lost (the exit fixture writes its diagnosis to stderr).
+        if ($stdoutClosed -and $stderrRead) {
+            $stderrDrainDeadline = (Get-Date).AddSeconds(2)
+            while ((Get-Date) -lt $stderrDrainDeadline) {
+                $stderrSliceDone = $false
+                try { $stderrSliceDone = $stderrRead.Wait(100) } catch { $stderrSliceDone = $false }
+                if (-not $stderrSliceDone) { continue }
+                $stderrReadCount = -1
+                try { $stderrReadCount = $stderrRead.Result } catch { $stderrReadCount = -1 }
+                if ($stderrReadCount -le 0) { $stderrRead = $null; break }
+                if ($stderrText.Length -lt $stderrCap) {
+                    $take = [Math]::Min($stderrReadCount, $stderrCap - $stderrText.Length)
+                    [void]$stderrText.Append([System.Text.Encoding]::UTF8.GetString($stderrBuffer, 0, $take))
+                }
+                try { $stderrRead = $process.StandardError.BaseStream.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length) } catch { $stderrRead = $null }
+            }
+        }
         # CPU consumed when the wait ended; read before any cleanup kill.
         try { $result.CpuMs = [int][Math]::Round($process.TotalProcessorTime.TotalMilliseconds) } catch { $result.CpuMs = -1 }
         if ($stdoutClosed) {
