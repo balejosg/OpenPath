@@ -61,7 +61,7 @@ describe('first-visit lane contract', () => {
     );
     assert.match(
       planModule,
-      /'settled,hot,class-boot,floor,update-contention:1'; repetitions = 2; source = 'schedule'/u
+      /'settled,hot,class-boot,floor,update-contention:1,host-recovery:1'; repetitions = 2; source = 'schedule'/u
     );
     assert.match(workflow, /actions\/upload-artifact@v7/u);
   });
@@ -245,16 +245,18 @@ describe('first-visit lane contract', () => {
     assert.match(workflow, /-SiteUrl/u);
     assert.match(workflow, /-SiteWhitelist/u);
     // The auto-run/nightly plans never contain site: only a dispatch asks for it.
+    // Phase 8d D1: host-recovery joins the nightly once and stays dispatch-only.
     const planModule = read('tests/e2e/ci/first-visit/FirstVisitLanePlan.psm1');
     assert.match(
       planModule,
-      /'settled,hot,class-boot,floor,update-contention:1'; repetitions = 2; source = 'schedule'/u
+      /'settled,hot,class-boot,floor,update-contention:1,host-recovery:1'; repetitions = 2; source = 'schedule'/u
     );
     assert.match(
       planModule,
       /'settled,class-boot,update-contention'; repetitions = 1; source = 'workflow_run'/u
     );
     assert.doesNotMatch(planModule, /site/u);
+    assert.match(planModule, /host-recovery/u);
     const suite = read('tests/e2e/ci/run-windows-first-visit-suite.ps1');
     assert.match(suite, /first-visit-site-url-required/u);
     assert.match(suite, /site-class-boot/u);

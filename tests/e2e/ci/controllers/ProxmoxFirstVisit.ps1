@@ -12,6 +12,8 @@ Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitWarmup.psm1') -
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitSiteCanary.psm1') -Force
 # Phase 7 L1: update-contention analysis (pure, tested).
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitUpdateContention.psm1') -Force
+# Phase 8d D1: host-recovery acceptance analysis (pure, tested).
+Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitHostRecovery.psm1') -Force
 # Phase 7 P1: stall-gap classification (pure, tested).
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitStall.psm1') -Force
 
@@ -95,6 +97,9 @@ function Get-OpenPathFirstVisitSettings {
     # Phase 7 L1: `update-contention` runs the settled-like visit with the
     # product update started right before the browser launch.
     $updateContention = ($scenario -eq 'first-visit-update-contention')
+    # Phase 8d D1: `host-recovery` reproduces the failed-install host state,
+    # keeps the student Firefox denied and then runs the real periodic update.
+    $hostRecovery = ($scenario -eq 'first-visit-host-recovery')
     if ($siteMode -and [string]::IsNullOrWhiteSpace($siteUrl)) { throw 'first-visit-site-url-required' }
     if ($siteMode) {
         # The URL and the domains travel through a bash command on the Proxmox
@@ -118,6 +123,7 @@ function Get-OpenPathFirstVisitSettings {
         SiteUrl         = $siteUrl.Trim()
         SiteDomains     = $siteDomains
         UpdateContention = $updateContention
+        HostRecovery    = $hostRecovery
     }
 }
 
@@ -1517,6 +1523,9 @@ function Invoke-OpenPathFirstVisitObserve {
     # not instrumented); its verdict comes from the collected diagnostics.
     # Phase 6.1 fix: the class-boot canary variant must take the same path.
     $siteMode = ($scenario -in @('first-visit-site', 'first-visit-site-class-boot'))
+    # Phase 8d D1: the host-recovery scene owns its own acceptance path (broken
+    # install state -> denied student visit -> real periodic update -> probe).
+    $hostRecoveryMode = ($scenario -eq 'first-visit-host-recovery')
     # Phase 6 B: SAC state is read only for smart_app_control=on scenes.
     $sacStateInfo = $null
     $sacControlInfo = $null
@@ -1545,6 +1554,14 @@ function Invoke-OpenPathFirstVisitObserve {
     #    Phase 7 L1: update-contention pre-launches Firefox on about:blank here;
     #    the update trigger below then waits for the update to be in course and
     #    navigates the anchor inside that running browser.
+    #    Phase 8d D1: host-recovery first reproduces the failed-install host
+    #    state so the student visit meets the denied PowerShell host.
+    $hostRecoveryBreak = $null
+    if ($hostRecoveryMode) {
+        $breakStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'host-recovery-break' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
+        $hostRecoveryBreak = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $breakStep -Name 'body') -Name 'state') -Name 'hostRecoveryBreak'
+        Write-Host "first-visit host-recovery break: manifestBefore=$([string](Get-OpenPathLabField -InputObject $hostRecoveryBreak -Name 'manifestBefore')) stopped=$([string](Get-OpenPathLabField -InputObject $hostRecoveryBreak -Name 'hostProcessesStopped')) error=$([string](Get-OpenPathLabField -InputObject $hostRecoveryBreak -Name 'error'))"
+    }
     $arm = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'visit' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300
     # Phase 7 L1: the update-contention scenario starts the product update after
     # the pre-launch, waits until the update is demonstrably in course and then
@@ -1623,6 +1640,17 @@ function Invoke-OpenPathFirstVisitObserve {
         try { & $Transport.CaptureScreendump $Vmid $capture | Out-Null } catch { Write-Warning "screendump t$offset failed: $($_.Exception.Message)" }
     }
 
+    # Phase 8d D1: with the student Firefox open and the PowerShell host denied,
+    # run the real periodic update task and wait (<= 6 min) for the messaging
+    # manifest to point at the recovered executable. The student probe and the
+    # informational no-restart check run inside the same guest step.
+    $hostRecoveryTrigger = $null
+    if ($hostRecoveryMode) {
+        $triggerStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'host-recovery-trigger' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 720
+        $hostRecoveryTrigger = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $triggerStep -Name 'body') -Name 'state') -Name 'hostRecoveryTrigger'
+        Write-Host "first-visit host-recovery trigger: mode=$([string](Get-OpenPathLabField -InputObject $hostRecoveryTrigger -Name 'mode')) manifestAtTrigger=$([string](Get-OpenPathLabField -InputObject $hostRecoveryTrigger -Name 'manifestAtTrigger')) manifestAfter=$([string](Get-OpenPathLabField -InputObject $hostRecoveryTrigger -Name 'manifestAfter')) recoveryMs=$([string](Get-OpenPathLabField -InputObject $hostRecoveryTrigger -Name 'recoveryMs')) ensureLineSeen=$([string](Get-OpenPathLabField -InputObject $hostRecoveryTrigger -Name 'ensureLineSeen'))"
+    }
+
     # 3) Phase 5.2 C1: the verdict is computed and persisted from the page
     #    self-report (plus the prepare product signals) BEFORE the heavy collect.
     #    A slow or failed collect can no longer turn a measured PRODUCT failure
@@ -1680,7 +1708,39 @@ function Invoke-OpenPathFirstVisitObserve {
     $verdict = $null
     $verdictDocument = $null
     $verdictPath = Join-Path $artifactsRoot 'observe-verdict.json'
-    if (-not $siteMode) {
+    if ($hostRecoveryMode) {
+        # Phase 8d D1: the scene verdict is the host recovery (manifest + student
+        # probe), not the page self-report: the denied host is the scenario
+        # device and the page waves are expected to be red while it is broken.
+        $hostRecoveryAnalysis = Get-OpenPathFirstVisitHostRecovery -TriggerEvidence $hostRecoveryTrigger
+        $verdict = [pscustomobject]@{
+            status  = if ($hostRecoveryAnalysis.verdict -eq 'HOST-RECOVERY-PASS') { 'passed' } else { 'failed' }
+            reasons = @($hostRecoveryAnalysis.reasons)
+        }
+        $verdictDocument = [ordered]@{
+            schemaVersion       = 1
+            scenario            = $scenario
+            source              = 'host-recovery'
+            verdict             = $verdict
+            reportPresent       = ($null -ne $report)
+            browserRequests     = $browserRequests
+            fixtureRequests     = if ($fixtureState) { [int](Get-OpenPathLabField -InputObject $fixtureState -Name 'requests') } else { 0 }
+            repairReloads       = $repairReloads
+            productReasons      = @()
+            hostStarted         = [bool](Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $state -Name 'liveSignals') -Name 'hostStarted')
+            blockedPathEnforced = Get-OpenPathLabField -InputObject $report -Name 'blockedPathEnforced'
+            blockedPathFinal    = [bool](Get-OpenPathLabField -InputObject $report -Name 'blockedPathFinal')
+            hostRecoveryStatus  = [string]$hostRecoveryAnalysis.verdict
+            hostRecoveryReasons = @($hostRecoveryAnalysis.reasons)
+            hostRecovery        = $hostRecoveryAnalysis
+            evidenceIncomplete  = $false
+            collectError        = ''
+            writtenAt           = [DateTime]::UtcNow.ToString('o')
+        }
+        [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
+        Write-Host "first-visit host-recovery verdict: $($hostRecoveryAnalysis.verdict) reasons=$(@($hostRecoveryAnalysis.reasons) -join ',')"
+    }
+    elseif (-not $siteMode) {
         $verdict = Get-OpenPathFirstVisitReportVerdict -Report $report -Plan $plan -Scenario $scenario -RepairReloads $repairReloads
         $prepareHostEvidence = Get-OpenPathLabField -InputObject $state -Name 'hostEvidence'
         $prepareProductReasons = @(Get-OpenPathLabField -InputObject $prepareHostEvidence -Name 'productReasons')

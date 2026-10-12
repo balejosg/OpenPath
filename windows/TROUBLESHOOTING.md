@@ -370,10 +370,39 @@ update cycle (the 5-minute Update task), the latter only after
 `Global\OpenPathUpdateLock` is released: the stage line reads
 `OpenPath update stage=native-host ms=... lock=released`. SSE cycles do not
 call it, so a slow ensure (compile plus ping retries, ~70 s) can never delay an
-SSE approval waiting on the update lock. All callers share a non-blocking
-mutex (`Global\OpenPathNativeHostEnsureLock`); a second ensure logs
-"another ensure is already running" and skips instead of compiling in
-parallel.
+SSE approval waiting on the update lock. All compilation callers share one
+non-blocking mutex (`Global\OpenPathNativeHostEnsureLock`): the ensure itself
+and the registration compile (`Invoke-OpenPathFirefoxNativeHostRegistrationBuild`,
+used by install, enrollment and the self-update) run through it. A second ensure
+logs "another ensure is already running" and skips instead of compiling in
+parallel; when the registration cannot take the lock it skips the compile and
+writes the manifest with the current launch path. The registry is only touched
+by install/enrollment.
+
+**The recovered host reaches Firefox (Phase 8d).** Only
+`Register-OpenPathFirefoxNativeHost` creates `whitelist_native_host.json`; the
+ensure used to recompile without touching it, so after a failed install health
+check the manifest stayed on the `.cmd` fallback and the restricted student
+(whose `powershell.exe` is denied) had no host until a new enrollment or agent
+version, even though the executable had already recovered. The ensure now calls
+`Sync-OpenPathFirefoxNativeHostMessagingManifest` after the build attempt (any
+outcome): when the manifest exists and its `path` differs from
+`Get-OpenPathNativeHostLaunchPath`, it is rewritten atomically (temp file plus
+move, no BOM) and the change is logged with the previous and new destination. A
+missing manifest is never created.
+
+**Health ping diagnosis (Phase 8d).** `Test-OpenPathNativeHostExecutable`
+drains stderr asynchronously from launch, so a host writing more than the pipe
+buffer can no longer block; a 0-byte stdout read ends the wait immediately as
+`health-check-exited` with the exit code. Each ping records `StartMs`,
+`ElapsedMs`, `Pid`, `HasExited`, `ExitCode`, the CPU consumed at the deadline
+(`CpuMs`) and a redacted stderr extract (max 2 KB). The records are persisted in
+`OpenPath-NativeHost.build.json` under `lastPings` (the last two attempts) and
+every failed ping logs one WARN line. A failed health attempt (H1) is classified
+as `exited` (exit code plus stderr), `hung-no-cpu` (the process is alive without
+CPU: blocked before managed code executes - kernel, antivirus or Code
+Integrity; check the CodeIntegrity and Defender events for that window) or
+`hung-cpu` (alive and consuming CPU: a host bug; check its native-host.log).
 
 **Smart App Control oscillates; `csc` is not deterministic.** In lab scenes
 the SAC positive control flips within minutes: right after the policy is

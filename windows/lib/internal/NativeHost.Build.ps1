@@ -459,6 +459,15 @@ function Test-OpenPathNativeHostExecutable {
     .SYNOPSIS
         Framed ping health check: starts the host, sends one ping and requires a
         pong with protocolVersion 2. Never throws.
+    .DESCRIPTION
+        Phase 8d D2: the ping explains its failures.
+          - a 0-byte stdout read (the host closed its pipe) ends the wait
+            immediately as `health-check-exited` with the exit code;
+          - stderr is drained asynchronously from launch so a host writing more
+            than the pipe buffer can never block on a full pipe;
+          - every ping records StartMs, ElapsedMs, the PID, HasExited, ExitCode,
+            the CPU consumed at the deadline and a redacted stderr extract
+            (at most 2 KB anyway).
     #>
     [CmdletBinding()]
     param(
@@ -476,11 +485,18 @@ function Test-OpenPathNativeHostExecutable {
         Capabilities    = @()
         ElapsedMs       = -1
         Error           = ''
+        # Phase 8d D2: literal per-ping diagnosis.
+        StartMs         = 0
+        Pid             = 0
+        HasExited       = $false
+        ExitCode        = $null
+        CpuMs           = -1
+        Stderr          = ''
     }
     if ($ProcessInvoker) {
         try {
             $invoked = & $ProcessInvoker $ExecutablePath $TimeoutSeconds
-            foreach ($name in @('Healthy', 'Version', 'ProtocolVersion', 'Capabilities', 'ElapsedMs', 'Error')) {
+            foreach ($name in @('Healthy', 'Version', 'ProtocolVersion', 'Capabilities', 'ElapsedMs', 'Error', 'StartMs', 'Pid', 'HasExited', 'ExitCode', 'CpuMs', 'Stderr')) {
                 if ($null -ne $invoked -and $invoked.PSObject.Properties[$name]) { $result[$name] = $invoked.$name }
             }
             return [pscustomobject]$result
@@ -493,6 +509,12 @@ function Test-OpenPathNativeHostExecutable {
 
     $process = $null
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $stderrText = New-Object System.Text.StringBuilder
+    $stderrCap = 2048
+    $stderrBuffer = New-Object byte[] 2048
+    $stderrRead = $null
+    $stdoutClosed = $false
+    $protocolError = ''
     try {
         if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
             $result.Error = 'executable-missing'
@@ -506,50 +528,98 @@ function Test-OpenPathNativeHostExecutable {
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
         $process = [System.Diagnostics.Process]::Start($startInfo)
+        $result.Pid = $process.Id
+        # Phase 8d D2: the stderr drain starts before the ping is written.
+        $stderrRead = $process.StandardError.BaseStream.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length)
         $message = '{"action":"ping","id":"health-1"}'
         $messageBytes = [System.Text.Encoding]::UTF8.GetBytes($message)
         $process.StandardInput.BaseStream.Write([System.BitConverter]::GetBytes([int]$messageBytes.Length), 0, 4)
         $process.StandardInput.BaseStream.Write($messageBytes, 0, $messageBytes.Length)
         $process.StandardInput.BaseStream.Flush()
+        $result.StartMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
         $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
         $lengthBuffer = New-Object byte[] 4
         $read = 0
-        while ($read -lt 4 -and (Get-Date) -lt $deadline) {
-            $readTask = $process.StandardOutput.BaseStream.ReadAsync($lengthBuffer, $read, 4 - $read)
-            if ($readTask.Wait([Math]::Max(1, [int](($deadline - (Get-Date)).TotalMilliseconds))) -and $readTask.Result -gt 0) {
-                $read += $readTask.Result
-            }
-            elseif ((Get-Date) -ge $deadline) { break }
-        }
-        if ($read -lt 4) {
-            $result.Error = 'health-check-timeout'
-            return [pscustomobject]$result
-        }
-        $length = [System.BitConverter]::ToInt32($lengthBuffer, 0)
-        if ($length -le 0 -or $length -gt 1MB) {
-            $result.Error = 'health-check-length'
-            return [pscustomobject]$result
-        }
-        $payload = New-Object byte[] $length
+        $length = -1
+        $payload = $null
         $offset = 0
-        while ($offset -lt $length -and (Get-Date) -lt $deadline) {
-            $readTask = $process.StandardOutput.BaseStream.ReadAsync($payload, $offset, $length - $offset)
-            if ($readTask.Wait([Math]::Max(1, [int](($deadline - (Get-Date)).TotalMilliseconds))) -and $readTask.Result -gt 0) {
-                $offset += $readTask.Result
+        $stage = 'header'
+        $stdoutRead = $process.StandardOutput.BaseStream.ReadAsync($lengthBuffer, 0, 4)
+        while ((Get-Date) -lt $deadline) {
+            # Drain one completed stderr read per slice so the pipe never stays
+            # full long enough to block the host.
+            if ($stderrRead -and $stderrRead.IsCompleted) {
+                $stderrReadCount = -1
+                try { $stderrReadCount = $stderrRead.Result } catch { $stderrReadCount = -1 }
+                if ($stderrReadCount -gt 0) {
+                    if ($stderrText.Length -lt $stderrCap) {
+                        $take = [Math]::Min($stderrReadCount, $stderrCap - $stderrText.Length)
+                        [void]$stderrText.Append([System.Text.Encoding]::UTF8.GetString($stderrBuffer, 0, $take))
+                    }
+                    $stderrRead = $process.StandardError.BaseStream.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length)
+                }
+                else {
+                    $stderrRead = $null
+                }
             }
-            elseif ((Get-Date) -ge $deadline) { break }
+            $sliceMilliseconds = [int](($deadline - (Get-Date)).TotalMilliseconds)
+            if ($sliceMilliseconds -gt 100) { $sliceMilliseconds = 100 }
+            if ($sliceMilliseconds -lt 1) { break }
+            if (-not $stdoutRead.Wait($sliceMilliseconds)) { continue }
+            $readCount = $stdoutRead.Result
+            if ($readCount -le 0) {
+                # Phase 8d D2: the host closed stdout; waiting any longer only
+                # burns the deadline (the Phase 8c E2E misreported this exit as
+                # a timeout).
+                $stdoutClosed = $true
+                break
+            }
+            if ($stage -eq 'header') {
+                $read += $readCount
+                if ($read -ge 4) {
+                    $length = [System.BitConverter]::ToInt32($lengthBuffer, 0)
+                    if ($length -le 0 -or $length -gt 1MB) {
+                        $protocolError = 'health-check-length'
+                        break
+                    }
+                    $payload = New-Object byte[] $length
+                    $offset = 0
+                    $stage = 'payload'
+                    $stdoutRead = $process.StandardOutput.BaseStream.ReadAsync($payload, 0, $length)
+                }
+                else {
+                    $stdoutRead = $process.StandardOutput.BaseStream.ReadAsync($lengthBuffer, $read, 4 - $read)
+                }
+            }
+            else {
+                $offset += $readCount
+                if ($offset -ge $length) { break }
+                $stdoutRead = $process.StandardOutput.BaseStream.ReadAsync($payload, $offset, $length - $offset)
+            }
         }
-        if ($offset -lt $length) {
-            $result.Error = 'health-check-body'
-            return [pscustomobject]$result
+        # CPU consumed when the wait ended; read before any cleanup kill.
+        try { $result.CpuMs = [int][Math]::Round($process.TotalProcessorTime.TotalMilliseconds) } catch { $result.CpuMs = -1 }
+        if ($stdoutClosed) {
+            # Give a closing process a bounded moment to publish its exit code.
+            try { $null = $process.WaitForExit(2000) } catch { }
         }
-        $response = [System.Text.Encoding]::UTF8.GetString($payload) | ConvertFrom-Json
-        $result.Version = [string]$response.version
-        $result.ProtocolVersion = if ($response.PSObject.Properties['protocolVersion']) { [int]$response.protocolVersion } else { 0 }
-        $result.Capabilities = @(if ($response.PSObject.Properties['capabilities']) { $response.capabilities } else { @() })
-        $result.Healthy = ($response.success -eq $true -and [string]$response.message -eq 'pong' -and $result.ProtocolVersion -ge 2)
-        if (-not $result.Healthy) { $result.Error = 'health-check-response' }
+        try { $result.HasExited = $process.HasExited } catch { $result.HasExited = $false }
+        if ($result.HasExited) {
+            try { $result.ExitCode = [int]$process.ExitCode } catch { $result.ExitCode = $null }
+        }
+        if ($protocolError) { $result.Error = $protocolError }
+        elseif ($stdoutClosed) { $result.Error = 'health-check-exited' }
+        elseif ($read -lt 4) { $result.Error = 'health-check-timeout' }
+        elseif ($offset -lt $length) { $result.Error = 'health-check-body' }
+        else {
+            $response = [System.Text.Encoding]::UTF8.GetString($payload) | ConvertFrom-Json
+            $result.Version = [string]$response.version
+            $result.ProtocolVersion = if ($response.PSObject.Properties['protocolVersion']) { [int]$response.protocolVersion } else { 0 }
+            $result.Capabilities = @(if ($response.PSObject.Properties['capabilities']) { $response.capabilities } else { @() })
+            $result.Healthy = ($response.success -eq $true -and [string]$response.message -eq 'pong' -and $result.ProtocolVersion -ge 2)
+            if (-not $result.Healthy) { $result.Error = 'health-check-response' }
+        }
     }
     catch {
         $result.Error = [string]$_
@@ -570,6 +640,13 @@ function Test-OpenPathNativeHostExecutable {
         }
         $stopwatch.Stop()
         $result.ElapsedMs = [int]$stopwatch.ElapsedMilliseconds
+        $stderrExtract = $stderrText.ToString()
+        if ($stderrExtract) {
+            $stderrExtract = ($stderrExtract -replace "`r?`n", ' ') -replace '\s{2,}', ' '
+            $stderrExtract = $stderrExtract -replace '(?i)(token=)[^&\s"'']+', '$1[redacted]'
+            $stderrExtract = $stderrExtract -replace '\beyJ[A-Za-z0-9_-]{10,}\b', '[redacted]'
+            $result.Stderr = $stderrExtract.Trim()
+        }
     }
     return [pscustomobject]$result
 }
@@ -613,7 +690,9 @@ function Test-OpenPathNativeHostExecutableWithRetry {
         (the retry never overlaps the next scheduled ensure) and more than
         doubles the 20 s first attempt, covering the one-time CI evaluation
         plus the framed handshake. The returned health object records Attempts
-        (1 or 2) so diagnostics and lab evidence can show the retry.
+        (1 or 2) and Pings: the literal per-ping records (at most two) that
+        build.json persists as `lastPings`. Phase 8d D2: every failed ping also
+        emits one WARN line with its diagnosis.
     #>
     [CmdletBinding()]
     param(
@@ -623,13 +702,45 @@ function Test-OpenPathNativeHostExecutableWithRetry {
         [scriptblock]$ProcessInvoker = $null
     )
 
+    $pings = New-Object System.Collections.Generic.List[object]
+    $addPingRecord = {
+        param([int]$Attempt, [object]$Health)
+        $record = [ordered]@{
+            attempt   = $Attempt
+            healthy   = [bool]$Health.Healthy
+            error     = if ($Health.PSObject.Properties['Error']) { [string]$Health.Error } else { '' }
+            elapsedMs = if ($Health.PSObject.Properties['ElapsedMs']) { [int]$Health.ElapsedMs } else { -1 }
+            startMs   = if ($Health.PSObject.Properties['StartMs']) { [long]$Health.StartMs } else { 0 }
+            pid       = if ($Health.PSObject.Properties['Pid']) { [int]$Health.Pid } else { 0 }
+            hasExited = if ($Health.PSObject.Properties['HasExited']) { [bool]$Health.HasExited } else { $false }
+            exitCode  = if (($Health.PSObject.Properties['ExitCode']) -and ($null -ne $Health.ExitCode)) { [int]$Health.ExitCode } else { $null }
+            cpuMs     = if ($Health.PSObject.Properties['CpuMs']) { [int]$Health.CpuMs } else { -1 }
+            stderr    = if ($Health.PSObject.Properties['Stderr']) { [string]$Health.Stderr } else { '' }
+        }
+        $pings.Add($record) | Out-Null
+        return $record
+    }
+    $logFailedPing = {
+        param([int]$Attempt, [object]$Record)
+        if ([bool]$Record.healthy) { return }
+        $logCommand = Get-Command -Name Write-OpenPathLog -ErrorAction SilentlyContinue
+        if (-not $logCommand) { return }
+        $message = "Native host health ping failed: attempt=$Attempt error=$($Record.error) elapsedMs=$($Record.elapsedMs) pid=$($Record.pid) hasExited=$($Record.hasExited) exitCode=$($Record.exitCode) cpuMs=$($Record.cpuMs) stderr='$($Record.stderr)'"
+        Write-OpenPathLog $message -Level WARN
+    }
+
     $health = Test-OpenPathNativeHostExecutable -ExecutablePath $ExecutablePath -TimeoutSeconds $TimeoutSeconds -ProcessInvoker $ProcessInvoker
+    $record = & $addPingRecord 1 $health
+    & $logFailedPing 1 $record
     $attempts = 1
     if (Test-OpenPathNativeHostHealthFailureRetryable -Health $health) {
         $attempts = 2
         $health = Test-OpenPathNativeHostExecutable -ExecutablePath $ExecutablePath -TimeoutSeconds $RetryTimeoutSeconds -ProcessInvoker $ProcessInvoker
+        $record = & $addPingRecord 2 $health
+        & $logFailedPing 2 $record
     }
     $health | Add-Member -NotePropertyName Attempts -NotePropertyValue $attempts -Force
+    $health | Add-Member -NotePropertyName Pings -NotePropertyValue @($pings.ToArray()) -Force
     return $health
 }
 
@@ -765,6 +876,12 @@ function Build-OpenPathFirefoxNativeHostExecutable {
             $attemptedAt = [DateTime]::UtcNow
             $pingAttempts = 0
             if ($result.Health -and $result.Health.PSObject.Properties['Attempts']) { $pingAttempts = [int]$result.Health.Attempts }
+            # Phase 8d D2: the literal per-ping records (at most the last two)
+            # so H1 can be classified from the diagnostics alone.
+            $lastPings = @()
+            if ($result.Health -and $result.Health.PSObject.Properties['Pings']) {
+                $lastPings = @($result.Health.Pings | Select-Object -Last 2)
+            }
             $diagnostics = [ordered]@{
                 status          = $Status
                 error           = $Error
@@ -774,6 +891,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
                 healthAttempts  = $healthAttempts
                 retryDelayMinutes = $retryDelayMinutes
                 pingAttempts    = $pingAttempts
+                lastPings       = @($lastPings)
                 attemptedAt     = $attemptedAt.ToString('o')
                 nextAttemptAt   = if ($Status -eq 'Built') { '' } else { $attemptedAt.AddMinutes($retryDelayMinutes).ToString('o') }
                 smartAppControl = Get-OpenPathSmartAppControlState

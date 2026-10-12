@@ -788,4 +788,184 @@ Import-Module '$nativeHostModulePath' -Force -Global -ErrorAction Stop
             (Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json).attempts | Should -Be 1
         }
     }
+
+    Context 'Health ping diagnosis (Phase 8d D2)' {
+        BeforeEach {
+            . $script:BuildModulePath
+            $script:Root = Join-Path $TestDrive ('native-ping-' + [guid]::NewGuid().ToString('N'))
+            $script:NativeRoot = Join-Path $script:Root 'native'
+            New-Item -ItemType Directory -Path $script:NativeRoot -Force | Out-Null
+            $script:Source = Join-Path $script:Root 'OpenPathNativeHost.cs'
+            Set-Content -LiteralPath $script:Source -Value '// fixture source' -Encoding ASCII
+            $script:DiagnosticsPath = Join-Path $script:NativeRoot 'OpenPath-NativeHost.build.json'
+            $compileTracker = [pscustomobject]@{ Calls = 0 }
+            $script:CompileTracker = $compileTracker
+            $script:GoodCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                Set-Content -LiteralPath $outputPath -Value 'MZ-fake-executable' -Encoding ASCII
+                [pscustomobject]@{ ExitCode = 0; Output = '' }
+            }.GetNewClosure()
+        }
+
+        BeforeAll {
+            # Real-process ping fixtures are compiled with the in-box csc only on
+            # Windows; anywhere else the three process tests skip with a reason.
+            $script:PingFixtureRoot = Join-Path $TestDrive ('ping-fixtures-' + [guid]::NewGuid().ToString('N'))
+            $script:PingFixtures = @{}
+            $script:PingFixtureSkipReason = 'requires Windows and the in-box .NET Framework compiler'
+            if ([System.Environment]::OSVersion.Platform -eq 'Win32NT') {
+                . $script:BuildModulePath
+                $compilerPath = Get-OpenPathNativeHostCompilerPath
+                if ($compilerPath) {
+                    New-Item -ItemType Directory -Path $script:PingFixtureRoot -Force | Out-Null
+                    $sources = @{
+                        exit  = @'
+using System;
+public static class OpenPathPingExitFixture {
+    public static int Main() {
+        Console.Error.WriteLine("fixture-exit-stderr: the host refused to start");
+        Console.Out.WriteLine("partial-before-exit");
+        Console.Out.Flush();
+        return 3;
+    }
+}
+'@
+                        hang  = @'
+using System;
+public static class OpenPathPingHangFixture {
+    public static int Main() {
+        System.Threading.Thread.Sleep(120000);
+        return 0;
+    }
+}
+'@
+                        noisy = @'
+using System;
+public static class OpenPathPingNoisyFixture {
+    private static void ReadFull(System.IO.Stream stream, byte[] buffer, int count) {
+        int offset = 0;
+        while (offset < count) {
+            int read = stream.Read(buffer, offset, count - offset);
+            if (read <= 0) { throw new System.IO.EndOfStreamException(); }
+            offset += read;
+        }
+    }
+    public static int Main() {
+        var junk = new string('n', 1024);
+        for (int i = 0; i < 64; i++) { Console.Error.WriteLine(junk); }
+        var stdin = Console.OpenStandardInput();
+        var lengthBytes = new byte[4];
+        ReadFull(stdin, lengthBytes, 4);
+        var length = BitConverter.ToInt32(lengthBytes, 0);
+        var body = new byte[length];
+        ReadFull(stdin, body, length);
+        var payload = System.Text.Encoding.UTF8.GetBytes("{\"success\":true,\"message\":\"pong\",\"protocolVersion\":2,\"version\":\"9.9.9\",\"capabilities\":[]}");
+        var stdout = Console.OpenStandardOutput();
+        stdout.Write(BitConverter.GetBytes(payload.Length), 0, 4);
+        stdout.Write(payload, 0, payload.Length);
+        stdout.Flush();
+        return 0;
+    }
+}
+'@
+                    }
+                    $fixtureErrors = @()
+                    foreach ($fixtureName in @($sources.Keys)) {
+                        $fixtureSource = Join-Path $script:PingFixtureRoot "$fixtureName.cs"
+                        $fixtureExe = Join-Path $script:PingFixtureRoot "$fixtureName.exe"
+                        Set-Content -LiteralPath $fixtureSource -Value $sources[$fixtureName] -Encoding ASCII
+                        $fixtureCompile = Invoke-OpenPathNativeHostCompilation -SourcePath $fixtureSource -OutputPath $fixtureExe -CompilerPath $compilerPath
+                        if ($fixtureCompile.Success) { $script:PingFixtures[$fixtureName] = $fixtureExe }
+                        else { $fixtureErrors += "${fixtureName}: $($fixtureCompile.Output)" }
+                    }
+                    if ($fixtureErrors.Count -gt 0) { $script:PingFixtureSkipReason = "fixture compilation failed: $($fixtureErrors -join ' | ')" }
+                }
+                else {
+                    $script:PingFixtureSkipReason = 'the in-box csc.exe is not available'
+                }
+            }
+        }
+
+        It 'Stores the last two ping attempts with their literal diagnosis in build.json' {
+            $script:PingQueue = New-Object System.Collections.ArrayList
+            $null = $script:PingQueue.Add([pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 20050; Error = 'health-check-timeout'; StartMs = 1000; Pid = 41; HasExited = $false; ExitCode = $null; CpuMs = 12; Stderr = 'stderr first' })
+            $null = $script:PingQueue.Add([pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 340; Error = 'health-check-exited'; StartMs = 21000; Pid = 42; HasExited = $true; ExitCode = 3; CpuMs = 5; Stderr = 'stderr second' })
+            $queue = $script:PingQueue
+            $process = {
+                param($executablePath, $timeoutSeconds)
+                $record = $queue[0]
+                $queue.RemoveAt(0)
+                $record
+            }.GetNewClosure()
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $process
+
+            $result.Status | Should -Be 'Fallback'
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            @($diagnostics.lastPings).Count | Should -Be 2
+            $diagnostics.lastPings[0].attempt | Should -Be 1
+            $diagnostics.lastPings[0].error | Should -Be 'health-check-timeout'
+            $diagnostics.lastPings[0].pid | Should -Be 41
+            $diagnostics.lastPings[0].elapsedMs | Should -Be 20050
+            $diagnostics.lastPings[0].stderr | Should -Be 'stderr first'
+            $diagnostics.lastPings[1].attempt | Should -Be 2
+            $diagnostics.lastPings[1].error | Should -Be 'health-check-exited'
+            $diagnostics.lastPings[1].exitCode | Should -Be 3
+            $diagnostics.lastPings[1].cpuMs | Should -Be 5
+            $diagnostics.pingAttempts | Should -Be 2
+        }
+
+        It 'Logs one WARN line per failed ping with its diagnosis' {
+            $script:PingLogLines = New-Object System.Collections.ArrayList
+            function global:Write-OpenPathLog {
+                param([Parameter(Mandatory = $true)][string]$Message, [string]$Level = 'INFO')
+                $null = $script:PingLogLines.Add("$Level $Message")
+            }
+            try {
+                $health = Test-OpenPathNativeHostExecutableWithRetry -ExecutablePath (Join-Path $script:NativeRoot 'missing.exe') -ProcessInvoker {
+                    param($executablePath, $timeoutSeconds)
+                    [pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 20050; Error = 'health-check-timeout'; StartMs = 100; Pid = 7; HasExited = $false; ExitCode = $null; CpuMs = 1; Stderr = 'x' }
+                }
+                $health.Healthy | Should -BeFalse
+                @($script:PingLogLines | Where-Object { $_ -match 'health ping failed' }).Count | Should -Be 2
+                ($script:PingLogLines -join "`n") | Should -Match 'attempt=1'
+                ($script:PingLogLines -join "`n") | Should -Match 'attempt=2'
+                ($script:PingLogLines -join "`n") | Should -Match 'health-check-timeout'
+            }
+            finally {
+                Remove-Item function:global:Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'Stops at stdout EOF and reports health-check-exited with the exit code (Windows only)' {
+            if (-not $script:PingFixtures.ContainsKey('exit')) { Set-ItResult -Skipped -Because $script:PingFixtureSkipReason; return }
+            $health = Test-OpenPathNativeHostExecutable -ExecutablePath $script:PingFixtures['exit'] -TimeoutSeconds 20
+            $health.Error | Should -Be 'health-check-exited'
+            $health.ExitCode | Should -Be 3
+            $health.HasExited | Should -BeTrue
+            $health.Stderr | Should -Match 'fixture-exit-stderr'
+            $health.ElapsedMs | Should -BeLessThan 5000
+            $health.Pid | Should -BeGreaterThan 0
+            $health.StartMs | Should -BeGreaterThan 0
+            ($health.CpuMs -ge 0) | Should -BeTrue
+        }
+
+        It 'Reports health-check-timeout with the still-running process and its CPU (Windows only)' {
+            if (-not $script:PingFixtures.ContainsKey('hang')) { Set-ItResult -Skipped -Because $script:PingFixtureSkipReason; return }
+            $health = Test-OpenPathNativeHostExecutable -ExecutablePath $script:PingFixtures['hang'] -TimeoutSeconds 2
+            $health.Error | Should -Be 'health-check-timeout'
+            $health.HasExited | Should -BeFalse
+            $health.Pid | Should -BeGreaterThan 0
+            ($health.CpuMs -ge 0) | Should -BeTrue
+            $health.ElapsedMs | Should -BeGreaterThan 1500
+        }
+
+        It 'Drains a noisy stderr pipe so the host still answers pong (Windows only)' {
+            if (-not $script:PingFixtures.ContainsKey('noisy')) { Set-ItResult -Skipped -Because $script:PingFixtureSkipReason; return }
+            $health = Test-OpenPathNativeHostExecutable -ExecutablePath $script:PingFixtures['noisy'] -TimeoutSeconds 20
+            $health.Healthy | Should -BeTrue
+            ($health.Stderr.Length -le 2048) | Should -BeTrue
+        }
+    }
 }

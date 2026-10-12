@@ -3115,4 +3115,174 @@ Describe "Compiled native host health (Phase 5.2 D3)" {
             $ensureBody | Should -Match 'Invoke-OpenPathFirefoxNativeHostEnsureWithLock'
         }
     }
+
+    Context "Manifest reconciliation and the registration compile lock (Phase 8d D1/D5)" {
+        BeforeAll {
+            Import-Module $nativeHostModulePath -Force -Global -ErrorAction Stop
+        }
+
+        BeforeEach {
+            $script:ReconRoot = Join-Path $TestDrive ('manifest-recon-' + [guid]::NewGuid().ToString('N'))
+            $script:ReconNative = Join-Path $script:ReconRoot 'browser-extension\firefox\native'
+            New-Item -ItemType Directory -Path $script:ReconNative -Force | Out-Null
+            $script:ReconManifest = Join-Path $script:ReconNative 'whitelist_native_host.json'
+            $script:ReconSource = Join-Path $script:ReconRoot 'native-host\OpenPathNativeHost.cs'
+            New-Item -ItemType Directory -Path (Split-Path $script:ReconSource -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $script:ReconSource -Value '// fixture source' -Encoding ASCII
+            $compileTracker = [pscustomobject]@{ Calls = 0 }
+            $script:ReconCompileTracker = $compileTracker
+            $script:ReconGoodCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                Set-Content -LiteralPath $outputPath -Value 'MZ-fake-executable' -Encoding ASCII
+                [pscustomobject]@{ ExitCode = 0; Output = '' }
+            }.GetNewClosure()
+            $script:ReconHealthyProcess = {
+                param($executablePath, $timeoutSeconds)
+                [pscustomobject]@{ Healthy = $true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 12; Error = '' }
+            }
+            $script:ReconBoundaryConfig = [pscustomobject]@{ enableNonAdminAppControl = $true }
+        }
+
+        It "Reconciles the manifest to the recovered executable and clears the fallback state" {
+            # The state a failed install health check leaves behind: the manifest
+            # points at the cmd fallback, no compiled executable or build manifest
+            # exists and the HealthCheckFailed backoff has already expired.
+            $cmdPath = Join-Path $script:ReconNative 'OpenPath-NativeHost.cmd'
+            [ordered]@{ name = 'whitelist_native_host'; description = 'OpenPath Windows Native Messaging Host'; path = $cmdPath; type = 'stdio' } |
+                ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:ReconManifest -Encoding UTF8
+            [ordered]@{
+                status = 'HealthCheckFailed'; error = 'health-check-timeout'
+                sourceSha256 = ('0' * 64); attempts = 2; healthAttempts = 2; retryDelayMinutes = 15
+                attemptedAt = ([DateTime]::UtcNow.AddHours(-2).ToString('o'))
+                nextAttemptAt = ([DateTime]::UtcNow.AddHours(-1).ToString('o'))
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:ReconNative 'OpenPath-NativeHost.build.json') -Encoding UTF8
+            [ordered]@{ reason = 'native_host_health_ping_failed'; status = 'Fallback' } |
+                ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:ReconNative 'fallback-state.json') -Encoding UTF8
+
+            $result = Invoke-OpenPathFirefoxNativeHostCompiledEnsure `
+                -NativeRoot $script:ReconNative `
+                -OpenPathRoot $script:ReconRoot `
+                -ManifestPath $script:ReconManifest `
+                -CompilerInvoker $script:ReconGoodCompiler `
+                -ProcessInvoker $script:ReconHealthyProcess
+
+            $result.Status | Should -Be 'Built'
+            $manifest = Get-Content -LiteralPath $script:ReconManifest -Raw | ConvertFrom-Json
+            $manifest.path | Should -Be (Join-Path $script:ReconNative 'OpenPath-NativeHost.exe')
+            (Test-Path -LiteralPath (Join-Path $script:ReconNative 'fallback-state.json')) | Should -BeFalse
+            $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $script:ReconBoundaryConfig -NativeRoot $script:ReconNative -OpenPathRoot $script:ReconRoot -ManifestPath $script:ReconManifest
+            $health.UsesCompiledHost | Should -BeTrue
+            $health.CompiledHealthy | Should -BeTrue
+            $health.ReasonCode | Should -Be ''
+        }
+
+        It "Leaves the manifest untouched when the healthy executable is already registered (same mtime)" {
+            # Registered state: the manifest points at the cmd fallback and no
+            # executable exists yet (the state D1 recovers from).
+            [ordered]@{ name = 'whitelist_native_host'; path = (Join-Path $script:ReconNative 'OpenPath-NativeHost.cmd'); type = 'stdio' } |
+                ConvertTo-Json | Set-Content -LiteralPath $script:ReconManifest -Encoding UTF8
+
+            $first = Invoke-OpenPathFirefoxNativeHostCompiledEnsure `
+                -NativeRoot $script:ReconNative `
+                -OpenPathRoot $script:ReconRoot `
+                -ManifestPath $script:ReconManifest `
+                -CompilerInvoker $script:ReconGoodCompiler `
+                -ProcessInvoker $script:ReconHealthyProcess
+            $first.Status | Should -Be 'Built'
+            (Get-Content -LiteralPath $script:ReconManifest -Raw | ConvertFrom-Json).path | Should -Be (Join-Path $script:ReconNative 'OpenPath-NativeHost.exe')
+            $mtime = (Get-Item -LiteralPath $script:ReconManifest).LastWriteTimeUtc
+            Start-Sleep -Milliseconds 50
+
+            $second = Invoke-OpenPathFirefoxNativeHostCompiledEnsure `
+                -NativeRoot $script:ReconNative `
+                -OpenPathRoot $script:ReconRoot `
+                -ManifestPath $script:ReconManifest `
+                -CompilerInvoker $script:ReconGoodCompiler `
+                -ProcessInvoker $script:ReconHealthyProcess
+
+            $second.Status | Should -Be 'BuildSkipped'
+            (Get-Item -LiteralPath $script:ReconManifest).LastWriteTimeUtc | Should -Be $mtime
+            $script:ReconCompileTracker.Calls | Should -Be 1
+        }
+
+        It "Falls back to the cmd wrapper when the executable disappeared" {
+            [ordered]@{ name = 'whitelist_native_host'; path = (Join-Path $script:ReconNative 'OpenPath-NativeHost.exe'); type = 'stdio' } |
+                ConvertTo-Json | Set-Content -LiteralPath $script:ReconManifest -Encoding UTF8
+
+            $changed = Sync-OpenPathFirefoxNativeHostMessagingManifest -NativeRoot $script:ReconNative -ManifestPath $script:ReconManifest
+
+            $changed | Should -BeTrue
+            (Get-Content -LiteralPath $script:ReconManifest -Raw | ConvertFrom-Json).path | Should -Be (Join-Path $script:ReconNative 'OpenPath-NativeHost.cmd')
+        }
+
+        It "Never creates the manifest when it does not exist" {
+            $changed = Sync-OpenPathFirefoxNativeHostMessagingManifest -NativeRoot $script:ReconNative -ManifestPath $script:ReconManifest
+
+            $changed | Should -BeFalse
+            (Test-Path -LiteralPath $script:ReconManifest) | Should -BeFalse
+        }
+
+        It "Routes the registration compile through the single ensure lock (contract)" {
+            $moduleText = Get-Content -LiteralPath $nativeHostModulePath -Raw
+            $registerStart = $moduleText.IndexOf('function Register-OpenPathFirefoxNativeHost')
+            $registerEnd = $moduleText.IndexOf('function Unregister-OpenPathFirefoxNativeHost')
+            ($registerStart -ge 0) | Should -BeTrue
+            ($registerEnd -gt $registerStart) | Should -BeTrue
+            $registerBody = $moduleText.Substring($registerStart, $registerEnd - $registerStart)
+            $registerBody | Should -Match 'Invoke-OpenPathFirefoxNativeHostRegistrationBuild'
+            $registerBody | Should -Not -Match 'Build-OpenPathFirefoxNativeHostExecutable'
+            # The manifest is written after the (possibly skipped) compile, so a
+            # lock refusal still leaves the current launch path registered.
+            $buildIndex = $registerBody.IndexOf('Invoke-OpenPathFirefoxNativeHostRegistrationBuild')
+            $manifestIndex = $registerBody.IndexOf('Write-OpenPathUtf8NoBomFile -Path $manifestPath')
+            ($manifestIndex -gt $buildIndex) | Should -BeTrue
+        }
+
+        It "Does not compile the registration while another ensure holds the lock" {
+            $holdScript = {
+                param($Ready, $Release)
+                $mutex = [System.Threading.Mutex]::new($false, 'Global\OpenPathNativeHostEnsureLock')
+                $acquired = $mutex.WaitOne(0)
+                $Ready.Set()
+                $null = $Release.Wait(10000)
+                if ($acquired) { $mutex.ReleaseMutex() }
+                $mutex.Dispose()
+            }
+            $ready = [System.Threading.ManualResetEventSlim]::new($false)
+            $release = [System.Threading.ManualResetEventSlim]::new($false)
+            $holder = [powershell]::Create()
+            $null = $holder.AddScript($holdScript).AddArgument($ready).AddArgument($release)
+            $handle = $holder.BeginInvoke()
+            try {
+                $ready.Wait(5000) | Should -BeTrue
+
+                $result = Invoke-OpenPathFirefoxNativeHostRegistrationBuild `
+                    -NativeRoot $script:ReconNative `
+                    -OpenPathRoot $script:ReconRoot `
+                    -CompilerInvoker $script:ReconGoodCompiler `
+                    -ProcessInvoker $script:ReconHealthyProcess
+
+                $result | Should -BeNullOrEmpty
+                $script:ReconCompileTracker.Calls | Should -Be 0
+                (Test-Path -LiteralPath (Join-Path $script:ReconNative 'OpenPath-NativeHost.exe')) | Should -BeFalse
+            }
+            finally {
+                $release.Set()
+                $null = $holder.EndInvoke($handle)
+                $holder.Dispose()
+            }
+        }
+
+        It "Compiles the registration through the shared lock when it is free" {
+            $result = Invoke-OpenPathFirefoxNativeHostRegistrationBuild `
+                -NativeRoot $script:ReconNative `
+                -OpenPathRoot $script:ReconRoot `
+                -CompilerInvoker $script:ReconGoodCompiler `
+                -ProcessInvoker $script:ReconHealthyProcess
+
+            $result.Status | Should -Be 'Built'
+            $script:ReconCompileTracker.Calls | Should -Be 1
+        }
+    }
 }

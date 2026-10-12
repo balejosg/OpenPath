@@ -262,6 +262,92 @@ function Invoke-OpenPathFirefoxNativeHostEnsureWithLock {
     }
 }
 
+function Sync-OpenPathFirefoxNativeHostMessagingManifest {
+    <#
+    .SYNOPSIS
+        Keeps the registered Firefox messaging manifest pointed at the current
+        launch path (compiled executable when healthy, cmd fallback otherwise).
+    .DESCRIPTION
+        Phase 8d D1: only Register-OpenPathFirefoxNativeHost writes the manifest,
+        so a host that recovers after a failed install health check was compiled
+        but never reached Firefox (the manifest kept pointing at the .cmd
+        fallback and the restricted student stayed denied). This reconciliation
+        rewrites the existing manifest atomically (temp file + move, no BOM)
+        when its `path` no longer matches Get-OpenPathNativeHostLaunchPath, and
+        logs the previous and new destination. A missing manifest is never
+        created: Register decides that from the request setup. The registry
+        entries are not touched.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$NativeRoot = '',
+        # Test seam: the Firefox messaging manifest to reconcile.
+        [string]$ManifestPath = ''
+    )
+
+    if (-not $NativeRoot) { $NativeRoot = Get-OpenPathFirefoxNativeHostRoot }
+    if (-not $ManifestPath) { $ManifestPath = Get-OpenPathFirefoxNativeHostManifestPath }
+    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) { return $false }
+
+    $launchPath = Get-OpenPathNativeHostLaunchPath -NativeRoot $NativeRoot
+    $currentPath = ''
+    try {
+        $existing = Get-Content -LiteralPath $ManifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($existing.PSObject.Properties['path']) { $currentPath = [string]$existing.path }
+    }
+    catch {
+        $currentPath = ''
+    }
+    if ($currentPath -and $currentPath.Trim().Equals($launchPath.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+
+    $manifestJson = [ordered]@{
+        name = Get-OpenPathFirefoxNativeHostName
+        description = 'OpenPath Windows Native Messaging Host'
+        path = $launchPath
+        type = 'stdio'
+        allowed_extensions = @('openpath-block-monitor@openpath')
+    } | ConvertTo-Json -Depth 8
+    $temporaryPath = "$ManifestPath.$([guid]::NewGuid().ToString('N')).tmp"
+    [IO.File]::WriteAllText($temporaryPath, $manifestJson, [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporaryPath -Destination $ManifestPath -Force
+    Write-OpenPathLog "Firefox native host manifest reconciled: '$currentPath' -> '$launchPath'"
+    return $true
+}
+
+function Invoke-OpenPathFirefoxNativeHostRegistrationBuild {
+    <#
+    .SYNOPSIS
+        Compiles the native host for the registration path under the single
+        non-blocking compilation mutex.
+    .DESCRIPTION
+        Phase 8d D5: the installer, the enrollment and the agent self-update used
+        to call the build directly while the periodic ensure held the same
+        mutex, so two compilations could run at once. They now share the one
+        lock. When another ensure runs, the registration skips the compile and
+        returns $null: the manifest is still written with the current launch
+        path, and the next periodic ensure (which reconciles the manifest, D1)
+        picks the recovered executable up.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$NativeRoot,
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        # Test seams: forwarded to the build.
+        [scriptblock]$CompilerInvoker = $null,
+        [scriptblock]$ProcessInvoker = $null
+    )
+
+    $buildResult = Invoke-OpenPathFirefoxNativeHostEnsureWithLock -Action {
+        Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $NativeRoot -OpenPathRoot $OpenPathRoot -CompilerInvoker $CompilerInvoker -ProcessInvoker $ProcessInvoker
+    }
+    if ($buildResult -and $buildResult.Status -in @('Built', 'BuildSkipped')) {
+        Write-OpenPathLog "Compiled native host ready ($($buildResult.Status), source=$($buildResult.HostSource), sha256=$($buildResult.ExecutableSha256))."
+    }
+    return $buildResult
+}
+
 function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
     <#
     .SYNOPSIS
@@ -275,18 +361,31 @@ function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
         source is unchanged. Phase 8c: the whole body runs under a non-blocking
         machine-wide mutex, so overlapping callers (periodic cycle, self-update
         retry, installer) never compile at the same time; a second caller exits
-        with $null instead of waiting.
+        with $null instead of waiting. Phase 8d D1: after the build attempt (any
+        outcome) the Firefox messaging manifest is reconciled so a recovered
+        executable actually reaches Firefox. The NativeRoot/OpenPathRoot/
+        ManifestPath/build-seam parameters exist for the tests.
     #>
     [CmdletBinding()]
-    param([AllowNull()][object]$Config = $null)
+    param(
+        [AllowNull()][object]$Config = $null,
+        [string]$NativeRoot = '',
+        [string]$OpenPathRoot = '',
+        [string]$ManifestPath = '',
+        [scriptblock]$CompilerInvoker = $null,
+        [scriptblock]$ProcessInvoker = $null,
+        [scriptblock]$HashReader = $null
+    )
 
-    $openPathRoot = $script:OpenPathRoot
+    $openPathRoot = if ($OpenPathRoot) { $OpenPathRoot } else { $script:OpenPathRoot }
+    $nativeRootOverride = $NativeRoot
+    $manifestPathOverride = $ManifestPath
     return Invoke-OpenPathFirefoxNativeHostEnsureWithLock -Action {
-        $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
+        $nativeRoot = if ($nativeRootOverride) { $nativeRootOverride } else { Get-OpenPathFirefoxNativeHostRoot }
         try { Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null } catch { }
         $result = $null
         try {
-            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $openPathRoot
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $openPathRoot -CompilerInvoker $CompilerInvoker -ProcessInvoker $ProcessInvoker -HashReader $HashReader
         }
         catch {
             $result = [pscustomobject][ordered]@{
@@ -300,11 +399,14 @@ function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
         # because the restricted student cannot run the PowerShell fallback.
         if ($result.Status -in @('Built', 'BuildSkipped')) {
             Write-OpenPathLog "Compiled native host ensured ($($result.Status), source=$($result.HostSource), sha256=$($result.ExecutableSha256))."
-            Remove-Item -LiteralPath (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'fallback-state.json') -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $nativeRoot 'fallback-state.json') -Force -ErrorAction SilentlyContinue
         }
         else {
-            Write-OpenPathNativeHostFallbackState -Config $Config -BuildResult $result
+            Write-OpenPathNativeHostFallbackState -Config $Config -BuildResult $result -NativeRoot $nativeRoot
         }
+        # Phase 8d D1: the manifest follows the launch path after any outcome;
+        # without this a recovered executable never reaches Firefox.
+        try { Sync-OpenPathFirefoxNativeHostMessagingManifest -NativeRoot $nativeRoot -ManifestPath $manifestPathOverride | Out-Null } catch { }
         return $result
     }
 }
@@ -425,17 +527,19 @@ function Write-OpenPathNativeHostFallbackState {
     [CmdletBinding()]
     param(
         [AllowNull()][object]$Config = $null,
-        [AllowNull()][object]$BuildResult = $null
+        [AllowNull()][object]$BuildResult = $null,
+        # Phase 8d: the ensure can point this at its own (test-seam) root.
+        [string]$NativeRoot = ''
     )
 
     $boundaryActive = $false
     if ($Config -and $Config.PSObject.Properties['enableNonAdminAppControl']) {
         $boundaryActive = [bool]$Config.enableNonAdminAppControl
     }
-    $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
+    $nativeRoot = if ($NativeRoot) { $NativeRoot } else { Get-OpenPathFirefoxNativeHostRoot }
     $statePath = Join-Path $nativeRoot 'fallback-state.json'
     $health = $null
-    try { $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $Config } catch { $health = $null }
+    try { $health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $Config -NativeRoot $nativeRoot } catch { $health = $null }
     $hostAvailable = ($health -and $health.UsesCompiledHost -and $health.CompiledHealthy)
     if ($hostAvailable) {
         Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
@@ -510,13 +614,14 @@ function Register-OpenPathFirefoxNativeHost {
     # the cmd/PowerShell host registered (never a manifest pointing at a
     # missing or unhealthy executable). Phase 8: the availability message is
     # logged once per state change after the manifest is written so the reason
-    # codes see the fresh registration.
+    # codes see the fresh registration. Phase 8d D5: the compile shares the
+    # single non-blocking compilation mutex with the ensure; when another
+    # ensure is running the registration skips the compile ($null) and writes
+    # the manifest with the current launch path (the next periodic ensure's
+    # reconciliation picks a recovered executable up).
     $buildResult = $null
     try {
-        $buildResult = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $script:OpenPathRoot
-        if ($buildResult.Status -in @('Built', 'BuildSkipped')) {
-            Write-OpenPathLog "Compiled native host ready ($($buildResult.Status), source=$($buildResult.HostSource), sha256=$($buildResult.ExecutableSha256))."
-        }
+        $buildResult = Invoke-OpenPathFirefoxNativeHostRegistrationBuild -NativeRoot $nativeRoot -OpenPathRoot $script:OpenPathRoot
     }
     catch {
         Write-OpenPathLog "Compiled native host build failed: $_" -Level WARN
@@ -580,6 +685,8 @@ Export-ModuleMember -Function @(
     'Sync-OpenPathFirefoxNativeHostState',
     'Invoke-OpenPathFirefoxNativeHostCompiledEnsure',
     'Invoke-OpenPathFirefoxNativeHostEnsureWithLock',
+    'Sync-OpenPathFirefoxNativeHostMessagingManifest',
+    'Invoke-OpenPathFirefoxNativeHostRegistrationBuild',
     'Get-OpenPathFirefoxNativeHostCompiledHealth',
     'Write-OpenPathNativeHostFallbackState',
     'Register-OpenPathFirefoxNativeHost',

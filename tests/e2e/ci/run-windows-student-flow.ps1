@@ -49,6 +49,9 @@ $script:Timings = @()
 $script:ProfilelessInstallTargetSid = $null
 $script:ProfilelessInstallTargetUserName = $null
 $script:ProfilelessInstallTargetUserCreated = $false
+# Phase 8d D3: install start (the CodeIntegrity/Defender event query starts one
+# minute before it).
+$script:InstallStartedAtUtc = $null
 
 function Resolve-WindowsStudentSseGroup {
     param(
@@ -98,49 +101,402 @@ function Protect-OpenPathStudentScenarioArtifact {
     }
 }
 
-function Write-OpenPathNativeHostE2eSummary {
-    # Phase 8c T3: one visible line with the final compiled-host state
-    # (status/error/attempts/pingAttempts) and the count of the false
-    # "no native host" errors. Evidence for the run summary, not a gate:
-    # every read is best-effort and a missing file is reported as missing.
-    param(
-        [string]$BuildJsonPath = 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.build.json',
-        [string]$DiagnosticsPath = (Join-Path $script:ArtifactsRoot 'windows-diagnostics.txt'),
-        [string]$SummaryPath = $env:GITHUB_STEP_SUMMARY
-    )
+function Get-OpenPathNativeHostLogNoHostCount {
+    # Phase 8d D3: counts the availability ERROR across the complete product log
+    # and its numbered rotations (openpath.log.N), never just the 200-line
+    # diagnostics tail (the Phase 8c count only saw ~1 minute of the run).
+    param([string]$LogPath)
 
-    $status = 'missing'
-    $errorText = ''
-    $attempts = ''
-    $pingAttempts = ''
-    try {
-        if (Test-Path -LiteralPath $BuildJsonPath -PathType Leaf) {
-            $build = Get-Content -LiteralPath $BuildJsonPath -Raw -ErrorAction Stop | ConvertFrom-Json
-            $status = [string]$build.status
-            $errorText = [string]$build.error
-            $attempts = [string]$build.attempts
-            $pingAttempts = [string]$build.pingAttempts
+    if ([string]::IsNullOrWhiteSpace($LogPath)) { return 0 }
+    $count = 0
+    foreach ($candidate in @($LogPath) + @(1..10 | ForEach-Object { "$LogPath.$_" })) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        try {
+            $count += @(Select-String -LiteralPath $candidate -Pattern 'Restricted student users have no native host' -SimpleMatch -ErrorAction SilentlyContinue).Count
         }
+        catch { }
+    }
+    return $count
+}
+
+function Get-OpenPathNativeHostManifestDestination {
+    # Phase 8d D3: exe | cmd | missing | unreadable | empty | other:<leaf> for
+    # the registered Firefox messaging manifest.
+    param([string]$ManifestPath)
+
+    if (-not $ManifestPath -or -not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) { return 'missing' }
+    $target = ''
+    try {
+        $target = [string](Get-Content -LiteralPath $ManifestPath -Raw -ErrorAction Stop | ConvertFrom-Json).path
     }
     catch {
-        $status = "unreadable: $($_.Exception.Message)"
+        return 'unreadable'
     }
-    if ($errorText) { $errorText = ($errorText -replace '\s+', ' ').Trim() }
+    if (-not $target) { return 'empty' }
+    $leaf = Split-Path -Leaf $target
+    if ($leaf -ieq 'OpenPath-NativeHost.exe') { return 'exe' }
+    if ($leaf -ieq 'OpenPath-NativeHost.cmd') { return 'cmd' }
+    return "other:$leaf"
+}
 
-    $noHostLines = 0
+function Get-OpenPathHarnessFileSha256 {
+    # Lowercase SHA256 hex without Get-FileHash (the child 5.1 sessions may not
+    # resolve it; see the Phase 8c finding).
+    param([string]$Path)
+
+    $stream = $null
+    $algorithm = $null
     try {
-        if (Test-Path -LiteralPath $DiagnosticsPath -PathType Leaf) {
-            $noHostLines = @(Select-String -LiteralPath $DiagnosticsPath -Pattern 'Restricted student users have no native host' -SimpleMatch -ErrorAction SilentlyContinue).Count
+        $stream = [System.IO.File]::OpenRead($Path)
+        $algorithm = [System.Security.Cryptography.SHA256]::Create()
+        $digest = $algorithm.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($digest).Replace('-', '')).ToLowerInvariant()
+    }
+    finally {
+        if ($algorithm) { $algorithm.Dispose() }
+        if ($stream) { $stream.Dispose() }
+    }
+}
+
+function Get-OpenPathNativeHostHealthFileFallback {
+    # Phase 8d D3: reads the same files Get-OpenPathFirefoxNativeHostCompiledHealth
+    # reads when the child probe cannot run.
+    param(
+        [string]$NativeRoot,
+        [string]$OpenPathRoot,
+        [string]$ManifestPath
+    )
+
+    $health = [ordered]@{
+        BoundaryActive   = $false
+        RegisteredPath   = ''
+        UsesCompiledHost = $false
+        CompiledHealthy  = $false
+        ReasonCode       = ''
+    }
+    if ($ManifestPath -and (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+        try { $health.RegisteredPath = [string](Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json).path } catch { }
+    }
+    $leaf = if ($health.RegisteredPath) { Split-Path -Leaf $health.RegisteredPath } else { '' }
+    $health.UsesCompiledHost = [bool]($leaf -ieq 'OpenPath-NativeHost.exe')
+    $status = ''
+    try {
+        $buildJsonPath = Join-Path $NativeRoot 'OpenPath-NativeHost.build.json'
+        if (Test-Path -LiteralPath $buildJsonPath -PathType Leaf) {
+            $status = [string](Get-Content -LiteralPath $buildJsonPath -Raw | ConvertFrom-Json).status
         }
     }
     catch { }
+    $executablePath = Join-Path $NativeRoot 'OpenPath-NativeHost.exe'
+    $buildManifestPath = Join-Path $NativeRoot 'OpenPath-NativeHost.manifest.json'
+    if ((Test-Path -LiteralPath $executablePath -PathType Leaf) -and (Test-Path -LiteralPath $buildManifestPath -PathType Leaf)) {
+        try {
+            $buildManifest = Get-Content -LiteralPath $buildManifestPath -Raw | ConvertFrom-Json
+            $healthy = ([string]$buildManifest.healthStatus -eq 'healthy')
+            if ($healthy) {
+                $healthy = ([string]$buildManifest.executableSha256 -eq (Get-OpenPathHarnessFileSha256 -Path $executablePath))
+            }
+            if ($healthy -and [string]$buildManifest.sourceSha256) {
+                $sourceCandidates = @(
+                    (Join-Path $OpenPathRoot 'native-host\OpenPathNativeHost.cs'),
+                    (Join-Path $NativeRoot 'OpenPathNativeHost.cs')
+                )
+                $sourcePath = @($sourceCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
+                if ($sourcePath) {
+                    $healthy = ([string]$buildManifest.sourceSha256 -eq (Get-OpenPathHarnessFileSha256 -Path $sourcePath))
+                }
+            }
+            $health.CompiledHealthy = $healthy
+        }
+        catch { $health.CompiledHealthy = $false }
+    }
+    $health.ReasonCode = if (-not ($health.UsesCompiledHost -and $health.CompiledHealthy)) {
+        if ($status -in @('CompilationFailed', 'SourceMissing', 'Failed')) { 'native_host_compile_failed' }
+        elseif ($status -eq 'HealthCheckFailed') { 'native_host_health_ping_failed' }
+        else { 'native_host_compiled_unavailable' }
+    }
+    else { '' }
+    return $health
+}
 
-    $line = "Native host (final E2E state): status=$status error='$errorText' attempts=$attempts pingAttempts=$pingAttempts | 'Restricted student users have no native host' lines: $noHostLines"
+function Get-OpenPathNativeHostE2eSummaryState {
+    # Phase 8d D3: assembles the final host state from the complete product log,
+    # the Firefox messaging manifest, build.json (incl. lastPings), the
+    # fallback-state file and the product's own health (child, with a file
+    # fallback). Read-only and best-effort; a missing file is reported as
+    # missing.
+    param(
+        [string]$BuildJsonPath = 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.build.json',
+        [string]$LogPath = 'C:\OpenPath\data\logs\openpath.log',
+        [string]$ManifestPath = 'C:\OpenPath\browser-extension\firefox\native\whitelist_native_host.json',
+        [string]$NativeRoot = 'C:\OpenPath\browser-extension\firefox\native',
+        [string]$OpenPathRoot = 'C:\OpenPath',
+        [string]$FallbackStatePath = '',
+        [string]$ConfigPath = 'C:\OpenPath\data\config.json',
+        [scriptblock]$HealthProbe = $null
+    )
+
+    if (-not $FallbackStatePath) { $FallbackStatePath = Join-Path $NativeRoot 'fallback-state.json' }
+    $state = [ordered]@{
+        Status            = 'missing'
+        Error             = ''
+        Attempts          = ''
+        PingAttempts      = ''
+        LastPingsCount    = 0
+        LastPingError     = ''
+        ManifestTarget    = 'missing'
+        UsesCompiledHost  = $false
+        CompiledHealthy   = $false
+        ReasonCode        = ''
+        BoundaryActive    = $false
+        FallbackState     = 'missing'
+        NoHostLines       = 0
+    }
+
+    try {
+        if (Test-Path -LiteralPath $BuildJsonPath -PathType Leaf) {
+            $build = Get-Content -LiteralPath $BuildJsonPath -Raw -ErrorAction Stop | ConvertFrom-Json
+            $state.Status = [string]$build.status
+            $state.Error = [string]$build.error
+            $state.Attempts = [string]$build.attempts
+            $state.PingAttempts = [string]$build.pingAttempts
+            $pings = @($build.lastPings)
+            $state.LastPingsCount = @($pings | Where-Object { $null -ne $_ }).Count
+            if ($state.LastPingsCount -gt 0 -and $pings[0].PSObject.Properties['error']) {
+                $state.LastPingError = [string]$pings[0].error
+            }
+        }
+    }
+    catch {
+        $state.Status = "unreadable: $($_.Exception.Message)"
+    }
+    $state.Error = ($state.Error -replace '\s+', ' ').Trim()
+
+    $state.ManifestTarget = Get-OpenPathNativeHostManifestDestination -ManifestPath $ManifestPath
+    $state.NoHostLines = Get-OpenPathNativeHostLogNoHostCount -LogPath $LogPath
+
+    $health = $null
+    if ($HealthProbe) {
+        try { $health = & $HealthProbe } catch { $health = $null }
+    }
+    if (-not $health) {
+        $health = Get-OpenPathNativeHostHealthFileFallback -NativeRoot $NativeRoot -OpenPathRoot $OpenPathRoot -ManifestPath $ManifestPath
+    }
+    $state.UsesCompiledHost = [bool]$health.UsesCompiledHost
+    $state.CompiledHealthy = [bool]$health.CompiledHealthy
+    $state.ReasonCode = [string]$health.ReasonCode
+    $state.BoundaryActive = [bool]$health.BoundaryActive
+    if (-not $state.BoundaryActive -and $ConfigPath -and (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+        try {
+            $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+            if ($config.PSObject.Properties['enableNonAdminAppControl']) {
+                $state.BoundaryActive = [bool]$config.enableNonAdminAppControl
+            }
+        }
+        catch { }
+    }
+
+    if (Test-Path -LiteralPath $FallbackStatePath -PathType Leaf) {
+        try {
+            $fallback = Get-Content -LiteralPath $FallbackStatePath -Raw | ConvertFrom-Json
+            $state.FallbackState = [string]$fallback.reason
+            if (-not $state.FallbackState) { $state.FallbackState = 'present' }
+        }
+        catch { $state.FallbackState = 'unreadable' }
+    }
+    return [pscustomobject]$state
+}
+
+function Get-OpenPathNativeHostHealthChildProbe {
+    # Phase 8d D3: runs Get-OpenPathFirefoxNativeHostCompiledHealth in a child
+    # powershell.exe with the machine+user PSModulePath (the production
+    # environment) so the summary reports the product's own health. Returns
+    # $null when the child cannot run; the caller falls back to reading the
+    # same files.
+    param(
+        [string]$NativeRoot = 'C:\OpenPath\browser-extension\firefox\native',
+        [string]$OpenPathRoot = 'C:\OpenPath',
+        [string]$ManifestPath = 'C:\OpenPath\browser-extension\firefox\native\whitelist_native_host.json',
+        [string]$ConfigPath = 'C:\OpenPath\data\config.json',
+        [string]$ProductModulePath = 'C:\OpenPath\lib\Browser.FirefoxNativeHost.psm1'
+    )
+
+    try {
+        if (-not (Test-Path -LiteralPath $ProductModulePath -PathType Leaf)) { return $null }
+        $powerShellExe = Get-Command -Name 'powershell.exe' -ErrorAction SilentlyContinue
+        if (-not $powerShellExe) { return $null }
+        $machineModulePath = (@(
+                [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+                [Environment]::GetEnvironmentVariable('PSModulePath', 'User')
+            ) | Where-Object { $_ }) -join ';'
+        $childScript = @(
+            "`$ErrorActionPreference = 'Stop'"
+            "if ('$machineModulePath') { `$env:PSModulePath = '$machineModulePath' }"
+            "Import-Module '$ProductModulePath' -Force -ErrorAction Stop"
+            "`$config = `$null"
+            "try { `$config = Get-Content -LiteralPath '$ConfigPath' -Raw -ErrorAction Stop | ConvertFrom-Json } catch { }"
+            "`$health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config `$config -NativeRoot '$NativeRoot' -OpenPathRoot '$OpenPathRoot' -ManifestPath '$ManifestPath'"
+            "`$health | ConvertTo-Json -Depth 6 -Compress"
+        ) -join "`n"
+        $childScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-host-health-$([guid]::NewGuid().ToString('N')).ps1")
+        [IO.File]::WriteAllText($childScriptPath, $childScript, [Text.UTF8Encoding]::new($false))
+        try {
+            $output = @(& $powerShellExe.Source -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $childScriptPath 2>&1)
+        }
+        finally {
+            Remove-Item -LiteralPath $childScriptPath -Force -ErrorAction SilentlyContinue
+        }
+        $jsonLine = @($output | ForEach-Object { [string]$_ } | Where-Object { $_.Trim().StartsWith('{') }) | Select-Object -Last 1
+        if (-not $jsonLine) { return $null }
+        $parsed = $jsonLine | ConvertFrom-Json
+        if ($null -eq $parsed.PSObject.Properties['UsesCompiledHost']) { return $null }
+        return [ordered]@{
+            BoundaryActive   = [bool]$parsed.BoundaryActive
+            RegisteredPath   = [string]$parsed.RegisteredPath
+            UsesCompiledHost = [bool]$parsed.UsesCompiledHost
+            CompiledHealthy  = [bool]$parsed.CompiledHealthy
+            ReasonCode       = [string]$parsed.ReasonCode
+        }
+    }
+    catch {
+        return $null
+    }
+}
+
+function Write-OpenPathNativeHostE2eSummary {
+    # Phase 8d D3: one visible line with the final compiled-host state computed
+    # from the complete product log (with rotations), the Firefox messaging
+    # manifest destination, the product health (child probe with a file
+    # fallback), build.json (incl. lastPings) and fallback-state.json. When the
+    # classroom boundary is active and the student ends without the compiled
+    # host it also emits a visible ::warning (evidence, not a gate: every read
+    # is best-effort and a missing file is reported as missing).
+    param(
+        [string]$BuildJsonPath = 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.build.json',
+        [string]$LogPath = 'C:\OpenPath\data\logs\openpath.log',
+        [string]$ManifestPath = 'C:\OpenPath\browser-extension\firefox\native\whitelist_native_host.json',
+        [string]$NativeRoot = 'C:\OpenPath\browser-extension\firefox\native',
+        [string]$OpenPathRoot = 'C:\OpenPath',
+        [string]$FallbackStatePath = '',
+        [string]$ConfigPath = 'C:\OpenPath\data\config.json',
+        [scriptblock]$HealthProbe = $null,
+        [string]$SummaryPath = $env:GITHUB_STEP_SUMMARY
+    )
+
+    if (-not $HealthProbe) { $HealthProbe = { Get-OpenPathNativeHostHealthChildProbe -NativeRoot $NativeRoot -OpenPathRoot $OpenPathRoot -ManifestPath $ManifestPath -ConfigPath $ConfigPath } }
+    $state = Get-OpenPathNativeHostE2eSummaryState -BuildJsonPath $BuildJsonPath -LogPath $LogPath -ManifestPath $ManifestPath -NativeRoot $NativeRoot -OpenPathRoot $OpenPathRoot -FallbackStatePath $FallbackStatePath -ConfigPath $ConfigPath -HealthProbe $HealthProbe
+
+    $line = "Native host (final E2E state): status=$($state.Status) error='$($state.Error)' attempts=$($state.Attempts) pingAttempts=$($state.PingAttempts) lastPings=$($state.LastPingsCount) lastPingError='$($state.LastPingError)' manifest=$($state.ManifestTarget) usesCompiledHost=$($state.UsesCompiledHost) compiledHealthy=$($state.CompiledHealthy) reasonCode='$($state.ReasonCode)' fallbackState='$($state.FallbackState)' | 'Restricted student users have no native host' lines: $($state.NoHostLines)"
     Write-Host $line -ForegroundColor Cyan
+    if ($state.BoundaryActive -and -not ($state.UsesCompiledHost -and $state.CompiledHealthy)) {
+        Write-Host "::warning title=Student has no compiled native host::$line"
+    }
     if ($SummaryPath) {
         try { Add-Content -Path $SummaryPath -Value "- $line" } catch { }
     }
     return $line
+}
+
+function Save-OpenPathNativeHostFirstRunProbe {
+    # Persists the probe result next to the native host artifacts (redacted).
+    param([object]$Probe)
+
+    $probe.endedAt = [DateTime]::UtcNow.ToString('o')
+    try {
+        $probeDir = Join-Path $script:ArtifactsRoot 'native-host'
+        New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+        $probePath = Join-Path $probeDir 'first-run-probe.json'
+        $probeJson = $Probe | ConvertTo-Json -Depth 10
+        [IO.File]::WriteAllText($probePath, (Protect-OpenPathDiagnosticText -Text $probeJson), [Text.UTF8Encoding]::new($false))
+    }
+    catch { }
+    return $Probe
+}
+
+function Invoke-OpenPathNativeHostFirstRunProbe {
+    # Phase 8d D3: best-effort first-execution probe (harness only, never a
+    # gate, bounded by 180 s + 30 s + compile). Compiles a fresh copy of the
+    # installed C# source into the native directory with a unique name, pings it
+    # with 180 s and then 30 s, records the time to pong and the Phase 8d D2
+    # ping fields, kills the process and removes the copy. It never touches
+    # build.json or the product manifests. The compiler/ping seams exist for
+    # the tests.
+    param(
+        [string]$NativeRoot = 'C:\OpenPath\browser-extension\firefox\native',
+        [string]$OpenPathRoot = 'C:\OpenPath',
+        [scriptblock]$CompilerInvoker = $null,
+        [scriptblock]$ProcessInvoker = $null
+    )
+
+    $probe = [ordered]@{
+        schemaVersion      = 1
+        startedAt          = [DateTime]::UtcNow.ToString('o')
+        status             = 'skipped'
+        skipReason         = ''
+        sourcePath         = ''
+        compilerPath       = ''
+        executable         = ''
+        compiled           = $false
+        compileOutput      = ''
+        pingFirst          = $null
+        pingSecond         = $null
+        timeToPongFirstMs  = -1
+        timeToPongSecondMs = -1
+        error              = ''
+        endedAt            = ''
+    }
+    $probeExecutable = ''
+    try {
+        . (Join-Path $script:RepoRoot 'windows\lib\internal\NativeHost.Build.ps1')
+        $sourcePath = Get-OpenPathNativeHostInstalledSourcePath -OpenPathRoot $OpenPathRoot -NativeRoot $NativeRoot
+        $probe.sourcePath = $sourcePath
+        if (-not $sourcePath) {
+            $probe.skipReason = 'installed-source-missing'
+            return (Save-OpenPathNativeHostFirstRunProbe -Probe $probe)
+        }
+        $compilerPath = if ($CompilerInvoker) { '' } else { Get-OpenPathNativeHostCompilerPath }
+        $probe.compilerPath = $compilerPath
+        if (-not $CompilerInvoker -and -not $compilerPath) {
+            $probe.skipReason = 'compiler-missing'
+            return (Save-OpenPathNativeHostFirstRunProbe -Probe $probe)
+        }
+        if (-not (Test-Path -LiteralPath $NativeRoot)) { New-Item -ItemType Directory -Path $NativeRoot -Force | Out-Null }
+        $probeExecutable = Join-Path $NativeRoot ("OpenPath-NativeHost.probe-$([guid]::NewGuid().ToString('N')).exe")
+        $compilation = if ($CompilerInvoker) { & $CompilerInvoker $sourcePath $probeExecutable } else { Invoke-OpenPathNativeHostCompilation -SourcePath $sourcePath -OutputPath $probeExecutable -CompilerPath $compilerPath }
+        $probe.compileOutput = ([string]$compilation.Output).Trim()
+        if ($probe.compileOutput.Length -gt 2000) { $probe.compileOutput = $probe.compileOutput.Substring(0, 2000) }
+        $compilationSucceeded = (([int]$compilation.ExitCode -eq 0) -and (Test-Path -LiteralPath $probeExecutable -PathType Leaf))
+        if ($null -ne $compilation.PSObject.Properties['Success']) { $compilationSucceeded = ([bool]$compilation.Success -and $compilationSucceeded) }
+        if (-not $compilationSucceeded) {
+            $probe.status = 'compile-failed'
+            $probe.error = "exit=$($compilation.ExitCode)"
+            return (Save-OpenPathNativeHostFirstRunProbe -Probe $probe)
+        }
+        $probe.compiled = $true
+        $probe.executable = $probeExecutable
+        $first = if ($ProcessInvoker) { & $ProcessInvoker $probeExecutable 180 } else { Test-OpenPathNativeHostExecutable -ExecutablePath $probeExecutable -TimeoutSeconds 180 }
+        $probe.pingFirst = $first
+        if ($first.Healthy) { $probe.timeToPongFirstMs = [int]$first.ElapsedMs }
+        $second = if ($ProcessInvoker) { & $ProcessInvoker $probeExecutable 30 } else { Test-OpenPathNativeHostExecutable -ExecutablePath $probeExecutable -TimeoutSeconds 30 }
+        $probe.pingSecond = $second
+        if ($second.Healthy) { $probe.timeToPongSecondMs = [int]$second.ElapsedMs }
+        $probe.status = if ($first.Healthy -or $second.Healthy) { 'healthy' } else { 'unhealthy' }
+    }
+    catch {
+        $probe.status = 'error'
+        $probe.error = [string]$_
+    }
+    finally {
+        if ($probeExecutable) {
+            try { Remove-Item -LiteralPath $probeExecutable -Force -ErrorAction SilentlyContinue } catch { }
+            try {
+                Get-ChildItem -LiteralPath $NativeRoot -Filter 'OpenPath-NativeHost.probe-*' -File -ErrorAction SilentlyContinue |
+                    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+            }
+            catch { }
+        }
+    }
+    return (Save-OpenPathNativeHostFirstRunProbe -Probe $probe)
 }
 
 function Write-DiagnosticNote {
@@ -2052,6 +2408,82 @@ function Write-WindowsDiagnostics {
         )
     }
 
+    # Phase 8d D3: the E2E health pings run as SYSTEM, whose native host log
+    # lives in the system profile; collecting only C:\Users\* left the section
+    # empty in Phase 8c.
+    $systemNativeHostLogPath = 'C:\Windows\System32\config\systemprofile\AppData\Local\OpenPath\native-host.log'
+    $systemNativeHostLogOutput = @(
+        "=== Native Host System Log $systemNativeHostLogPath ==="
+        if (Test-Path -LiteralPath $systemNativeHostLogPath -PathType Leaf) {
+            $systemLogTail = Protect-OpenPathDiagnosticText -Text ((Get-Content -LiteralPath $systemNativeHostLogPath -Tail 400 -ErrorAction SilentlyContinue) -join "`n")
+            if ($systemLogTail.Length -gt 65536) { $systemLogTail = $systemLogTail.Substring($systemLogTail.Length - 65536) }
+            Set-Content -LiteralPath (Join-Path $nativeHostArtifactDir 'native-host-system.log') -Value $systemLogTail -Encoding UTF8
+            $systemLogTail
+        }
+        else { 'MISSING' }
+    )
+
+    # Phase 8d D3: the native host lines of the complete product log (with its
+    # rotations), not the 200-line diagnostics tail.
+    $nativeHostLogLineEntries = @(
+        foreach ($logCandidate in @($logPath) + @(1..10 | ForEach-Object { "$logPath.$_" })) {
+            if (-not (Test-Path -LiteralPath $logCandidate -PathType Leaf)) { continue }
+            foreach ($match in @(Select-String -LiteralPath $logCandidate -Pattern 'native host|native-host' -ErrorAction SilentlyContinue)) {
+                Protect-OpenPathDiagnosticText -Text $match.Line
+            }
+        }
+    )
+    $nativeHostLogLines = @($nativeHostLogLineEntries | Select-Object -Last 2000)
+    Set-Content -LiteralPath (Join-Path $nativeHostArtifactDir 'openpath-native-host-lines.log') -Value ($nativeHostLogLines -join "`n") -Encoding UTF8
+
+    # Phase 8d D3: CodeIntegrity and Defender events from one minute before the
+    # install until now (at most 300 each), with TimeCreated in UTC, the id, the
+    # provider and 400 characters of the message.
+    $securityEventsOutput = try {
+        $since = if ($script:InstallStartedAtUtc) { ([datetime]$script:InstallStartedAtUtc).ToUniversalTime().AddMinutes(-1) } else { (Get-Date).ToUniversalTime().AddHours(-2) }
+        $eventLogNames = @('Microsoft-Windows-CodeIntegrity/Operational', 'Microsoft-Windows-Windows Defender/Operational')
+        $projection = [ordered]@{
+            collectedAtUtc = [DateTime]::UtcNow.ToString('o')
+            sinceUtc       = $since.ToString('o')
+            logs           = [ordered]@{}
+        }
+        foreach ($eventLogName in $eventLogNames) {
+            $entries = @()
+            try {
+                $events = Get-WinEvent -FilterHashtable @{ LogName = $eventLogName; StartTime = $since } -MaxEvents 300 -ErrorAction Stop
+                foreach ($event in @($events | Sort-Object TimeCreated)) {
+                    $message = ''
+                    try { $message = [string]$event.Message } catch { $message = '' }
+                    if ($message.Length -gt 400) { $message = $message.Substring(0, 400) }
+                    $entries += [ordered]@{
+                        timeCreatedUtc = $event.TimeCreated.ToUniversalTime().ToString('o')
+                        id             = [int]$event.Id
+                        provider       = [string]$event.ProviderName
+                        message        = Protect-OpenPathDiagnosticText -Text $message
+                    }
+                }
+            }
+            catch {
+                $entries += [ordered]@{ error = $_.Exception.Message }
+            }
+            $projection.logs[$eventLogName] = @($entries)
+        }
+        [IO.File]::WriteAllText((Join-Path $nativeHostArtifactDir 'security-events.json'), ($projection | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        @(
+            "=== CodeIntegrity / Defender Events since $($projection.sinceUtc) ==="
+            "codeIntegrity=$(@($projection.logs['Microsoft-Windows-CodeIntegrity/Operational']).Count) defender=$(@($projection.logs['Microsoft-Windows-Windows Defender/Operational']).Count)"
+        )
+    }
+    catch {
+        "ERROR: $($_.Exception.Message)"
+    }
+
+    $firstRunProbePath = Join-Path $nativeHostArtifactDir 'first-run-probe.json'
+    $firstRunProbeOutput = @(
+        '=== Native Host First-Run Probe ==='
+        if (Test-Path -LiteralPath $firstRunProbePath -PathType Leaf) { Get-Content -LiteralPath $firstRunProbePath -Raw } else { 'MISSING' }
+    )
+
     $nativeHostBuildJsonPath = Join-Path $nativeHostRoot 'OpenPath-NativeHost.build.json'
     $nativeHostManifestJsonPath = Join-Path $nativeHostRoot 'OpenPath-NativeHost.manifest.json'
     $nativeHostMessagingManifestPath = Join-Path $nativeHostRoot 'whitelist_native_host.json'
@@ -2124,6 +2556,14 @@ function Write-WindowsDiagnostics {
         ($nativeHostRegistryOutput | Out-String)
         '=== Native Host User Logs ==='
         ($nativeHostUserLogOutput | Out-String)
+        '=== Native Host System Log ==='
+        ($systemNativeHostLogOutput | Out-String)
+        '=== Native Host Log Lines (openpath.log complete) ==='
+        ($nativeHostLogLines | Out-String)
+        '=== CodeIntegrity / Defender Events ==='
+        ($securityEventsOutput | Out-String)
+        '=== Native Host First-Run Probe ==='
+        ($firstRunProbeOutput | Out-String)
         '=== DNS Probes ==='
         ($dnsProbeOutput | Out-String)
         '=== Whitelist ==='
@@ -2353,6 +2793,7 @@ try {
         Start-LabDnsGuard
     }
     Invoke-TimedStep -Name 'Assert profileless Windows install precondition' -ScriptBlock { Assert-WindowsProfilelessInstallPrecondition }
+    $script:InstallStartedAtUtc = [DateTime]::UtcNow
     Invoke-TimedStep -Name 'Install and enroll client (sse)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $true }
     Invoke-TimedStep -Name 'Pin product sslip resolver upstream' -ScriptBlock { Set-ProductSslipResolverUpstream | Out-Null }
     $windowsStudentSseGroup = if ([string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP)) {
@@ -2419,6 +2860,9 @@ try {
             Start-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction SilentlyContinue
         }
     }
+    # Phase 8d D3: the first-execution probe runs at the end of the suites,
+    # before the diagnostics collection. Best-effort and never a gate.
+    Invoke-TimedStep -Name 'First-run native host probe' -ScriptBlock { Invoke-OpenPathNativeHostFirstRunProbe | Out-Null }
     Invoke-TimedStep -Name 'Collect Windows diagnostics' -ScriptBlock { Write-WindowsDiagnostics }
     $script:RunSucceeded = $true
 }

@@ -118,6 +118,35 @@ function Get-OpenPathFirstVisitSceneOutcome {
             }
             return [pscustomobject]$outcome
         }
+        # Phase 8d D1: the host-recovery scene keeps its own acceptance status
+        # (manifest recovered within budget + student probe); the page
+        # self-report is not its gate.
+        if ($Scenario -match 'first-visit-host-recovery') {
+            $hostRecoveryStatus = [string](Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'hostRecoveryStatus')
+            if ($outcome.evidenceIncomplete) {
+                $outcome.category = 'INFRA'
+                $outcome.error = if ($outcome.collectError) { $outcome.collectError } elseif ($ObserveError) { $ObserveError } else { 'evidence-incomplete' }
+            }
+            elseif ($hostRecoveryStatus -eq 'HOST-RECOVERY-PASS') {
+                $outcome.category = 'PASS'
+                $outcome.error = ''
+            }
+            elseif ($hostRecoveryStatus -eq 'HOST-RECOVERY-RED') {
+                $outcome.category = 'PRODUCT'
+                $hostRecoveryReasons = @(Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'hostRecoveryReasons')
+                if ($hostRecoveryReasons.Count -gt 0) { $outcome.reasons = @($hostRecoveryReasons) }
+                $outcome.error = if ($outcome.reasons.Count -gt 0) { (@($outcome.reasons) -join ',') } elseif ($ObserveError) { $ObserveError } else { 'host-recovery-red' }
+            }
+            elseif ($ObserveError) {
+                $outcome.category = 'INFRA'
+                $outcome.error = $ObserveError
+            }
+            else {
+                $outcome.category = 'INFRA'
+                $outcome.error = 'host-recovery-status-missing'
+            }
+            return [pscustomobject]$outcome
+        }
         if ($Metrics) {
             $outcome.evidenceIncomplete = $outcome.evidenceIncomplete -or [bool](Get-OpenPathFirstVisitOutcomeField -InputObject $Metrics -Name 'evidenceIncomplete')
             if (-not $outcome.collectError) { $outcome.collectError = [string](Get-OpenPathFirstVisitOutcomeField -InputObject $Metrics -Name 'collectError') }

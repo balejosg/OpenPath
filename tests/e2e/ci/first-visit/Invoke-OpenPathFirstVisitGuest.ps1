@@ -123,6 +123,22 @@ function Get-NativeHostLogPath {
     return (Join-Path (Join-Path $base 'OpenPath') 'native-host.log')
 }
 
+function Get-HostRecoveryManifestLeaf {
+    # Phase 8d D1: leaf of the registered Firefox messaging manifest path
+    # (exe / cmd / missing / unreadable / <other leaf>).
+    param([Parameter(Mandatory = $true)][string]$ManifestPath)
+    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) { return 'missing' }
+    try {
+        $target = [string](Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json).path
+    }
+    catch { return 'unreadable' }
+    if (-not $target) { return 'empty' }
+    $leaf = Split-Path -Leaf $target
+    if ($leaf -ieq 'OpenPath-NativeHost.exe') { return 'exe' }
+    if ($leaf -ieq 'OpenPath-NativeHost.cmd') { return 'cmd' }
+    return $leaf
+}
+
 function Get-FixtureClock {
     # Reads the fixture state on the fixture's own clock, so warm-up deltas
     # (xpi fetch vs launch mark) never mix the guest clock with the host clock.
@@ -1380,6 +1396,220 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             $trigger.tail = @($tail | Where-Object { $_ -match 'Starting openpath update|OpenPath update stage|Runtime dependency' } | Select-Object -Last 6)
         }
         $script:Body.updateTrigger = $trigger
+        Complete-Step
+    }
+    'host-recovery-break' {
+        # Phase 8d D1: reproduce the state a failed install health check leaves
+        # (the Phase 8c E2E 38208889929): host processes stopped, no executable
+        # or build manifest, an expired HealthCheckFailed backoff and the
+        # Firefox messaging manifest pointing at the cmd fallback. The scenario
+        # then measures whether the real periodic update recovers it.
+        Save-PartialResult
+        $nativeRoot = 'C:\OpenPath\browser-extension\firefox\native'
+        $break = [ordered]@{
+            nativeRoot           = $nativeRoot
+            brokenAt             = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+            hostProcessesStopped = 0
+            removedExecutable    = $false
+            removedBuildManifest = $false
+            buildJsonWritten     = $false
+            manifestBefore       = ''
+            manifestAfter        = ''
+            hostProcessesAfter   = 0
+            error                = ''
+        }
+        try {
+            New-Dir $nativeRoot
+            foreach ($hostProcess in @(Get-Process -Name 'OpenPath-NativeHost' -ErrorAction SilentlyContinue)) {
+                try {
+                    Stop-Process -Id $hostProcess.Id -Force -ErrorAction Stop
+                    $break.hostProcessesStopped += 1
+                }
+                catch { }
+            }
+            $exePath = Join-Path $nativeRoot 'OpenPath-NativeHost.exe'
+            if (Test-Path -LiteralPath $exePath -PathType Leaf) {
+                Remove-Item -LiteralPath $exePath -Force -ErrorAction Stop
+                $break.removedExecutable = $true
+            }
+            Get-ChildItem -LiteralPath $nativeRoot -Filter 'OpenPath-NativeHost.exe.*.tmp' -File -ErrorAction SilentlyContinue |
+                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+            $buildManifestPath = Join-Path $nativeRoot 'OpenPath-NativeHost.manifest.json'
+            if (Test-Path -LiteralPath $buildManifestPath -PathType Leaf) {
+                Remove-Item -LiteralPath $buildManifestPath -Force -ErrorAction Stop
+                $break.removedBuildManifest = $true
+            }
+            $messagingManifestPath = Join-Path $nativeRoot 'whitelist_native_host.json'
+            $break.manifestBefore = Get-HostRecoveryManifestLeaf -ManifestPath $messagingManifestPath
+            $messagingManifest = [ordered]@{
+                name               = 'whitelist_native_host'
+                description        = 'OpenPath Windows Native Messaging Host'
+                path               = (Join-Path $nativeRoot 'OpenPath-NativeHost.cmd')
+                type               = 'stdio'
+                allowed_extensions = @('openpath-block-monitor@openpath')
+            }
+            [IO.File]::WriteAllText($messagingManifestPath, ($messagingManifest | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+            $break.manifestAfter = Get-HostRecoveryManifestLeaf -ManifestPath $messagingManifestPath
+            $attemptedAt = [DateTime]::UtcNow.AddHours(-2)
+            $buildDiagnostics = [ordered]@{
+                status            = 'HealthCheckFailed'
+                error             = 'health-check-timeout'
+                sourcePath        = (Join-Path $OpenPathRoot 'native-host\OpenPathNativeHost.cs')
+                sourceSha256      = ('0' * 64)
+                attempts          = 2
+                healthAttempts    = 2
+                retryDelayMinutes = 15
+                pingAttempts      = 2
+                attemptedAt       = $attemptedAt.ToString('o')
+                nextAttemptAt     = $attemptedAt.AddMinutes(15).ToString('o')
+            }
+            [IO.File]::WriteAllText((Join-Path $nativeRoot 'OpenPath-NativeHost.build.json'), ($buildDiagnostics | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+            $break.buildJsonWritten = $true
+            $break.hostProcessesAfter = @(Get-Process -Name 'OpenPath-NativeHost' -ErrorAction SilentlyContinue).Count
+        }
+        catch {
+            $break.error = [string]$_
+            $script:Failures.Add('host-recovery-break-failed') | Out-Null
+        }
+        $script:Body.hostRecoveryBreak = $break
+        Complete-Step
+    }
+    'host-recovery-trigger' {
+        # Phase 8d D1: run the real periodic OpenPath-Update task and wait up to
+        # 6 minutes for the Firefox messaging manifest to point at the recovered
+        # executable (the ensure stage line proves the periodic path ran). Then
+        # the authoritative student probe (compiled .exe pong + powershell
+        # denial) and the informational no-restart recovery check.
+        Save-PartialResult
+        $nativeRoot = 'C:\OpenPath\browser-extension\firefox\native'
+        $messagingManifestPath = Join-Path $nativeRoot 'whitelist_native_host.json'
+        $logPath = Join-Path $OpenPathRoot 'data\logs\openpath.log'
+        $schtasks = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+        $taskName = 'OpenPath-Update'
+        $scriptName = Join-Path $OpenPathRoot 'scripts\Update-OpenPath.ps1'
+        $trigger = [ordered]@{
+            startedAt              = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+            mode                   = ''
+            exit                   = -1
+            out                    = @()
+            manifestAtTrigger      = ''
+            recoveredBeforeTrigger = $false
+            manifestAfter          = ''
+            recovered              = $false
+            recoveryMs             = -1
+            recoveredAt            = ''
+            ensureLine             = ''
+            ensureLineSeen         = $false
+            ensureLineCount        = 0
+            studentProbe           = $null
+            studentProbeError      = ''
+            extensionRecovery      = [ordered]@{ attempted = $false; firefoxRunningAtRecovery = $false; hostConnectedWithoutRestart = $false; timeToHostConnectMs = -1; firefoxRestarted = $false }
+            error                  = ''
+        }
+        $trigger.manifestAtTrigger = Get-HostRecoveryManifestLeaf -ManifestPath $messagingManifestPath
+        $trigger.recoveredBeforeTrigger = ($trigger.manifestAtTrigger -eq 'exe')
+        $firefoxPidsBefore = @(Get-FirefoxProcesses | ForEach-Object { [int]$_.pid })
+        try {
+            if (Test-Path -LiteralPath $schtasks) {
+                $run = Invoke-Cmd $schtasks @('/Run', '/TN', $taskName)
+                $trigger.exit = [int]$run.exit
+                $trigger.out = @($run.out | Select-Object -First 10)
+                if ($run.exit -eq 0) { $trigger.mode = 'schtasks' }
+            }
+            if ($trigger.mode -ne 'schtasks' -and (Test-Path -LiteralPath $scriptName)) {
+                Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptName) -PassThru -WindowStyle Hidden | Out-Null
+                $trigger.mode = 'direct'
+            }
+            if (-not $trigger.mode) {
+                $trigger.error = 'update-task-unavailable'
+                $script:Failures.Add('host-recovery-trigger-task-unavailable') | Out-Null
+            }
+            $recoveryStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $deadline = (Get-Date).AddSeconds(360)
+            while ((Get-Date) -lt $deadline) {
+                $leafNow = Get-HostRecoveryManifestLeaf -ManifestPath $messagingManifestPath
+                $tail = @(Get-LogTail -Path $logPath -Tail 400)
+                $lines = @($tail | Where-Object { $_ -match 'OpenPath update stage=native-host ' -and $_ -match 'lock=released' })
+                $trigger.ensureLineCount = $lines.Count
+                if ($lines.Count -gt 0) { $trigger.ensureLine = [string]$lines[-1] }
+                if ($leafNow -eq 'exe' -and -not $trigger.recovered) {
+                    $trigger.recovered = $true
+                    $trigger.recoveredAt = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+                    $trigger.recoveryMs = [int]$recoveryStopwatch.ElapsedMilliseconds
+                    break
+                }
+                Start-Sleep -Seconds 2
+            }
+            $recoveryStopwatch.Stop()
+            $trigger.manifestAfter = Get-HostRecoveryManifestLeaf -ManifestPath $messagingManifestPath
+            $trigger.recovered = ($trigger.manifestAfter -eq 'exe')
+            $trigger.ensureLineSeen = [bool]$trigger.ensureLine
+
+            # Informational: does the running Firefox recover the host without a
+            # restart? A navigation in the already-open browser issues a new
+            # host request; the student's native-host.log gains a new
+            # initialization line when the compiled host answers.
+            try {
+                $firefoxNow = @(Get-FirefoxProcesses)
+                if ($trigger.recovered -and $firefoxNow.Count -gt 0) {
+                    $trigger.extensionRecovery.attempted = $true
+                    $trigger.extensionRecovery.firefoxRunningAtRecovery = $true
+                    $studentLog = Get-NativeHostLogPath
+                    $initCountBefore = @(Get-LogTail -Path $studentLog -Tail 400 | Where-Object { $_ -match 'Native host initialization completed' }).Count
+                    $plan = Get-FixturePlan
+                    $anchorUrl = "http://$([string]$plan.anchors.a1.host)/"
+                    $nav = Start-InSessionVisit -Url $anchorUrl -Tag 'recovery-visit'
+                    $connected = $false
+                    $connectStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                    $connectDeadline = (Get-Date).AddSeconds(60)
+                    while ((Get-Date) -lt $connectDeadline) {
+                        $initCountNow = @(Get-LogTail -Path $studentLog -Tail 400 | Where-Object { $_ -match 'Native host initialization completed' }).Count
+                        if ($initCountNow -gt $initCountBefore) { $connected = $true; break }
+                        Start-Sleep -Seconds 3
+                    }
+                    $connectStopwatch.Stop()
+                    $trigger.extensionRecovery.hostConnectedWithoutRestart = $connected
+                    if ($connected) { $trigger.extensionRecovery.timeToHostConnectMs = [int]$connectStopwatch.ElapsedMilliseconds }
+                    $firefoxPidsAfter = @(Get-FirefoxProcesses | ForEach-Object { [int]$_.pid })
+                    $common = @($firefoxPidsAfter | Where-Object { $firefoxPidsBefore -contains $_ })
+                    $trigger.extensionRecovery.firefoxRestarted = ($firefoxPidsAfter.Count -gt 0 -and $common.Count -eq 0)
+                }
+            }
+            catch {
+                $trigger.extensionRecovery.error = [string]$_
+            }
+
+            # Authoritative student probe: runs the recovered .exe as the
+            # restricted student and diffs the AppLocker 8004 denial of
+            # powershell.exe.
+            try {
+                $probeScript = Join-Path $PSScriptRoot 'Test-OpenPathNativeHostAsStudent.ps1'
+                $probeWork = 'C:\OpenPathLab\phase5\host-recovery'
+                $launcherPath = 'C:\OpenPathLab\first-visit\student-session-launch.ps1'
+                if (Test-Path -LiteralPath $probeScript) {
+                    $probeOutput = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probeScript -HostExe (Join-Path $nativeRoot 'OpenPath-NativeHost.exe') -StudentUserName $StudentUserName -LauncherPath $launcherPath -WorkDir $probeWork 2>&1 | Out-String).Trim()
+                    $probeResultPath = Join-Path $probeWork 'b6-result.json'
+                    if (Test-Path -LiteralPath $probeResultPath) {
+                        $trigger.studentProbe = Get-Content -LiteralPath $probeResultPath -Raw | ConvertFrom-Json
+                    }
+                    if (-not $trigger.studentProbe) { $trigger.studentProbeError = 'student-probe-result-missing' }
+                }
+                else {
+                    $trigger.studentProbeError = 'student-host-probe-script-missing'
+                }
+            }
+            catch {
+                $trigger.studentProbeError = [string]$_
+            }
+            if ($trigger.studentProbeError) {
+                $script:Failures.Add('host-recovery-student-probe-error') | Out-Null
+            }
+        }
+        catch {
+            $trigger.error = [string]$_
+            $script:Failures.Add('host-recovery-trigger-error') | Out-Null
+        }
+        $script:Body.hostRecoveryTrigger = $trigger
         Complete-Step
     }
     'visit' {

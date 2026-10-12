@@ -1309,17 +1309,20 @@ try { `$json2 = [ordered]@{ s = `$plain } | ConvertTo-Json -Depth 12 -Compress }
 
         It 'Plans scenarios per trigger' {
             $schedule = Get-OpenPathFirstVisitScenarioPlan -EventName 'schedule'
-            $schedule.scenarios | Should -Be 'settled,hot,class-boot,floor,update-contention:1'
+            $schedule.scenarios | Should -Be 'settled,hot,class-boot,floor,update-contention:1,host-recovery:1'
             $schedule.repetitions | Should -Be 2
             $afterRel = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_run'
             $afterRel.scenarios | Should -Be 'settled,class-boot,update-contention'
             $afterRel.repetitions | Should -Be 1
+            # Phase 8d D1: host-recovery is dispatch-only apart from the nightly.
+            $afterRel.scenarios | Should -Not -Match 'host-recovery'
             $dispatch = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_dispatch'
             $dispatch.scenarios | Should -Be 'settled,class-boot'
             $dispatch.repetitions | Should -Be 1
             $requested = Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_dispatch' -RequestedScenarios 'class-boot' -RequestedRepetitions '5'
             $requested.scenarios | Should -Be 'class-boot'
             $requested.repetitions | Should -Be 5
+            (Get-OpenPathFirstVisitScenarioPlan -EventName 'workflow_dispatch' -RequestedScenarios 'host-recovery').scenarios | Should -Be 'host-recovery'
         }
 
         It 'Uses the whole push range and fails open without a comparable base' {
@@ -2254,6 +2257,108 @@ PrimaryServerAddress=198.51.100.7
             $result = Get-BoundedMozMatches -Directories @($script:mozFixtureDir) -Pattern 'nsHostResolver' -FileFilter '*'
             @($result.lines).Count | Should -Be 2
             $result.fileNames | Should -Contain 'hostresolver.log.0'
+        }
+    }
+
+    Context 'Host recovery (Phase 8d D1)' -Tag 'Phase8d' {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitHostRecovery.psm1') -Force
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitOutcome.psm1') -Force
+            function New-HostRecoveryPayload {
+                param([hashtable]$FirstVisit)
+                return [pscustomobject]@{ firstVisit = [pscustomobject]$FirstVisit }
+            }
+            $script:laneGuestSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\Invoke-OpenPathFirstVisitGuest.ps1') -Raw
+            $script:laneControllerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\controllers\ProxmoxFirstVisit.ps1') -Raw
+        }
+
+        It 'Classifies the recovered scene as HOST-RECOVERY-PASS' {
+            $trigger = [pscustomobject]@{
+                manifestAfter          = 'exe'
+                recoveredBeforeTrigger = $false
+                recoveryMs             = 42000
+                ensureLine             = 'OpenPath update stage=native-host ms=88 lock=released'
+                extensionRecovery      = [pscustomobject]@{ attempted = $true; hostConnectedWithoutRestart = $true; timeToHostConnectMs = 5200; firefoxRestarted = $false }
+            }
+            $probe = [pscustomobject]@{ pingResponded = $true; deniedPowershell = $true; events8004Measured = $true }
+            $analysis = Get-OpenPathFirstVisitHostRecovery -TriggerEvidence $trigger -StudentProbe $probe
+            $analysis.verdict | Should -Be 'HOST-RECOVERY-PASS'
+            @($analysis.reasons).Count | Should -Be 0
+            $analysis.recoveryMs | Should -Be 42000
+            $analysis.extensionRecovery.hostConnectedWithoutRestart | Should -BeTrue
+        }
+
+        It 'Classifies the pre-D1 manifest (still cmd) as HOST-RECOVERY-RED' {
+            # The control: the ensure recompiles but the messaging manifest
+            # keeps pointing at the cmd fallback (6f4c1c58 behaviour).
+            $trigger = [pscustomobject]@{
+                manifestAfter          = 'cmd'
+                recoveredBeforeTrigger = $false
+                recoveryMs             = -1
+                ensureLine             = 'OpenPath update stage=native-host ms=88 lock=released'
+            }
+            $probe = [pscustomobject]@{ pingResponded = $true; deniedPowershell = $true; events8004Measured = $true }
+            $analysis = Get-OpenPathFirstVisitHostRecovery -TriggerEvidence $trigger -StudentProbe $probe
+            $analysis.verdict | Should -Be 'HOST-RECOVERY-RED'
+            $analysis.reasons | Should -Contain 'manifest-not-recovered'
+
+            $overBudget = Get-OpenPathFirstVisitHostRecovery -TriggerEvidence ([pscustomobject]@{ manifestAfter = 'exe'; recoveryMs = 400000; ensureLine = 'x' }) -StudentProbe $probe
+            $overBudget.verdict | Should -Be 'HOST-RECOVERY-RED'
+            $overBudget.reasons | Should -Contain 'recovery-over-budget:400000'
+
+            $missingProbe = Get-OpenPathFirstVisitHostRecovery -TriggerEvidence ([pscustomobject]@{ manifestAfter = 'exe'; recoveryMs = 1000; ensureLine = 'x' }) -StudentProbe $null
+            $missingProbe.verdict | Should -Be 'HOST-RECOVERY-RED'
+            $missingProbe.reasons | Should -Contain 'student-probe-missing'
+
+            # A manifest recovered before the explicit trigger is accepted when
+            # the ensure stage line was observed.
+            $preRecovered = Get-OpenPathFirstVisitHostRecovery -TriggerEvidence ([pscustomobject]@{ manifestAfter = 'exe'; recoveredBeforeTrigger = $true; recoveryMs = -1; ensureLine = 'x' }) -StudentProbe $probe
+            $preRecovered.verdict | Should -Be 'HOST-RECOVERY-PASS'
+        }
+
+        It 'Maps the scene status into PASS / PRODUCT / INFRA' {
+            $pass = Get-OpenPathFirstVisitSceneOutcome -VerdictFile ([pscustomobject]@{
+                    scenario = 'first-visit-host-recovery'; hostRecoveryStatus = 'HOST-RECOVERY-PASS'
+                    verdict = [pscustomobject]@{ status = 'passed'; reasons = @() }; reportPresent = $false
+                    productReasons = @(); evidenceIncomplete = $false; hostRecoveryReasons = @()
+                }) -Scenario 'first-visit-host-recovery'
+            $pass.category | Should -Be 'PASS'
+
+            $red = Get-OpenPathFirstVisitSceneOutcome -VerdictFile ([pscustomobject]@{
+                    scenario = 'first-visit-host-recovery'; hostRecoveryStatus = 'HOST-RECOVERY-RED'
+                    verdict = [pscustomobject]@{ status = 'failed'; reasons = @('manifest-not-recovered') }; reportPresent = $false
+                    productReasons = @(); evidenceIncomplete = $false; hostRecoveryReasons = @('manifest-not-recovered')
+                }) -Scenario 'first-visit-host-recovery'
+            $red.category | Should -Be 'PRODUCT'
+            $red.reasons | Should -Contain 'manifest-not-recovered'
+
+            $missing = Get-OpenPathFirstVisitSceneOutcome -VerdictFile ([pscustomobject]@{
+                    scenario = 'first-visit-host-recovery'; verdict = [pscustomobject]@{ status = 'failed'; reasons = @() }
+                    reportPresent = $false; productReasons = @(); evidenceIncomplete = $false
+                }) -Scenario 'first-visit-host-recovery'
+            $missing.category | Should -Be 'INFRA'
+            $missing.error | Should -Be 'host-recovery-status-missing'
+        }
+
+        It 'Exposes the host-recovery settings flag for the dispatch input' {
+            $config = [pscustomobject]@{ hostAddress = '192.168.1.150' }
+            $settings = Get-OpenPathFirstVisitSettings -Payload (New-HostRecoveryPayload @{ scenario = 'first-visit-host-recovery' }) -Config $config
+            $settings.HostRecovery | Should -BeTrue
+            $settings.UpdateContention | Should -BeFalse
+            (Get-OpenPathFirstVisitSettings -Payload (New-HostRecoveryPayload @{ scenario = 'first-visit-settled' }) -Config $config).HostRecovery | Should -BeFalse
+        }
+
+        It 'Wires the scene into the guest harness and the controller' {
+            $script:laneGuestSource | Should -Match "'host-recovery-break' \{"
+            $script:laneGuestSource | Should -Match "'host-recovery-trigger' \{"
+            $script:laneGuestSource | Should -Match 'Get-HostRecoveryManifestLeaf'
+            $script:laneGuestSource | Should -Match "OpenPath update stage=native-host '"
+            $script:laneGuestSource | Should -Match 'Test-OpenPathNativeHostAsStudent.ps1'
+            $script:laneControllerSource | Should -Match "Step 'host-recovery-break'"
+            $script:laneControllerSource | Should -Match "Step 'host-recovery-trigger'"
+            $script:laneControllerSource | Should -Match 'Get-OpenPathFirstVisitHostRecovery -TriggerEvidence \$hostRecoveryTrigger'
+            $script:laneControllerSource | Should -Match "source              = 'host-recovery'"
+            $script:laneControllerSource | Should -Match 'hostRecoveryStatus'
         }
     }
 }

@@ -154,6 +154,53 @@ Product response:
   recover a blocked host without a signature, but the outcome stays a chance
   event; signing remains the deterministic fix.
 
+### Manifest reconciliation, ping diagnosis and H1 (Phase 8d)
+
+The Phase 8c E2E (38208889929) also showed a product gap independent of the
+hash: the ensure recompiled the host but never touched
+`whitelist_native_host.json`, which only `Register-OpenPathFirefoxNativeHost`
+writes. After an install whose health ping failed, the manifest kept pointing at
+the `.cmd` fallback; Firefox launched `powershell.exe`, AppLocker denied it for
+the restricted student and the classroom stayed without a native host until a
+new enrollment or agent version, even after the executable had recovered. The
+same run proved the Phase 8c "0 no-host errors" count was measured on the last
+200 log lines only (~1 minute of the run), so a real denial could hide.
+
+Product response:
+
+- The ensure (all callers, under its mutex) calls
+  `Sync-OpenPathFirefoxNativeHostMessagingManifest` after the build attempt with
+  any outcome: an existing manifest whose `path` no longer matches
+  `Get-OpenPathNativeHostLaunchPath` is rewritten atomically (temp file plus
+  move, no BOM) and the previous and new destinations are logged. A missing
+  manifest is never created; the registry is untouched.
+- Every compilation path shares the one non-blocking mutex: the installer,
+  enrollment and self-update compile through
+  `Invoke-OpenPathFirefoxNativeHostRegistrationBuild`; when the lock is held
+  they skip the compile and write the manifest with the current launch path.
+- `Test-OpenPathNativeHostExecutable` drains stderr asynchronously from launch,
+  stops at a 0-byte stdout read (`health-check-exited` with the exit code) and
+  records `StartMs`, `ElapsedMs`, `Pid`, `HasExited`, `ExitCode`, `CpuMs` and a
+  redacted 2 KB stderr extract. `build.json` keeps the last two attempts under
+  `lastPings` and each failed ping logs one WARN line.
+- A failed health attempt is classified from that data: `exited` (exit code and
+  stderr), `hung-no-cpu` (alive without CPU: blocked before managed code -
+  kernel, antivirus or Code Integrity; check the CodeIntegrity/Defender events
+  of the window) or `hung-cpu` (alive with CPU: host bug; check its
+  native-host.log).
+- The E2E harness reports the final state from the complete `openpath.log` (with
+  rotations), the manifest destination, the product health (child
+  `Get-OpenPathFirefoxNativeHostCompiledHealth` with the machine PSModulePath,
+  file fallback), `lastPings` and `fallback-state.json`, and emits a visible
+  `::warning` when the classroom boundary is active and the student ends without
+  the compiled host. It also collects the SYSTEM native-host.log, the native
+  host lines of the full log, the CodeIntegrity/Defender events and a first-run
+  probe (fresh copy of the installed source, 180 s then 30 s ping). The lane's
+  `host-recovery` scene reproduces the failed-install state, keeps a student
+  Firefox session and requires the periodic task to recover the manifest within
+  6 minutes with a passing student probe; on the pre-8d template it is
+  PRODUCT-RED.
+
 ### Installer signing: options
 
 The offline template is personalized at download time
