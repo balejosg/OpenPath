@@ -351,6 +351,40 @@ Protocol parity between both hosts is enforced by
 `windows\tests\Windows.NativeHostParity.Tests.ps1` (framed reference sequence
 against the PowerShell host and the compiled host, same fixture state).
 
+### Compiled host, Smart App Control and the update cycle (Phase 8c)
+
+**The hash never depends on `Get-FileHash`.** The compiled-host stack also runs
+from Windows PowerShell 5.1 children (scheduled Update task, E2E harness) whose
+`PSModulePath` may be inherited from a PowerShell 7 parent; there
+`Get-FileHash` is not auto-loaded and fails with "The term 'Get-FileHash' is
+not recognized", which turned every build into `status=Failed`
+(`attempts=16` in ~12 minutes in E2E run 38144922322) while the previously
+installed host stayed healthy. `Get-OpenPathNativeHostFileSha256` hashes the
+file stream with `System.Security.Cryptography.SHA256` instead. An unreadable
+source hash counts as one failed attempt per backoff hour
+(`native-host-source-hash-failed`), never as a compile loop.
+
+**Where the ensure runs.** `Invoke-OpenPathFirefoxNativeHostCompiledEnsure`
+runs from install/enrollment, the daily agent self-update and each **periodic**
+update cycle (the 5-minute Update task), the latter only after
+`Global\OpenPathUpdateLock` is released: the stage line reads
+`OpenPath update stage=native-host ms=... lock=released`. SSE cycles do not
+call it, so a slow ensure (compile plus ping retries, ~70 s) can never delay an
+SSE approval waiting on the update lock. All callers share a non-blocking
+mutex (`Global\OpenPathNativeHostEnsureLock`); a second ensure logs
+"another ensure is already running" and skips instead of compiling in
+parallel.
+
+**Smart App Control oscillates; `csc` is not deterministic.** In lab scenes
+the SAC positive control flips within minutes: right after the policy is
+applied the MOTW copy is blocked (4551) while the plain copy runs, a few
+minutes later both run, and later both are blocked again. `csc` produced
+different executables for the same source (`ad79...` and `5f58...` in one
+scene), and SAC decides per executable on its **first launch**, so every
+recompilation is a new evaluation. The backoff + recompile cycle can recover a
+blocked host without a signature, but the outcome remains chance: signing the
+native host is the deterministic fix.
+
 If the machine is not enrolled, re-enroll:
 
 ```powershell

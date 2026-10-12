@@ -53,6 +53,10 @@ jobs:
       - name: Compute the source hash and look for an existing signed executable
         id: state
         shell: pwsh
+        env:
+          # Phase 8c T4: the input travels through the environment, never
+          # interpolated into the script text.
+          REQUEST_ID_INPUT: ${{ inputs.signing_request_id }}
         run: |
           $sourceSha = (Get-FileHash -LiteralPath 'windows/native-host/OpenPathNativeHost.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           "source_sha256=$sourceSha" >> $env:GITHUB_OUTPUT
@@ -69,7 +73,13 @@ jobs:
           $hasSigned = ($assetNames -contains "OpenPath-NativeHost-$sourceSha.exe") -and
             ($assetNames -contains "OpenPath-NativeHost-$sourceSha.signing.json")
           "signed_exists=$($hasSigned.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          $requestId = '${{ inputs.signing_request_id }}'
+          $requestId = [string]$env:REQUEST_ID_INPUT
+          # Phase 8c T4: validate the format before use; SignPath signing
+          # request ids are GUIDs. An invalid dispatch fails here, early and
+          # visibly, instead of half-running the collect.
+          if ($requestId -and $requestId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+            throw "signing_request_id must be a SignPath signing request GUID; got '$requestId'."
+          }
           $collectOnly = ([bool]$requestId) -and (-not $hasSigned)
           "collect_only=$($collectOnly.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           if ($requestId) { "signing_request_id=$requestId" >> $env:GITHUB_OUTPUT }

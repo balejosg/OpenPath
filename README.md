@@ -114,7 +114,7 @@ OpenPath uses the SignPath Foundation open-source code signing program for exact
 
 ### Privacy
 
-The Windows agent transfers data only to the OpenPath server the administrator configures during installation (enrollment, whitelist sync, health reports and student requests); there is no telemetry to any third party. See the [privacy section above](#privacy-first-not-as-a-feature-but-as-architecture) and the browser-extension privacy policy in [`firefox-extension/PRIVACY.md`](firefox-extension/PRIVACY.md).
+The Windows agent transfers data only to the OpenPath server the administrator configures during installation (enrollment, whitelist sync, health reports and student requests); there is no telemetry to any third party. Installations that do not bundle the Acrylic DNS Proxy payload download it from its SourceForge open-source release (GitHub mirror first, SHA-256 pinned). See the [privacy section above](#privacy-first-not-as-a-feature-but-as-architecture) and the browser-extension privacy policy in [`firefox-extension/PRIVACY.md`](firefox-extension/PRIVACY.md).
 
 ## How It Works
 

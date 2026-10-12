@@ -689,6 +689,47 @@ function Invoke-OpenPathUpdateWritersLockScope {
     }
 }
 
+function Invoke-OpenPathNativeHostPostCycleEnsure {
+    <#
+    .SYNOPSIS
+    Phase 8c T2: refreshes the compiled native host off the whitelist critical path.
+    .DESCRIPTION
+    Only periodic cycles (TriggerSource Update) reach this, and it must be
+    called after the cycle released Global\OpenPathUpdateLock: a slow ensure
+    (compile plus ping retries, ~70 s) can then never delay an SSE approval
+    waiting on the update lock. SSE cycles never call the ensure at all. The
+    ensure itself is guarded by its own non-blocking mutex (in
+    Browser.FirefoxNativeHost.psm1), so it cannot overlap the self-update
+    retries either. The stage line is logged with lock=released to keep the
+    per-stage accounting in the guest log.
+    #>
+    [CmdletBinding()]
+    param(
+        [ValidateSet('Update', 'SSE')][string]$TriggerSource = 'Update',
+
+        [AllowNull()][object]$Config = $null,
+
+        # Test seam: replaces the real ensure call.
+        [scriptblock]$EnsureInvoker = $null
+    )
+
+    if ($TriggerSource -ne 'Update') { return $false }
+    $ensureCommand = Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure' -ErrorAction SilentlyContinue
+    if (-not $ensureCommand -and -not $EnsureInvoker) { return $false }
+
+    $ensureStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        if ($EnsureInvoker) { & $EnsureInvoker | Out-Null }
+        else { Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $Config | Out-Null }
+    }
+    catch {
+        Write-OpenPathLog "Compiled native host ensure after the update cycle failed: $_" -Level WARN
+    }
+    $ensureStopwatch.Stop()
+    Write-OpenPathLog "OpenPath update stage=native-host ms=$($ensureStopwatch.ElapsedMilliseconds) lock=released"
+    return $true
+}
+
 function Invoke-OpenPathUpdateCycle {
     <#
     .SYNOPSIS
@@ -789,16 +830,12 @@ function Invoke-OpenPathUpdateCycle {
                 -Config $config `
                 -SkipProtectedModeRestore:($TriggerSource -eq 'SSE')
             & $writeUpdateStage 'reconcile'
-            # Phase 8b R1: refresh the compiled native host on every update
-            # cycle (Update task every 5 min, SSE) so a transient install-time
-            # failure no longer leaves the classroom without the host until the
-            # daily agent self-update. The ensure is backoff-gated by cause
-            # (health 5/15/60 minutes, compilation one hour), so a healthy or
-            # backing-off machine pays a source hash and a manifest read.
-            if (Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure' -ErrorAction SilentlyContinue) {
-                try { Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $config | Out-Null } catch { }
-            }
-            & $writeUpdateStage 'native-host'
+            # Phase 8c T2: the compiled-host ensure moved out of the locked
+            # section (see Invoke-OpenPathNativeHostPostCycleEnsure below). It
+            # used to run here, inside Global\OpenPathUpdateLock and before the
+            # download; with a host whose ping retries (compile + 20 s + 45 s,
+            # ~70 s) an SSE approval waited 45 s on the lock and skipped its
+            # cycle.
             $null = Backup-OpenPathWhitelistState `
                 -WhitelistPath $whitelistPath `
                 -BackupPath $backupPath `
@@ -840,13 +877,12 @@ function Invoke-OpenPathUpdateCycle {
                     -HealthActionSuffix $portalActiveState.HealthAction
             }
             & $writeUpdateStage 'apply'
-            Write-OpenPathLog ("OpenPath update stages totalMs={0} enrollment={1} config-sync={2} portal-state={3} reconcile={4} native-host={5} backup={6} download={7} apply={8}" -f `
+            Write-OpenPathLog ("OpenPath update stages totalMs={0} enrollment={1} config-sync={2} portal-state={3} reconcile={4} backup={5} download={6} apply={7}" -f `
                     (@($updateStages.Values) | Measure-Object -Sum).Sum, `
                     $updateStages['enrollment'], `
                     $updateStages['config-sync'], `
                     $updateStages['portal-state'], `
                     $updateStages['reconcile'], `
-                    $updateStages['native-host'], `
                     $updateStages['backup'], `
                     $updateStages['download'], `
                     $updateStages['apply'])
@@ -878,6 +914,12 @@ function Invoke-OpenPathUpdateCycle {
         if ($mutex) {
             $mutex.Dispose()
         }
+    }
+
+    # Phase 8c T2: periodic cycles refresh the compiled host here, after apply
+    # and after Global\OpenPathUpdateLock was released; SSE cycles skip it.
+    if ($shouldRunUpdate) {
+        Invoke-OpenPathNativeHostPostCycleEnsure -TriggerSource $TriggerSource -Config $config | Out-Null
     }
 
     return [int]$exitCode

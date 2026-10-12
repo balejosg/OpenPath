@@ -160,6 +160,58 @@ test('signing workflow passes the token through the environment, never through r
   );
 });
 
+test('signing workflow never interpolates inputs into run scripts and validates the request id (Phase 8c)', () => {
+  const workflow = readText(WORKFLOW);
+
+  // Every `run: |` body must stay free of workflow-level interpolation, so a
+  // dispatched input can never reshape the generated script; the run blocks
+  // are discovered structurally instead of trusting the one known step.
+  const runBlocks = [];
+  const lines = workflow.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const match = /^(\s*)run: \|\s*$/u.exec(lines[index]);
+    if (!match) {
+      continue;
+    }
+    const blockIndent = match[1].length;
+    const body = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor++) {
+      const line = lines[cursor];
+      if (line.trim() !== '' && line.search(/\S/) <= blockIndent) {
+        break;
+      }
+      body.push(line);
+    }
+    runBlocks.push(body.join('\n'));
+  }
+
+  assert.ok(runBlocks.length >= 5, 'every workflow run block must be discovered');
+  for (const block of runBlocks) {
+    assert.ok(
+      !block.includes('${{ inputs.'),
+      'an input must never be interpolated into a run script'
+    );
+    assert.ok(
+      !block.includes('${{ secrets.'),
+      'a secret must never be interpolated into a run script'
+    );
+  }
+
+  assert.ok(
+    workflow.includes('REQUEST_ID_INPUT: ${{ inputs.signing_request_id }}'),
+    'the collect-only input must travel through the environment'
+  );
+  assert.ok(
+    workflow.includes('$requestId = [string]$env:REQUEST_ID_INPUT'),
+    'the script must read the request id from the environment'
+  );
+  assert.match(
+    workflow,
+    /\[0-9a-fA-F\]\{8\}-\[0-9a-fA-F\]\{4\}-\[0-9a-fA-F\]\{4\}-\[0-9a-fA-F\]\{4\}-\[0-9a-fA-F\]\{12\}/u,
+    'the request id format must be validated before use'
+  );
+});
+
 test('signing workflow installs the SignPath PowerShell module at one pinned version', () => {
   const workflow = readText(WORKFLOW);
 

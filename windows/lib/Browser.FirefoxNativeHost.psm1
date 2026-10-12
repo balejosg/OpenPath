@@ -213,6 +213,55 @@ function Sync-OpenPathFirefoxNativeHostState {
     return $true
 }
 
+function Invoke-OpenPathFirefoxNativeHostEnsureWithLock {
+    <#
+    .SYNOPSIS
+        Runs an ensure action under a non-blocking machine-wide mutex.
+    .DESCRIPTION
+        Phase 8c: the periodic update cycle, the agent self-update and the
+        installer can race on the same compiled host. The lock is never waited
+        on: when another ensure is running the caller skips immediately with
+        $null (the current ensure leaves a fresh executable/manifest or its own
+        backoff state). A ~70 s ensure (compile + ping retry) therefore never
+        queues a second one anywhere.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+        [string]$MutexName = 'Global\OpenPathNativeHostEnsureLock'
+    )
+
+    $mutex = $null
+    $acquired = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, $MutexName)
+        try {
+            $acquired = $mutex.WaitOne(0)
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            Write-OpenPathLog 'Native host ensure: another ensure is already running - skipping this attempt' -Level WARN
+            return $null
+        }
+        return (& $Action)
+    }
+    finally {
+        if ($acquired -and $mutex) {
+            try {
+                $mutex.ReleaseMutex()
+            }
+            catch [System.ApplicationException] {
+                # Ignore if mutex ownership was not held at release time.
+            }
+        }
+        if ($mutex) {
+            $mutex.Dispose()
+        }
+    }
+}
+
 function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
     <#
     .SYNOPSIS
@@ -223,35 +272,41 @@ function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
         periodic Update task all call this. Never throws; the outcome carries
         Status (Built/BuildSkipped/Fallback), BackoffActive and the error so the
         caller can log it. A failed attempt backs off for an hour while the
-        source is unchanged.
+        source is unchanged. Phase 8c: the whole body runs under a non-blocking
+        machine-wide mutex, so overlapping callers (periodic cycle, self-update
+        retry, installer) never compile at the same time; a second caller exits
+        with $null instead of waiting.
     #>
     [CmdletBinding()]
     param([AllowNull()][object]$Config = $null)
 
-    $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
-    try { Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null } catch { }
-    $result = $null
-    try {
-        $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $script:OpenPathRoot
-    }
-    catch {
-        $result = [pscustomobject][ordered]@{
-            Status = 'Failed'; Error = [string]$_; BackoffActive = $false; NextAttemptAt = ''
-            BuiltNow = $false; ExecutablePath = ''; ManifestPath = ''; SourcePath = ''
-            SourceSha256 = ''; ExecutableSha256 = ''; Health = $null
+    $openPathRoot = $script:OpenPathRoot
+    return Invoke-OpenPathFirefoxNativeHostEnsureWithLock -Action {
+        $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
+        try { Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null } catch { }
+        $result = $null
+        try {
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $openPathRoot
         }
+        catch {
+            $result = [pscustomobject][ordered]@{
+                Status = 'Failed'; Error = [string]$_; BackoffActive = $false; NextAttemptAt = ''
+                BuiltNow = $false; ExecutablePath = ''; ManifestPath = ''; SourcePath = ''
+                SourceSha256 = ''; ExecutableSha256 = ''; Health = $null
+            }
+        }
+        # Phase 8: availability is logged once per state change with the product
+        # reason code; the classroom boundary turns a Fallback into an ERROR
+        # because the restricted student cannot run the PowerShell fallback.
+        if ($result.Status -in @('Built', 'BuildSkipped')) {
+            Write-OpenPathLog "Compiled native host ensured ($($result.Status), source=$($result.HostSource), sha256=$($result.ExecutableSha256))."
+            Remove-Item -LiteralPath (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'fallback-state.json') -Force -ErrorAction SilentlyContinue
+        }
+        else {
+            Write-OpenPathNativeHostFallbackState -Config $Config -BuildResult $result
+        }
+        return $result
     }
-    # Phase 8: availability is logged once per state change with the product
-    # reason code; the classroom boundary turns a Fallback into an ERROR
-    # because the restricted student cannot run the PowerShell fallback.
-    if ($result.Status -in @('Built', 'BuildSkipped')) {
-        Write-OpenPathLog "Compiled native host ensured ($($result.Status), source=$($result.HostSource), sha256=$($result.ExecutableSha256))."
-        Remove-Item -LiteralPath (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'fallback-state.json') -Force -ErrorAction SilentlyContinue
-    }
-    else {
-        Write-OpenPathNativeHostFallbackState -Config $Config -BuildResult $result
-    }
-    return $result
 }
 
 function Get-OpenPathFirefoxNativeHostCompiledHealth {
@@ -320,11 +375,11 @@ function Get-OpenPathFirefoxNativeHostCompiledHealth {
     if ($buildManifest -and $buildManifest.PSObject.Properties['hostSource']) { $health.HostSource = [string]$buildManifest.hostSource }
     if ((Test-Path -LiteralPath $executablePath -PathType Leaf) -and $buildManifest -and ([string]$buildManifest.healthStatus -eq 'healthy')) {
         try {
-            $healthy = ([string]$buildManifest.executableSha256 -eq (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant())
+            $healthy = ([string]$buildManifest.executableSha256 -eq (Get-OpenPathNativeHostFileSha256 -Path $executablePath))
             if ($healthy) {
                 $sourcePath = Get-OpenPathNativeHostInstalledSourcePath -OpenPathRoot $OpenPathRoot -NativeRoot $NativeRoot
                 if ($sourcePath) {
-                    $currentSourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $currentSourceHash = Get-OpenPathNativeHostFileSha256 -Path $sourcePath
                     if ([string]$buildManifest.sourceSha256 -and ($currentSourceHash -ne [string]$buildManifest.sourceSha256)) {
                         $healthy = $false
                     }
@@ -524,6 +579,7 @@ Export-ModuleMember -Function @(
     'Sync-OpenPathFirefoxNativeHostArtifacts',
     'Sync-OpenPathFirefoxNativeHostState',
     'Invoke-OpenPathFirefoxNativeHostCompiledEnsure',
+    'Invoke-OpenPathFirefoxNativeHostEnsureWithLock',
     'Get-OpenPathFirefoxNativeHostCompiledHealth',
     'Write-OpenPathNativeHostFallbackState',
     'Register-OpenPathFirefoxNativeHost',

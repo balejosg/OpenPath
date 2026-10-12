@@ -197,6 +197,7 @@ function Get-OpenPathInstallerPrivacyNotice {
         '- Whitelist sync: the agent downloads the classroom whitelist and identifies the machine with its machine token.',
         "- Health reports: hostname, DNS and service state, agent version and reason codes (POST $serverDisplay/trpc/healthReports.submit).",
         '- Student requests: when a student asks for access from the blocked page, the requested domain and the student reason are submitted to the server.',
+        '- Third-party component: when the installation package does not bundle Acrylic DNS Proxy, the installer downloads it from its SourceForge open-source release.',
         '- These transfers cannot be disabled: they are how classroom enforcement works.'
     )
 }

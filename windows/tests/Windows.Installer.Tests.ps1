@@ -2828,6 +2828,7 @@ Describe "Uninstaller" {
             $text | Should -Match 'Student requests'
             $text | Should -Match 'https://api\.example\.test/trpc/healthReports\.submit'
             $text | Should -Match '/w/\[redacted\]/whitelist\.txt'
+            $text | Should -Match 'Acrylic DNS Proxy'
             $text.Contains('secret-token-123') | Should -BeFalse
             $text | Should -Match 'cannot be disabled'
         }

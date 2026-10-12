@@ -555,7 +555,7 @@ Describe "Update Script" {
             (Get-Content -LiteralPath $runtimePath -Raw) | Should -Match "'Get-OpenPathRuntimeDependencyOverlayState'"
         }
 
-        It "resolves and retries the compiled native host on every update cycle (Phase 8b)" {
+        It "re-exports the compiled native host entrypoints for every Browser consumer (Phase 8b)" {
             # The ensure/health entrypoints live in Browser.FirefoxNativeHost.psm1
             # and were private to it, so the self-update retry, the watchdog
             # health report and the installer SAC notice skipped them silently.
@@ -565,16 +565,100 @@ Describe "Update Script" {
             "(Get-Command -Name Get-OpenPathFirefoxNativeHostCompiledHealth -ErrorAction SilentlyContinue)) { 'resolved' } else { 'missing' }"
             $result = & pwsh -NoProfile -Command $script | Select-Object -Last 1
             $result | Should -Be 'resolved'
+        }
 
-            # The update cycle (Update task every 5 minutes, SSE) retries the
-            # ensure under the cause-based backoff, so a transient install-time
-            # failure no longer waits for the daily agent self-update.
+        It "runs the compiled native host ensure after the cycle released the update lock (Phase 8c)" {
+            # The ensure used to run inside the cycle while Global\OpenPathUpdateLock
+            # was held; a host whose ping times out (compile + 20 s + 45 s) then
+            # made an SSE approval wait and skip its cycle.
             $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
             $runtimeContent = Get-Content -LiteralPath $runtimePath -Raw
-            $cycleBody = $runtimeContent.Substring($runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle'))
-            $cycleBody | Should -Match "Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure'"
-            $cycleBody | Should -Match "writeUpdateStage 'native-host'"
-            $cycleBody | Should -Match 'native-host=\{5\}'
+            $cycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
+            $cycleEnd = $runtimeContent.IndexOf('function Write-OpenPathUpdatePortalActiveState')
+            ($cycleStart -ge 0) | Should -BeTrue
+            ($cycleEnd -gt $cycleStart) | Should -BeTrue
+            $cycleBody = $runtimeContent.Substring($cycleStart, $cycleEnd - $cycleStart)
+
+            $cycleBody | Should -Match 'Invoke-OpenPathNativeHostPostCycleEnsure'
+            $cycleBody | Should -Not -Match 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure'
+            $cycleBody | Should -Not -Match "writeUpdateStage 'native-host'"
+            $releaseIndex = $cycleBody.IndexOf('ReleaseMutex')
+            $postEnsureIndex = $cycleBody.LastIndexOf('Invoke-OpenPathNativeHostPostCycleEnsure')
+            ($releaseIndex -ge 0) | Should -BeTrue
+            ($postEnsureIndex -gt $releaseIndex) | Should -BeTrue
+        }
+    }
+
+    Context "Post-cycle native host ensure (Phase 8c)" {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1") -Force
+        }
+
+        It "does not run the ensure for SSE cycles" {
+            InModuleScope Update.Runtime {
+                $script:ensureCalls = 0
+                $ran = Invoke-OpenPathNativeHostPostCycleEnsure -TriggerSource 'SSE' -EnsureInvoker { $script:ensureCalls = $script:ensureCalls + 1 }
+                $ran | Should -BeFalse
+                $script:ensureCalls | Should -Be 0
+            }
+        }
+
+        It "runs after a periodic cycle and logs the stage as outside the lock" {
+            InModuleScope Update.Runtime {
+                $script:ensureCalls = 0
+                $script:logLines = New-Object System.Collections.ArrayList
+                $logLines = $script:logLines
+                function Write-OpenPathLog { param([string]$Message, [string]$Level = 'INFO') $null = $logLines.Add([string]$Message) }
+
+                $ran = Invoke-OpenPathNativeHostPostCycleEnsure -TriggerSource 'Update' -EnsureInvoker { $script:ensureCalls = $script:ensureCalls + 1 }
+
+                $ran | Should -BeTrue
+                $script:ensureCalls | Should -Be 1
+                ($script:logLines -join "`n") | Should -Match 'stage=native-host'
+                ($script:logLines -join "`n") | Should -Match 'lock=released'
+            }
+        }
+
+        It "leaves the update lock free while a slow ensure runs" {
+            # Simulated long ensure (the H1 shape costs ~70 s): the post-cycle
+            # ensure must never hold Global\OpenPathUpdateLock, so another
+            # cycle (an SSE approval) can acquire it without waiting.
+            $ready = Join-Path $TestDrive ('ensure-running-' + [guid]::NewGuid().ToString('N') + '.marker')
+            $modulePath = (Resolve-Path (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1")).Path
+            $slowEnsure = {
+                param($modulePath, $ready)
+                function global:Write-OpenPathLog { param([string]$Message, [string]$Level = 'INFO') }
+                Import-Module $modulePath -Force
+                & (Get-Module Update.Runtime) {
+                    Invoke-OpenPathNativeHostPostCycleEnsure -TriggerSource 'Update' -EnsureInvoker {
+                        Set-Content -LiteralPath $ready -Value 'running' -Encoding ASCII
+                        Start-Sleep -Seconds 5
+                    } | Out-Null
+                }
+            }
+            $holder = [powershell]::Create()
+            $null = $holder.AddScript($slowEnsure).AddArgument($modulePath).AddArgument($ready)
+            $handle = $holder.BeginInvoke()
+            try {
+                $deadline = (Get-Date).AddSeconds(15)
+                while (-not (Test-Path -LiteralPath $ready) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+                (Test-Path -LiteralPath $ready) | Should -BeTrue
+
+                $mutex = [System.Threading.Mutex]::new($false, 'Global\OpenPathUpdateLock')
+                $acquired = $false
+                try {
+                    $acquired = $mutex.WaitOne(0)
+                    $acquired | Should -BeTrue
+                }
+                finally {
+                    if ($acquired) { $mutex.ReleaseMutex() }
+                    $mutex.Dispose()
+                }
+            }
+            finally {
+                $null = $holder.EndInvoke($handle)
+                $holder.Dispose()
+            }
         }
     }
 

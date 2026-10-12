@@ -76,6 +76,9 @@ function Protect-OpenPathDiagnosticText {
     $redacted = $Text -replace '/w/[^/\s?#]+/whitelist\.txt', '/w/[redacted]/whitelist.txt'
     $redacted = $redacted -replace '(?i)(token=)[^&\s"'']+', '$1[redacted]'
     $redacted = $redacted -replace '(?i)("machineToken"\s*:\s*")[^"]+', '$1[redacted]'
+    # Phase 8c T3: the reconciled scenario also carries the per-run test-API
+    # session tokens; they are redacted with the same finally step.
+    $redacted = $redacted -replace '(?i)("accessToken"\s*:\s*")[^"]+', '$1[redacted]'
     return $redacted
 }
 
@@ -93,6 +96,51 @@ function Protect-OpenPathStudentScenarioArtifact {
     if ($redacted -ne $raw) {
         [System.IO.File]::WriteAllText($scenarioPath, $redacted, [System.Text.UTF8Encoding]::new($false))
     }
+}
+
+function Write-OpenPathNativeHostE2eSummary {
+    # Phase 8c T3: one visible line with the final compiled-host state
+    # (status/error/attempts/pingAttempts) and the count of the false
+    # "no native host" errors. Evidence for the run summary, not a gate:
+    # every read is best-effort and a missing file is reported as missing.
+    param(
+        [string]$BuildJsonPath = 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.build.json',
+        [string]$DiagnosticsPath = (Join-Path $script:ArtifactsRoot 'windows-diagnostics.txt'),
+        [string]$SummaryPath = $env:GITHUB_STEP_SUMMARY
+    )
+
+    $status = 'missing'
+    $errorText = ''
+    $attempts = ''
+    $pingAttempts = ''
+    try {
+        if (Test-Path -LiteralPath $BuildJsonPath -PathType Leaf) {
+            $build = Get-Content -LiteralPath $BuildJsonPath -Raw -ErrorAction Stop | ConvertFrom-Json
+            $status = [string]$build.status
+            $errorText = [string]$build.error
+            $attempts = [string]$build.attempts
+            $pingAttempts = [string]$build.pingAttempts
+        }
+    }
+    catch {
+        $status = "unreadable: $($_.Exception.Message)"
+    }
+    if ($errorText) { $errorText = ($errorText -replace '\s+', ' ').Trim() }
+
+    $noHostLines = 0
+    try {
+        if (Test-Path -LiteralPath $DiagnosticsPath -PathType Leaf) {
+            $noHostLines = @(Select-String -LiteralPath $DiagnosticsPath -Pattern 'Restricted student users have no native host' -SimpleMatch -ErrorAction SilentlyContinue).Count
+        }
+    }
+    catch { }
+
+    $line = "Native host (final E2E state): status=$status error='$errorText' attempts=$attempts pingAttempts=$pingAttempts | 'Restricted student users have no native host' lines: $noHostLines"
+    Write-Host $line -ForegroundColor Cyan
+    if ($SummaryPath) {
+        try { Add-Content -Path $SummaryPath -Value "- $line" } catch { }
+    }
+    return $line
 }
 
 function Write-DiagnosticNote {
@@ -1671,7 +1719,12 @@ function Invoke-SeleniumStudentSuite {
         $env:OPENPATH_EXTENSION_PATH = $ExtensionArchivePath
         $env:OPENPATH_STUDENT_DIAGNOSTICS_DIR = $script:ArtifactsRoot
         $env:OPENPATH_WHITELIST_PATH = 'C:\OpenPath\data\whitelist.txt'
-        $env:OPENPATH_FORCE_UPDATE_COMMAND = 'powershell -NoLogo -File "C:\OpenPath\scripts\Update-OpenPath.ps1"'
+        # Phase 8c T3: the forced update runs through a wrapper that records the
+        # inherited child environment (PSModulePath / Get-FileHash resolution)
+        # and then uses the machine+user PSModulePath of the production
+        # scheduled task, instead of inheriting the pwsh 7 module path.
+        $forceUpdateWrapperPath = Join-Path $script:RepoRoot 'tests\e2e\ci\Invoke-OpenPathForcedUpdate.ps1'
+        $env:OPENPATH_FORCE_UPDATE_COMMAND = "powershell -NoLogo -NoProfile -File `"$forceUpdateWrapperPath`""
         $env:OPENPATH_DISABLE_SSE_COMMAND = 'powershell -NoLogo -Command "Disable-ScheduledTask -TaskName ''OpenPath-SSE'' -ErrorAction SilentlyContinue; Stop-ScheduledTask -TaskName ''OpenPath-SSE'' -ErrorAction SilentlyContinue"'
         $env:OPENPATH_ENABLE_SSE_COMMAND = 'powershell -NoLogo -Command "Enable-ScheduledTask -TaskName ''OpenPath-SSE'' -ErrorAction SilentlyContinue; Start-ScheduledTask -TaskName ''OpenPath-SSE'' -ErrorAction SilentlyContinue"'
         $env:CI = 'true'
@@ -2385,6 +2438,16 @@ finally {
     # later cleanup failure can never leave the raw token behind.
     try {
         Invoke-TimedStep -Name 'Redact student scenario artifact' -ScriptBlock { Protect-OpenPathStudentScenarioArtifact }
+    }
+    catch {
+        if ($null -eq $cleanupError) { $cleanupError = $_ }
+    }
+
+    # Phase 8c T3: one visible line with the final compiled-host state and the
+    # count of the false "no native host" errors, collected before the
+    # uninstall removes the installed state. Evidence, not a gate.
+    try {
+        Invoke-TimedStep -Name 'Summarize native host state' -ScriptBlock { Write-OpenPathNativeHostE2eSummary | Out-Null }
     }
     catch {
         if ($null -eq $cleanupError) { $cleanupError = $_ }

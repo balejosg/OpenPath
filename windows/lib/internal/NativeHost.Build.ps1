@@ -260,6 +260,37 @@ function Find-OpenPathNativeHostSignedCandidate {
     return [pscustomobject]$candidate
 }
 
+function Get-OpenPathNativeHostFileSha256 {
+    <#
+    .SYNOPSIS
+        Lowercase SHA256 hex of a file without relying on Get-FileHash.
+    .DESCRIPTION
+        Phase 8c: the native host stack also runs from Windows PowerShell 5.1
+        children (the scheduled Update task and the E2E harness) whose
+        inherited PSModulePath may not auto-load Get-FileHash; the source hash
+        then fails with "not recognized" before any compile. Hash the literal
+        file stream with .NET, the same pattern already used by
+        Get-AcrylicFileSha256, so the command's availability is irrelevant.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $stream = $null
+    $algorithm = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $algorithm = [System.Security.Cryptography.SHA256]::Create()
+        $digest = $algorithm.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($digest).Replace('-', '')).ToLowerInvariant()
+    }
+    finally {
+        if ($algorithm) { $algorithm.Dispose() }
+        if ($stream) { $stream.Dispose() }
+    }
+}
+
 function Test-OpenPathNativeHostSignedExecutable {
     <#
     .SYNOPSIS
@@ -298,7 +329,7 @@ function Test-OpenPathNativeHostSignedExecutable {
         return [pscustomobject]$result
     }
     try {
-        $result.ExecutableSha256 = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $result.ExecutableSha256 = Get-OpenPathNativeHostFileSha256 -Path $ExecutablePath
     }
     catch {
         $result.Reason = 'signed-hash-unreadable'
@@ -668,6 +699,8 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         [scriptblock]$CompilerInvoker = $null,
         [scriptblock]$ProcessInvoker = $null,
         [scriptblock]$SignatureReader = $null,
+        # Phase 8c test seam: replaces the source-hash computation.
+        [scriptblock]$HashReader = $null,
         # Test seam: overrides the empty-until-Phase-8.1 publisher pin.
         [AllowNull()][object]$SignaturePin = $null,
         [string]$CompilerPath = ''
@@ -762,7 +795,18 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         $result.SourcePath = $SourcePath
         $sourceExists = ($SourcePath -and (Test-Path -LiteralPath $SourcePath -PathType Leaf))
         $sourceHash = ''
-        if ($sourceExists) { $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+        $sourceHashError = ''
+        if ($sourceExists) {
+            try {
+                $sourceHash = if ($HashReader) { [string](& $HashReader $SourcePath) } else { Get-OpenPathNativeHostFileSha256 -Path $SourcePath }
+            }
+            catch {
+                # Phase 8c: an unreadable source hash is a failed attempt too; it
+                # is reported after the backoff gate below so it can only retry
+                # once per hour while the file stays unreadable.
+                $sourceHashError = [string]$_.Exception.Message
+            }
+        }
         $result.SourceSha256 = $sourceHash
 
         # Phase 8: a valid signed executable for the current source is preferred
@@ -786,7 +830,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         }
         if (-not $Force -and $existing -and
             [string]$existing.sourceSha256 -eq $sourceHash -and
-            [string]$existing.executableSha256 -eq (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant() -and
+            [string]$existing.executableSha256 -eq (Get-OpenPathNativeHostFileSha256 -Path $executablePath) -and
             [string]$existing.healthStatus -eq 'healthy') {
             # An installed signed host is final; a compiled host is replaced
             # once a valid signed candidate for the same source shows up.
@@ -826,6 +870,17 @@ function Build-OpenPathFirefoxNativeHostExecutable {
             }
         }
 
+        if ($sourceHashError) {
+            # Phase 8c: the source hash could not be computed, so nothing may be
+            # compiled or matched against. The backoff gate above already
+            # refused a repeat attempt inside the hour window; the first
+            # attempt and each post-window attempt land here.
+            $result.Error = "native-host-source-hash-failed: $sourceHashError"
+            & $writeDiagnostics 'Failed' $result.Error
+            if (Test-Path -LiteralPath $executablePath -PathType Leaf) { $result.ExecutablePath = $executablePath }
+            return [pscustomobject]$result
+        }
+
         if ($signedUsable) {
             # Phase 8: install the verified prebuilt with the same atomic swap,
             # temporary copy and SYSTEM health ping as the compiled path.
@@ -849,7 +904,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
                 return [pscustomobject]$result
             }
             Move-Item -LiteralPath $temporaryExecutable -Destination $executablePath -Force
-            $executableHash = (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $executableHash = Get-OpenPathNativeHostFileSha256 -Path $executablePath
             $result.ExecutablePath = $executablePath
             $result.ExecutableSha256 = $executableHash
             $result.BuiltNow = $true
@@ -920,7 +975,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         # Atomic swap: the new executable only replaces the previous one after a
         # successful health check, and the manifest is written after the move.
         Move-Item -LiteralPath $temporaryExecutable -Destination $executablePath -Force
-        $executableHash = (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $executableHash = Get-OpenPathNativeHostFileSha256 -Path $executablePath
         $result.ExecutablePath = $executablePath
         $result.ExecutableSha256 = $executableHash
         $result.BuiltNow = $true
@@ -966,7 +1021,7 @@ function Get-OpenPathNativeHostLaunchPath {
         try {
             $manifest = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
             if ([string]$manifest.healthStatus -eq 'healthy' -and
-                [string]$manifest.executableSha256 -eq (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant()) {
+                [string]$manifest.executableSha256 -eq (Get-OpenPathNativeHostFileSha256 -Path $executablePath)) {
                 return $executablePath
             }
         }

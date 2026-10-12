@@ -684,4 +684,108 @@ Describe 'Compiled native host (Phase 5)' {
             $diagnostics.retryDelayMinutes | Should -Be 5
         }
     }
+
+    Context 'Hash without Get-FileHash (Phase 8c)' {
+        BeforeEach {
+            . $script:BuildModulePath
+            $script:Root = Join-Path $TestDrive ('native-hash-' + [guid]::NewGuid().ToString('N'))
+            $script:NativeRoot = Join-Path $script:Root 'browser-extension\firefox\native'
+            New-Item -ItemType Directory -Path $script:NativeRoot -Force | Out-Null
+            $script:Source = Join-Path $script:Root 'OpenPathNativeHost.cs'
+            Set-Content -LiteralPath $script:Source -Value '// fixture source' -Encoding ASCII
+            $compileTracker = [pscustomobject]@{ Calls = 0 }
+            $script:CompileTracker = $compileTracker
+            $script:GoodCompiler = {
+                param($sourcePath, $outputPath)
+                $compileTracker.Calls = $compileTracker.Calls + 1
+                Set-Content -LiteralPath $outputPath -Value 'MZ-fake-executable' -Encoding ASCII
+                [pscustomobject]@{ ExitCode = 0; Output = '' }
+            }.GetNewClosure()
+            $script:HealthyProcess = {
+                param($executablePath, $timeoutSeconds)
+                [pscustomobject]@{ Healthy = $true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 12; Error = '' }
+            }
+            $script:DiagnosticsPath = Join-Path $script:NativeRoot 'OpenPath-NativeHost.build.json'
+        }
+
+        It 'Computes the same lowercase SHA256 hex as Get-FileHash' {
+            . $script:BuildModulePath
+            $sample = Join-Path $script:Root 'sample.bin'
+            [IO.File]::WriteAllBytes($sample, [byte[]](1..97))
+            $expected = (Get-FileHash -LiteralPath $sample -Algorithm SHA256).Hash.ToLowerInvariant()
+            (Get-OpenPathNativeHostFileSha256 -Path $sample) | Should -Be $expected
+        }
+
+        It 'Never relies on Get-FileHash in the native host stack (contract)' {
+            foreach ($relative in @('windows/lib/internal/NativeHost.Build.ps1', 'windows/lib/Browser.FirefoxNativeHost.psm1')) {
+                $path = Join-Path $script:RepoRoot $relative
+                $tokens = $null
+                $parseErrors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors)
+                $calls = $ast.FindAll({
+                        param($node)
+                        $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Get-FileHash'
+                    }, $true)
+                @($calls).Count | Should -Be 0 -Because $relative
+            }
+        }
+
+        It 'Builds and reports healthy in a child session where Get-FileHash is not recognized' {
+            $childRoot = Join-Path $TestDrive ('native-hash-child-' + [guid]::NewGuid().ToString('N'))
+            $childNative = Join-Path $childRoot 'native'
+            New-Item -ItemType Directory -Path $childNative -Force | Out-Null
+            $childSource = Join-Path $childRoot 'OpenPathNativeHost.cs'
+            Set-Content -LiteralPath $childSource -Value '// child fixture source' -Encoding ASCII
+            $buildPath = (Resolve-Path $script:BuildModulePath).Path
+            $nativeHostModulePath = (Resolve-Path (Join-Path $PSScriptRoot '..\lib\Browser.FirefoxNativeHost.psm1')).Path
+            $childScript = @"
+function global:Get-FileHash { throw [System.Management.Automation.CommandNotFoundException]::new("The term 'Get-FileHash' is not recognized as the name of a cmdlet, function, script file, or operable program.") }
+. '$buildPath'
+`$compiler = { param(`$sourcePath, `$outputPath) Set-Content -LiteralPath `$outputPath -Value 'MZ-fake-executable' -Encoding ASCII; [pscustomobject]@{ ExitCode = 0; Output = '' } }
+`$process = { param(`$executablePath, `$timeoutSeconds) [pscustomobject]@{ Healthy = `$true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 5; Error = '' } }
+`$result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot '$childNative' -OpenPathRoot '$childRoot' -SourcePath '$childSource' -CompilerInvoker `$compiler -ProcessInvoker `$process
+Import-Module '$nativeHostModulePath' -Force -Global -ErrorAction Stop
+`$registered = Join-Path '$childRoot' 'whitelist_native_host.json'
+[ordered]@{ path = (Join-Path '$childNative' 'OpenPath-NativeHost.exe') } | ConvertTo-Json | Set-Content -LiteralPath `$registered -Encoding UTF8
+`$health = Get-OpenPathFirefoxNativeHostCompiledHealth -Config ([pscustomobject]@{ enableNonAdminAppControl = `$true }) -NativeRoot '$childNative' -OpenPathRoot '$childRoot' -ManifestPath `$registered
+[ordered]@{
+  commandType     = [string](Get-Command Get-FileHash).CommandType
+  status          = [string]`$result.Status
+  error           = [string]`$result.Error
+  compiledHealthy = [bool]`$health.CompiledHealthy
+  usesCompiled    = [bool]`$health.UsesCompiledHost
+} | ConvertTo-Json -Compress
+"@
+            $shellExe = if (Get-Command -Name 'powershell.exe' -ErrorAction SilentlyContinue) { 'powershell.exe' } else { 'pwsh' }
+            $output = @(& $shellExe -NoProfile -Command $childScript 2>&1)
+            $jsonLine = $output | Where-Object { $_ -match '^\{' } | Select-Object -Last 1
+            $child = $jsonLine | ConvertFrom-Json
+
+            $child.commandType | Should -Be 'Function'
+            $child.status | Should -BeIn @('Built', 'BuildSkipped')
+            $child.error | Should -Be ''
+            $child.compiledHealthy | Should -BeTrue
+            $child.usesCompiled | Should -BeTrue
+        }
+
+        It 'Counts an unreadable source hash as one attempt per backoff hour' {
+            . $script:BuildModulePath
+            $throwingHash = { param($path) throw 'hash-unreadable-fixture' }
+            $first = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:HealthyProcess -HashReader $throwingHash
+            $first.Status | Should -Be 'Fallback'
+            $first.Error | Should -Match 'native-host-source-hash-failed'
+            $script:CompileTracker.Calls | Should -Be 0
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            $diagnostics.status | Should -Be 'Failed'
+            $diagnostics.attempts | Should -Be 1
+            $diagnostics.retryDelayMinutes | Should -Be 60
+
+            # Inside the one-hour window the hash failure is not attempted again.
+            $second = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $script:HealthyProcess -HashReader $throwingHash
+            $second.BackoffActive | Should -BeTrue
+            $second.Error | Should -Be 'native-host-compile-backoff'
+            $script:CompileTracker.Calls | Should -Be 0
+            (Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json).attempts | Should -Be 1
+        }
+    }
 }

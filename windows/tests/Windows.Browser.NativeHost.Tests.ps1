@@ -3056,4 +3056,63 @@ Describe "Compiled native host health (Phase 5.2 D3)" {
         $exported | Should -Contain "Invoke-OpenPathFirefoxNativeHostCompiledEnsure"
         $exported | Should -Contain "Get-OpenPathFirefoxNativeHostCompiledHealth"
     }
+
+    Context "Non-blocking ensure lock (Phase 8c)" {
+        BeforeAll {
+            Import-Module $nativeHostModulePath -Force -Global -ErrorAction Stop
+        }
+
+        It "Skips the action without waiting when another ensure holds the lock" {
+            # The mutex has thread affinity, so the holder must live on another
+            # thread: a child runspace takes it and the test thread (a different
+            # owner) must get the immediate skip.
+            $holdScript = {
+                param($Ready, $Release)
+                $mutex = [System.Threading.Mutex]::new($false, 'Global\OpenPathNativeHostEnsureLock')
+                $acquired = $mutex.WaitOne(0)
+                $Ready.Set()
+                $null = $Release.Wait(10000)
+                if ($acquired) { $mutex.ReleaseMutex() }
+                $mutex.Dispose()
+            }
+            $ready = [System.Threading.ManualResetEventSlim]::new($false)
+            $release = [System.Threading.ManualResetEventSlim]::new($false)
+            $holder = [powershell]::Create()
+            $null = $holder.AddScript($holdScript).AddArgument($ready).AddArgument($release)
+            $handle = $holder.BeginInvoke()
+            try {
+                $ready.Wait(5000) | Should -BeTrue
+
+                $tracker = [pscustomobject]@{ Ran = 0 }
+                $action = { $tracker.Ran = $tracker.Ran + 1; 'ran' }.GetNewClosure()
+
+                $result = Invoke-OpenPathFirefoxNativeHostEnsureWithLock -Action $action
+
+                $result | Should -BeNullOrEmpty
+                $tracker.Ran | Should -Be 0
+            }
+            finally {
+                $release.Set()
+                $null = $holder.EndInvoke($handle)
+                $holder.Dispose()
+            }
+        }
+
+        It "Runs the action and releases the lock for the next call" {
+            $first = Invoke-OpenPathFirefoxNativeHostEnsureWithLock -Action { 'first' }
+            $second = Invoke-OpenPathFirefoxNativeHostEnsureWithLock -Action { 'second' }
+            $first | Should -Be 'first'
+            $second | Should -Be 'second'
+        }
+
+        It "Wraps the compiled ensure with the non-blocking lock (contract)" {
+            $moduleText = Get-Content -LiteralPath $nativeHostModulePath -Raw
+            $ensureStart = $moduleText.IndexOf('function Invoke-OpenPathFirefoxNativeHostCompiledEnsure')
+            $ensureEnd = $moduleText.IndexOf('function Get-OpenPathFirefoxNativeHostCompiledHealth')
+            ($ensureStart -ge 0) | Should -BeTrue
+            ($ensureEnd -gt $ensureStart) | Should -BeTrue
+            $ensureBody = $moduleText.Substring($ensureStart, $ensureEnd - $ensureStart)
+            $ensureBody | Should -Match 'Invoke-OpenPathFirefoxNativeHostEnsureWithLock'
+        }
+    }
 }
