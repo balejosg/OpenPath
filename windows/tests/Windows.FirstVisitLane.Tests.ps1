@@ -2360,5 +2360,26 @@ PrimaryServerAddress=198.51.100.7
             $script:laneControllerSource | Should -Match "source              = 'host-recovery'"
             $script:laneControllerSource | Should -Match 'hostRecoveryStatus'
         }
+
+        It 'Builds metrics for a synthetic host-recovery verdict without page waves' {
+            # The lab run 38355030489 crashed after writing the PASS verdict:
+            # Get-OpenPathFirstVisitMetrics read $Verdict.waves (and timesMs /
+            # reloads) directly, which strict mode rejects for the host-recovery
+            # verdict shape.
+            $metrics = Get-OpenPathFirstVisitMetrics `
+                -Plan ([pscustomobject]@{ anchors = [pscustomobject]@{}; controlDependencies = @(); neverLearnable = '' }) `
+                -Scenario 'first-visit-host-recovery' `
+                -Report $null `
+                -DiagnosticLines @() `
+                -StartupProfiles @() `
+                -FixtureState $null `
+                -Verdict ([pscustomobject]@{ status = 'passed'; reasons = @() })
+
+            $metrics.verdict | Should -Be 'passed'
+            $metrics.waves | Should -BeNullOrEmpty
+            $metrics.waveTimesMs | Should -BeNullOrEmpty
+            $metrics.reloads | Should -Be -1
+            $metrics.repairReloads | Should -Be -1
+        }
     }
 }

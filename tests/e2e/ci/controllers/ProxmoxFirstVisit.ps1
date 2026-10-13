@@ -924,23 +924,34 @@ function Get-OpenPathFirstVisitMetrics {
         $diagnosticKinds.batchFirst = [bool](Get-OpenPathLabField -InputObject $Diagnostics -Name 'batchFirst')
         $diagnosticKinds.hostStarted = [bool](Get-OpenPathLabField -InputObject $Diagnostics -Name 'hostStarted')
     }
+    # Phase 8d D1 lab fix: the host-recovery verdict has no page waves; every
+    # optional verdict field is read through Get-OpenPathLabField so strict mode
+    # never rejects the synthetic document (lab run 38355030489 crashed on
+    # $Verdict.waves after the PASS verdict had already been written).
+    $verdictStatus = if ($Verdict) { [string](Get-OpenPathLabField -InputObject $Verdict -Name 'status') } else { '' }
+    $verdictReasons = if ($Verdict) { @(Get-OpenPathLabField -InputObject $Verdict -Name 'reasons') } elseif ($Canary) { @(Get-OpenPathLabField -InputObject $Canary -Name 'reasons') } else { @('no-verdict') }
+    $verdictReloads = -1
+    if ($Verdict) {
+        $rawReloads = Get-OpenPathLabField -InputObject $Verdict -Name 'reloads'
+        if ($null -ne $rawReloads) { $verdictReloads = [int]$rawReloads }
+    }
     return [ordered]@{
         schemaVersion  = 1
         scenario       = $Scenario
-        anchor         = if ($Report) { [string]$Report.anchor } else { '' }
+        anchor         = if ($Report) { [string](Get-OpenPathLabField -InputObject $Report -Name 'anchor') } else { '' }
         plan           = [ordered]@{
             anchors          = @($Plan.anchors.PSObject.Properties | ForEach-Object { $_.Value.host })
             controlDeps      = @($Plan.controlDependencies)
             neverLearnable   = [string]$Plan.neverLearnable
         }
-        verdict        = if ($Verdict) { [string]$Verdict.status } elseif ($Canary) { [string](Get-OpenPathLabField -InputObject $Canary -Name 'status') } else { 'failed' }
+        verdict        = if ($Verdict) { $verdictStatus } elseif ($Canary) { [string](Get-OpenPathLabField -InputObject $Canary -Name 'status') } else { 'failed' }
         # Phase 7 L3: canary scenes have no page self-report; their reasons are
         # the canary verdict reasons instead of the legacy `no-verdict` marker.
-        reasons        = if ($Verdict) { @($Verdict.reasons) } elseif ($Canary) { @(Get-OpenPathLabField -InputObject $Canary -Name 'reasons') } else { @('no-verdict') }
-        waves          = if ($Verdict) { $Verdict.waves } else { $null }
-        waveTimesMs    = if ($Verdict) { $Verdict.timesMs } else { $null }
-        reloads        = if ($Verdict) { $Verdict.reloads } else { -1 }
-        repairReloads  = if ($Verdict) { $Verdict.reloads } else { -1 }
+        reasons        = $verdictReasons
+        waves          = if ($Verdict) { Get-OpenPathLabField -InputObject $Verdict -Name 'waves' } else { $null }
+        waveTimesMs    = if ($Verdict) { Get-OpenPathLabField -InputObject $Verdict -Name 'timesMs' } else { $null }
+        reloads        = $verdictReloads
+        repairReloads  = $verdictReloads
         fontLoaded     = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'fontLoaded')
         neverLearnableBlocked = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'neverLearnableBlocked')
         blockedPathEnforced = [bool](Get-OpenPathLabField -InputObject $Verdict -Name 'blockedPathEnforced')
