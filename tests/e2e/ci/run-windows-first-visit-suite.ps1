@@ -12,6 +12,11 @@
                                 (environment floor; `control` is accepted as alias)
       first-visit-site       S  real-site canary, settled-like (dispatch only)
       first-visit-site-class-boot SB real-site canary through the class-boot
+      first-visit-sac-eval-off / sac-on-off / sac-on-keep
+                             SAC scenes (dispatch only): evaluation + flag,
+                             SAC applied before install + flag, and the SAC-on
+                             control without the flag. They self-configure the
+                             posture and require smart_app_control=unchanged.
                                 refresh (dispatch only)
 
     Each repetition creates a fresh run/attempt/scenario artifact boundary. The
@@ -50,6 +55,16 @@ if ($SmartAppControl -in @('on', 'on-before-install')) {
         [Console]::Error.WriteLine("first-visit-smart-app-control-requires-class-boot: scenarios=$($invalid -join ',')")
         exit 2
     }
+}
+# Phase 8e: the sac-* scenes set the Smart App Control posture themselves (the
+# installer receives /DisableSmartAppControl for the two "off" scenes); mixing
+# them with the class-boot simulation input would measure two postures at once.
+$sacScenarios = @($Scenarios | ForEach-Object {
+        if ($_ -match '^([a-z0-9-]+):(\d+)$') { $Matches[1] } else { [string]$_ }
+    } | Where-Object { $_ -like 'sac-*' })
+if ($sacScenarios.Count -gt 0 -and $SmartAppControl -ne 'unchanged') {
+    [Console]::Error.WriteLine("first-visit-sac-scenes-self-configure: smart_app_control must stay unchanged (scenarios=$($sacScenarios -join ',')).")
+    exit 2
 }
 if ([string]::IsNullOrWhiteSpace($ControllerCommand) -or -not (Test-Path -LiteralPath $ControllerCommand -PathType Leaf)) {
     [Console]::Error.WriteLine('BLOCKED_PLATFORM_VALIDATION: no authorized disposable Windows controller is configured.')

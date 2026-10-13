@@ -184,10 +184,25 @@ Describe 'Installer Smart App Control phase (Phase 8e E1)' {
                         DecidedAtUtc   = '2026-10-13T00:00:00.0000000Z'
                     })
                 @($script:SacLogLines).Count | Should -Be 1
+                $script:SacLogLines[0] | Should -Match '^INFO '
                 $script:SacLogLines[0] | Should -Match 'previous=evaluation'
                 $script:SacLogLines[0] | Should -Match 'action=disabled'
                 $script:SacLogLines[0] | Should -Match 'result=verified'
                 $script:SacLogLines[0] | Should -Match 'decidedAt=2026-10-13T00:00:00.0000000Z'
+
+                # Phase 8e: a decision that carries the unattended warning is
+                # logged as WARN so the warning survives the install summary.
+                Write-OpenPathSmartAppControlDecision -Outcome ([pscustomobject]@{
+                        PreviousState  = 'evaluation'
+                        Action         = 'none'
+                        Result         = 'not-requested'
+                        RebootRequired = $false
+                        Warning        = 'Smart App Control is evaluation and -DisableSmartAppControl was not passed'
+                        DecidedAtUtc   = '2026-10-13T00:00:01.0000000Z'
+                    })
+                @($script:SacLogLines).Count | Should -Be 2
+                $script:SacLogLines[1] | Should -Match '^WARN '
+                $script:SacLogLines[1] | Should -Match 'result=not-requested'
             }
             finally {
                 Remove-Item function:global:Write-OpenPathLog -ErrorAction SilentlyContinue

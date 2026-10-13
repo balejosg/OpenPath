@@ -30,7 +30,10 @@ param(
     [string]$FixtureBaselineJson = '',
     # Phase 6.1 C: ISO-8601 UTC scene start (prepare began). Every CodeIntegrity
     # XML query is bounded to the scene from this mark.
-    [string]$SceneStartedAt = ''
+    [string]$SceneStartedAt = '',
+    # Phase 8e: the SAC scenes pass /DisableSmartAppControl to the offline
+    # setup, which forwards -DisableSmartAppControl to the installer child.
+    [switch]$DisableSmartAppControlInstall
 )
 
 $ErrorActionPreference = 'Continue'
@@ -915,7 +918,10 @@ switch ($Step) {
     'install' {
         if (-not (Test-Path -LiteralPath $PersonalizedExePath)) { $script:Failures.Add('personalized-exe-missing') }
         else {
-            $process = Start-Process -FilePath $PersonalizedExePath -ArgumentList '/S' -PassThru -Wait -WindowStyle Hidden
+            $installArguments = @('/S')
+            if ($DisableSmartAppControlInstall) { $installArguments += '/DisableSmartAppControl' }
+            $process = Start-Process -FilePath $PersonalizedExePath -ArgumentList $installArguments -PassThru -Wait -WindowStyle Hidden
+            $script:Body.installArgs = @($installArguments)
             $script:Body.installerExit = $process.ExitCode
             # A production-like offline install applies policies and tasks after
             # the silent installer returns; wait for the essential surfaces.
@@ -2625,6 +2631,55 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             ciTool        = $ci
             at            = [DateTime]::UtcNow.ToString('o')
         }
+        Complete-Step
+    }
+    'sac-watchdog' {
+        # Phase 8e: run the product watchdog checks with the installed tree and
+        # record the reason codes plus the durable Smart App Control decision
+        # line of the installer (the WARN is the on-keep scene's warning).
+        Save-PartialResult
+        $watchdog = [ordered]@{
+            reasonCodes        = @()
+            issues             = @()
+            staleFailsafe      = $false
+            integrityTampered  = $false
+            failOpen           = $false
+            installWarningSeen = $false
+            decisionLines      = @()
+            error              = ''
+        }
+        try {
+            Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force
+            Initialize-OpenPathScriptSession `
+                -OpenPathRoot "$OpenPathRoot" `
+                -DependentModules @('DNS', 'Network', 'Firewall', 'Browser', 'CaptivePortal', 'AppControl') `
+                -RequiredCommands @('Write-OpenPathLog', 'Get-OpenPathConfig') | Out-Null
+            . "$OpenPathRoot\lib\internal\Watchdog.FailCount.ps1"
+            . "$OpenPathRoot\lib\internal\Watchdog.Runtime.ps1"
+            $config = Get-OpenPathConfig
+            $checks = Invoke-OpenPathWatchdogChecks `
+                -Config $config `
+                -PortalModeActive $false `
+                -CaptiveState 'Direct' `
+                -OpenPathRoot "$OpenPathRoot" `
+                -StaleFailsafeStatePath "$OpenPathRoot\data\stale-failsafe-state.json"
+            $watchdog.reasonCodes = @($checks.ReasonCodes)
+            $watchdog.issues = @($checks.Issues)
+            $watchdog.staleFailsafe = [bool]$checks.StaleFailsafeActive
+            $watchdog.integrityTampered = [bool]$checks.IntegrityTampered
+            $watchdog.failOpen = [bool]$checks.FailOpenActive
+        }
+        catch { $watchdog.error = [string]$_ }
+        try {
+            $logPath = "$OpenPathRoot\data\logs\openpath.log"
+            if (Test-Path -LiteralPath $logPath) {
+                $decisionLines = @(Get-LogTail -Path $logPath -Tail 2000 -Patterns @('Smart App Control decision'))
+                $watchdog.decisionLines = @($decisionLines | Select-Object -Last 5)
+                $watchdog.installWarningSeen = [bool](@($decisionLines | Where-Object { $_ -match '\[WARN\]' }).Count -gt 0)
+            }
+        }
+        catch { }
+        $script:Body.sacWatchdog = $watchdog
         Complete-Step
     }
     'sac-state' {

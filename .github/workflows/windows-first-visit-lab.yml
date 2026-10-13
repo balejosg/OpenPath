@@ -24,7 +24,7 @@ on:
         required: false
         type: string
       scenarios:
-        description: 'comma-separated scenarios (settled,hot,class-boot,floor,site,update-contention,host-recovery; control is the floor alias; site only by dispatch and never in auto-run/nightly; host-recovery only by dispatch and once in the nightly)'
+        description: 'comma-separated scenarios (settled,hot,class-boot,floor,site,update-contention,host-recovery,sac-eval-off,sac-on-off,sac-on-keep; control is the floor alias; site only by dispatch and never in auto-run/nightly; host-recovery only by dispatch and once in the nightly; sac-* scenes only by dispatch and self-configure Smart App Control)'
         required: false
         default: 'settled,class-boot'
         type: string
@@ -34,7 +34,7 @@ on:
         default: '1'
         type: string
       smart_app_control:
-        description: 'class-boot Smart App Control simulation: unchanged (default), on, or on-before-install'
+        description: 'class-boot Smart App Control simulation: unchanged (default), on, or on-before-install (the sac-* scenes self-configure and require unchanged)'
         required: false
         default: 'unchanged'
         type: string

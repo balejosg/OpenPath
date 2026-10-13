@@ -2381,6 +2381,81 @@ PrimaryServerAddress=198.51.100.7
             $script:laneGuestSource | Should -Not -Match '\$initCountBefore'
         }
 
+        It 'Decides the SAC scene verdict from two sampled moments (Phase 8e)' {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitSacScene.psm1') -Force
+            $stateOffEarly = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('No policies'); json = '{}' } }
+            $stateOffLate = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = @('No policies'); json = '{}' } }
+            $stateOnEarly = [pscustomobject]@{ registryValue = 1; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policies: VerifiedAndReputable'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
+            $stateOn = [pscustomobject]@{ registryValue = 1; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = @('Policies: VerifiedAndReputable'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
+            $controlRan = [pscustomobject]@{ plainSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }); motwSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }) }
+            $controlBlocked = [pscustomobject]@{ plainSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }); motwSamples = @([pscustomobject]@{ started = $false; exitCode = $null }) }
+            $probe = [pscustomobject]@{ pingResponded = $true; deniedPowershell = $true }
+            $recompile = [pscustomobject]@{ buildDiagnosticsJson = [pscustomobject]@{ status = 'Built' } }
+            $passedProduct = [pscustomobject]@{ status = 'passed' }
+
+            $passed = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlRan },
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOffLate; control = $controlRan }
+            ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
+            $passed.status | Should -Be 'SAC-PASS'
+            $passed.gapSeconds | Should -Be 420
+
+            $redValue = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlRan },
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOn; control = $controlRan }
+            ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
+            $redValue.status | Should -Be 'SAC-RED'
+            $redValue.reasons | Should -Contain 'sac-second-value:1'
+            $redValue.reasons | Should -Contain 'sac-second-policy-applied'
+
+            $redControl = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'on-off' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlRan },
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOffLate; control = $controlBlocked }
+            ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
+            $redControl.reasons | Should -Contain 'sac-second-control-motw-blocked'
+
+            $redEarly = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlRan },
+                [pscustomobject]@{ label = 'post-visit'; state = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:02:00Z'; ciTool = [pscustomobject]@{ raw = @('none'); json = '{}' } }; control = $controlRan }
+            ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
+            $redEarly.reasons | Should -Contain 'sac-second-sample-too-early:120s'
+
+            # on-keep: SAC stays enforced; the watchdog code and the durable
+            # installer warning are required, the host is not.
+            $keepPass = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'on-keep' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateOnEarly; control = $controlBlocked },
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOn; control = $controlBlocked }
+            ) -Watchdog ([pscustomobject]@{ reasonCodes = @('smart_app_control_enforced'); installWarningSeen = $true })
+            $keepPass.status | Should -Be 'SAC-PASS'
+
+            $keepRed = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'on-keep' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateOnEarly; control = $controlBlocked },
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOffLate; control = $controlRan }
+            ) -Watchdog ([pscustomobject]@{ reasonCodes = @(); installWarningSeen = $false })
+            $keepRed.status | Should -Be 'SAC-RED'
+            $keepRed.reasons | Should -Contain 'sac-second-value:0'
+            $keepRed.reasons | Should -Contain 'sac-watchdog-code-missing'
+            $keepRed.reasons | Should -Contain 'sac-install-warning-missing'
+        }
+
+        It 'Wires the SAC scenes into the suite, controller, harness and outcome (Phase 8e)' {
+            $script:laneGuestSource | Should -Match "'sac-watchdog' \{"
+            $script:laneGuestSource | Should -Match 'DisableSmartAppControlInstall'
+            $script:laneControllerSource | Should -Match '\$sacSceneKind'
+            $script:laneControllerSource | Should -Match "-DisableSmartAppControlInstall"
+            $script:laneControllerSource | Should -Match '-Step ''sac-watchdog'''
+            $script:laneControllerSource | Should -Match 'Get-OpenPathFirstVisitSacSceneVerdict'
+            $script:laneControllerSource | Should -Match "sacScene            = if"
+            $script:laneControllerSource | Should -Match 'sacStatus'
+            $outcomeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitOutcome.psm1') -Raw
+            $outcomeSource | Should -Match "first-visit-sac-"
+            $outcomeSource | Should -Match 'sac-status-missing'
+            $suiteSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\run-windows-first-visit-suite.ps1') -Raw
+            $suiteSource | Should -Match 'sac-eval-off'
+            $workflowSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\.github\workflows\windows-first-visit-lab.yml') -Raw
+            $workflowSource | Should -Match 'sac-eval-off'
+        }
+
         It 'Builds metrics for a synthetic host-recovery verdict without page waves' {
             # The lab run 38355030489 crashed after writing the PASS verdict:
             # Get-OpenPathFirstVisitMetrics read $Verdict.waves (and timesMs /

@@ -16,6 +16,8 @@ Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitUpdateContentio
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitHostRecovery.psm1') -Force
 # Phase 7 P1: stall-gap classification (pure, tested).
 Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitStall.psm1') -Force
+# Phase 8e: SAC scene verdict (pure, tested).
+Import-Module (Join-Path $PSScriptRoot '..\first-visit\FirstVisitSacScene.psm1') -Force
 
 $script:OpenPathFirstVisitCaptureOffsets = @(5, 10, 15, 20, 30, 60)
 $script:OpenPathFirstVisitRefreshSettleSeconds = 30
@@ -100,6 +102,14 @@ function Get-OpenPathFirstVisitSettings {
     # Phase 8d D1: `host-recovery` reproduces the failed-install host state,
     # keeps the student Firefox denied and then runs the real periodic update.
     $hostRecovery = ($scenario -eq 'first-visit-host-recovery')
+    # Phase 8e: explicit Smart App Control scenes. They self-configure the SAC
+    # posture (evaluation vs applied before the install) and pass the installer
+    # the explicit flag, so the smart_app_control dispatch input stays
+    # 'unchanged' for them.
+    $sacSceneKind = ''
+    if ($scenario -match '^first-visit-sac-(eval-off|on-off|on-keep)$') { $sacSceneKind = [string]$Matches[1] }
+    $sacScene = ($sacSceneKind -ne '')
+    $sacInstallFlag = ($sacSceneKind -in @('eval-off', 'on-off'))
     if ($siteMode -and [string]::IsNullOrWhiteSpace($siteUrl)) { throw 'first-visit-site-url-required' }
     if ($siteMode) {
         # The URL and the domains travel through a bash command on the Proxmox
@@ -124,6 +134,8 @@ function Get-OpenPathFirstVisitSettings {
         SiteDomains     = $siteDomains
         UpdateContention = $updateContention
         HostRecovery    = $hostRecovery
+        # Phase 8e: '', eval-off, on-off or on-keep.
+        SacSceneKind    = $sacSceneKind
     }
 }
 
@@ -478,6 +490,9 @@ function Send-OpenPathFirstVisitStep {
         [string]$PersonalizedGuestPath = '',
         [string]$Capabilities = '',
         [string]$FixtureBaselineJson = '',
+        # Phase 8e: only the SAC scenes pass /DisableSmartAppControl to the
+        # offline setup (which forwards it to the installer child).
+        [switch]$DisableSmartAppControlInstall,
         [int]$TimeoutSeconds = 900,
         # Read-only steps may be re-run once after a transport error; steps with
         # side effects (install, warm-up, visit) never are.
@@ -519,6 +534,7 @@ function Send-OpenPathFirstVisitStep {
         '-StatePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $statePath)
     )
     if ($PersonalizedGuestPath) { $arguments += '-PersonalizedExePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $PersonalizedGuestPath) }
+    if ($DisableSmartAppControlInstall) { $arguments += '-DisableSmartAppControlInstall:$true' }
     if ($Capabilities) { $arguments += '-Capabilities ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $Capabilities) }
     if ($FixtureBaselineJson) { $arguments += '-FixtureBaselineJson ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $FixtureBaselineJson) }
     # Phase 6.1 C: every step of the scene shares the prepare start mark so the
@@ -1043,6 +1059,10 @@ function Invoke-OpenPathFirstVisitPrepare {
     )
     $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
     $firstVisit = Get-OpenPathFirstVisitSettings -Payload $Payload -Config $Config
+    # Phase 8e: ''. / eval-off / on-off / on-keep.
+    $sacSceneKind = [string](Get-OpenPathLabField -InputObject $firstVisit -Name 'SacSceneKind')
+    $sacScene = ($sacSceneKind -ne '')
+    $sacInstallFlag = ($sacSceneKind -in @('eval-off', 'on-off'))
     # Phase 6.1 C: the scene starts when prepare begins; every step carries the
     # mark so the CodeIntegrity XML queries share one window.
     $sceneStartedAt = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
@@ -1094,7 +1114,7 @@ Write-Output 'launcher-staged'
     $sacPreInstall = $null
     $sacPreInstallDecision = $null
     $sacPreInstallApply = $null
-    if ($firstVisit.SmartAppControl -eq 'on-before-install') {
+    if ($firstVisit.SmartAppControl -eq 'on-before-install' -or $sacSceneKind -in @('on-off', 'on-keep')) {
         $sacApplyStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare-sac' -Step 'sac-apply' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
         $sacPreInstallApply = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacApplyStep -Name 'body') -Name 'state') -Name 'sacApply'
         & $Transport.RequestGuestReboot $Vmid | Out-Null
@@ -1116,7 +1136,36 @@ Write-Output 'launcher-staged'
         }
         Write-Host ("first-visit SAC pre-install applied: umci=$($sacPreInstallDecision.umciEnforcementStatus) motwBlocked=$($sacPreInstallDecision.motwBlocked) plainRan=$($sacPreInstallDecision.plainRan) attempts=$($sacPreInstallCycle.attempts)")
     }
-    $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
+    $sacPrepSample = $null
+    if ($sacSceneKind -eq 'eval-off') {
+        # Phase 8e: the scene requires the baseline snapshot in evaluation (2).
+        $sacEvalStateStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare-sac' -Step 'sac-state' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300
+        $sacEvalState = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacEvalStateStep -Name 'body') -Name 'state') -Name 'sacState'
+        $sacEvalValue = Get-OpenPathLabField -InputObject $sacEvalState -Name 'registryValue'
+        if ([int]$sacEvalValue -ne 2) { throw "sac-not-evaluation: registry=$sacEvalValue" }
+    }
+    if ($sacInstallFlag) {
+        $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -DisableSmartAppControlInstall -TimeoutSeconds 1800
+    }
+    else {
+        $install = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'install' -HarnessGuestPath $setup.HarnessGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
+    }
+    if ($sacScene) {
+        # Phase 8e: first sampled moment, right after the install returns.
+        $sacPrepState = $null
+        $sacPrepControl = $null
+        try {
+            $sacPrepStateStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'sac-state' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 300 -AllowFailed
+            $sacPrepState = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacPrepStateStep -Name 'body') -Name 'state') -Name 'sacState'
+        }
+        catch { Write-Warning "first-visit SAC install-end state failed: $($_.Exception.Message)" }
+        try {
+            $sacPrepControlStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'sac-control' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 600 -AllowFailed
+            $sacPrepControl = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacPrepControlStep -Name 'body') -Name 'state') -Name 'sacControl'
+        }
+        catch { Write-Warning "first-visit SAC install-end control failed: $($_.Exception.Message)" }
+        $sacPrepSample = [ordered]@{ label = 'install-end'; state = $sacPrepState; control = $sacPrepControl }
+    }
     $configure = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'prepare' -Step 'configure' -HarnessGuestPath $setup.HarnessGuestPath -TimeoutSeconds 900
     # Phase 7 L2: with SAC already enforced, capture the compiled native host
     # state and run the product's own compile/ensure entrypoint.
@@ -1353,6 +1402,10 @@ Write-Output 'autologon-on'
         sacControlPost      = $sacControlPost
         sacDecision         = $sacDecision
         sacCycles           = @($sacCycles)
+        # Phase 8e: SAC scenes carry their kind and the first sampled moment
+        # (install end) into the persisted state so the observe phase can build
+        # the two-moment verdict.
+        sacScene            = if ($sacScene) { [ordered]@{ kind = $sacSceneKind; prepSample = $sacPrepSample } } else { $null }
         # Phase 7 L2: on-before-install evidence (policy applied before the
         # install, the compiled host with SAC active and its build/ensure log).
         sacPreInstall       = $sacPreInstall
@@ -1537,6 +1590,9 @@ function Invoke-OpenPathFirstVisitObserve {
     # Phase 8d D1: the host-recovery scene owns its own acceptance path (broken
     # install state -> denied student visit -> real periodic update -> probe).
     $hostRecoveryMode = ($scenario -eq 'first-visit-host-recovery')
+    # Phase 8e: '' / eval-off / on-off / on-keep (see the settings provider).
+    $sacSceneKind = ''
+    if ($scenario -match '^first-visit-sac-(eval-off|on-off|on-keep)$') { $sacSceneKind = [string]$Matches[1] }
     # Phase 6 B: SAC state is read only for smart_app_control=on scenes.
     $sacStateInfo = $null
     $sacControlInfo = $null
@@ -1823,6 +1879,25 @@ function Invoke-OpenPathFirstVisitObserve {
     if ($samplerEvidence.error) { Write-Warning "first-visit sampler stop: $($samplerEvidence.error)" }
     $security = $null
     $securityError = ''
+    # Phase 8e: second sampled moment for the SAC scenes (the criterion is
+    # "5 minutes later" than the install-end sample; the literal gap travels in
+    # the analysis so the scene can prove it).
+    $sacLateSample = $null
+    if ($sacSceneKind) {
+        $sacLateState = $null
+        $sacLateControl = $null
+        try {
+            $sacLateStateStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'sac-state' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300 -AllowFailed
+            $sacLateState = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacLateStateStep -Name 'body') -Name 'state') -Name 'sacState'
+        }
+        catch { Write-Warning "first-visit SAC post-visit state failed: $($_.Exception.Message)" }
+        try {
+            $sacLateControlStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'sac-control' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowFailed
+            $sacLateControl = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacLateControlStep -Name 'body') -Name 'state') -Name 'sacControl'
+        }
+        catch { Write-Warning "first-visit SAC post-visit control failed: $($_.Exception.Message)" }
+        $sacLateSample = [ordered]@{ label = 'post-visit'; state = $sacLateState; control = $sacLateControl }
+    }
     # Phase 5.2 E2: the student host probe is scene evidence, not a gate: its
     # result travels in metrics and never changes the persisted verdict.
     $hostProbe = $null
@@ -1844,12 +1919,37 @@ function Invoke-OpenPathFirstVisitObserve {
     # product's own ensure (delete the compiled exe + build manifest) and repeat
     # the student probe. This is the auto-update path when the .cs changes.
     $hostRecompile = $null
-    if ([string]$state.smartAppControl -eq 'on-before-install') {
+    if ([string]$state.smartAppControl -eq 'on-before-install' -or $sacSceneKind -in @('eval-off', 'on-off')) {
         try {
             $recompileStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'host-recompile' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowFailed
             $hostRecompile = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $recompileStep -Name 'body') -Name 'state') -Name 'hostRecompile'
         }
         catch { Write-Warning "first-visit host recompile step failed: $($_.Exception.Message)" }
+    }
+    # Phase 8e: the on-keep control runs the product watchdog checks with the
+    # installed tree and reads the durable SAC decision line of the installer.
+    $sacWatchdog = $null
+    if ($sacSceneKind -eq 'on-keep') {
+        try {
+            $sacWatchdogStep = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -Phase 'observe' -Step 'sac-watchdog' -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600 -AllowFailed
+            $sacWatchdog = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $sacWatchdogStep -Name 'body') -Name 'state') -Name 'sacWatchdog'
+        }
+        catch { Write-Warning "first-visit SAC watchdog step failed: $($_.Exception.Message)" }
+    }
+    # Phase 8e: the SAC verdict from the two moments, the student probe and the
+    # recompile/watchdog evidence; it merges into the persisted document (the
+    # post-boot merges below keep the fields).
+    if ($sacSceneKind -and $verdictDocument) {
+        $sacPrepSample = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $state -Name 'sacScene') -Name 'prepSample'
+        $sacAnalysis = Get-OpenPathFirstVisitSacSceneVerdict -Kind $sacSceneKind -Samples @($sacPrepSample, $sacLateSample) -HostProbe $hostProbeResult -Recompile $hostRecompile -Watchdog $sacWatchdog -ProductVerdict $verdict
+        $verdictDocument.sacStatus = [string]$sacAnalysis.status
+        $verdictDocument.sac = $sacAnalysis
+        $verdictDocument.verdict = [ordered]@{
+            status  = if ($sacAnalysis.status -eq 'SAC-PASS') { 'sac-pass' } else { 'sac-red' }
+            reasons = @($sacAnalysis.reasons)
+        }
+        [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
+        Write-Host "first-visit SAC verdict: $($sacAnalysis.status) reasons=$(@($sacAnalysis.reasons) -join ',') gap=$($sacAnalysis.gapSeconds)s"
     }
     # Phase 6 B: post-boot CodeIntegrity / language-mode / agent-state evidence
     # for every scenario (also with SAC=2), bounded and best-effort.

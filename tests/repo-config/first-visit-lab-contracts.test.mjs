@@ -238,6 +238,33 @@ describe('first-visit lane contract', () => {
     assert.match(warmup, /blockedBySmartAppControl/u);
   });
 
+  test('the SAC scenes wire the explicit flag, two sampled moments and the control evidence (Phase 8e)', () => {
+    const workflow = read(workflowPath);
+    assert.match(workflow, /sac-eval-off/u);
+    const suite = read('tests/e2e/ci/run-windows-first-visit-suite.ps1');
+    assert.match(suite, /sac-eval-off/u);
+    assert.match(suite, /first-visit-sac-scenes-self-configure/u);
+    const controller = read('tests/e2e/ci/controllers/ProxmoxFirstVisit.ps1');
+    assert.match(controller, /first-visit-sac-\(eval-off\|on-off\|on-keep\)/u);
+    assert.match(controller, /-DisableSmartAppControlInstall/u);
+    assert.match(controller, /Get-OpenPathFirstVisitSacSceneVerdict/u);
+    assert.match(controller, /sac-watchdog/u);
+    const harness = read('tests/e2e/ci/first-visit/Invoke-OpenPathFirstVisitGuest.ps1');
+    assert.match(harness, /DisableSmartAppControlInstall/u);
+    assert.match(harness, /'\/DisableSmartAppControl'/u);
+    assert.match(harness, /'sac-watchdog'/u);
+    const sac = read('tests/e2e/ci/first-visit/FirstVisitSacScene.psm1');
+    assert.match(sac, /SAC-PASS/u);
+    assert.match(sac, /SAC-RED/u);
+    assert.match(sac, /sac-watchdog-code-missing/u);
+    assert.match(sac, /sac-install-warning-missing/u);
+    const outcome = read('tests/e2e/ci/first-visit/FirstVisitOutcome.psm1');
+    assert.match(outcome, /sac-status-missing/u);
+    // The sac scenes stay dispatch-only: never in the auto-run or nightly plans.
+    const plan = read('tests/e2e/ci/first-visit/FirstVisitLanePlan.psm1');
+    assert.doesNotMatch(plan, /sac-/u);
+  });
+
   test('the real-site canary only runs by dispatch and is non-blocking (Phase 6 C)', () => {
     const workflow = read(workflowPath);
     assert.match(workflow, /site_url:/u);

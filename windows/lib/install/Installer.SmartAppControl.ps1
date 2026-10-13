@@ -229,5 +229,9 @@ function Write-OpenPathSmartAppControlDecision {
     $logCommand = Get-Command -Name Write-OpenPathLog -ErrorAction SilentlyContinue
     if (-not $logCommand) { return }
     $line = "Smart App Control decision: previous=$($Outcome.PreviousState) action=$($Outcome.Action) result=$($Outcome.Result) rebootRequired=$([bool]$Outcome.RebootRequired) decidedAt=$($Outcome.DecidedAtUtc)"
-    Write-OpenPathLog $line -Level INFO
+    # Phase 8e: the warning must survive unattended installs (the console
+    # summary is ephemeral there), so the decision line is WARN when the
+    # outcome carries one.
+    $level = if ($Outcome.PSObject.Properties['Warning'] -and $Outcome.Warning) { 'WARN' } else { 'INFO' }
+    Write-OpenPathLog $line -Level $level
 }

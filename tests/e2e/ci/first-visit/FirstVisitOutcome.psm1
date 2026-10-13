@@ -147,6 +147,35 @@ function Get-OpenPathFirstVisitSceneOutcome {
             }
             return [pscustomobject]$outcome
         }
+        # Phase 8e: the SAC scenes keep their own acceptance status (two sampled
+        # moments + positive control + host probe/recompile or watchdog warning);
+        # the page self-report is not their gate.
+        if ($Scenario -match 'first-visit-sac-') {
+            $sacStatus = [string](Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'sacStatus')
+            if ($outcome.evidenceIncomplete) {
+                $outcome.category = 'INFRA'
+                $outcome.error = if ($outcome.collectError) { $outcome.collectError } elseif ($ObserveError) { $ObserveError } else { 'evidence-incomplete' }
+            }
+            elseif ($sacStatus -eq 'SAC-PASS') {
+                $outcome.category = 'PASS'
+                $outcome.error = ''
+            }
+            elseif ($sacStatus -eq 'SAC-RED') {
+                $outcome.category = 'PRODUCT'
+                $sacReasons = @(Get-OpenPathFirstVisitOutcomeField -InputObject (Get-OpenPathFirstVisitOutcomeField -InputObject $VerdictFile -Name 'sac') -Name 'reasons')
+                if ($sacReasons.Count -gt 0) { $outcome.reasons = @($sacReasons) }
+                $outcome.error = if ($outcome.reasons.Count -gt 0) { (@($outcome.reasons) -join ',') } elseif ($ObserveError) { $ObserveError } else { 'sac-red' }
+            }
+            elseif ($ObserveError) {
+                $outcome.category = 'INFRA'
+                $outcome.error = $ObserveError
+            }
+            else {
+                $outcome.category = 'INFRA'
+                $outcome.error = 'sac-status-missing'
+            }
+            return [pscustomobject]$outcome
+        }
         if ($Metrics) {
             $outcome.evidenceIncomplete = $outcome.evidenceIncomplete -or [bool](Get-OpenPathFirstVisitOutcomeField -InputObject $Metrics -Name 'evidenceIncomplete')
             if (-not $outcome.collectError) { $outcome.collectError = [string](Get-OpenPathFirstVisitOutcomeField -InputObject $Metrics -Name 'collectError') }
