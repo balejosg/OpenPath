@@ -1050,16 +1050,25 @@ public static class OpenPathPingNoisyFixture {
                 Set-ItResult -Skipped -Because 'the in-box csc.exe is not available'
                 return
             }
-            $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-            $probePath = Join-Path $repoRoot 'tests\e2e\ci\probe-native-host-preamble.ps1'
-            (Test-Path -LiteralPath $probePath -PathType Leaf) | Should -BeTrue
-            $realSource = Join-Path $repoRoot 'windows\native-host\OpenPathNativeHost.cs'
-            (Test-Path -LiteralPath $realSource -PathType Leaf) | Should -BeTrue
+            # The BeforeAll paths: Pester resolves them against the test file,
+            # and the probe receives every path explicitly so its own repo-root
+            # derivation never decides the outcome.
+            $probePath = Join-Path $script:RepoRoot 'tests\e2e\ci\probe-native-host-preamble.ps1'
+            (Test-Path -LiteralPath $probePath -PathType Leaf) | Should -BeTrue -Because "probe=$probePath repo=$($script:RepoRoot)"
+            $realSource = Join-Path $script:RepoRoot 'windows\native-host\OpenPathNativeHost.cs'
+            (Test-Path -LiteralPath $realSource -PathType Leaf) | Should -BeTrue -Because "source=$realSource"
 
             $probeRoot = Join-Path $TestDrive ('h1-preamble-' + [guid]::NewGuid().ToString('N'))
             $probeOut = Join-Path $probeRoot 'probe.json'
-            $probeOutput = @(& $probePath -SourcePath $realSource -WorkDir $probeRoot -JsonOut $probeOut 2>&1)
-            (Test-Path -LiteralPath $probeOut -PathType Leaf) | Should -BeTrue -Because (($probeOutput | Out-String).Trim())
+            $probeError = ''
+            try {
+                $probeOutput = @(& $probePath -SourcePath $realSource -PingModulePath $script:BuildModulePath -WorkDir $probeRoot -JsonOut $probeOut 2>&1)
+            }
+            catch {
+                $probeError = [string]$_
+                $probeOutput = @($probeError)
+            }
+            (Test-Path -LiteralPath $probeOut -PathType Leaf) | Should -BeTrue -Because "probeError=$probeError output=$((($probeOutput | Out-String).Trim()))"
             $probe = Get-Content -LiteralPath $probeOut -Raw | ConvertFrom-Json
 
             # Control: the same binary without a preamble answers pong.

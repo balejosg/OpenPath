@@ -32,7 +32,8 @@ $ErrorActionPreference = 'Stop'
 $probeRoot = if ($WorkDir) { $WorkDir } else { Join-Path ([IO.Path]::GetTempPath()) ('openpath-h1-probe-' + [guid]::NewGuid().ToString('N')) }
 New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+# The probe lives at tests/e2e/ci: three levels below the repository root.
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 if (-not $SourcePath -and -not $ExecutablePath) {
     $SourcePath = Join-Path $repoRoot 'windows\native-host\OpenPathNativeHost.cs'
 }
