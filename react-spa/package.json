@@ -62,7 +62,7 @@
     "pathe": "^2.0.3",
     "postcss": "^8.5.14",
     "size-limit": "^12.1.0",
-    "tailwindcss": "^4.1.18",
+    "tailwindcss": "^4.3.0",
     "typescript": "~5.8.2",
     "vite": "^7.3.1",
     "vitest": "^4.1.6"
