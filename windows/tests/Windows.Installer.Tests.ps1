@@ -35,6 +35,7 @@ Describe "Installer" {
             @($plan.Phases.Name) | Should -Be @(
                 'existing-install-cleanup',
                 'preflight',
+                'smart-app-control',
                 'directories',
                 'runtime',
                 'offline-payload-verification',

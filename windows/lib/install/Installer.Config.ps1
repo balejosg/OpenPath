@@ -59,7 +59,13 @@ function New-OpenPathInstallerConfig {
         [string[]]$ApprovedStudentBrowsers = @('Firefox'),
 
         [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
-        [string]$BrowserCleanupMode = 'ReportOnly'
+        [string]$BrowserCleanupMode = 'ReportOnly',
+
+        # Phase 8e E1: the early smart-app-control phase decision (previous
+        # state, action, result, reboot flag and date); persisted so the
+        # administrator can see later why the machine was changed.
+        [AllowNull()]
+        [object]$SmartAppControl = $null
     )
 
     # A strict profile with no explicit catalog means "no additional
@@ -139,6 +145,18 @@ function New-OpenPathInstallerConfig {
     }
     if ($ChromeExtensionStoreUrl) { $config.chromeExtensionStoreUrl = $ChromeExtensionStoreUrl }
     if ($EdgeExtensionStoreUrl) { $config.edgeExtensionStoreUrl = $EdgeExtensionStoreUrl }
+
+    # Phase 8e E1: persist the SAC decision with the config (the phase runs
+    # before this constructor; the installer forwards its outcome here).
+    if ($null -ne $SmartAppControl) {
+        $config.smartAppControl = [ordered]@{
+            previousState  = [string]$SmartAppControl.PreviousState
+            action         = [string]$SmartAppControl.Action
+            result         = [string]$SmartAppControl.Result
+            rebootRequired = [bool]$SmartAppControl.RebootRequired
+            decidedAtUtc   = [string]$SmartAppControl.DecidedAtUtc
+        }
+    }
 
     return $config
 }

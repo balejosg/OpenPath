@@ -261,18 +261,36 @@ Describe 'Windows student-policy artifact hygiene (Phase 8b/8d)' {
         (Test-Path -LiteralPath $wrapperPath -PathType Leaf) | Should -BeTrue
 
         # The wrapper records the inherited child environment (literal cause
-        # data) and then runs the update under the machine+user PSModulePath.
+        # data: PSModulePath, Get-FileHash resolution and the console input code
+        # page plus its encoding preamble) and then runs the update under the
+        # machine+user PSModulePath.
         $root = Join-Path $TestDrive ('forced-update-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $root -Force | Out-Null
         $envSnapshot = Join-Path $root 'child-env.txt'
         $fakeUpdate = Join-Path $root 'fake-update.ps1'
         [IO.File]::WriteAllText($fakeUpdate, "[IO.File]::WriteAllText('$envSnapshot', [string]`$env:PSModulePath)`nexit 0`n", [Text.UTF8Encoding]::new($false))
 
-        $output = @(& pwsh -NoProfile -File (Resolve-Path $wrapperPath).Path -UpdateScriptPath $fakeUpdate 2>&1)
+        $previousDiagnosticsDir = [string]$env:OPENPATH_STUDENT_DIAGNOSTICS_DIR
+        $env:OPENPATH_STUDENT_DIAGNOSTICS_DIR = $root
+        try {
+            $output = @(& pwsh -NoProfile -File (Resolve-Path $wrapperPath).Path -UpdateScriptPath $fakeUpdate 2>&1)
+        }
+        finally {
+            if ($previousDiagnosticsDir) { $env:OPENPATH_STUDENT_DIAGNOSTICS_DIR = $previousDiagnosticsDir }
+            else { Remove-Item Env:\OPENPATH_STUDENT_DIAGNOSTICS_DIR -ErrorAction SilentlyContinue }
+        }
         $text = $output -join "`n"
         $text | Should -Match 'inheritedPSModulePath='
         $text | Should -Match 'Get-FileHashResolves='
+        $text | Should -Match 'stdinCodePage=\d+'
+        $text | Should -Match "stdinPreambleBytes='([0-9a-f]*)'"
         (Test-Path -LiteralPath $envSnapshot) | Should -BeTrue
+
+        $artifact = Join-Path $root 'forced-update-environment.log'
+        (Test-Path -LiteralPath $artifact -PathType Leaf) | Should -BeTrue
+        $artifactText = Get-Content -LiteralPath $artifact -Raw
+        $artifactText | Should -Match 'stdinCodePage=\d+'
+        $artifactText | Should -Match "stdinPreambleBytes='([0-9a-f]*)'"
 
         $expected = (@(
                 [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')

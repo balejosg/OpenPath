@@ -311,7 +311,18 @@ function Sync-OpenPathFirefoxNativeHostMessagingManifest {
     } | ConvertTo-Json -Depth 8
     $temporaryPath = "$ManifestPath.$([guid]::NewGuid().ToString('N')).tmp"
     [IO.File]::WriteAllText($temporaryPath, $manifestJson, [Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporaryPath -Destination $ManifestPath -Force
+    # Phase 8e M2: [IO.File]::Replace swaps the existing file atomically;
+    # Move-Item -Force deletes the destination first, so a concurrent Firefox
+    # read could observe a missing manifest. The function only runs when the
+    # manifest exists; the fallback keeps the race safe if it vanished in
+    # between. (NullString passes a real null for the backup path: PowerShell
+    # binds a plain $null to the string parameter as an empty string.)
+    if (Test-Path -LiteralPath $ManifestPath -PathType Leaf) {
+        [IO.File]::Replace($temporaryPath, $ManifestPath, [System.Management.Automation.Language.NullString]::Value)
+    }
+    else {
+        Move-Item -LiteralPath $temporaryPath -Destination $ManifestPath -Force
+    }
     Write-OpenPathLog "Firefox native host manifest reconciled: '$currentPath' -> '$launchPath'"
     return $true
 }

@@ -1425,6 +1425,25 @@ function Invoke-OpenPathWatchdogChecks {
         Write-OpenPathLog "Watchdog: compiled native host health check failed: $_" -Level WARN
     }
 
+    # Phase 8e E3: Smart App Control enforcement is a health fact of its own.
+    # Windows can enforce SAC after the install (the evaluation state ends on
+    # its own; managed images switch it off within 48 hours), and an enforced
+    # machine can block the unsigned native host at any time. The code is
+    # reported with the classroom boundary active even while the host still
+    # works, so the administrator can see those machines.
+    try {
+        $sacBoundaryActive = [bool]($Config -and $Config.PSObject.Properties['enableNonAdminAppControl'] -and $Config.enableNonAdminAppControl)
+        if ($sacBoundaryActive -and (Get-Command -Name 'Get-OpenPathSmartAppControlState' -ErrorAction SilentlyContinue)) {
+            $sacState = Get-OpenPathSmartAppControlState
+            if ($sacState -and $sacState.State -eq 'enforcement') {
+                & $addReasonCode 'smart_app_control_enforced'
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Smart App Control state check failed: $_" -Level WARN
+    }
+
     return [PSCustomObject]@{
         Issues = @($issues)
         ReasonCodes = @($reasonCodes.ToArray())

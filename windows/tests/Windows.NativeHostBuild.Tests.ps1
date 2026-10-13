@@ -554,13 +554,15 @@ Describe 'Compiled native host (Phase 5)' {
             (Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts 9) | Should -Be 60
         }
 
-        It 'Retries a clean immediate exit of a freshly written candidate once (Phase 8d D4)' {
-            # The win11-pro-full first-execution anomaly: the candidate closes
-            # stdout and exits 0 before reading the ping; the second launch of
-            # the same binary answers. A non-zero exit stays deterministic.
-            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-exited'; ExitCode = 0; HasExited = $true })) | Should -BeTrue
+        It 'Does not retry a clean immediate exit: H1 is deterministic (Phase 8e E0.4)' {
+            # Phase 8d D4 retried a clean exit because "a second launch of the
+            # same binary answers". That premise was false: the working probe
+            # was another copy launched from pwsh. The clean exit is the
+            # deterministic consequence of a UTF-8 preamble in front of the
+            # frame (Phase 8e E0), so it is not retryable.
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-exited'; ExitCode = 0; HasExited = $true })) | Should -BeFalse
             (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-exited'; ExitCode = 3; HasExited = $true })) | Should -BeFalse
-            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-exited'; HasExited = $true })) | Should -BeTrue
+            (Test-OpenPathNativeHostHealthFailureRetryable -Health ([pscustomobject]@{ Healthy = $false; Error = 'health-check-exited'; HasExited = $true })) | Should -BeFalse
 
             $script:PingQueue = New-Object System.Collections.ArrayList
             $null = $script:PingQueue.Add([pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 2764; Error = 'health-check-exited'; StartMs = 100; Pid = 41; HasExited = $true; ExitCode = 0; CpuMs = 125; Stderr = '' })
@@ -575,14 +577,14 @@ Describe 'Compiled native host (Phase 5)' {
 
             $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $process
 
-            $result.Status | Should -Be 'Built'
-            $result.Health.Attempts | Should -Be 2
+            $result.Status | Should -Be 'Fallback'
+            $result.Health.Attempts | Should -Be 1
+            @($script:PingQueue).Count | Should -Be 1 -Because 'the clean exit must not consume a second launch'
             $script:CompileTracker.Calls | Should -Be 1
             $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
-            @($diagnostics.lastPings).Count | Should -Be 2
+            @($diagnostics.lastPings).Count | Should -Be 1
             $diagnostics.lastPings[0].error | Should -Be 'health-check-exited'
-            $diagnostics.lastPings[1].healthy | Should -BeTrue
-            (Test-Path -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.exe')) | Should -BeTrue
+            (Test-Path -LiteralPath (Join-Path $script:NativeRoot 'OpenPath-NativeHost.exe')) | Should -BeFalse
         }
 
         It 'Retries a timed-out ping once with a longer timeout before building' {
@@ -945,6 +947,43 @@ public static class OpenPathPingNoisyFixture {
             $diagnostics.pingAttempts | Should -Be 2
         }
 
+        It 'Captures the parent stdin code page and preamble on every ping (Phase 8e E0.1)' {
+            # The .NET Framework Process.StandardInput StreamWriter emits the
+            # parent console input encoding preamble (a UTF-8 BOM when the
+            # console input code page is 65001) before the first frame. The ping
+            # records what this process would emit so the E2E artifact and the
+            # WARN line carry the literal cause.
+            $health = Test-OpenPathNativeHostExecutable -ExecutablePath (Join-Path $script:NativeRoot 'missing.exe')
+            $health.StdinCodePage | Should -Be ([int][Console]::InputEncoding.CodePage)
+            $expectedPreamble = ''
+            $preamble = [byte[]][Console]::InputEncoding.GetPreamble()
+            if ($preamble.Length -gt 0) { $expectedPreamble = (@($preamble | ForEach-Object { $_.ToString('x2') }) -join '') }
+            $health.StdinPreambleBytes | Should -Be $expectedPreamble
+        }
+
+        It 'Persists the stdin code page and preamble bytes on every lastPings record (Phase 8e E0.1)' {
+            $script:PingQueue = New-Object System.Collections.ArrayList
+            $null = $script:PingQueue.Add([pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 20050; Error = 'health-check-timeout'; StartMs = 1000; Pid = 41; HasExited = $false; ExitCode = $null; CpuMs = 12; Stderr = ''; StdinCodePage = 65001; StdinPreambleBytes = 'efbbbf' })
+            $null = $script:PingQueue.Add([pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 340; Error = 'health-check-exited'; StartMs = 21000; Pid = 42; HasExited = $true; ExitCode = 0; CpuMs = 5; Stderr = ''; StdinCodePage = 437; StdinPreambleBytes = '' })
+            $queue = $script:PingQueue
+            $process = {
+                param($executablePath, $timeoutSeconds)
+                $record = $queue[0]
+                $queue.RemoveAt(0)
+                $record
+            }.GetNewClosure()
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:NativeRoot -OpenPathRoot $script:Root -SourcePath $script:Source -CompilerInvoker $script:GoodCompiler -ProcessInvoker $process
+
+            $result.Status | Should -Be 'Fallback'
+            $diagnostics = Get-Content -LiteralPath $script:DiagnosticsPath -Raw | ConvertFrom-Json
+            @($diagnostics.lastPings).Count | Should -Be 2
+            $diagnostics.lastPings[0].stdinCodePage | Should -Be 65001
+            $diagnostics.lastPings[0].stdinPreambleBytes | Should -Be 'efbbbf'
+            $diagnostics.lastPings[1].stdinCodePage | Should -Be 437
+            $diagnostics.lastPings[1].stdinPreambleBytes | Should -Be ''
+        }
+
         It 'Logs one WARN line per failed ping with its diagnosis' {
             $script:PingLogLines = New-Object System.Collections.ArrayList
             function global:Write-OpenPathLog {
@@ -954,13 +993,15 @@ public static class OpenPathPingNoisyFixture {
             try {
                 $health = Test-OpenPathNativeHostExecutableWithRetry -ExecutablePath (Join-Path $script:NativeRoot 'missing.exe') -ProcessInvoker {
                     param($executablePath, $timeoutSeconds)
-                    [pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 20050; Error = 'health-check-timeout'; StartMs = 100; Pid = 7; HasExited = $false; ExitCode = $null; CpuMs = 1; Stderr = 'x' }
+                    [pscustomobject]@{ Healthy = $false; Version = ''; ProtocolVersion = 0; Capabilities = @(); ElapsedMs = 20050; Error = 'health-check-timeout'; StartMs = 100; Pid = 7; HasExited = $false; ExitCode = $null; CpuMs = 1; Stderr = 'x'; StdinCodePage = 65001; StdinPreambleBytes = 'efbbbf' }
                 }
                 $health.Healthy | Should -BeFalse
                 @($script:PingLogLines | Where-Object { $_ -match 'health ping failed' }).Count | Should -Be 2
                 ($script:PingLogLines -join "`n") | Should -Match 'attempt=1'
                 ($script:PingLogLines -join "`n") | Should -Match 'attempt=2'
                 ($script:PingLogLines -join "`n") | Should -Match 'health-check-timeout'
+                ($script:PingLogLines -join "`n") | Should -Match 'stdinCodePage=65001'
+                ($script:PingLogLines -join "`n") | Should -Match "stdinPreambleBytes='efbbbf'"
             }
             finally {
                 Remove-Item function:global:Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -995,6 +1036,44 @@ public static class OpenPathPingNoisyFixture {
             $health = Test-OpenPathNativeHostExecutable -ExecutablePath $script:PingFixtures['noisy'] -TimeoutSeconds 20
             $health.Healthy | Should -BeTrue
             ($health.Stderr.Length -le 2048) | Should -BeTrue
+        }
+    }
+
+    Context 'H1 stdin preamble probe (Phase 8e E0.2)' {
+        It 'Answers without a preamble and discards one UTF-8 preamble before the first frame (Windows only)' {
+            if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') {
+                Set-ItResult -Skipped -Because 'requires Windows, Windows PowerShell 5.1 and the in-box .NET Framework compiler'
+                return
+            }
+            . $script:BuildModulePath
+            if (-not (Get-OpenPathNativeHostCompilerPath)) {
+                Set-ItResult -Skipped -Because 'the in-box csc.exe is not available'
+                return
+            }
+            $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+            $probePath = Join-Path $repoRoot 'tests\e2e\ci\probe-native-host-preamble.ps1'
+            (Test-Path -LiteralPath $probePath -PathType Leaf) | Should -BeTrue
+            $realSource = Join-Path $repoRoot 'windows\native-host\OpenPathNativeHost.cs'
+            (Test-Path -LiteralPath $realSource -PathType Leaf) | Should -BeTrue
+
+            $probeRoot = Join-Path $TestDrive ('h1-preamble-' + [guid]::NewGuid().ToString('N'))
+            $probeOut = Join-Path $probeRoot 'probe.json'
+            $probeOutput = @(& $probePath -SourcePath $realSource -WorkDir $probeRoot -JsonOut $probeOut 2>&1)
+            (Test-Path -LiteralPath $probeOut -PathType Leaf) | Should -BeTrue -Because (($probeOutput | Out-String).Trim())
+            $probe = Get-Content -LiteralPath $probeOut -Raw | ConvertFrom-Json
+
+            # Control: the same binary without a preamble answers pong.
+            $probe.control.healthy | Should -BeTrue
+            $probe.control.protocolVersion -ge 2 | Should -BeTrue
+            $probe.control.stdinPreambleBytes | Should -Be ''
+
+            # The preamble run pings from a real 65001 console whose encoding
+            # emits EF BB BF; the host must discard exactly one preamble.
+            $probe.withPreamble.healthy | Should -BeTrue -Because ("$($probe.withPreamble.error) exitCode=$($probe.withPreamble.exitCode)")
+            $probe.withPreamble.encodingError | Should -Be ''
+            $probe.withPreamble.stdinCodePage | Should -Be 65001
+            $probe.withPreamble.stdinPreambleBytes | Should -Be 'efbbbf'
+            @($probe.hostStopLines | Where-Object { $_ -match 'invalid-frame-length' }).Count | Should -Be 0
         }
     }
 }

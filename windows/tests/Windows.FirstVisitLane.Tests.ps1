@@ -2361,6 +2361,26 @@ PrimaryServerAddress=198.51.100.7
             $script:laneControllerSource | Should -Match 'hostRecoveryStatus'
         }
 
+        It 'Times the recovery visit from before the navigation and records the connected host (Phase 8e M1)' {
+            $script:laneGuestSource | Should -Match '\$visitStartedAt = Get-Date'
+            $script:laneGuestSource | Should -Match '\$connectStopwatch = \[System\.Diagnostics\.Stopwatch\]::StartNew\(\)'
+            $startIndex = $script:laneGuestSource.IndexOf('$visitStartedAt = Get-Date')
+            $stopwatchIndex = $script:laneGuestSource.IndexOf('$connectStopwatch = [System.Diagnostics.Stopwatch]::StartNew()')
+            $navIndex = $script:laneGuestSource.IndexOf("Start-InSessionVisit -Url `$anchorUrl -Tag 'recovery-visit'")
+            ($startIndex -ge 0) | Should -BeTrue
+            ($stopwatchIndex -gt $startIndex) | Should -BeTrue
+            ($navIndex -gt $stopwatchIndex) | Should -BeTrue
+
+            # Timestamped detection: only initialization lines stamped at or
+            # after the visit start count, and the new pid plus whether that
+            # host answered any message are recorded.
+            $script:laneGuestSource | Should -Match '\$initPattern = '
+            $script:laneGuestSource | Should -Match '\$lineAt -lt \$visitStartedAt'
+            $script:laneGuestSource | Should -Match 'extensionRecovery\.hostPid = \$hostPid'
+            $script:laneGuestSource | Should -Match 'extensionRecovery\.hostAnsweredMessages = \$hostAnsweredMessages'
+            $script:laneGuestSource | Should -Not -Match '\$initCountBefore'
+        }
+
         It 'Builds metrics for a synthetic host-recovery verdict without page waves' {
             # The lab run 38355030489 crashed after writing the PASS verdict:
             # Get-OpenPathFirstVisitMetrics read $Verdict.waves (and timesMs /

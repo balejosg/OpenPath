@@ -1503,7 +1503,7 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             ensureLineCount        = 0
             studentProbe           = $null
             studentProbeError      = ''
-            extensionRecovery      = [ordered]@{ attempted = $false; firefoxRunningAtRecovery = $false; hostConnectedWithoutRestart = $false; timeToHostConnectMs = -1; firefoxRestarted = $false }
+            extensionRecovery      = [ordered]@{ attempted = $false; firefoxRunningAtRecovery = $false; hostConnectedWithoutRestart = $false; timeToHostConnectMs = -1; firefoxRestarted = $false; hostPid = 0; hostAnsweredMessages = $false; error = '' }
             error                  = ''
         }
         $trigger.manifestAtTrigger = Get-HostRecoveryManifestLeaf -ManifestPath $messagingManifestPath
@@ -1548,28 +1548,56 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             # Informational: does the running Firefox recover the host without a
             # restart? A navigation in the already-open browser issues a new
             # host request; the student's native-host.log gains a new
-            # initialization line when the compiled host answers.
+            # initialization line when the compiled host answers. Phase 8e M1:
+            # the timer covers the visit itself and the detection requires an
+            # initialization line stamped at or after the visit start, then
+            # records the new pid and whether that host answered any message.
             try {
                 $firefoxNow = @(Get-FirefoxProcesses)
                 if ($trigger.recovered -and $firefoxNow.Count -gt 0) {
                     $trigger.extensionRecovery.attempted = $true
                     $trigger.extensionRecovery.firefoxRunningAtRecovery = $true
                     $studentLog = Get-NativeHostLogPath
-                    $initCountBefore = @(Get-LogTail -Path $studentLog -Tail 400 | Where-Object { $_ -match 'Native host initialization completed' }).Count
                     $plan = Get-FixturePlan
                     $anchorUrl = "http://$([string]$plan.anchors.a1.host)/"
+                    $visitStartedAt = Get-Date
+                    $connectStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                     $nav = Start-InSessionVisit -Url $anchorUrl -Tag 'recovery-visit'
                     $connected = $false
-                    $connectStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                    $hostPid = 0
+                    $hostAnsweredMessages = $false
+                    $initPattern = '^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\] .* Native host initialization completed pid=(\d+)'
+                    $stagePattern = '^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\] .* Native host stage='
                     $connectDeadline = (Get-Date).AddSeconds(60)
                     while ((Get-Date) -lt $connectDeadline) {
-                        $initCountNow = @(Get-LogTail -Path $studentLog -Tail 400 | Where-Object { $_ -match 'Native host initialization completed' }).Count
-                        if ($initCountNow -gt $initCountBefore) { $connected = $true; break }
+                        $tail = @(Get-LogTail -Path $studentLog -Tail 400)
+                        foreach ($line in $tail) {
+                            $match = [regex]::Match($line, $initPattern)
+                            if (-not $match.Success) { continue }
+                            $lineAt = $null
+                            try { $lineAt = [DateTime]::ParseExact($match.Groups[1].Value, 'yyyy-MM-dd HH:mm:ss.fff', [System.Globalization.CultureInfo]::InvariantCulture) } catch { $lineAt = $null }
+                            if ($null -eq $lineAt -or $lineAt -lt $visitStartedAt) { continue }
+                            $hostPid = [int]$match.Groups[2].Value
+                            foreach ($stageLine in $tail) {
+                                $stageMatch = [regex]::Match($stageLine, $stagePattern)
+                                if (-not $stageMatch.Success) { continue }
+                                $stageAt = $null
+                                try { $stageAt = [DateTime]::ParseExact($stageMatch.Groups[1].Value, 'yyyy-MM-dd HH:mm:ss.fff', [System.Globalization.CultureInfo]::InvariantCulture) } catch { $stageAt = $null }
+                                if ($null -ne $stageAt -and $stageAt -ge $lineAt) { $hostAnsweredMessages = $true; break }
+                            }
+                            $connected = $true
+                            break
+                        }
+                        if ($connected) { break }
                         Start-Sleep -Seconds 3
                     }
                     $connectStopwatch.Stop()
                     $trigger.extensionRecovery.hostConnectedWithoutRestart = $connected
-                    if ($connected) { $trigger.extensionRecovery.timeToHostConnectMs = [int]$connectStopwatch.ElapsedMilliseconds }
+                    if ($connected) {
+                        $trigger.extensionRecovery.timeToHostConnectMs = [int]$connectStopwatch.ElapsedMilliseconds
+                        $trigger.extensionRecovery.hostPid = $hostPid
+                        $trigger.extensionRecovery.hostAnsweredMessages = $hostAnsweredMessages
+                    }
                     $firefoxPidsAfter = @(Get-FirefoxProcesses | ForEach-Object { [int]$_.pid })
                     $common = @($firefoxPidsAfter | Where-Object { $firefoxPidsBefore -contains $_ })
                     $trigger.extensionRecovery.firefoxRestarted = ($firefoxPidsAfter.Count -gt 0 -and $common.Count -eq 0)

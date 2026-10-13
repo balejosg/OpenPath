@@ -115,6 +115,83 @@ $script:ParityListFields = @(Get-NativeHostParityListFields)
                 $process.Dispose()
             }
         }
+
+        It 'Names why it stops reading stdin, with the literal header bytes (Phase 8e E0.1)' {
+            # The same literal line must exist in both hosts (parity).
+            $referenceSource = Get-Content -LiteralPath (Join-Path $script:ParityRepoRoot 'windows/lib/internal/NativeHost.Protocol.ps1') -Raw
+            $compiledSource = Get-Content -LiteralPath (Join-Path $script:ParityRepoRoot 'windows/native-host/OpenPathNativeHost.cs') -Raw
+            foreach ($source in @($referenceSource, $compiledSource)) {
+                $source | Should -Match ([regex]::Escape('Native host stdin read stopped: reason='))
+                foreach ($reason in @('stdin-eof', 'invalid-frame-length', 'payload-eof')) {
+                    $source | Should -Match ([regex]::Escape($reason))
+                }
+                $source | Should -Match ([regex]::Escape('header='))
+            }
+            # Lowercase hex without separators in both hosts: 'efbbbf22' is the
+            # literal H1 signature.
+            $referenceSource | Should -Match "ToString\('x2'\)"
+            $compiledSource | Should -Match 'ToLowerInvariant\(\)'
+
+            # Behavior on the reference host: a header of FF FF FF FF (-1) is
+            # named with its literal bytes and never dumps the payload.
+            $logPath = Get-NativeHostParityLogPath -NativeRoot $script:ParityReferenceFixture.Native
+            $logPath | Should -Not -BeNullOrEmpty
+            $invalidProcess = Start-NativeHostParityProcess -FilePath $script:ParityHostCommand.FilePath -Arguments (@($script:ParityHostCommand.Arguments) + (Join-Path $script:ParityReferenceFixture.Native 'OpenPath-NativeHost.ps1'))
+            try {
+                $invalidProcess.StandardInput.BaseStream.Write([byte[]]@(0xFF, 0xFF, 0xFF, 0xFF), 0, 4)
+                $invalidProcess.StandardInput.BaseStream.Flush()
+                ($invalidProcess.WaitForExit(15000)) | Should -BeTrue
+            }
+            finally {
+                try { $invalidProcess.StandardInput.Close() } catch { }
+                if (-not $invalidProcess.HasExited) { try { $invalidProcess.Kill($true) } catch { } }
+                $invalidProcess.Dispose()
+            }
+
+            # A truncated payload ends as payload-eof instead.
+            $truncatedProcess = Start-NativeHostParityProcess -FilePath $script:ParityHostCommand.FilePath -Arguments (@($script:ParityHostCommand.Arguments) + (Join-Path $script:ParityReferenceFixture.Native 'OpenPath-NativeHost.ps1'))
+            try {
+                $truncatedProcess.StandardInput.BaseStream.Write([System.BitConverter]::GetBytes([int]64), 0, 4)
+                $partial = [System.Text.Encoding]::UTF8.GetBytes('{"action":')
+                $truncatedProcess.StandardInput.BaseStream.Write($partial, 0, $partial.Length)
+                $truncatedProcess.StandardInput.BaseStream.Flush()
+                $truncatedProcess.StandardInput.Close()
+                ($truncatedProcess.WaitForExit(15000)) | Should -BeTrue
+            }
+            finally {
+                try { $truncatedProcess.StandardInput.Close() } catch { }
+                if (-not $truncatedProcess.HasExited) { try { $truncatedProcess.Kill($true) } catch { } }
+                $truncatedProcess.Dispose()
+            }
+
+            (Test-Path -LiteralPath $logPath -PathType Leaf) | Should -BeTrue
+            $log = Get-Content -LiteralPath $logPath -Raw
+            $log | Should -Match ([regex]::Escape('Native host stdin read stopped: reason=invalid-frame-length header=ffffffff'))
+            $log | Should -Match ([regex]::Escape('Native host stdin read stopped: reason=payload-eof'))
+        }
+
+        It 'Discards one UTF-8 preamble before the first frame (Phase 8e E0.3)' {
+            # The parity sequence opens with a BOM-prefixed first frame
+            # (prefixHex 'efbbbf'); the reference host must answer it.
+            $referenceSource = Get-Content -LiteralPath (Join-Path $script:ParityRepoRoot 'windows/lib/internal/NativeHost.Protocol.ps1') -Raw
+            $compiledSource = Get-Content -LiteralPath (Join-Path $script:ParityRepoRoot 'windows/native-host/OpenPathNativeHost.cs') -Raw
+            $referenceSource | Should -Match 'NativeHostStdinPreambleChecked'
+            $referenceSource | Should -Match '0xEF'
+            $compiledSource | Should -Match '_stdinPreambleChecked'
+            $compiledSource | Should -Match '0xEF'
+
+            $reference = @($script:ParityReferenceResponses | Where-Object { $_.name -eq 'bom-prefixed-first-frame' })[0]
+            $reference.response | Should -Not -BeNullOrEmpty
+            $reference.response.success | Should -BeTrue
+            $reference.response.message | Should -Be 'pong'
+
+            if ($script:ParityCompiledExecutable) {
+                $candidate = @($script:ParityCandidateResponses | Where-Object { $_.name -eq 'bom-prefixed-first-frame' })[0]
+                $candidate.response | Should -Not -BeNullOrEmpty
+                $candidate.response.success | Should -BeTrue
+                $candidate.response.message | Should -Be 'pong'
+            }
+        }
     }
 
     Context 'Hook mechanism (Phase 5.3 P1)' {

@@ -160,6 +160,9 @@ function New-NativeHostParitySequence {
     param()
 
     $cases = @(
+        # Phase 8e E0.3: the UTF-8 preamble a .NET Framework parent can write
+        # before the first frame; both hosts must discard exactly one.
+        @{ name = 'bom-prefixed-first-frame'; prefixHex = 'efbbbf'; message = @{ action = 'ping' } },
         @{ name = 'ping'; message = @{ action = 'ping' } },
         @{ name = 'ping-id-number'; message = @{ action = 'ping'; id = 42 } },
         @{ name = 'ping-id-string'; message = @{ action = 'ping'; id = 'client-7' } },
@@ -258,7 +261,35 @@ function Start-NativeHostParityProcess {
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    # Deterministic stdin: never let the harness console inject its own encoding
+    # preamble before the first frame (Windows PowerShell 5.1 writes the
+    # EF BB BF preamble when the console input code page is UTF-8). Explicit
+    # `prefixHex` cases write their own bytes.
+    if ($startInfo.PSObject.Properties['StandardInputEncoding']) {
+        $startInfo.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
+    }
+    else {
+        try { [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
+    }
     return [System.Diagnostics.Process]::Start($startInfo)
+}
+
+function Get-NativeHostParityLogPath {
+    <#
+    .SYNOPSIS
+        Resolves the native host log path exactly like the PowerShell host
+        (LOCALAPPDATA, then TEMP, then the native root).
+    #>
+    [CmdletBinding()]
+    param([string]$NativeRoot = '')
+
+    $base = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = $env:TEMP }
+    if ([string]::IsNullOrWhiteSpace($base)) {
+        if ($NativeRoot) { return (Join-Path $NativeRoot 'native-host.log') }
+        return ''
+    }
+    return (Join-Path (Join-Path $base 'OpenPath') 'native-host.log')
 }
 
 function Write-NativeHostParityFrame {
@@ -336,6 +367,19 @@ function Invoke-NativeHostParitySession {
                 }
             }
             $json = if ($case.ContainsKey('raw')) { [string]$case.raw } else { ($case.message | ConvertTo-Json -Depth 10 -Compress) }
+            if ($case.ContainsKey('prefixHex')) {
+                # Phase 8e E0.3: raw bytes written before the frame (the UTF-8
+                # preamble a .NET Framework parent can inject).
+                $prefixText = [string]$case.prefixHex
+                if ($prefixText) {
+                    $prefixBytes = New-Object byte[] ([int]($prefixText.Length / 2))
+                    for ($prefixIndex = 0; $prefixIndex -lt $prefixBytes.Length; $prefixIndex++) {
+                        $prefixBytes[$prefixIndex] = [Convert]::ToByte($prefixText.Substring($prefixIndex * 2, 2), 16)
+                    }
+                    $process.StandardInput.BaseStream.Write($prefixBytes, 0, $prefixBytes.Length)
+                    $process.StandardInput.BaseStream.Flush()
+                }
+            }
             Write-NativeHostParityFrame -Process $process -Json $json
             $response = Read-NativeHostParityFrame -Process $process -TimeoutSeconds $PerMessageTimeoutSeconds
             $responses += [pscustomobject]@{ name = $case.name; response = $response }
@@ -636,6 +680,7 @@ Export-ModuleMember -Function @(
     'New-NativeHostParityWorkerStateHook',
     'Get-NativeHostParityListFields',
     'Get-NativeHostParityMaskedKeys',
+    'Get-NativeHostParityLogPath',
     'Start-NativeHostParityProcess',
     'Write-NativeHostParityFrame',
     'Read-NativeHostParityFrame',

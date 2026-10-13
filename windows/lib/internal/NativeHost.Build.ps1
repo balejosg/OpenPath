@@ -125,9 +125,10 @@ function Get-OpenPathNativeHostSignaturePin {
     .SYNOPSIS
         Publisher pin for the prebuilt Authenticode-signed native host.
     .DESCRIPTION
-        Phase 8: constants only. Empty until Phase 8.1 activates the SignPath
-        Foundation signing channel; an empty pin fails closed, so a prebuilt
-        executable is never trusted before the publisher identity is known.
+        Phase 8: constants only. Empty until a signing channel is activated
+        (Phase 8e: parked - SAC off is the deployment requirement); an empty
+        pin fails closed, so a prebuilt executable is never trusted before the
+        publisher identity is known.
         Subject/Issuer are the certificate values the submission must present.
         Description is the authenticated SpcSpOpusInfo program description when
         the pin declares one (SignPath Foundation signs many projects, so the
@@ -492,11 +493,28 @@ function Test-OpenPathNativeHostExecutable {
         ExitCode        = $null
         CpuMs           = -1
         Stderr          = ''
+        # Phase 8e E0.1: what this process emits on the host's stdin before the
+        # first frame. .NET Framework's Process.StandardInput StreamWriter
+        # writes the console input encoding preamble (EF BB BF when the input
+        # code page is 65001): the H1 trigger.
+        StdinCodePage      = 0
+        StdinPreambleBytes = ''
     }
+    try {
+        $stdinEncoding = [Console]::InputEncoding
+        if ($stdinEncoding) {
+            $result.StdinCodePage = [int]$stdinEncoding.CodePage
+            $stdinPreamble = [byte[]]$stdinEncoding.GetPreamble()
+            if ($stdinPreamble -and $stdinPreamble.Length -gt 0) {
+                $result.StdinPreambleBytes = ((@($stdinPreamble | ForEach-Object { $_.ToString('x2') })) -join '')
+            }
+        }
+    }
+    catch { }
     if ($ProcessInvoker) {
         try {
             $invoked = & $ProcessInvoker $ExecutablePath $TimeoutSeconds
-            foreach ($name in @('Healthy', 'Version', 'ProtocolVersion', 'Capabilities', 'ElapsedMs', 'Error', 'StartMs', 'Pid', 'HasExited', 'ExitCode', 'CpuMs', 'Stderr')) {
+            foreach ($name in @('Healthy', 'Version', 'ProtocolVersion', 'Capabilities', 'ElapsedMs', 'Error', 'StartMs', 'Pid', 'HasExited', 'ExitCode', 'CpuMs', 'Stderr', 'StdinCodePage', 'StdinPreambleBytes')) {
                 if ($null -ne $invoked -and $invoked.PSObject.Properties[$name]) { $result[$name] = $invoked.$name }
             }
             return [pscustomobject]$result
@@ -684,14 +702,11 @@ function Test-OpenPathNativeHostHealthFailureRetryable {
             has blocked this file"): the very first execution decides whether
             the unsigned binary may run at all; a retry observes the settled
             decision instead of a racing one.
-        Phase 8d D4: the win11-pro-full runner also shows a first-execution
-        anomaly where the freshly written candidate closes its stdout and exits
-        with code 0 before reading the ping (empty stderr, no CodeIntegrity or
-        Defender event) while a second launch of the same binary answers in
-        ~0.2 s. A clean exit (code 0 or unavailable) is therefore retried once
-        against the same candidate; a non-zero exit stays deterministic.
-        Everything else (frame/protocol errors, missing executable) is
-        deterministic and is not retried.
+        Phase 8e E0.4: the Phase 8d clean-exit retry was reverted. Its premise
+        (a second launch of the same binary answers) was false: the working
+        probe was a different copy launched from pwsh. A clean exit is the
+        deterministic H1 consequence of a UTF-8 preamble in front of the frame
+        (header=efbbbf22), so it is not retryable.
     #>
     [CmdletBinding()]
     param([AllowNull()][object]$Health)
@@ -701,13 +716,6 @@ function Test-OpenPathNativeHostHealthFailureRetryable {
     if (-not $errorText) { return $false }
     if ($errorText -eq 'health-check-timeout') { return $true }
     if ($errorText -match '(?i)application control policy has blocked') { return $true }
-    if ($errorText -eq 'health-check-exited') {
-        $exitCode = $null
-        if ($Health.PSObject.Properties['ExitCode'] -and $null -ne $Health.ExitCode) {
-            try { $exitCode = [int]$Health.ExitCode } catch { $exitCode = $null }
-        }
-        return ($null -eq $exitCode -or $exitCode -eq 0)
-    }
     return $false
 }
 
@@ -748,6 +756,10 @@ function Test-OpenPathNativeHostExecutableWithRetry {
             exitCode  = if (($Health.PSObject.Properties['ExitCode']) -and ($null -ne $Health.ExitCode)) { [int]$Health.ExitCode } else { $null }
             cpuMs     = if ($Health.PSObject.Properties['CpuMs']) { [int]$Health.CpuMs } else { -1 }
             stderr    = if ($Health.PSObject.Properties['Stderr']) { [string]$Health.Stderr } else { '' }
+            # Phase 8e E0.1: the parent console input code page and the encoding
+            # preamble this process emits before the first frame.
+            stdinCodePage      = if ($Health.PSObject.Properties['StdinCodePage']) { [int]$Health.StdinCodePage } else { 0 }
+            stdinPreambleBytes = if ($Health.PSObject.Properties['StdinPreambleBytes']) { [string]$Health.StdinPreambleBytes } else { '' }
         }
         $pings.Add($record) | Out-Null
         return $record
@@ -757,7 +769,7 @@ function Test-OpenPathNativeHostExecutableWithRetry {
         if ([bool]$Record.healthy) { return }
         $logCommand = Get-Command -Name Write-OpenPathLog -ErrorAction SilentlyContinue
         if (-not $logCommand) { return }
-        $message = "Native host health ping failed: attempt=$Attempt error=$($Record.error) elapsedMs=$($Record.elapsedMs) pid=$($Record.pid) hasExited=$($Record.hasExited) exitCode=$($Record.exitCode) cpuMs=$($Record.cpuMs) stderr='$($Record.stderr)'"
+        $message = "Native host health ping failed: attempt=$Attempt error=$($Record.error) elapsedMs=$($Record.elapsedMs) pid=$($Record.pid) hasExited=$($Record.hasExited) exitCode=$($Record.exitCode) cpuMs=$($Record.cpuMs) stdinCodePage=$($Record.stdinCodePage) stdinPreambleBytes='$($Record.stdinPreambleBytes)' stderr='$($Record.stderr)'"
         Write-OpenPathLog $message -Level WARN
     }
 

@@ -257,17 +257,52 @@ diagnostics record that state and the fallback keeps working. See
 [`docs/design/windows-native-host-under-appcontrol.md`](../docs/design/windows-native-host-under-appcontrol.md)
 and [`docs/extension-native-host-contract.md`](../docs/extension-native-host-contract.md).
 
-### Smart App Control deployments
+### Smart App Control (requirement)
 
-With SAC enforced, the PowerShell/cmd fallback does not exist for the
-restricted student (`powershell.exe`/`pwsh.exe` are denied by the AppLocker
-boundary), so an unsigned compiled host means **no native host at all**. The
-product prefers a prebuilt Authenticode-signed executable when the install
-payload carries one (`native-host\signed\OpenPath-NativeHost.exe` plus its
-`OpenPath-NativeHost.signing.json`, anchored on the payload manifest sha256 and
-the publisher pin); otherwise it compiles, and only a valid signature is ever
-executed. The signing channel is documented in
-[`docs/design/windows-native-host-signing.md`](../docs/design/windows-native-host-signing.md).
+OpenPath requires Smart App Control (SAC) **off** on classroom machines. SAC
+blocks unsigned executables, the compiled native host is unsigned, and Windows
+offers no per-app bypass ("There is currently no way to bypass Smart App Control
+protection for individual apps"). SAC also turns itself on: clean Windows images
+start in evaluation and in organization-managed images it "switches off within
+48 hours", so a machine where the host worked at install time can be blocked
+later without any OpenPath change. The signing channel stays parked (Phase 8e
+decision, 2026-10-13:
+[`docs/design/windows-native-host-signing.md`](../docs/design/windows-native-host-signing.md));
+SAC off is what makes the deployment deterministic today.
+
+Check the state (`0` off, `1` enforcement, `2` evaluation):
+
+```powershell
+Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' |
+    Select-Object VerifiedAndReputablePolicyState
+& "$env:SystemRoot\System32\CiTool.exe" -lp   # no VerifiedAndReputable policy when SAC is off
+```
+
+How to turn it off:
+
+- Windows Security > App & browser control > Smart App Control > Off.
+- Or, in an organization: set `VerifiedAndReputablePolicyState` (DWORD) to `0`
+  under `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy` and run
+  `%SystemRoot%\System32\CiTool.exe -r`. It can be turned back on later without
+  reinstalling Windows.
+
+Installer options (the setup exe is **not** code-signed, so SmartScreen shows
+"Windows protected your PC": choose _More info_ > _Run anyway_. With SAC
+enforced the setup itself may not start; in that case turn SAC off first from
+Windows Security):
+
+- The setup shows a yes/no dialog when the policy value is `1` or `2`; only an
+  explicit yes leads to `-DisableSmartAppControl` for the installer child.
+- Silent installs (`/S`) never prompt: pass `/DisableSmartAppControl` on the
+  setup command line to disable SAC, or `-DisableSmartAppControl` when calling
+  `Install-OpenPath.ps1` directly.
+- `-Unattended` without the flag leaves SAC untouched and records a visible
+  warning in the install summary. Interactive `Install-OpenPath.ps1` explains
+  the trade-off and asks before changing anything.
+- Cost: SAC is disabled for the whole machine (it protects all apps, not only
+  OpenPath). Students remain under the OpenPath AppLocker boundary. The decision
+  (previous state, action, result, date) is logged and stored in
+  `data\config.json` under `smartAppControl`.
 
 What the administrator sees:
 
@@ -275,20 +310,20 @@ What the administrator sees:
   with a warning listing the features that will not work for restricted
   students: whitelist path/subdomain rules in Firefox, the request-access
   screen and approval propagation, runtime dependency learning and captive
-  portal recovery.
+  portal recovery. With SAC in evaluation or enforcement, the post-install
+  notice explains the risk and how to turn it off (it never changes the state).
 - The watchdog health report carries the product reason code
-  (`native_host_smart_app_control_blocked`, `native_host_signature_invalid`,
-  `native_host_compile_failed`, `native_host_health_ping_failed`,
-  `native_host_compiled_unavailable`) and turns the report DEGRADED.
+  (`smart_app_control_enforced`, `native_host_smart_app_control_blocked`,
+  `native_host_signature_invalid`, `native_host_compile_failed`,
+  `native_host_health_ping_failed`, `native_host_compiled_unavailable`) and
+  turns the report DEGRADED. `smart_app_control_enforced` is reported with the
+  classroom boundary active even while the host still answers.
 - `C:\OpenPath\browser-extension\firefox\native\fallback-state.json` records the
   last logged availability state (reason, status, boundary flag) so repeated
   refreshes do not spam the log; the log line is an ERROR only when the
   classroom boundary is active.
-- The install never changes the SAC state and never aborts because of it.
-
-Before the signing channel is activated (Phase 8.1), an SAC-enforced classroom
-is expected to stay in this "SAC active, not supported" state; the diagnostic
-paths above make it visible without breaking the rest of the deployment.
+- The install never changes the SAC state without an explicit administrator
+  decision and never aborts because of it.
 
 ```powershell
 # Registered launch path (.exe = compiled host, .cmd = fallback)

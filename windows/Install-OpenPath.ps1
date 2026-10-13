@@ -40,6 +40,9 @@ param(
     [string]$ChromeExtensionStoreUrl = "",
     [string]$EdgeExtensionStoreUrl = "",
     [switch]$Unattended,
+    # Phase 8e E1: explicit administrator decision to disable Smart App Control.
+    # Without it, SAC is never changed (unattended) and the install warns.
+    [switch]$DisableSmartAppControl,
     [string]$HealthApiSecret = "",
     [switch]$EnforceManagedBrowserBoundary,
     [string[]]$ApprovedStudentBrowsers = @('Firefox'),
@@ -94,6 +97,7 @@ $OpenPathRoot = Resolve-OpenPathWindowsRoot
 . (Join-Path $installerHelperRoot 'Installer.Staging.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Enrollment.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Offline.ps1')
+. (Join-Path $installerHelperRoot 'Installer.SmartAppControl.ps1')
 
 $offlineMode = [bool]$OfflineConfigPath
 $offlineEnrollmentExpiresAt = ''
@@ -479,6 +483,21 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'preflight' -Action {
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
+# Phase 8e E1: Smart App Control decision, before any unsigned binary runs
+# (Acrylic install, native host compilation). SAC can block the unsigned
+# native host now or after Windows enforces it; there is no per-app bypass.
+# The step only changes SAC on an explicit administrator decision.
+$smartAppControlOutcome = $null
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'smart-app-control' -Action {
+    $outcome = Invoke-OpenPathSmartAppControlStep `
+        -Unattended:$Unattended `
+        -DisableSmartAppControl:$DisableSmartAppControl `
+        -OpenPathRoot $OpenPathRoot
+    Set-Variable -Name smartAppControlOutcome -Scope Script -Value $outcome
+    Write-InstallerVerbose "  Smart App Control decision: previous=$($outcome.PreviousState) action=$($outcome.Action) result=$($outcome.Result) rebootRequired=$($outcome.RebootRequired) at=$($outcome.DecidedAtUtc)"
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'directories' -Action {
     if ($PSCmdlet.ShouldProcess('OpenPath install root', 'Create install directories')) {
         Initialize-OpenPathInstallDirectories -OpenPathRoot $OpenPathRoot
@@ -554,10 +573,14 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'configuration' -Action {
         -ApprovedStudentBrowsers $ApprovedStudentBrowsers `
         -AppControlProfile $AppControlProfile `
         -ApprovedApplicationCatalog $ApprovedApplicationCatalog `
-        -BrowserCleanupMode $BrowserCleanupMode
+        -BrowserCleanupMode $BrowserCleanupMode `
+        -SmartAppControl $script:smartAppControlOutcome
     if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration')) {
         Write-OpenPathAtomicJsonFile -Path "$OpenPathRoot\data\config.json" -Data $config -Depth 10
     }
+    # Phase 8e E1: the SAC decision is a durable record (previous state,
+    # action, result and date) in the product log and in the config above.
+    Write-OpenPathSmartAppControlDecision -Outcome $script:smartAppControlOutcome
     Set-Variable -Name primaryDNS -Scope Script -Value $primaryDNS
     Set-Variable -Name agentVersion -Scope Script -Value $agentVersion
     Set-Variable -Name config -Scope Script -Value $config
@@ -912,6 +935,17 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'summary' -Action {
         -ApiUrl $apiBaseUrl `
         -AgentVersion $agentVersion `
         -PrimaryDNS $primaryDNS
+    # Phase 8e E1: the summary must keep the SAC posture visible even in quiet
+    # installs (the early phase output is suppressed outside verbose mode).
+    if ($script:smartAppControlOutcome) {
+        $sacOutcome = $script:smartAppControlOutcome
+        if ($sacOutcome.Action -eq 'disabled' -and $sacOutcome.RebootRequired) {
+            Write-Host '  Smart App Control: disabled; verification is pending and a reboot may be required.' -ForegroundColor Yellow
+        }
+        elseif ($sacOutcome.PreviousState -in @('evaluation', 'enforcement') -and $sacOutcome.Action -ne 'disabled') {
+            Write-Host "  Smart App Control: still $($sacOutcome.PreviousState); the unsigned native host may be blocked. See windows/DEPLOYMENT.md (Smart App Control)." -ForegroundColor Yellow
+        }
+    }
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
@@ -925,22 +959,27 @@ $phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'privacy-notice' -Action
         -WhitelistUrl $WhitelistUrl | Out-Null
 }
 
-# Phase 8: with Smart App Control already enforced, tell the administrator what
-# will not work when no valid native host is available. Warning only: the
-# install never aborts and never changes the SAC state.
+# Phase 8e E3: with Smart App Control still in evaluation or enforcement after
+# the install, explain the risk and how to turn it off. Warning only: the
+# install never aborts and never changes the SAC state (that decision belongs
+# to the smart-app-control phase and to the administrator; see
+# windows/DEPLOYMENT.md, Smart App Control).
 $phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'sac-native-host-notice' -Action {
     try {
         $sacState = Get-OpenPathSmartAppControlState
-        if ($sacState.State -eq 'enforcement') {
-            $nativeHostHealth = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $config
-            if (-not ($nativeHostHealth.UsesCompiledHost -and $nativeHostHealth.CompiledHealthy)) {
-                Write-InstallerWarning '  WARNING: Smart App Control is enforced and no valid native host is available.'
-                Write-InstallerWarning '  While Smart App Control blocks the unsigned native host, these features will not work for restricted students:'
-                Write-InstallerWarning '    - whitelist path and subdomain rules in Firefox;'
-                Write-InstallerWarning '    - the request-access screen and approval propagation;'
-                Write-InstallerWarning '    - runtime dependency learning for allowed sites;'
-                Write-InstallerWarning '    - captive portal recovery.'
-                Write-InstallerWarning "  Reason: $($nativeHostHealth.ReasonCode). Sign the native host (Phase 8.1) or disable Smart App Control to restore them."
+        if ($sacState.State -in @('evaluation', 'enforcement')) {
+            Write-InstallerWarning "  NOTICE: Smart App Control is $($sacState.State); Windows can block the unsigned OpenPath native host now or after it enforces SAC."
+            Write-InstallerWarning '  To turn it off: Windows Security > App & browser control > Smart App Control, or follow windows/DEPLOYMENT.md (Smart App Control).'
+            if ($sacState.State -eq 'enforcement') {
+                $nativeHostHealth = Get-OpenPathFirefoxNativeHostCompiledHealth -Config $config
+                if (-not ($nativeHostHealth.UsesCompiledHost -and $nativeHostHealth.CompiledHealthy)) {
+                    Write-InstallerWarning '  No valid native host is available. While Smart App Control blocks the unsigned native host, these features will not work for restricted students:'
+                    Write-InstallerWarning '    - whitelist path and subdomain rules in Firefox;'
+                    Write-InstallerWarning '    - the request-access screen and approval propagation;'
+                    Write-InstallerWarning '    - runtime dependency learning for allowed sites;'
+                    Write-InstallerWarning '    - captive portal recovery.'
+                    Write-InstallerWarning "  Reason: $($nativeHostHealth.ReasonCode)."
+                }
             }
         }
     }

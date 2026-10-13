@@ -98,19 +98,7 @@ You can verify every one of these claims yourself: the entire codebase is here, 
 
 ## Code signing policy
 
-**Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).**
-
-OpenPath uses the SignPath Foundation open-source code signing program for exactly one artifact: the compiled Windows native messaging host (`OpenPath-NativeHost.exe`) that the Windows agent installs under the browser-extension runtime root. Without it, Windows Smart App Control may block the unsigned compiled host and the classroom browser enforcement loses its native helper (see [`docs/design/windows-native-host-signing.md`](docs/design/windows-native-host-signing.md)).
-
-- **What is signed:** only `OpenPath-NativeHost.exe`, built from [`windows/native-host/OpenPathNativeHost.cs`](windows/native-host/OpenPathNativeHost.cs) in this repository.
-- **How it is built:** the [Native Host Signing](.github/workflows/native-host-signing.yml) workflow compiles the source with the in-box .NET Framework compiler on GitHub-hosted runners, uploads the executable as a GitHub Actions artifact and submits it to SignPath by artifact id. Every signing request is approved manually by an Approver before the signed executable is used.
-- **What is not signed:** installers, scripts, the API and the browser extension (the extension is signed separately through AMO).
-
-### Roles
-
-- **Authors:** maintainers with write access - [@balejosg](https://github.com/balejosg)
-- **Reviewers:** maintainers who review changes from non-committers - [@balejosg](https://github.com/balejosg)
-- **Approvers:** maintainers trusted to approve each signing request - [@balejosg](https://github.com/balejosg)
+The Windows binaries are **not code-signed today** and no signing request has been made: the SignPath channel is implemented but parked (Phase 8e decision, 2026-10-13). Because Windows Smart App Control (SAC) blocks unsigned executables - including the locally compiled native host - OpenPath **requires SAC off** on classroom machines. The setup offers that as an explicit administrator decision (a yes/no dialog, or `/DisableSmartAppControl` for silent installs), and the installer never changes SAC silently; [`windows/DEPLOYMENT.md`](windows/DEPLOYMENT.md) documents the states, how to check them and the trade-off. The extension is signed separately through AMO. The full decision record and the signing policy kept as a draft for a future application live in [`docs/design/windows-native-host-signing.md`](docs/design/windows-native-host-signing.md).
 
 ### Privacy
 

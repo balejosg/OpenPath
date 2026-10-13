@@ -834,6 +834,45 @@ test('NSIS resolves one native Windows PowerShell path from the launcher process
   assert.match(invocations[1][1], /-Unattended/);
 });
 
+test('NSIS asks before disabling Smart App Control and keeps silent installs explicit (Phase 8e E2)', () => {
+  const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
+
+  // The 32-bit launcher reads HKLM\SYSTEM directly: the subtree is not
+  // WOW64-redirected, so no SetRegView instruction may appear.
+  assert.doesNotMatch(nsiSource, /^\s*SetRegView/m);
+  assert.match(
+    nsiSource,
+    /ReadRegDWORD \$SacPolicyState HKLM "SYSTEM\\CurrentControlSet\\Control\\CI\\Policy" "VerifiedAndReputablePolicyState"/
+  );
+
+  // The yes/no dialog only exists in the 1 (enforcement) / 2 (evaluation)
+  // branch, defaults to No and never runs in silent installs.
+  assert.equal((nsiSource.match(/MessageBox MB_YESNO/g) || []).length, 1);
+  const strcmpOne = nsiSource.indexOf('StrCmp $SacPolicyState "1"');
+  const strcmpTwo = nsiSource.indexOf('StrCmp $SacPolicyState "2"');
+  const messageBox = nsiSource.indexOf('MessageBox MB_YESNO');
+  const doneLabel = nsiSource.indexOf('smart_app_control_done:');
+  assert.ok(strcmpOne > 0 && strcmpTwo > strcmpOne, 'both policy states must reach the decision');
+  assert.ok(
+    messageBox > strcmpTwo && doneLabel > messageBox,
+    'the dialog belongs to the 1/2 branch only'
+  );
+  assert.match(nsiSource, /MessageBox MB_YESNO\|MB_ICONQUESTION\|MB_DEFBUTTON2/);
+  assert.match(nsiSource, /IDNO smart_app_control_done/);
+  assert.match(nsiSource, /IfSilent smart_app_control_done/);
+
+  // Silent installs pass the child flag only when the command line asked for
+  // it; the option itself is the explicit administrator decision.
+  assert.match(nsiSource, /\$\{GetOptions\} \$CommandLineParameters "\/DisableSmartAppControl"/);
+  assert.match(nsiSource, /StrCpy \$SmartAppControlArgument " -DisableSmartAppControl"/);
+  assert.match(nsiSource, /Call ResolveSmartAppControlDecision/);
+  const invocation =
+    /ExecWait '"\$NativePowerShellPath"[^']*-Unattended\$SmartAppControlArgument' \$1/.exec(
+      nsiSource
+    );
+  assert.ok(invocation, 'the installer child receives the explicit SAC flag only when decided');
+});
+
 test('physical personalized-EXE lane asserts architecture and LocalAccounts inside the installer child', () => {
   const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
 

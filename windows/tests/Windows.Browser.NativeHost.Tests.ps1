@@ -3223,6 +3223,30 @@ Describe "Compiled native host health (Phase 5.2 D3)" {
             (Test-Path -LiteralPath $script:ReconManifest) | Should -BeFalse
         }
 
+        It "Replaces an existing manifest in place instead of deleting it first (Phase 8e M2)" {
+            [ordered]@{ name = 'whitelist_native_host'; path = (Join-Path $script:ReconRoot 'stale\whitelist_native_host.cmd'); type = 'stdio' } |
+                ConvertTo-Json | Set-Content -LiteralPath $script:ReconManifest -Encoding UTF8
+
+            $changed = Sync-OpenPathFirefoxNativeHostMessagingManifest -NativeRoot $script:ReconNative -ManifestPath $script:ReconManifest
+
+            $changed | Should -BeTrue
+            (Get-Content -LiteralPath $script:ReconManifest -Raw | ConvertFrom-Json).path | Should -Be (Join-Path $script:ReconNative 'OpenPath-NativeHost.cmd')
+            @(Get-ChildItem -LiteralPath (Split-Path -Parent $script:ReconManifest) -Filter '*.tmp' -ErrorAction SilentlyContinue).Count | Should -Be 0
+
+            # The atomic swap goes through File.Replace; Move-Item -Force only
+            # remains as the vanished-destination fallback.
+            $moduleText = Get-Content -LiteralPath $nativeHostModulePath -Raw
+            $syncStart = $moduleText.IndexOf('function Sync-OpenPathFirefoxNativeHostMessagingManifest')
+            $syncEnd = $moduleText.IndexOf('function Invoke-OpenPathFirefoxNativeHostRegistrationBuild')
+            ($syncStart -ge 0) | Should -BeTrue
+            ($syncEnd -gt $syncStart) | Should -BeTrue
+            $syncBody = $moduleText.Substring($syncStart, $syncEnd - $syncStart)
+            $replaceIndex = $syncBody.IndexOf('[IO.File]::Replace($temporaryPath, $ManifestPath, [System.Management.Automation.Language.NullString]::Value)')
+            $moveIndex = $syncBody.IndexOf('Move-Item -LiteralPath $temporaryPath')
+            ($replaceIndex -ge 0) | Should -BeTrue
+            ($moveIndex -gt $replaceIndex) | Should -BeTrue
+        }
+
         It "Routes the registration compile through the single ensure lock (contract)" {
             $moduleText = Get-Content -LiteralPath $nativeHostModulePath -Raw
             $registerStart = $moduleText.IndexOf('function Register-OpenPathFirefoxNativeHost')

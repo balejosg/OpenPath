@@ -323,6 +323,7 @@ windows/lib/install/Installer.Config.ps1|windows/tests/Windows.Tests.ps1,tests/r
 windows/lib/install/Installer.Dns.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Enrollment.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Runtime.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/install/Installer.SmartAppControl.ps1|windows/tests/Windows.Installer.SmartAppControl.Tests.ps1
 windows/lib/install/Installer.Staging.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Config.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Redaction.ps1|windows/tests/Windows.Config.Redaction.Tests.ps1

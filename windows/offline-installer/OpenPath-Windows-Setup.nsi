@@ -32,6 +32,10 @@ ManifestDPIAware true
     !define PAYLOADS_DIR "${BUILD_DIR}\payloads"
 !endif
 
+; Phase 8e E2: FileFunc provides ${GetParameters}/${GetOptions} for the silent
+; /DisableSmartAppControl opt-in.
+!include "FileFunc.nsh"
+
 ; The executable evidence lane reads a two-byte marker from %TEMP%. Keep the
 ; stage values stable and the exit value bounded to one byte; the marker must
 ; never contain configuration, command lines, or installer output.
@@ -52,6 +56,11 @@ ManifestDPIAware true
 !define OFFLINE_STAGE_NATIVE_POWERSHELL_EXIT 5
 
 Var NativePowerShellPath
+Var SacPolicyState
+Var DisableSmartAppControlFlag
+Var SmartAppControlArgument
+Var CommandLineParameters
+Var SmartAppControlOptionValue
 
 Name "${PRODUCT_NAME}"
 OutFile "${BUILD_DIR}\OpenPath-Windows-Setup.exe"
@@ -115,6 +124,42 @@ native_powershell_missing:
     SetErrorLevel 12
     Abort
 native_powershell_ready:
+FunctionEnd
+
+Function ResolveSmartAppControlDecision
+    ; Phase 8e E2: Smart App Control (1 enforcement, 2 evaluation) can block
+    ; the unsigned native host now or after Windows enforces it. The decision
+    ; belongs to the administrator:
+    ;   - /DisableSmartAppControl on the command line answers it without a
+    ;     dialog (the only way a silent install passes the flag);
+    ;   - otherwise a visible yes/no dialog asks; the default button is No;
+    ;   - silent installs without the option never change SAC.
+    ; The launcher is 32-bit, but HKLM\SYSTEM is not redirected under WOW64,
+    ; so the policy key is read directly (no SetRegView).
+    StrCpy $DisableSmartAppControlFlag "0"
+    StrCpy $SmartAppControlArgument ""
+    ReadRegDWORD $SacPolicyState HKLM "SYSTEM\CurrentControlSet\Control\CI\Policy" "VerifiedAndReputablePolicyState"
+    IfErrors smart_app_control_done
+    StrCmp $SacPolicyState "1" smart_app_control_needs_decision
+    StrCmp $SacPolicyState "2" smart_app_control_needs_decision
+    Goto smart_app_control_done
+smart_app_control_needs_decision:
+    ClearErrors
+    ${GetParameters} $CommandLineParameters
+    IfErrors smart_app_control_silent_check
+    ClearErrors
+    ${GetOptions} $CommandLineParameters "/DisableSmartAppControl" $SmartAppControlOptionValue
+    IfErrors smart_app_control_silent_check
+    StrCpy $DisableSmartAppControlFlag "1"
+    Goto smart_app_control_apply
+smart_app_control_silent_check:
+    IfSilent smart_app_control_done
+    MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "Smart App Control can block the unsigned OpenPath native host. Disable Smart App Control now? The machine loses SAC for all apps; students stay under the OpenPath AppLocker boundary, and Windows Security can turn it back on later." IDNO smart_app_control_done
+    StrCpy $DisableSmartAppControlFlag "1"
+smart_app_control_apply:
+    StrCmp $DisableSmartAppControlFlag "1" 0 smart_app_control_done
+    StrCpy $SmartAppControlArgument " -DisableSmartAppControl"
+smart_app_control_done:
 FunctionEnd
 
 Function NormalizeOfflineStatusByte
@@ -288,8 +333,12 @@ Section "RunInstaller" SEC02
     Push "${OFFLINE_STAGE_RUN_INSTALLER_START}"
     Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
+    ; Phase 8e E2: ask about Smart App Control before the install starts. Only
+    ; an explicit yes (or /DisableSmartAppControl on the command line) passes
+    ; the flag to the child installer; silent installs never prompt.
+    Call ResolveSmartAppControlDecision
     ClearErrors
-    ExecWait '"$NativePowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -FailureStatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" -RuntimeStatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-runtime.json" -Unattended' $1
+    ExecWait '"$NativePowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -FailureStatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" -RuntimeStatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-runtime.json" -Unattended$SmartAppControlArgument' $1
     IfErrors installer_exec_error
     Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
     Push $1

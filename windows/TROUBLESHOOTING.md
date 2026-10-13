@@ -396,28 +396,65 @@ drains stderr asynchronously from launch, so a host writing more than the pipe
 buffer can no longer block; a 0-byte stdout read ends the wait immediately as
 `health-check-exited` with the exit code. Each ping records `StartMs`,
 `ElapsedMs`, `Pid`, `HasExited`, `ExitCode`, the CPU consumed at the deadline
-(`CpuMs`) and a redacted stderr extract (max 2 KB). The records are persisted in
+(`CpuMs`), a redacted stderr extract (max 2 KB) and the parent console input
+encoding (`stdinCodePage`, `stdinPreambleBytes`: what .NET Framework writes on
+the host's stdin before the first frame). The records are persisted in
 `OpenPath-NativeHost.build.json` under `lastPings` (the last two attempts) and
 every failed ping logs one WARN line. A failed health attempt (H1) is classified
 as `exited` (exit code plus stderr), `hung-no-cpu` (the process is alive without
 CPU: blocked before managed code executes - kernel, antivirus or Code
 Integrity; check the CodeIntegrity and Defender events for that window) or
 `hung-cpu` (alive and consuming CPU: a host bug; check its native-host.log).
-A clean immediate exit (code 0, empty stderr, no CodeIntegrity/Defender event)
-is the win11-pro-full first-execution anomaly: the freshly written candidate
-closes stdout before reading the ping while a second launch of the same binary
-answers in ~0.2 s, so the ping is retried once against the same candidate
-(never a compile loop; a non-zero exit stays deterministic).
 
-**Smart App Control oscillates; `csc` is not deterministic.** In lab scenes
-the SAC positive control flips within minutes: right after the policy is
-applied the MOTW copy is blocked (4551) while the plain copy runs, a few
-minutes later both run, and later both are blocked again. `csc` produced
-different executables for the same source (`ad79...` and `5f58...` in one
-scene), and SAC decides per executable on its **first launch**, so every
-recompilation is a new evaluation. The backoff + recompile cycle can recover a
-blocked host without a signature, but the outcome remains chance: signing the
-native host is the deterministic fix.
+**H1: a UTF-8 preamble in front of the frame (Phase 8e).** The clean exit
+(code 0, empty stderr, `pingMs=-1`, no CodeIntegrity/Defender event) has one
+deterministic cause. When the ensure runs from Windows PowerShell 5.1 (.NET
+Framework) and the console **input** code page is UTF-8 (65001), the
+`Process.StandardInput` StreamWriter emits the UTF-8 preamble (`EF BB BF`) on
+the host's stdin before the first frame. The host reads `EF BB BF 22` as the
+four length bytes (`0x22BFBBEF`, over the 1 MB cap) and leaves cleanly:
+
+```
+Native host stdin read stopped: reason=invalid-frame-length header=efbbbf22
+```
+
+Both hosts (the compiled C# host and the PowerShell fallback) discard a single
+UTF-8 preamble at the start of stdin, once per process; no valid length
+(1..1 MiB) begins with `EF BB BF`. Since Phase 8e the clean exit is no longer
+retried: it was deterministic, not a transient first-execution anomaly. The
+signature channel is orthogonal - a signed prebuilt receives the same preamble.
+Affected machines: Windows with the _Beta: Use Unicode UTF-8 for worldwide
+language support_ option enabled, or an administrator console set to
+`chcp 65001`. The ping records the literal code page and preamble bytes in
+`lastPings`; the E2E wrapper writes its own to `forced-update-environment.log`.
+
+**Students lose the native host days after installing.** Windows can turn Smart
+App Control on after the installation; enforcement then blocks the unsigned
+host with no OpenPath change. Check the state and the applied policies:
+
+```powershell
+Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' |
+    Select-Object VerifiedAndReputablePolicyState   # 0 off, 1 enforcement, 2 evaluation
+& "$env:SystemRoot\System32\CiTool.exe" -lp
+```
+
+The watchdog health report carries `smart_app_control_enforced` with the
+classroom boundary active even while the host still answers, and
+`native_host_smart_app_control_blocked` once the host is unavailable. Turn SAC
+off per `DEPLOYMENT.md` ("Smart App Control").
+
+**Smart App Control is a deployment requirement (Phase 8e).** In lab scenes the
+SAC positive control flips within minutes: right after the policy is applied
+the MOTW copy is blocked (4551) while the plain copy runs, a few minutes later
+both run, and later both are blocked again. `csc` produced different
+executables for the same source (`ad79...` and `5f58...` in one scene), and SAC
+decides per executable on its **first launch**, so every recompilation is a new
+evaluation. A recompile under the backoff can still recover a blocked host by
+chance, which is exactly why a classroom machine must have SAC **off**: the
+installer offers that as an explicit administrator decision (setup dialog or
+`-DisableSmartAppControl`) and never changes SAC silently; see
+`DEPLOYMENT.md` ("Smart App Control"). The signing channel remains parked
+(Phase 8e decision; `docs/design/windows-native-host-signing.md`).
 
 If the machine is not enrolled, re-enroll:
 
@@ -640,13 +677,14 @@ build manifest names the one in place:
 Reason codes in `OpenPath-NativeHost.build.json`, `fallback-state.json` and the
 watchdog health report:
 
-| Code                                    | Meaning                                                                                                    |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `native_host_compile_failed`            | csc missing or the compilation failed.                                                                     |
-| `native_host_health_ping_failed`        | The compiled candidate failed the framed ping health check.                                                |
-| `native_host_signature_invalid`         | A staged prebuilt was rejected (hash, signature, timestamp or pin mismatch); the product compiled instead. |
-| `native_host_smart_app_control_blocked` | Smart App Control (or the WDAC policy) enforced a block on the host, or the build error names it.          |
-| `native_host_compiled_unavailable`      | No healthy signed/compiled host is registered while the classroom boundary is active.                      |
+| Code                                    | Meaning                                                                                                                   |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `native_host_compile_failed`            | csc missing or the compilation failed.                                                                                    |
+| `native_host_health_ping_failed`        | The compiled candidate failed the framed ping health check.                                                               |
+| `native_host_signature_invalid`         | A staged prebuilt was rejected (hash, signature, timestamp or pin mismatch); the product compiled instead.                |
+| `native_host_smart_app_control_blocked` | Smart App Control (or the WDAC policy) enforced a block on the host, or the build error names it.                         |
+| `smart_app_control_enforced`            | Smart App Control is enforced while the classroom boundary is active (Phase 8e); reported even when the host still works. |
+| `native_host_compiled_unavailable`      | No healthy signed/compiled host is registered while the classroom boundary is active.                                     |
 
 With the classroom AppControl boundary active (`enableNonAdminAppControl`),
 `fallback-state.json` and the log record the availability once per state

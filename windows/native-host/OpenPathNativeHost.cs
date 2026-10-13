@@ -758,25 +758,108 @@ namespace OpenPathNativeHost
         // Framing
         // ------------------------------------------------------------------
 
+        // Phase 8e E0.1: one literal line per process explaining why the stdin
+        // reader stopped. The PowerShell host logs the same line (parity); the
+        // literal header bytes are lowercase hex without separators and the
+        // payload is never included.
+        private static bool _stdinStopLogged;
+
+        private static void LogStdinReadStopped(string reason, byte[] header)
+        {
+            if (_stdinStopLogged) { return; }
+            _stdinStopLogged = true;
+            string line = "Native host stdin read stopped: reason=" + reason;
+            if (header != null && header.Length == 4)
+            {
+                line += " header=" + BitConverter.ToString(header).Replace("-", "").ToLowerInvariant();
+            }
+            WriteCompatLog(line);
+        }
+
+        // Phase 8e E0.3: .NET Framework's Process.StandardInput StreamWriter
+        // emits the parent console input encoding preamble (EF BB BF when the
+        // input code page is 65001) before the first frame; the host used to
+        // read it as the length header and leave cleanly (H1). One UTF-8
+        // preamble is discarded at the start of stdin, once per process; no
+        // valid length (1..MaxMessageBytes, little-endian) starts with those
+        // bytes.
+        private static bool _stdinPreambleChecked;
+        private static readonly byte[] _stdinPrefetched = new byte[3];
+        private static int _stdinPrefetchedCount;
+
+        private static int ReadStdinBytes(Stream stdin, byte[] buffer, int offset, int count)
+        {
+            if (_stdinPrefetchedCount > 0)
+            {
+                int take = Math.Min(count, _stdinPrefetchedCount);
+                Array.Copy(_stdinPrefetched, 0, buffer, offset, take);
+                for (int i = take; i < _stdinPrefetchedCount; i++)
+                {
+                    _stdinPrefetched[i - take] = _stdinPrefetched[i];
+                }
+                _stdinPrefetchedCount -= take;
+                return take;
+            }
+            return stdin.Read(buffer, offset, count);
+        }
+
+        private static bool TryCheckStdinPreamble(Stream stdin)
+        {
+            if (_stdinPreambleChecked) { return true; }
+            _stdinPreambleChecked = true;
+            byte[] prefix = new byte[3];
+            int prefixRead = 0;
+            while (prefixRead < 3)
+            {
+                int chunk = stdin.Read(prefix, prefixRead, 3 - prefixRead);
+                if (chunk <= 0)
+                {
+                    LogStdinReadStopped("stdin-eof", null);
+                    return false;
+                }
+                prefixRead += chunk;
+            }
+            if (prefix[0] == 0xEF && prefix[1] == 0xBB && prefix[2] == 0xBF)
+            {
+                return true;
+            }
+            Array.Copy(prefix, _stdinPrefetched, 3);
+            _stdinPrefetchedCount = 3;
+            return true;
+        }
+
         private static object ReadMessage()
         {
             Stream stdin = Console.OpenStandardInput();
+            if (!TryCheckStdinPreamble(stdin)) { return null; }
             byte[] lengthBuffer = new byte[4];
             int read = 0;
             while (read < 4)
             {
-                int chunk = stdin.Read(lengthBuffer, read, 4 - read);
-                if (chunk <= 0) { return null; }
+                int chunk = ReadStdinBytes(stdin, lengthBuffer, read, 4 - read);
+                if (chunk <= 0)
+                {
+                    LogStdinReadStopped("stdin-eof", null);
+                    return null;
+                }
                 read += chunk;
             }
             int length = BitConverter.ToInt32(lengthBuffer, 0);
-            if (length <= 0 || length > MaxMessageBytes) { return null; }
+            if (length <= 0 || length > MaxMessageBytes)
+            {
+                LogStdinReadStopped("invalid-frame-length", lengthBuffer);
+                return null;
+            }
             byte[] payload = new byte[length];
             int offset = 0;
             while (offset < length)
             {
-                int chunk = stdin.Read(payload, offset, length - offset);
-                if (chunk <= 0) { return null; }
+                int chunk = ReadStdinBytes(stdin, payload, offset, length - offset);
+                if (chunk <= 0)
+                {
+                    LogStdinReadStopped("payload-eof", null);
+                    return null;
+                }
                 offset += chunk;
             }
             string json = Encoding.UTF8.GetString(payload);

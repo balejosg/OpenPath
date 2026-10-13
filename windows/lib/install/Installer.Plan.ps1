@@ -104,6 +104,11 @@ function New-OpenPathInstallPlan {
     $phases = @(
         New-OpenPathInstallPhase -Name 'existing-install-cleanup' -RecoveryHint 'Check file locks and rerun the installer as Administrator.'
         New-OpenPathInstallPhase -Name 'preflight' -Step 0 -TotalSteps 7 -Status 'Running preflight validation' -Inputs @{ SkipPreflight = $Parameters.SkipPreflight } -RecoveryHint 'Run Pre-Install-Validation.ps1 manually and fix reported prerequisites.'
+        # Phase 8e E1: Smart App Control decision, before any unsigned binary
+        # runs (Acrylic install, native host compilation). Warning-free when
+        # SAC is off; it only changes SAC on an explicit administrator
+        # decision (-DisableSmartAppControl or an interactive yes).
+        New-OpenPathInstallPhase -Name 'smart-app-control' -Inputs @{ DisableSmartAppControl = $Parameters.DisableSmartAppControl } -RecoveryHint 'Review the Smart App Control posture (Windows Security) before installing the unsigned native host.'
         New-OpenPathInstallPhase -Name 'directories' -Step 1 -TotalSteps 7 -Status 'Creating directory structure' -RecoveryHint 'Check permissions for C:\OpenPath.'
         New-OpenPathInstallPhase -Name 'runtime' -Step 2 -TotalSteps 7 -Status 'Copying modules and scripts' -RecoveryHint 'Verify installer package contents and retry from a local directory.'
         New-OpenPathInstallPhase -Name 'offline-payload-verification' -Inputs @{ OfflineConfigPath = $Parameters.OfflineConfigPath } -RecoveryHint 'Verify the offline payload manifest and staged payloads, then rerun from a complete package.'

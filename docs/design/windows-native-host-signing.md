@@ -3,7 +3,7 @@
 > Status: maintained
 > Applies to: `windows/native-host/`, the offline installer payload, the Native
 > Host Signing workflow and the classroom Smart App Control deployments
-> Last verified: 2026-10-11
+> Last verified: 2026-10-13
 > Source of truth: this document
 
 ## Problem
@@ -21,6 +21,70 @@ OpenPath uses the free **SignPath Foundation** open-source signing program
 (OV-level Authenticode; the visible publisher is _SignPath Foundation_). The
 team applies for admission; until the project is accepted nothing is signed and
 the product keeps working with a visible "SAC active, not supported" warning.
+
+## Decision (Phase 8e, 2026-10-13): signing parked; SAC off is the requirement
+
+No signing request has been made (confirmed with the maintainer on 2026-10-12)
+and SignPath is not viable in the short term, so the channel stays implemented
+but dormant (`native-host-signing.yml` compiles, uploads unsigned and ends with
+a visible warning; the empty publisher pin fails closed). OpenPath instead
+**requires Smart App Control (SAC) off** on classroom machines, and the
+installer offers that as an explicit administrator decision (setup dialog,
+`/DisableSmartAppControl`, `-DisableSmartAppControl`; see
+`windows/DEPLOYMENT.md`, "Smart App Control"). Verified facts behind the
+decision:
+
+1. Microsoft Support, "App & browser control": "Smart App Control won't block
+   anything while it's in evaluation mode"; Windows then turns it on or off by
+   itself, and once decided (or changed by hand) it cannot return to evaluation
+   without reinstalling or resetting Windows.
+2. Clean Windows 11 Pro/Education installations start in evaluation ("In most
+   cases Smart App Control will automatically turn on"); in organization-managed
+   devices SAC "switches off within 48 hours" (Microsoft Support).
+3. Microsoft Support, "What is Smart App Control": "There is currently no way
+   to bypass Smart App Control protection for individual apps."
+4. Microsoft Learn (App Control, updated 2026-10-08): an organization disables
+   SAC with `VerifiedAndReputablePolicyState` (DWORD) `0` under
+   `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy` and then `CiTool.exe -r`;
+   it can be re-enabled later without reinstalling.
+5. With SAC enforced, the freshly compiled host is blocked (4551) (Phase 7
+   product log; Phase 8/8b SAC scenes). An executable that already ran kept
+   running for minutes; long-term behavior is not measured. With SAC enforced
+   the positive control oscillates (blocked for minutes, allowed for others),
+   so it is not an instant oracle; with SAC off nothing must be blocked.
+6. Acrylic 2.2.1 (the pinned `Acrylic-Portable.zip`, sha256 `26a5601c...`) has
+   no Authenticode signature on `AcrylicService.exe`, `AcrylicConsole.exe` or
+   `AcrylicUI.exe`; in the 8b SAC scene it still ran with SAC on, probably by
+   cloud reputation - not guaranteed.
+
+What signing would add if it is ever obtained: a host that runs with SAC on
+(per-app trust instead of a machine-wide posture change) and no dependency on
+the administrator disabling SAC. H1 also shows the limit of the "signature
+fixes it" reading: the Phase 8d health-ping failure was a UTF-8 preamble in
+front of the frame (see the H1 section below), not a signing problem, and a
+signed prebuilt receives the same preamble.
+
+### Prepared signing policy (draft for a future application)
+
+The text below was the README "Code signing policy" until Phase 8e. It is kept
+here, as a draft, for a future SignPath application:
+
+> **Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).**
+>
+> OpenPath uses the SignPath Foundation open-source code signing program for
+> exactly one artifact: the compiled Windows native messaging host
+> (`OpenPath-NativeHost.exe`) that the Windows agent installs under the
+> browser-extension runtime root.
+>
+> - **What is signed:** only `OpenPath-NativeHost.exe`, built from
+>   `windows/native-host/OpenPathNativeHost.cs` in this repository.
+> - **How it is built:** the Native Host Signing workflow compiles the source
+>   with the in-box .NET Framework compiler on GitHub-hosted runners, uploads
+>   the executable as a GitHub Actions artifact and submits it to SignPath by
+>   artifact id. Every signing request is approved manually by an Approver.
+> - **What is not signed:** installers, scripts, the API and the browser
+>   extension (the extension is signed separately through AMO).
+> - **Roles:** Authors, Reviewers and Approvers - [@balejosg](https://github.com/balejosg).
 
 ## The signing channel (implemented in Phase 8)
 
@@ -76,8 +140,9 @@ expire; a release asset does not, and only the workflow creates it (the tag is
 - `Test-OpenPathNativeHostSignedExecutable` requires: sha256 == anchor hash,
   Authenticode `Valid`, a timestamp countersignature, signer subject and issuer
   equal to the pin, and the pinned description when one is declared.
-- The publisher pin (`Get-OpenPathNativeHostSignaturePin`) is **empty until
-  Phase 8.1**; an empty pin fails closed with `signature-pin-not-configured`,
+- The publisher pin (`Get-OpenPathNativeHostSignaturePin`) is **empty until a
+  signing channel is activated** (Phase 8e: parked, see the decision above); an
+  empty pin fails closed with `signature-pin-not-configured`,
   the product compiles and records
   `signatureRejectedReason`/`signature-pin-not-configured`.
 - A valid signed executable is copied to a temporary path, health-pinged as
@@ -150,9 +215,10 @@ Product response:
 - SAC windows oscillate (blocked right after apply -> both controls run minutes
   later -> blocked again) and `csc` is not deterministic: the same source
   produced hashes `ad79...` and `5f58...` in one scene, and SAC evaluates each
-  executable on first launch. A recompile under the backoff can therefore
-  recover a blocked host without a signature, but the outcome stays a chance
-  event; signing remains the deterministic fix.
+  executable on first launch. A recompile under the backoff can still recover a
+  blocked host by chance, which is why the Phase 8e decision makes SAC
+  **off** a deployment requirement instead of relying on a signature
+  (`windows/DEPLOYMENT.md`, "Smart App Control").
 
 ### Manifest reconciliation, ping diagnosis and H1 (Phase 8d)
 
@@ -188,9 +254,11 @@ Product response:
   kernel, antivirus or Code Integrity; check the CodeIntegrity/Defender events
   of the window) or `hung-cpu` (alive with CPU: host bug; check its
   native-host.log). The runner's clean first-execution exit (code 0, empty
-  stderr, no CodeIntegrity/Defender event: the candidate closes stdout before
-  the ping while its second launch answers in ~0.2 s) is retried once against
-  the same candidate; a non-zero exit stays deterministic.
+  stderr, no CodeIntegrity/Defender event) is **not** a first-execution
+  anomaly: Phase 8e H1 proved it is the UTF-8 preamble that .NET Framework's
+  `Process.StandardInput` writes when the console input code page is 65001
+  (`header=efbbbf22`). Both hosts discard one preamble at the start of stdin
+  and the clean exit is no longer retried (Phase 8e E0.4).
 - The E2E harness reports the final state from the complete `openpath.log` (with
   rotations), the manifest destination, the product health (child
   `Get-OpenPathFirefoxNativeHostCompiledHealth` with the machine PSModulePath,

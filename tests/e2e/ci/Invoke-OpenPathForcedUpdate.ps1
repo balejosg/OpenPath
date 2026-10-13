@@ -20,7 +20,22 @@ param(
 
 $inherited = [string]$env:PSModulePath
 $getFileHashResolved = [bool](Get-Command -Name Get-FileHash -ErrorAction SilentlyContinue)
-$probeLine = "Forced-update child environment: inheritedPSModulePath='$inherited' Get-FileHashResolves=$getFileHashResolved"
+# Phase 8e E0.1: literal console input encoding of the process that runs the
+# update (and therefore the health ping). .NET Framework's
+# Process.StandardInput StreamWriter writes this encoding preamble on the
+# host's stdin before the first frame; with the input code page 65001 it is
+# EF BB BF, the H1 trigger.
+$stdinCodePage = 0
+$stdinPreambleBytes = ''
+try {
+    $stdinCodePage = [int][Console]::InputEncoding.CodePage
+    $preamble = [byte[]][Console]::InputEncoding.GetPreamble()
+    if ($preamble -and $preamble.Length -gt 0) {
+        $stdinPreambleBytes = ((@($preamble | ForEach-Object { $_.ToString('x2') })) -join '')
+    }
+}
+catch { }
+$probeLine = "Forced-update child environment: inheritedPSModulePath='$inherited' Get-FileHashResolves=$getFileHashResolved stdinCodePage=$stdinCodePage stdinPreambleBytes='$stdinPreambleBytes'"
 Write-Host $probeLine
 
 $diagnosticsDir = [string]$env:OPENPATH_STUDENT_DIAGNOSTICS_DIR
