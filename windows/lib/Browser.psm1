@@ -87,6 +87,16 @@ function Sync-OpenPathFirefoxNativeHostState {
     Browser.FirefoxNativeHost\Sync-OpenPathFirefoxNativeHostState -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist:$ClearWhitelist
 }
 
+function Get-OpenPathSmartAppControlState {
+    # Phase 8e: re-exports the Smart App Control state reader from the Firefox
+    # native host module; the watchdog script resolves it through Get-Command,
+    # so the reader must be visible from the Browser module.
+    [CmdletBinding()]
+    param()
+
+    Browser.FirefoxNativeHost\Get-OpenPathSmartAppControlState
+}
+
 function Register-OpenPathFirefoxNativeHost {
     # delegates to the firefox native host module to register the native messaging host manifest
     [CmdletBinding()]
@@ -412,6 +422,8 @@ Export-ModuleMember -Function @(
     'Register-OpenPathFirefoxNativeHost',
     'Sync-OpenPathFirefoxNativeHostArtifacts',
     'Sync-OpenPathFirefoxNativeHostState',
+    # Phase 8e: watchdog-visible Smart App Control state reader.
+    'Get-OpenPathSmartAppControlState',
     # Phase 8b: the compiled-host ensure/health entrypoints were only visible
     # inside their module, so the self-update retry, the watchdog health report
     # and the installer SAC notice silently skipped them (Get-Command found

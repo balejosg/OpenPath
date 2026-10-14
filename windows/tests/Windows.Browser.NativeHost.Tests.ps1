@@ -3223,6 +3223,16 @@ Describe "Compiled native host health (Phase 5.2 D3)" {
             (Test-Path -LiteralPath $script:ReconManifest) | Should -BeFalse
         }
 
+        It "Exports the Smart App Control state reader for the watchdog session (Phase 8e)" {
+            # The watchdog script resolves the reader through Get-Command; the
+            # lab on-keep scene failed with an empty reason-code list because
+            # the function lived only inside the module scope. Browser.psm1 is
+            # already imported -Global at the top of this file.
+            (Get-Command -Name Get-OpenPathSmartAppControlState -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
+            $state = Get-OpenPathSmartAppControlState
+            $state.PSObject.Properties['State'] | Should -Not -BeNullOrEmpty
+        }
+
         It "Replaces an existing manifest in place instead of deleting it first (Phase 8e M2)" {
             [ordered]@{ name = 'whitelist_native_host'; path = (Join-Path $script:ReconRoot 'stale\whitelist_native_host.cmd'); type = 'stdio' } |
                 ConvertTo-Json | Set-Content -LiteralPath $script:ReconManifest -Encoding UTF8

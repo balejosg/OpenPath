@@ -2442,7 +2442,10 @@ PrimaryServerAddress=198.51.100.7
             $script:laneGuestSource | Should -Match "'sac-watchdog' \{"
             $script:laneGuestSource | Should -Match 'DisableSmartAppControlInstall'
             $script:laneControllerSource | Should -Match '\$sacSceneKind'
-            $script:laneControllerSource | Should -Match "-DisableSmartAppControlInstall"
+            $script:laneControllerSource | Should -Match '-DisableSmartAppControlInstall'
+            # Windows PowerShell 5.1 rejects the `-Name:$true` form for -File
+            # children; the controller must emit the bare switch token.
+            $script:laneControllerSource | Should -Not -Match 'DisableSmartAppControlInstall:\$true'
             $script:laneControllerSource | Should -Match '-Step ''sac-watchdog'''
             $script:laneControllerSource | Should -Match 'Get-OpenPathFirstVisitSacSceneVerdict'
             $script:laneControllerSource | Should -Match "sacScene            = if"

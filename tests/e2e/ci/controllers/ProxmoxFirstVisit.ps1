@@ -534,7 +534,10 @@ function Send-OpenPathFirstVisitStep {
         '-StatePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $statePath)
     )
     if ($PersonalizedGuestPath) { $arguments += '-PersonalizedExePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $PersonalizedGuestPath) }
-    if ($DisableSmartAppControlInstall) { $arguments += '-DisableSmartAppControlInstall:$true' }
+    # Phase 8e: a bare switch token; Windows PowerShell 5.1 rejects the
+    # `-Name:$true` form for -File children ("Cannot convert System.String to
+    # SwitchParameter"; reproduced on VM 111).
+    if ($DisableSmartAppControlInstall) { $arguments += '-DisableSmartAppControlInstall' }
     if ($Capabilities) { $arguments += '-Capabilities ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $Capabilities) }
     if ($FixtureBaselineJson) { $arguments += '-FixtureBaselineJson ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $FixtureBaselineJson) }
     # Phase 6.1 C: every step of the scene shares the prepare start mark so the

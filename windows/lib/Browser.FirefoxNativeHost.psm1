@@ -692,6 +692,9 @@ Export-ModuleMember -Function @(
     'Get-OpenPathFirefoxNativeHostUpdateTaskName',
     'Get-OpenPathFirefoxNativeHostRegistryPaths',
     'Test-OpenPathFirefoxNativeHostRequestSetupComplete',
+    # Phase 8e: the watchdog script resolves the SAC state through
+    # Get-Command, so the reader must be exported (it used to be module-only).
+    'Get-OpenPathSmartAppControlState',
     'Sync-OpenPathFirefoxNativeHostArtifacts',
     'Sync-OpenPathFirefoxNativeHostState',
     'Invoke-OpenPathFirefoxNativeHostCompiledEnsure',
