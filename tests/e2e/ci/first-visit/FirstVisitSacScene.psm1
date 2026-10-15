@@ -67,15 +67,31 @@ function Test-OpenPathFirstVisitSacControlMotwRan {
 }
 
 function Test-OpenPathFirstVisitSacPolicyApplied {
-    # CiTool -lp lists a VerifiedAndReputable (SAC) policy: json mode first,
-    # text mode as the fallback.
+    <#
+    .SYNOPSIS
+        A SAC policy counts as applied only while it is currently enforced.
+    .DESCRIPTION
+        `CiTool.exe -lp` keeps listing the disabled VerifiedAndReputable
+        policies after the installer turns SAC off (measured on VM 111:
+        'Friendly Name: VerifiedAndReputableDesktop' with
+        'Is Currently Enforced: false'), so a raw substring is not enough.
+        The text output is split into policy blocks; a block that names a
+        VerifiedAndReputable policy counts only when it is enforced (or when
+        the enforcement field is absent, which keeps older outputs strict).
+    #>
     param([AllowNull()][object]$State = $null)
 
     $ciTool = Get-OpenPathFirstVisitSacSceneField -InputObject $State -Name 'ciTool'
-    $json = [string](Get-OpenPathFirstVisitSacSceneField -InputObject $ciTool -Name 'json')
-    if ($json -and $json -match 'VerifiedAndReputable') { return $true }
     $raw = @(Get-OpenPathFirstVisitSacSceneField -InputObject $ciTool -Name 'raw')
-    return [bool](($raw -join "`n") -match 'VerifiedAndReputable')
+    $text = ($raw -join "`n")
+    if (-not $text -or $text -notmatch 'VerifiedAndReputable') { return $false }
+    $blocks = [regex]::Split($text, '(?m)^\s*Policy:\s*$')
+    foreach ($block in $blocks) {
+        if ($block -notmatch 'VerifiedAndReputable') { continue }
+        if ($block -match 'Is Currently Enforced:\s*true') { return $true }
+        if ($block -notmatch 'Is Currently Enforced:') { return $true }
+    }
+    return $false
 }
 
 function Get-OpenPathFirstVisitSacSceneVerdict {

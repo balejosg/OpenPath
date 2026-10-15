@@ -2383,10 +2383,14 @@ PrimaryServerAddress=198.51.100.7
 
         It 'Decides the SAC scene verdict from two sampled moments (Phase 8e)' {
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitSacScene.psm1') -Force
-            $stateOffEarly = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('No policies'); json = '{}' } }
-            $stateOffLate = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = @('No policies'); json = '{}' } }
-            $stateOnEarly = [pscustomobject]@{ registryValue = 1; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policies: VerifiedAndReputable'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
-            $stateOn = [pscustomobject]@{ registryValue = 1; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = @('Policies: VerifiedAndReputable'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
+            $stateOffEarly = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: false'); json = '{}' } }
+            $stateOffLate = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: false'); json = '{}' } }
+            $stateOnEarly = [pscustomobject]@{ registryValue = 1; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: true'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
+            $stateOn = [pscustomobject]@{ registryValue = 1; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: true'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
+            # The installer turns SAC off but `CiTool -lp` keeps listing the
+            # disabled policy until Windows settles: registry 0, policy listed
+            # with 'Is Currently Enforced: false' (measured on VM 111).
+            $stateJustDisabled = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: false'); json = '{}' } }
             $controlRan = [pscustomobject]@{ plainSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }); motwSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }) }
             $controlBlocked = [pscustomobject]@{ plainSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }); motwSamples = @([pscustomobject]@{ started = $false; exitCode = $null }) }
             $probe = [pscustomobject]@{ pingResponded = $true; deniedPowershell = $true }
