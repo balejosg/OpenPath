@@ -2407,6 +2407,16 @@ PrimaryServerAddress=198.51.100.7
             $redValue.status | Should -Be 'SAC-RED'
             $redValue.reasons | Should -Contain 'sac-second-value:1'
             $redValue.reasons | Should -Contain 'sac-second-policy-applied'
+            # A policy listing right after the install (before the reboot that
+            # settles it) is recorded but not a failure on its own.
+            $stateJustDisabled = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policies: VerifiedAndReputable'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
+            $settled = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateJustDisabled; control = $controlRan },
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOffLate; control = $controlRan }
+            ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
+            $settled.status | Should -Be 'SAC-PASS'
+            $settled.firstPolicyApplied | Should -BeTrue
+            $settled.secondPolicyApplied | Should -BeFalse
 
             $redControl = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'on-off' -Samples @(
                 [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlRan },

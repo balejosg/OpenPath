@@ -141,7 +141,10 @@ function Get-OpenPathFirstVisitSacSceneVerdict {
     if ($Kind -in @('eval-off', 'on-off')) {
         if (-not (($null -ne $firstValue) -and [int]$firstValue -eq 0)) { $reasons.Add("sac-first-value:$firstValue") | Out-Null }
         if (-not (($null -ne $secondValue) -and [int]$secondValue -eq 0)) { $reasons.Add("sac-second-value:$secondValue") | Out-Null }
-        if ($firstPolicy) { $reasons.Add('sac-first-policy-applied') | Out-Null }
+        # The policy listing settles after the reboot that the scene already
+        # performs before the visit: right after `CiTool -r` the disabled
+        # policy can still be listed (measured on VM 111), so only the second
+        # moment - the one the criterion describes - requires it gone.
         if ($secondPolicy) { $reasons.Add('sac-second-policy-applied') | Out-Null }
         if (-not $firstPlainRan) { $reasons.Add('sac-first-control-plain-blocked') | Out-Null }
         if (-not $firstMotwRan) { $reasons.Add('sac-first-control-motw-blocked') | Out-Null }

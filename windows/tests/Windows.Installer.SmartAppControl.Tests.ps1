@@ -215,5 +215,17 @@ Describe 'Installer Smart App Control phase (Phase 8e E1)' {
             $installer | Should -Match 'windows/DEPLOYMENT\.md'
             $installer | Should -Not -Match 'Sign the native host'
         }
+
+        It 'Gives CiTool a closed stdin and a bounded wait in the default invoker (Phase 8e)' {
+            # The plain `& CiTool -r` invocation hangs forever in the hidden
+            # installer child started by the NSIS (reproduced on VM 111 with
+            # cpuMs=0): CiTool blocks on an invalid stdin handle. The default
+            # invoker redirects and closes stdin and bounds the wait.
+            $helper = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'lib' 'install' 'Installer.SmartAppControl.ps1') -Raw
+            $helper | Should -Match 'RedirectStandardInput = \$true'
+            $helper | Should -Match 'StandardInput\.Close\(\)'
+            $helper | Should -Match 'WaitForExit\(60000\)'
+            $helper | Should -Match 'TimedOut'
+        }
     }
 }

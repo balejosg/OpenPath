@@ -160,14 +160,38 @@ function Invoke-OpenPathSmartAppControlStep {
             $systemRoot = if ($env:SystemRoot) { [string]$env:SystemRoot } else { 'C:\Windows' }
             $ciTool = Join-Path $systemRoot 'System32\CiTool.exe'
             if (-not (Test-Path -LiteralPath $ciTool -PathType Leaf)) {
-                return [pscustomobject]@{ ExitCode = -1; Output = ''; Missing = $true }
+                return [pscustomobject]@{ ExitCode = -1; Output = ''; Missing = $true; TimedOut = $false }
             }
             try {
-                $output = (& $ciTool @Arguments 2>&1 | Out-String)
-                return [pscustomobject]@{ ExitCode = [int]$LASTEXITCODE; Output = $output; Missing = $false }
+                # Phase 8e: CiTool blocks forever when its stdin is an invalid
+                # handle - the hidden installer child started by the NSIS
+                # (reproduced on VM 111: the plain `& CiTool -r` invocation
+                # timed out, the same call with a closed stdin pipe finished in
+                # ~1.5 s). Redirect and close stdin, read the pipes
+                # asynchronously and bound the wait so a stuck CiTool becomes a
+                # failure the step can report instead of a hung install.
+                $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+                $startInfo.FileName = $ciTool
+                $startInfo.Arguments = (@($Arguments) -join ' ')
+                $startInfo.UseShellExecute = $false
+                $startInfo.CreateNoWindow = $true
+                $startInfo.RedirectStandardInput = $true
+                $startInfo.RedirectStandardOutput = $true
+                $startInfo.RedirectStandardError = $true
+                $process = [System.Diagnostics.Process]::Start($startInfo)
+                try { $process.StandardInput.Close() } catch { }
+                $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+                $stderrTask = $process.StandardError.ReadToEndAsync()
+                if (-not $process.WaitForExit(60000)) {
+                    try { $process.Kill() } catch { }
+                    return [pscustomobject]@{ ExitCode = -1; Output = ''; Missing = $false; TimedOut = $true }
+                }
+                $output = [string]$stdoutTask.Result + [string]$stderrTask.Result
+                try { $process.Dispose() } catch { }
+                return [pscustomobject]@{ ExitCode = [int]$process.ExitCode; Output = $output; Missing = $false; TimedOut = $false }
             }
             catch {
-                return [pscustomobject]@{ ExitCode = -1; Output = [string]$_; Missing = $false }
+                return [pscustomobject]@{ ExitCode = -1; Output = [string]$_; Missing = $false; TimedOut = $false }
             }
         }
     }
@@ -181,7 +205,7 @@ function Invoke-OpenPathSmartAppControlStep {
         $refresh = & $invoker @('-r')
         $refreshOk = ($refresh -and $null -ne $refresh.ExitCode -and [int]$refresh.ExitCode -eq 0)
         if (-not $refreshOk) {
-            $applyError = if ($refresh -and $refresh.PSObject.Properties['Missing'] -and [bool]$refresh.Missing) { 'CiTool.exe is not available' } else { "CiTool.exe -r failed (exit $($refresh.ExitCode))" }
+            $applyError = if ($refresh -and $refresh.PSObject.Properties['Missing'] -and [bool]$refresh.Missing) { 'CiTool.exe is not available' } elseif ($refresh -and $refresh.PSObject.Properties['TimedOut'] -and [bool]$refresh.TimedOut) { 'CiTool.exe -r timed out' } else { "CiTool.exe -r failed (exit $($refresh.ExitCode))" }
         }
         elseif ($refresh.PSObject.Properties['Output'] -and ([string]$refresh.Output).Trim()) {
             # `CiTool -r` answers with a JSON policy list; a refused refresh can
