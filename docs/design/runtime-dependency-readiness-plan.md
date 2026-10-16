@@ -885,6 +885,26 @@ Phase 8f makes the restart decision explicit and shared:
   `acrylic-restart-near-ready`; `FirstVisitUpdateContention.psm1`) that fail
   the scene as PRODUCT red even when the page waves pass.
 
+Two measured corrections on the invariant analysis (both found by the lane's
+own runs, 2026-10-16):
+
+- the analysis must read the **full post-visit `openpath.log` copy** the
+  controller already makes before the collect; the collect tail is capped at
+  its last 60 lines and run 38921473331 landed its three restart lines just
+  outside that window, reporting `restartCount=0` (a blind
+  CONTENTION-PASS). The literal artifacts of that run and of the control run
+  38911355649 are pinned as fixtures in
+  `tests/e2e/ci/first-visit/fixtures/update-contention-*-openpath-log.txt`;
+- a restart the log identifies as `reason=content-changed` is the designed
+  way to load new content: the worker's stamp runs after that restart inside
+  the restart lock and the `ready` it publishes legitimately follows it
+  (11 near-ready pairs in run 38921473331, all justified). The
+  `*-unchanged` and `*-near-ready` invariants therefore count only restarts
+  without that identification, which keeps the old-product control red (its
+  legacy log carries no reason lines) and the fixed product green. The log
+  prefix is parsed as UTC (`AssumeUniversal`): the guest clock is UTC and a
+  local parse silently shifted every epoch comparison by the runner offset.
+
 The Phase 8f evidence summary lives in
 `evidence/windows-acrylic-restarts-phase8f-*` at the workspace root, including
 the literal restart table for one unchanged Update cycle.

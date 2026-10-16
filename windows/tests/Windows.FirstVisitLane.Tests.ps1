@@ -1978,8 +1978,40 @@ PrimaryServerAddress=198.51.100.7
             $verdict.acrylicRestarts.unchangedCycleRestarts | Should -Be 9
         }
 
+        It 'Keeps the healthy fixed-product log green and the old-product control red (Phase 8f F5, literal runs)' {
+            $fx = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\fixtures'
+            # Run 38921473331 (auto-run on the fixed product, full post-visit
+            # log + the visit diagnostics): the three fast-apply restarts are
+            # content changes and the readies legitimately follow them (11
+            # near-ready pairs, all justified), while the 60-line collect tail
+            # alone - the defect that made that run's own analysis blind - sees
+            # none of it.
+            $autoLog = @(Get-Content -LiteralPath (Join-Path $fx 'update-contention-autorun-38921473331-openpath-log.txt'))
+            $autoDiag = @(Get-Content -LiteralPath (Join-Path $fx 'update-contention-autorun-38921473331-diagnostics.txt'))
+            $auto = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $autoLog -DiagnosticLines $autoDiag
+            $auto.restartCount | Should -Be 4
+            $auto.unchangedCycleRestarts | Should -Be 0
+            $auto.overlapCount | Should -Be 0
+            $auto.nearReadyCount | Should -Be 11
+            $auto.unjustifiedNearReadyCount | Should -Be 0
+            $auto.reasons.Count | Should -Be 0
+
+            $tailOnly = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines @($autoLog | Select-Object -Last 60) -DiagnosticLines $autoDiag
+            $tailOnly.restartCount | Should -Be 0
+
+            # Run 38911355649 (the control: 1c363288 template + this harness,
+            # full log): restarts without a reason line inside unchanged cycles
+            # and one overlap stay PRODUCT-red.
+            $controlLog = @(Get-Content -LiteralPath (Join-Path $fx 'update-contention-control-38911355649-openpath-log.txt'))
+            $control = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $controlLog
+            $control.unchangedCycleRestarts | Should -Be 9
+            $control.overlapCount | Should -Be 1
+            $control.reasons | Should -Contain 'acrylic-restart-unchanged'
+            $control.reasons | Should -Contain 'acrylic-restart-overlap'
+        }
+
         It 'Flags a restart next to a ready event and stays quiet otherwise (Phase 8f F5)' {
-            $restartAt = [DateTimeOffset]::ParseExact('2026-10-16 10:00:00', 'yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
+            $restartAt = [DateTimeOffset]::ParseExact('2026-10-16 10:00:00', 'yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal)
             $baseMs = [long]$restartAt.ToUnixTimeMilliseconds()
             $restartLines = @(
                 '2026-10-16 10:00:00 [INFO] [DNS.Acrylic.Service.ps1] [PID:900] Restarting Acrylic service...',
@@ -1991,6 +2023,18 @@ PrimaryServerAddress=198.51.100.7
             $near = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $restartLines -DiagnosticLines $nearDiagnostics
             $near.reasons | Should -Contain 'acrylic-restart-near-ready'
             $near.nearReadyCount | Should -Be 1
+            $near.unjustifiedNearReadyCount | Should -Be 1
+
+            # F4: a restart identified as a real content change is the designed
+            # way to load new content; the ready that follows its own stamp is
+            # not a violation. Legacy logs have no reason line and always count.
+            $contentChangedLines = $restartLines + @(
+                '2026-10-16 10:00:01 [INFO] [DNS.Acrylic.Service.ps1] [PID:900] Acrylic restart reason=content-changed caller=Invoke-OpenPathRuntimeDependencyFastApply pid=900 ms=1400'
+            )
+            $contentChanged = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $contentChangedLines -DiagnosticLines $nearDiagnostics
+            $contentChanged.reasons | Should -Not -Contain 'acrylic-restart-near-ready'
+            $contentChanged.nearReadyCount | Should -Be 1
+            $contentChanged.unjustifiedNearReadyCount | Should -Be 0
 
             $farDiagnostics = @(
                 ('2026-10-16 10:01:00 [INFO] [OpenPath-NativeHost] stage=extension-diagnostic {"kind":"hold-outcome","outcome":"ready","ts":' + ($baseMs + 60000) + '}')
@@ -2165,9 +2209,14 @@ PrimaryServerAddress=198.51.100.7
             $controller | Should -Match 'on-before-install'
             $controller | Should -Match 'Get-OpenPathFirstVisitUpdateContention'
             # Phase 8f F5: the restart invariant reasons join productReasons so
-            # the scene files as PRODUCT red even when the waves pass.
+            # the scene files as PRODUCT red even when the waves pass, and the
+            # analysis runs on the full post-visit openpath.log copy, never the
+            # 60-line collect tail (run 38921473331 was analysis-blind).
             $controller | Should -Match 'acrylic-restart-'
             $controller | Should -Match 'restart invariants'
+            $controller | Should -Match '\$contentionLines'
+            $controller | Should -Match "Join-Path \`$evidenceDir 'openpath\.log'"
+            $controller | Should -Match 'Get-OpenPathFirstVisitUpdateContention -OpenPathLines \$contentionLines'
             $controller | Should -Match 'Get-OpenPathFirstVisitStallClassification'
             $controller | Should -Match 'infraVmStall'
 

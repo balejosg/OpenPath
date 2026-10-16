@@ -27,6 +27,13 @@ function Get-OpenPathFirstVisitLogTimestampMs {
     <#
     .SYNOPSIS
     Parses the second-resolution log prefix (yyyy-MM-dd HH:mm:ss) into epoch ms.
+    .DESCRIPTION
+    The guest agent logs UTC wall-clock prefixes (the lab VMs run on UTC), and
+    every consumer compares the result against epoch-ms values from the guest
+    evidence (extension diagnostics `ts`, trigger evidence). AssumeUniversal
+    keeps the frame correct regardless of the runner's local timezone; a local
+    parse silently shifted every comparison by the runner offset (measured
+    +2 h on the development host vs the UTC lane runner).
     #>
     [CmdletBinding()]
     param([AllowNull()][string]$Line = '')
@@ -34,7 +41,12 @@ function Get-OpenPathFirstVisitLogTimestampMs {
     $match = [regex]::Match([string]$Line, '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
     if (-not $match.Success) { return $null }
     try {
-        $parsed = [datetimeoffset]::ParseExact($match.Groups[1].Value, 'yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
+        # ps-culture-allow: the guest log prefix is a UTC wall-clock stamp; AssumeUniversal (not RoundtripKind) is the intended parse frame.
+        $parsed = [datetimeoffset]::ParseExact(
+            $match.Groups[1].Value,
+            'yyyy-MM-dd HH:mm:ss',
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::AssumeUniversal)
         return [long]$parsed.ToUnixTimeMilliseconds()
     }
     catch {
@@ -201,8 +213,11 @@ function Get-OpenPathFirstVisitAcrylicRestartInvariants {
         (ii) `acrylic-restart-overlap`: 0 overlapping restart intervals between
             distinct PIDs (the pre-8f serialization defect).
         (iii) `acrylic-restart-near-ready`: 0 restarts within +/-2 s of a
-            `hold-outcome ... "outcome":"ready"` event (the ready window would
-            publish inside or against a restart).
+            `hold-outcome ... "outcome":"ready"` event unless the restart is
+            identified as `reason=content-changed` (Phase 8f F4: a content
+            change is the designed way to load new content and the worker's
+            ready legitimately follows its own restart; legacy logs without a
+            reason line have no exemption).
         The Update cycle windows come from Get-OpenPathFirstVisitUpdateRuns and
         the ready events from the extension diagnostics (`ts` is epoch ms).
     #>
@@ -246,11 +261,16 @@ function Get-OpenPathFirstVisitAcrylicRestartInvariants {
         if (-not $contentUnchanged) { continue }
         $unchangedCycleCount += 1
         foreach ($restart in $restarts) {
+            # Phase 8f F4: a restart the log identifies as a real content change
+            # is a justified loader (typically the fast apply serving the queue
+            # while the cycle's own render found the file already updated);
+            # legacy logs without a reason line have no exemption.
+            if ([string]$restart.reason -eq 'content-changed') { continue }
             if ([long]$restart.startMs -ge $cycleStart -and [long]$restart.startMs -le $cycleEnd) {
                 $unchangedCycleRestarts += 1
                 $violations.Add([pscustomobject]@{
                         code = 'acrylic-restart-unchanged'
-                        detail = "restart pid=$($restart.pid) at=$($restart.startMs) in unchanged cycle start=$cycleStart end=$cycleEnd"
+                        detail = "restart pid=$($restart.pid) at=$($restart.startMs) in unchanged cycle start=$cycleStart end=$cycleEnd reason='$($restart.reason)'"
                     }) | Out-Null
             }
         }
@@ -275,7 +295,13 @@ function Get-OpenPathFirstVisitAcrylicRestartInvariants {
     }
     if ($overlapCount -gt 0) { $reasons.Add('acrylic-restart-overlap') | Out-Null }
 
-    # (iii) restarts within +/-ReadyProximityMs of a ready event
+    # (iii) restarts within +/-ReadyProximityMs of a ready event.
+    # Phase 8f F4: a restart the log identifies as a real content change
+    # (`reason=content-changed`) is the designed way to load new content; the
+    # worker's stamp runs after that restart's window, so the ready it
+    # publishes legitimately follows it. The invariant keeps its teeth against
+    # restarts near a ready that are NOT identifiable as a content change
+    # (legacy logs carry no reason line and therefore count).
     $readyTs = New-Object System.Collections.Generic.List[long]
     foreach ($line in @($DiagnosticLines)) {
         $text = [string]$line
@@ -284,18 +310,22 @@ function Get-OpenPathFirstVisitAcrylicRestartInvariants {
         if ($tsMatch.Success) { $readyTs.Add([long]$tsMatch.Groups['ts'].Value) | Out-Null }
     }
     $nearReadyCount = 0
+    $unjustifiedNearReadyCount = 0
     foreach ($restart in $restarts) {
+        $restartReason = [string]$restart.reason
         foreach ($ready in $readyTs) {
             if ([long]$ready -ge ([long]$restart.startMs - $ReadyProximityMs) -and [long]$ready -le ([long]$restart.endMs + $ReadyProximityMs)) {
                 $nearReadyCount += 1
+                if ($restartReason -eq 'content-changed') { continue }
+                $unjustifiedNearReadyCount += 1
                 $violations.Add([pscustomobject]@{
                         code = 'acrylic-restart-near-ready'
-                        detail = "ready ts=$ready within +/-${ReadyProximityMs}ms of restart pid=$($restart.pid) [$($restart.startMs),$($restart.endMs)]"
+                        detail = "ready ts=$ready within +/-${ReadyProximityMs}ms of unjustified restart pid=$($restart.pid) [$($restart.startMs),$($restart.endMs)] reason='$restartReason'"
                     }) | Out-Null
             }
         }
     }
-    if ($nearReadyCount -gt 0) { $reasons.Add('acrylic-restart-near-ready') | Out-Null }
+    if ($unjustifiedNearReadyCount -gt 0) { $reasons.Add('acrylic-restart-near-ready') | Out-Null }
 
     return [ordered]@{
         restarts                  = @($restarts)
@@ -306,6 +336,7 @@ function Get-OpenPathFirstVisitAcrylicRestartInvariants {
         overlapCount              = $overlapCount
         readyEvents               = $readyTs.Count
         nearReadyCount            = $nearReadyCount
+        unjustifiedNearReadyCount = $unjustifiedNearReadyCount
         readyProximityMs          = $ReadyProximityMs
         reasons                   = @($reasons.ToArray())
         violations                = @($violations.ToArray())

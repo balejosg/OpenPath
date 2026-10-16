@@ -2049,7 +2049,25 @@ function Invoke-OpenPathFirstVisitObserve {
             # retention, enqueue->ready p95 <= 3 s, zero cancelled-budget). The
             # guest trigger evidence backs the precondition when the collected
             # log tail no longer carries the run start.
-            $contentionAnalysis = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $openpathTail -DiagnosticLines $canaryDiagnostics -CanaryMetrics $canaryMetrics -TriggerEvidence $updateTrigger
+            # Phase 8f F5: the restart invariants need the whole scene window.
+            # The collect tail is capped at the last 60 lines and cut the
+            # contention cycle off entirely in run 38921473331 (the restart
+            # lines fell just outside it, reporting restartCount=0 with a false
+            # CONTENTION-PASS), so prefer the full post-visit copy the
+            # controller already made (guest-logs/openpath.log) and fall back
+            # to the tail only when that copy is missing.
+            $contentionLines = $openpathTail
+            $fullOpenPathLog = Join-Path $evidenceDir 'openpath.log'
+            if (Test-Path -LiteralPath $fullOpenPathLog) {
+                try {
+                    $fullLines = @(Get-Content -LiteralPath $fullOpenPathLog)
+                    if ($fullLines.Count -gt 0) { $contentionLines = $fullLines }
+                }
+                catch {
+                    Write-Warning "first-visit update-contention full log unreadable: $($_.Exception.Message)"
+                }
+            }
+            $contentionAnalysis = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $contentionLines -DiagnosticLines $canaryDiagnostics -CanaryMetrics $canaryMetrics -TriggerEvidence $updateTrigger
             $canary['contention'] = $contentionAnalysis
             $canary['updateTrigger'] = $updateTrigger
         }
