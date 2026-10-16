@@ -120,6 +120,198 @@ function Get-OpenPathFirstVisitFirstRetentionMs {
     return $first
 }
 
+function Get-OpenPathFirstVisitAcrylicRestarts {
+    <#
+    .SYNOPSIS
+        Acrylic restart intervals from the agent log, paired per process.
+    .DESCRIPTION
+        Phase 8f F1/F5. A restart starts at `Restarting Acrylic service...` and
+        ends at the next `Acrylic service restarted successfully` (or `Could not
+        restart Acrylic service`) from the same PID. The Phase 8f reason line
+        (`Acrylic restart reason=...`) attaches the product's reason when the
+        log carries it; `Acrylic restart skipped ...` lines are not restarts.
+        An unfinished interval (log cut mid-restart) is treated as ending at the
+        log's last timestamp, so a later different-PID restart still overlaps it.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][string[]]$OpenPathLines = @())
+
+    $restarts = New-Object System.Collections.Generic.List[object]
+    $lastMs = $null
+    foreach ($line in @($OpenPathLines)) {
+        $text = [string]$line
+        $ts = Get-OpenPathFirstVisitLogTimestampMs -Line $text
+        if ($null -ne $ts) { $lastMs = [long]$ts }
+        $pidMatch = [regex]::Match($text, '\[PID:(\d+)\]')
+        $pid = if ($pidMatch.Success) { [int]$pidMatch.Groups[1].Value } else { 0 }
+
+        if ($text -match 'Restarting Acrylic service\.\.\.' -and $null -ne $ts) {
+            $restarts.Add([ordered]@{
+                    startMs  = [long]$ts
+                    endMs    = $null
+                    failed   = $false
+                    pid      = $pid
+                    reason   = ''
+                    startLine = $text
+                }) | Out-Null
+            continue
+        }
+        if ($text -match 'Acrylic service restarted successfully' -or $text -match 'Could not restart Acrylic service') {
+            $failed = ($text -match 'Could not restart Acrylic service')
+            for ($index = $restarts.Count - 1; $index -ge 0; $index--) {
+                if ($null -eq $restarts[$index].endMs -and [int]$restarts[$index].pid -eq $pid) {
+                    $restarts[$index].endMs = $ts
+                    $restarts[$index].failed = $failed
+                    break
+                }
+            }
+            continue
+        }
+        if ($text -match 'Acrylic restart reason=' -and $null -ne $ts) {
+            $reasonMatch = [regex]::Match($text, 'Acrylic restart reason=(?<reason>\S+) caller=\S+ pid=(?<pid>\d+)')
+            if ($reasonMatch.Success) {
+                $reasonPid = [int]$reasonMatch.Groups['pid'].Value
+                for ($index = $restarts.Count - 1; $index -ge 0; $index--) {
+                    if ([int]$restarts[$index].pid -eq $reasonPid) {
+                        $restarts[$index].reason = [string]$reasonMatch.Groups['reason'].Value
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    if ($null -eq $lastMs) { $lastMs = 0 }
+    foreach ($restart in $restarts) {
+        if ($null -eq $restart.endMs) { $restart.endMs = [long]$lastMs }
+    }
+    return @($restarts.ToArray())
+}
+
+function Get-OpenPathFirstVisitAcrylicRestartInvariants {
+    <#
+    .SYNOPSIS
+        Phase 8f F5 invariants over the update-contention evidence.
+    .DESCRIPTION
+        (i) `acrylic-restart-unchanged`: 0 restarts inside an Update cycle whose
+            hosts file and INI were both unchanged (the cycle shows the
+            "effective content unchanged" / "configuration unchanged" markers,
+            or it never rendered either file). Restarts of ANY process inside
+            the cycle window count.
+        (ii) `acrylic-restart-overlap`: 0 overlapping restart intervals between
+            distinct PIDs (the pre-8f serialization defect).
+        (iii) `acrylic-restart-near-ready`: 0 restarts within +/-2 s of a
+            `hold-outcome ... "outcome":"ready"` event (the ready window would
+            publish inside or against a restart).
+        The Update cycle windows come from Get-OpenPathFirstVisitUpdateRuns and
+        the ready events from the extension diagnostics (`ts` is epoch ms).
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string[]]$OpenPathLines = @(),
+        [AllowNull()][string[]]$DiagnosticLines = @(),
+        [int]$ReadyProximityMs = 2000
+    )
+
+    $restarts = @(Get-OpenPathFirstVisitAcrylicRestarts -OpenPathLines $OpenPathLines)
+    $runs = @(Get-OpenPathFirstVisitUpdateRuns -OpenPathLines $OpenPathLines)
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $violations = New-Object System.Collections.Generic.List[object]
+
+    # (i) restarts inside unchanged Update cycles
+    $unchangedCycleCount = 0
+    $unchangedCycleRestarts = 0
+    foreach ($run in $runs) {
+        # Only completed cycles are evaluated: a run that never logged its end
+        # (still in course when the log was copied, or an aborted start) has
+        # unknown content status, and letting it swallow every later cycle
+        # would misattribute restarts.
+        if ($null -eq $run.endMs) { continue }
+        $cycleStart = [long]$run.startMs
+        $cycleEnd = [long]$run.endMs
+        $hostsUnchanged = $false
+        $hostsRendered = $false
+        $iniUnchanged = $false
+        $iniWritten = $false
+        foreach ($line in @($OpenPathLines)) {
+            $ts = Get-OpenPathFirstVisitLogTimestampMs -Line ([string]$line)
+            if ($null -eq $ts -or [long]$ts -lt $cycleStart -or [long]$ts -gt $cycleEnd) { continue }
+            $text = [string]$line
+            if ($text -match 'AcrylicHosts\.txt effective content unchanged; skipping rewrite' -or $text -match 'AcrylicHosts\.txt unchanged; skipping rewrite') { $hostsUnchanged = $true }
+            if ($text -match 'Generating AcrylicHosts\.txt with') { $hostsRendered = $true }
+            if ($text -match 'Acrylic configuration unchanged; skipping rewrite') { $iniUnchanged = $true }
+            if ($text -match 'Acrylic configuration updated') { $iniWritten = $true }
+        }
+        $contentUnchanged = ((-not $hostsRendered -or $hostsUnchanged) -and (-not $iniWritten -or $iniUnchanged))
+        if (-not $contentUnchanged) { continue }
+        $unchangedCycleCount += 1
+        foreach ($restart in $restarts) {
+            if ([long]$restart.startMs -ge $cycleStart -and [long]$restart.startMs -le $cycleEnd) {
+                $unchangedCycleRestarts += 1
+                $violations.Add([pscustomobject]@{
+                        code = 'acrylic-restart-unchanged'
+                        detail = "restart pid=$($restart.pid) at=$($restart.startMs) in unchanged cycle start=$cycleStart end=$cycleEnd"
+                    }) | Out-Null
+            }
+        }
+    }
+    if ($unchangedCycleRestarts -gt 0) { $reasons.Add('acrylic-restart-unchanged') | Out-Null }
+
+    # (ii) overlapping restart intervals between distinct PIDs
+    $overlapCount = 0
+    for ($left = 0; $left -lt $restarts.Count; $left++) {
+        for ($right = $left + 1; $right -lt $restarts.Count; $right++) {
+            $a = $restarts[$left]
+            $b = $restarts[$right]
+            if ([int]$a.pid -eq [int]$b.pid) { continue }
+            if ([long]$a.startMs -lt [long]$b.endMs -and [long]$b.startMs -lt [long]$a.endMs) {
+                $overlapCount += 1
+                $violations.Add([pscustomobject]@{
+                        code = 'acrylic-restart-overlap'
+                        detail = "pid=$($a.pid) [$($a.startMs),$($a.endMs)] overlaps pid=$($b.pid) [$($b.startMs),$($b.endMs)]"
+                    }) | Out-Null
+            }
+        }
+    }
+    if ($overlapCount -gt 0) { $reasons.Add('acrylic-restart-overlap') | Out-Null }
+
+    # (iii) restarts within +/-ReadyProximityMs of a ready event
+    $readyTs = New-Object System.Collections.Generic.List[long]
+    foreach ($line in @($DiagnosticLines)) {
+        $text = [string]$line
+        if ($text -notmatch '"outcome":"ready"') { continue }
+        $tsMatch = [regex]::Match($text, '"ts"\s*:\s*(?<ts>\d{10,})')
+        if ($tsMatch.Success) { $readyTs.Add([long]$tsMatch.Groups['ts'].Value) | Out-Null }
+    }
+    $nearReadyCount = 0
+    foreach ($restart in $restarts) {
+        foreach ($ready in $readyTs) {
+            if ([long]$ready -ge ([long]$restart.startMs - $ReadyProximityMs) -and [long]$ready -le ([long]$restart.endMs + $ReadyProximityMs)) {
+                $nearReadyCount += 1
+                $violations.Add([pscustomobject]@{
+                        code = 'acrylic-restart-near-ready'
+                        detail = "ready ts=$ready within +/-${ReadyProximityMs}ms of restart pid=$($restart.pid) [$($restart.startMs),$($restart.endMs)]"
+                    }) | Out-Null
+            }
+        }
+    }
+    if ($nearReadyCount -gt 0) { $reasons.Add('acrylic-restart-near-ready') | Out-Null }
+
+    return [ordered]@{
+        restarts                  = @($restarts)
+        restartCount              = $restarts.Count
+        updateCycles              = $runs.Count
+        unchangedCycles           = $unchangedCycleCount
+        unchangedCycleRestarts    = $unchangedCycleRestarts
+        overlapCount              = $overlapCount
+        readyEvents               = $readyTs.Count
+        nearReadyCount            = $nearReadyCount
+        readyProximityMs          = $ReadyProximityMs
+        reasons                   = @($reasons.ToArray())
+        violations                = @($violations.ToArray())
+    }
+}
+
 function Get-OpenPathFirstVisitUpdateContention {
     <#
     .SYNOPSIS
@@ -188,6 +380,12 @@ function Get-OpenPathFirstVisitUpdateContention {
     if ($cancelledBudget -gt 0) { $reasons.Add("holds-not-ready:$cancelledBudget") | Out-Null }
     if ($readyP95 -gt $MaxReadyP95Ms) { $reasons.Add("ready-p95-over-budget:$readyP95") | Out-Null }
 
+    # Phase 8f F5: the restart invariants (see the function's doc) join the
+    # verdict; the controller merges these three codes into productReasons so
+    # the scene files as PRODUCT red even when the page waves pass.
+    $restartInvariants = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $OpenPathLines -DiagnosticLines $DiagnosticLines
+    foreach ($restartReason in @($restartInvariants.reasons)) { $reasons.Add([string]$restartReason) | Out-Null }
+
     $passed = ($reasons.Count -eq 0)
     return [ordered]@{
         updateRuns          = @($runs)
@@ -202,6 +400,7 @@ function Get-OpenPathFirstVisitUpdateContention {
         readyMaxMs          = $readyMax
         cancelledBudget     = $cancelledBudget
         maxReadyP95Ms       = $MaxReadyP95Ms
+        acrylicRestarts     = $restartInvariants
         verdict             = if ($passed) { 'CONTENTION-PASS' } else { 'CONTENTION-RED' }
         reasons             = @($reasons.ToArray())
     }
@@ -212,4 +411,6 @@ Export-ModuleMember -Function `
     Get-OpenPathFirstVisitLogTimestampMs, `
     Get-OpenPathFirstVisitUpdateRuns, `
     Get-OpenPathFirstVisitFirstRetentionMs, `
+    Get-OpenPathFirstVisitAcrylicRestarts, `
+    Get-OpenPathFirstVisitAcrylicRestartInvariants, `
     Get-OpenPathFirstVisitUpdateContention

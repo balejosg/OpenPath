@@ -304,6 +304,21 @@ Windows Security):
   (previous state, action, result, date) is logged and stored in
   `data\config.json` under `smartAppControl`.
 
+The recorded `result` says whether the machine is actually off SAC now (the
+installer cross-checks the policy value, the `CiTool.exe -lp` listing and
+`Win32_DeviceGuard.UsermodeCodeIntegrityPolicyEnforcementStatus`):
+
+- `result=verified` - the policy value is `0`, no VerifiedAndReputable policy
+  is listed as currently enforced, and the usermode code-integrity enforcement
+  status is `0`. SAC is off without a reboot. A policy that stays listed with
+  `Is Currently Enforced: false` is still `verified`: the listing persists by
+  design after the disable.
+- `result=reboot-required` - one of the checks did not settle: a policy is
+  still listed as enforced, the Device Guard status disagrees with the listing
+  (the mismatch is spelled out in the WARN), or CiTool could not refresh. The
+  install continues, but Windows may keep enforcing SAC until the next reboot;
+  re-check with `CiTool.exe -lp` after rebooting.
+
 What the administrator sees:
 
 - If SAC is enforced and no valid host is available, the installer finishes

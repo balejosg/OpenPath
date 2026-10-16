@@ -303,6 +303,13 @@ Describe "DNS Module" {
     Context "Update-AcrylicHost" {
         BeforeEach {
             Mock Get-OpenPathProtectedDomains { @('raw.githubusercontent.com') } -ModuleName DNS
+            # Phase 8f: the restart path evaluates the loaded-content state
+            # before touching the service. These unit tests cover the
+            # stop/purge/start mechanics, so the state reads as unknown
+            # (fail-safe restart) on every machine and no real state file is
+            # read or written.
+            Mock Get-OpenPathAcrylicLoadedState { $null } -ModuleName DNS
+            Mock Set-OpenPathAcrylicLoadedState { $true } -ModuleName DNS
         }
 
         It "Exposes runtime dependency policy, queue, and overlay as split internal modules" {

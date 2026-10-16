@@ -27,14 +27,18 @@ function Get-OpenPathInstallerSmartAppControlState {
     .DESCRIPTION
         Get-OpenPathSmartAppControlState (lib/internal/NativeHost.Build.ps1) is
         not loaded this early in the install. The value set is the same: off,
-        not-configured, evaluation or enforcement; unknown never throws.
+        not-configured, evaluation or enforcement, plus the Device Guard
+        UsermodeCodeIntegrityPolicyEnforcementStatus as the second signal the
+        step cross-checks (0 = no usermode code integrity enforcement). Both
+        reads are best-effort; unknown never throws.
     #>
     [CmdletBinding()]
     param()
 
     $state = [ordered]@{
-        State                     = 'unknown'
-        VerifiedAndReputableState = $null
+        State                                        = 'unknown'
+        VerifiedAndReputableState                    = $null
+        UsermodeCodeIntegrityPolicyEnforcementStatus = $null
     }
     if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') { return [pscustomobject]$state }
     try {
@@ -54,7 +58,49 @@ function Get-OpenPathInstallerSmartAppControlState {
         }
     }
     catch { }
+    # Phase 8f F0: second signal. With SAC off the CI subsystem clears the
+    # usermode code-integrity enforcement status (measured on VM 111:
+    # 2 = SAC enforced, 1 = evaluation, 0 = off, read seconds after the
+    # registry write plus `CiTool -r` and before/without any reboot).
+    try {
+        $deviceGuard = Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName Win32_DeviceGuard -ErrorAction Stop
+        if ($deviceGuard -and $null -ne $deviceGuard.PSObject.Properties['UsermodeCodeIntegrityPolicyEnforcementStatus'] -and $null -ne $deviceGuard.UsermodeCodeIntegrityPolicyEnforcementStatus) {
+            $state.UsermodeCodeIntegrityPolicyEnforcementStatus = [int]$deviceGuard.UsermodeCodeIntegrityPolicyEnforcementStatus
+        }
+    }
+    catch { }
     return [pscustomobject]$state
+}
+
+function Test-OpenPathSmartAppControlPolicyApplied {
+    <#
+    .SYNOPSIS
+        True while a VerifiedAndReputable policy block says it is currently enforced.
+    .DESCRIPTION
+        `CiTool.exe -lp` keeps listing the disabled VerifiedAndReputable
+        policies after SAC is turned off (measured on VM 111 on 2026-10-16:
+        'Friendly Name: VerifiedAndReputableDesktop' with
+        'Is Currently Enforced: false' at both sampled moments of the
+        sac-eval-off and sac-on-off scenes), so a raw substring search reports
+        a false reboot requirement. The text is split into per-policy blocks; a
+        block that names a VerifiedAndReputable policy counts as applied only
+        when it says 'Is Currently Enforced: true'. A block that names the
+        policy without the enforcement field fails safe (counts as applied), so
+        an unparseable listing never claims SAC is off. Used by the installer
+        step and, dot-sourced from this file, by the first-visit SAC harness so
+        the product and its lab verdict share one parser.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$ListOutput = '')
+
+    $text = [string]$ListOutput
+    if (-not $text -or $text -notmatch 'VerifiedAndReputable') { return $false }
+    foreach ($block in [regex]::Split($text, '(?m)^\s*Policy:\s*$')) {
+        if ($block -notmatch 'VerifiedAndReputable') { continue }
+        if ($block -match '(?i)Is Currently Enforced:\s*true') { return $true }
+        if ($block -notmatch '(?i)Is Currently Enforced:') { return $true }
+    }
+    return $false
 }
 
 function Invoke-OpenPathSmartAppControlStep {
@@ -197,15 +243,16 @@ function Invoke-OpenPathSmartAppControlStep {
     }
 
     $refreshOk = $false
-    $policyGone = $false
     $valueOff = $false
-    $applyError = ''
+    $policyApplied = $null
+    $umciStatus = $null
+    $applyProblems = New-Object System.Collections.Generic.List[string]
     try {
         & $writer 'VerifiedAndReputablePolicyState' 0
         $refresh = & $invoker @('-r')
         $refreshOk = ($refresh -and $null -ne $refresh.ExitCode -and [int]$refresh.ExitCode -eq 0)
         if (-not $refreshOk) {
-            $applyError = if ($refresh -and $refresh.PSObject.Properties['Missing'] -and [bool]$refresh.Missing) { 'CiTool.exe is not available' } elseif ($refresh -and $refresh.PSObject.Properties['TimedOut'] -and [bool]$refresh.TimedOut) { 'CiTool.exe -r timed out' } else { "CiTool.exe -r failed (exit $($refresh.ExitCode))" }
+            $applyProblems.Add($(if ($refresh -and $refresh.PSObject.Properties['Missing'] -and [bool]$refresh.Missing) { 'CiTool.exe is not available' } elseif ($refresh -and $refresh.PSObject.Properties['TimedOut'] -and [bool]$refresh.TimedOut) { 'CiTool.exe -r timed out' } else { "CiTool.exe -r failed (exit $($refresh.ExitCode))" })) | Out-Null
         }
         elseif ($refresh.PSObject.Properties['Output'] -and ([string]$refresh.Output).Trim()) {
             # `CiTool -r` answers with a JSON policy list; a refused refresh can
@@ -215,21 +262,48 @@ function Invoke-OpenPathSmartAppControlStep {
         $afterState = if ($StateReader) { & $StateReader } else { Get-OpenPathInstallerSmartAppControlState }
         $afterValue = if ($afterState -and $afterState.PSObject.Properties['VerifiedAndReputableState']) { $afterState.VerifiedAndReputableState } else { $null }
         $valueOff = ($null -ne $afterValue -and [int]$afterValue -eq 0)
-        if (-not $valueOff) { $applyError = 'the policy value did not settle to 0' }
+        if (-not $valueOff) { $applyProblems.Add('the policy value did not settle to 0') | Out-Null }
+        $umciStatus = if ($afterState -and $afterState.PSObject.Properties['UsermodeCodeIntegrityPolicyEnforcementStatus']) { $afterState.UsermodeCodeIntegrityPolicyEnforcementStatus } else { $null }
+
+        # Phase 8f F0: a VerifiedAndReputable policy counts as applied only
+        # while its own block says 'Is Currently Enforced: true'. Right after a
+        # correct disable `CiTool -lp` keeps listing the policy with
+        # 'Is Currently Enforced: false' (measured on VM 111), which used to be
+        # reported as a reboot requirement.
         $list = & $invoker @('-lp')
         $listOk = ($list -and $null -ne $list.ExitCode -and [int]$list.ExitCode -eq 0)
         $listOutput = if ($list -and $list.PSObject.Properties['Output']) { [string]$list.Output } else { '' }
-        $policyGone = $listOk -and ($listOutput -notmatch 'VerifiedAndReputable')
-        if (-not $policyGone -and -not $applyError) { $applyError = 'CiTool.exe -lp still lists a VerifiedAndReputable policy' }
+        if (-not $listOk) {
+            $applyProblems.Add("CiTool.exe -lp failed (exit $($list.ExitCode))") | Out-Null
+        }
+        else {
+            $policyApplied = Test-OpenPathSmartAppControlPolicyApplied -ListOutput $listOutput
+            if ($policyApplied) {
+                $applyProblems.Add('CiTool.exe -lp still reports an enforced VerifiedAndReputable policy') | Out-Null
+            }
+        }
+
+        # Phase 8f F0: cross-check the second signal. A mismatch means Windows
+        # is still enforcing usermode code integrity (or its status did not
+        # settle), so the install must not claim SAC is off yet.
+        if ($null -ne $umciStatus -and [int]$umciStatus -ne 0) {
+            if ($policyApplied -eq $false) {
+                $applyProblems.Add("policy listing and Device Guard disagree: CiTool -lp reports no enforced VerifiedAndReputable policy but Win32_DeviceGuard.UsermodeCodeIntegrityPolicyEnforcementStatus=$umciStatus") | Out-Null
+            }
+            else {
+                $applyProblems.Add("Win32_DeviceGuard.UsermodeCodeIntegrityPolicyEnforcementStatus=$umciStatus (usermode code integrity still enforced)") | Out-Null
+            }
+        }
     }
     catch {
-        $applyError = [string]$_
+        $applyProblems.Add([string]$_) | Out-Null
     }
 
+    $applyError = ($applyProblems -join '; ')
     $outcome.Action = 'disabled'
-    if ($refreshOk -and $valueOff -and $policyGone) {
+    if ($refreshOk -and $valueOff -and ($policyApplied -eq $false) -and $applyProblems.Count -eq 0) {
         $outcome.Result = 'verified'
-        Write-InstallerNotice '  Smart App Control disabled and verified (no VerifiedAndReputable policy applied).'
+        Write-InstallerNotice '  Smart App Control disabled and verified (no VerifiedAndReputable policy applied and usermode code integrity off).'
     }
     else {
         $outcome.Result = 'reboot-required'

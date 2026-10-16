@@ -445,18 +445,23 @@ function Ensure-AcrylicService {
     }
 }
 
-function Restart-AcrylicService {
+function Invoke-AcrylicServiceRestartCore {
     <#
     .SYNOPSIS
-    Clears the Acrylic cache and restarts the service, falling back to the batch file when the service cmdlet fails.
+    Performs the mechanical stop -> cache purge -> start of the Acrylic service.
+    .DESCRIPTION
+    Phase 8f: the restart DECISION (content unchanged? service down? state
+    unknown? cross-process lock) belongs to Invoke-OpenPathAcrylicRestart in
+    DNS.Acrylic.Restart.ps1; this core only executes the restart once a caller
+    decided one is needed. Kept separate so the serialization test can run two
+    real processes against a simulated service.
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding()]
     param(
         [int]$TimeoutSeconds = 20,
         [switch]$SkipBatchFallback
     )
 
-    if (-not $PSCmdlet.ShouldProcess("Acrylic DNS Proxy service", "Restart")) { return $false }
     Write-OpenPathLog "Restarting Acrylic service..."
     try {
         $service = Get-AcrylicService
@@ -508,6 +513,32 @@ function Restart-AcrylicService {
         Write-OpenPathLog "Error restarting Acrylic: $_" -Level ERROR
         return $false
     }
+}
+
+function Restart-AcrylicService {
+    <#
+    .SYNOPSIS
+    Restarts the Acrylic service through the single serialized entry point (Phase 8f F1-F3).
+    .DESCRIPTION
+    Every caller goes through Invoke-OpenPathAcrylicRestart
+    (DNS.Acrylic.Restart.ps1): it takes the global restart lock, skips the
+    restart when the running service already loaded the current content and the
+    service answers the local control query, and logs reason/caller/pid/ms for
+    every restart and skip. Returns $true when the service is left running with
+    the current content (restarted or already stable), $false on lock timeout or
+    restart failure.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [int]$TimeoutSeconds = 20,
+        [switch]$SkipBatchFallback
+    )
+
+    if (-not $PSCmdlet.ShouldProcess("Acrylic DNS Proxy service", "Restart")) { return $false }
+    return [bool](Invoke-OpenPathAcrylicRestart `
+            -Caller (Get-OpenPathAcrylicCallerName) `
+            -TimeoutSeconds $TimeoutSeconds `
+            -SkipBatchFallback:$SkipBatchFallback)
 }
 
 function Initialize-OpenPathDnsFlushType {

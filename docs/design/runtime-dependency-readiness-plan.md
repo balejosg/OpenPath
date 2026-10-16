@@ -838,3 +838,53 @@ The update cycle also logs a per-stage breakdown
 Measured before/after (Phase 7 lab runs) and the retention acceptance
 (enqueue->ready p95 <= 3 s, zero `cancelled-budget`) live in the Phase 7
 evidence summary, alongside the stall classification.
+
+## Phase 8f: Acrylic restarts are decided, serialized and observable
+
+The update-contention nightly of 2026-10-16 (SHA `1c363288`) showed ten Acrylic
+restarts in seven minutes, two per cycle with unchanged content: the startup
+reconcile (`Restore-OpenPathProtectedMode`) and the apply repair plan restart
+regardless of whether the service already loaded the current content, and the
+fast apply can restart while an update cycle restarts from another process
+(`10:51:09`, PID 1984 and PID 1808). A `ready` published near one of those
+windows is luck, not correctness.
+
+Phase 8f makes the restart decision explicit and shared:
+
+- **Loaded state.** After every successful restart the agent records the
+  sha256 of the effective `AcrylicHosts.txt` content (the renderer's
+  timestamp-free view) plus the INI in `data\acrylic-loaded-state.json`
+  (`windows/lib/internal/DNS.Acrylic.Restart.ps1`). A restart happens only
+  when (a) the current content differs from the loaded state, (b) the service
+  is not Running or does not answer a local control query (UDP DNS query to
+  `127.0.0.1`), or (c) the loaded state is unknown (fail-safe restart).
+- **One entry point.** Every caller of `Restart-AcrylicService` (reconcile,
+  apply repair plan, watchdog, captive portal, rollback, self-update,
+  checkpoint restore, CLI) now goes through `Invoke-OpenPathAcrylicRestart`,
+  which takes the new global mutex `Global\OpenPathAcrylicRestartLock` with a
+  bounded wait and re-evaluates the decision after acquiring it. A waiter
+  whose content another process already loaded coalesces (logs
+  `reason=stable`); a lock-timeout never restarts in parallel and is left to
+  the next cycle.
+- **Lock order.** `Global\OpenPathUpdateLock` -> `Global\OpenPathAcrylicWriteLock`
+  -> `Global\OpenPathAcrylicRestartLock` (always innermost; never held while
+  taking the other two). The restart lock is a separate mutex because the
+  writers lock is held across the fast apply's whole body while restarts also
+  come from callers that never take the writers lock.
+- **Ready inside the restart lock.** The fast apply wraps its restart, DNS
+  flush and `appliedGeneration` stamp in
+  `Invoke-OpenPathAcrylicRestartLockScope`, so no other process can restart
+  Acrylic between the worker's reload and its stamp. After a `ready`, a
+  restart can only come from a real content change, logged as
+  `reason=content-changed`.
+- **Observability.** Every restart and skip logs
+  `Acrylic restart reason=<...> caller=<function> pid=<pid> ms=<ms>` /
+  `Acrylic restart skipped reason=<...> caller=<...> pid=<...>`, and the
+  update-contention verdict adds three invariants over `openpath.log`
+  (`acrylic-restart-unchanged`, `acrylic-restart-overlap`,
+  `acrylic-restart-near-ready`; `FirstVisitUpdateContention.psm1`) that fail
+  the scene as PRODUCT red even when the page waves pass.
+
+The Phase 8f evidence summary lives in
+`evidence/windows-acrylic-restarts-phase8f-*` at the workspace root, including
+the literal restart table for one unchanged Update cycle.

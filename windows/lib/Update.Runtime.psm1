@@ -79,6 +79,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Get-AcrylicPath',
         'Update-AcrylicHost',
         'Restart-AcrylicService',
+        'Invoke-OpenPathAcrylicRestartLockScope',
         'Clear-OpenPathDnsClientCache',
         'Clear-OpenPathRuntimeDependencyOverlay',
         'Restore-OriginalDNS',
@@ -519,51 +520,70 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                 break
             }
             if ($queueResult.AcrylicHostsChanged -or $overlayUnappliedBefore) {
-                & $updateWorkerBusyStage('acrylic-reload')
-                $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-                $acrylicReloaded = [bool](Restart-AcrylicService)
-                $reloadStopwatch.Stop()
-                $metrics['acrylicReloadMs'] = [int]$metrics['acrylicReloadMs'] + [int]$reloadStopwatch.ElapsedMilliseconds
+                # Phase 8f F4: the restart, the DNS flush and the
+                # appliedGeneration stamp run inside the global Acrylic restart
+                # lock. Another process cannot restart Acrylic between this
+                # worker's reload and its stamp, so a `ready` published from
+                # this generation can only be invalidated by a real content
+                # change (logged as reason=content-changed). On a bounded wait
+                # timeout the scope leaves the action unrun: dependencies stay
+                # pending for the next cycle instead of restarting in parallel.
+                $reloadScope = Invoke-OpenPathAcrylicRestartLockScope -Stage 'runtime-dependency-fast-apply' -Action {
+                    & $updateWorkerBusyStage('acrylic-reload')
+                    $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                    $acrylicReloaded = [bool](Restart-AcrylicService)
+                    $reloadStopwatch.Stop()
+                    $metrics['acrylicReloadMs'] = [int]$metrics['acrylicReloadMs'] + [int]$reloadStopwatch.ElapsedMilliseconds
 
-                if (-not $acrylicReloaded) {
+                    if (-not $acrylicReloaded) {
+                        return $false
+                    }
+
+                    # A successful reload alone does not prove that a brand-new OS-level
+                    # lookup resolves: the Windows DNS client keeps its own negative
+                    # answers (NODATA/9501). Flush before stamping the applied generation
+                    # so `ready` implies a fresh system lookup already succeeds.
+                    & $updateWorkerBusyStage('dns-flush')
+                    $dnsFlushStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                    $dnsFlushOk = [bool](Clear-OpenPathDnsClientCache)
+                    $dnsFlushStopwatch.Stop()
+                    $metrics['dnsFlushMs'] = [int]$metrics['dnsFlushMs'] + [int]$dnsFlushStopwatch.ElapsedMilliseconds
+                    $metrics['dnsFlushOk'] = [bool]$dnsFlushOk
+                    if ($dnsFlushOk) {
+                        Write-OpenPathLog "Runtime dependency fast apply flushed the Windows DNS client cache (ms=$($dnsFlushStopwatch.ElapsedMilliseconds))"
+                    }
+                    else {
+                        Write-OpenPathLog "Runtime dependency fast apply could not flush the Windows DNS client cache" -Level WARN
+                    }
+
+                    # Only a successful reload proves the new overlay content is operative;
+                    # the native host waits for this marker before reporting `ready`.
+                    # Stamping at the end of every iteration is what lets the entries of
+                    # this iteration become ready even when later batches are pending.
+                    & $updateWorkerBusyStage('generation-stamp')
+                    Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
+                    $appliedGeneration = 0
+                    try {
+                        $overlayRawAfter = [System.IO.File]::ReadAllText($overlayPath)
+                        $appliedMatchAfter = [regex]::Match($overlayRawAfter, '"appliedGeneration"\s*:\s*(\d+)')
+                        if ($appliedMatchAfter.Success) { $appliedGeneration = [int]$appliedMatchAfter.Groups[1].Value }
+                    }
+                    catch {
+                        $appliedGeneration = 0
+                    }
+                    $metrics['appliedGeneration'] = [int]$appliedGeneration
+                    Write-OpenPathLog "Runtime dependency fast apply overlay generation stamped: appliedGeneration=$appliedGeneration"
+                    return $true
+                }
+
+                if (-not $reloadScope.Acquired) {
+                    Write-OpenPathLog "Runtime dependency fast apply could not take the Acrylic restart lock; dependencies remain pending" -Level WARN
+                    break
+                }
+                if (-not [bool]$reloadScope.Result) {
                     Write-OpenPathLog "Runtime dependency fast apply could not confirm the Acrylic reload; dependencies remain pending" -Level WARN
                     break
                 }
-
-                # A successful reload alone does not prove that a brand-new OS-level
-                # lookup resolves: the Windows DNS client keeps its own negative
-                # answers (NODATA/9501). Flush before stamping the applied generation
-                # so `ready` implies a fresh system lookup already succeeds.
-                & $updateWorkerBusyStage('dns-flush')
-                $dnsFlushStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-                $dnsFlushOk = [bool](Clear-OpenPathDnsClientCache)
-                $dnsFlushStopwatch.Stop()
-                $metrics['dnsFlushMs'] = [int]$metrics['dnsFlushMs'] + [int]$dnsFlushStopwatch.ElapsedMilliseconds
-                $metrics['dnsFlushOk'] = [bool]$dnsFlushOk
-                if ($dnsFlushOk) {
-                    Write-OpenPathLog "Runtime dependency fast apply flushed the Windows DNS client cache (ms=$($dnsFlushStopwatch.ElapsedMilliseconds))"
-                }
-                else {
-                    Write-OpenPathLog "Runtime dependency fast apply could not flush the Windows DNS client cache" -Level WARN
-                }
-
-                # Only a successful reload proves the new overlay content is operative;
-                # the native host waits for this marker before reporting `ready`.
-                # Stamping at the end of every iteration is what lets the entries of
-                # this iteration become ready even when later batches are pending.
-                & $updateWorkerBusyStage('generation-stamp')
-                Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
-                $appliedGeneration = 0
-                try {
-                    $overlayRawAfter = [System.IO.File]::ReadAllText($overlayPath)
-                    $appliedMatchAfter = [regex]::Match($overlayRawAfter, '"appliedGeneration"\s*:\s*(\d+)')
-                    if ($appliedMatchAfter.Success) { $appliedGeneration = [int]$appliedMatchAfter.Groups[1].Value }
-                }
-                catch {
-                    $appliedGeneration = 0
-                }
-                $metrics['appliedGeneration'] = [int]$appliedGeneration
-                Write-OpenPathLog "Runtime dependency fast apply overlay generation stamped: appliedGeneration=$appliedGeneration"
             }
             else {
                 # The effective Acrylic content did not change and was already applied:

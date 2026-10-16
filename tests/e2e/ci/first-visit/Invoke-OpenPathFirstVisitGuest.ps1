@@ -2797,6 +2797,23 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         }
         catch { }
         try { $agentState.openpathErrors = @(Get-LogTail -Path "$OpenPathRoot\data\logs\openpath.log" -Tail 400 -Patterns @('ERROR', 'WARN') | Select-Object -Last 25) } catch { }
+        # Phase 8f F0 acceptance: the persisted installer decision travels with
+        # the sampled moment so the scene evidence carries
+        # config.json.smartAppControl.result (verified vs reboot-required).
+        $configSmartAppControl = $null
+        try {
+            $configForSac = Get-Content -LiteralPath "$OpenPathRoot\data\config.json" -Raw -ErrorAction Stop | ConvertFrom-Json
+            if ($configForSac.PSObject.Properties['smartAppControl']) {
+                $configSmartAppControl = [ordered]@{
+                    previousState  = [string]$configForSac.smartAppControl.previousState
+                    action         = [string]$configForSac.smartAppControl.action
+                    result         = [string]$configForSac.smartAppControl.result
+                    rebootRequired = [bool]$configForSac.smartAppControl.rebootRequired
+                    decidedAtUtc   = [string]$configForSac.smartAppControl.decidedAtUtc
+                }
+            }
+        }
+        catch { $configSmartAppControl = [ordered]@{ error = [string]$_.Exception.Message } }
         $script:Body.sacState = [ordered]@{
             registryValue         = $registryValue
             smartAppControlState  = $mpState
@@ -2807,6 +2824,7 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             codeIntegrityXml      = $ciXml
             codeIntegrityExit     = $ciXml.exit
             agentState            = $agentState
+            configSmartAppControl = $configSmartAppControl
             sceneStartedAt        = $SceneStartedAt
             at                    = [DateTime]::UtcNow.ToString('o')
         }

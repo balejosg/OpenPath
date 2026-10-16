@@ -2090,6 +2090,14 @@ function Invoke-OpenPathFirstVisitObserve {
             $verdictDocument.canaryReasons = @($canaryVerdict.reasons)
             $verdictDocument.contention = $canary['contention']
             $verdictDocument.updateTrigger = $updateTrigger
+            # Phase 8f F5: the Acrylic restart invariants are product acceptance,
+            # not page-wave evidence: their codes join productReasons so the
+            # scene files as PRODUCT red even when the waves pass.
+            $restartInvariantReasons = @($canary['contention'].reasons | Where-Object { [string]$_ -like 'acrylic-restart-*' })
+            if ($restartInvariantReasons.Count -gt 0) {
+                $verdictDocument.productReasons = @(@($verdictDocument.productReasons) + $restartInvariantReasons | Select-Object -Unique)
+                Write-Host ("first-visit update-contention restart invariants: " + ($restartInvariantReasons -join ',') + " (red=" + [string]($canary['contention'].acrylicRestarts.unchangedCycleRestarts) + " overlap=" + [string]($canary['contention'].acrylicRestarts.overlapCount) + " nearReady=" + [string]($canary['contention'].acrylicRestarts.nearReadyCount) + ")")
+            }
             [IO.File]::WriteAllText($verdictPath, ($verdictDocument | ConvertTo-Json -Depth 14), [Text.UTF8Encoding]::new($false))
         }
     }

@@ -13,6 +13,9 @@ $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 . (Join-Path $script:InternalModulePath 'AcrylicConfigWriter.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.Acrylic.Config.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.Acrylic.Service.ps1')
+# Phase 8f F1-F4: single serialized restart entry point (must load after the
+# service core it wraps).
+. (Join-Path $script:InternalModulePath 'DNS.Acrylic.Restart.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.Diagnostics.ps1')
 
 Export-ModuleMember -Function @(
@@ -37,6 +40,11 @@ Export-ModuleMember -Function @(
     'Restore-OpenPathCaptivePortalDNS',
     'Update-OpenPathOriginalDnsSnapshotForCurrentNetwork',
     'Restart-AcrylicService',
+    'Invoke-OpenPathAcrylicRestart',
+    'Invoke-OpenPathAcrylicRestartLockScope',
+    'Test-OpenPathAcrylicControlQuery',
+    'Get-OpenPathAcrylicRestartDecision',
+    'Get-OpenPathAcrylicContentFingerprint',
     'Clear-OpenPathDnsClientCache',
     'Initialize-OpenPathDnsFlushType',
     'Initialize-OpenPathAcrylicHostRenderDryRun',

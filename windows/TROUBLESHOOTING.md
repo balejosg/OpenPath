@@ -91,6 +91,58 @@ An oversized or malformed `AcrylicHosts.txt` can prevent Acrylic from loading. I
 .\OpenPath.ps1 update
 ```
 
+### Acrylic restarts: when and why (Phase 8f)
+
+Acrylic reloads `AcrylicHosts.txt` and `AcrylicConfiguration.ini` when the
+service starts, so OpenPath normally restarts it only when the running service
+does not yet have the current content loaded. Every restart decision, restart
+and skip is logged with a reason, the calling function, the process id and the
+duration:
+
+```
+Acrylic restart reason=content-changed caller=Invoke-OpenPathStartupLocalReconcile pid=1964 ms=1400
+Acrylic restart reason=service-down caller=Invoke-OpenPathEndpointStateRepairPlan pid=8852 ms=2100
+Acrylic restart skipped reason=stable caller=Restore-OpenPathProtectedMode pid=4504 ms=25
+```
+
+Read the `reason=` field:
+
+- `content-changed` - the effective `AcrylicHosts.txt` content or the INI
+  differs from what the service loaded last (`data\acrylic-loaded-state.json`
+  records the last loaded content hashes). This is the only normal reason a
+  restart follows a `ready` on an unchanged whitelist.
+- `service-down` - the service was not Running.
+- `control-unresponsive` - the service did not answer a local control query
+  within a few seconds (a wedged process). On a network with no reachable
+  upstream the proxy can exceed the query timeout and get restarted; the
+  restart is idempotent.
+- `state-unknown` - no readable loaded state (fresh install, deleted file):
+  restarting to be safe.
+- `stable` (skip) - the service already loaded the current content and answers
+  control queries; nothing was touched.
+- `lock-timeout` (skip, WARN) - another process held the restart lock for the
+  whole bounded wait. The restart never runs in parallel; the work is left to
+  the next cycle (the fast apply leaves the dependencies pending, the captive
+  portal transition rolls back).
+
+All restarts serialize on the global mutex
+`Global\OpenPathAcrylicRestartLock`, and a waiter re-evaluates the decision
+after acquiring the lock, so two processes that raced the same content change
+produce one restart (the second logs `reason=stable`). The lock order is
+`Global\OpenPathUpdateLock` then `Global\OpenPathAcrylicWriteLock` then
+`Global\OpenPathAcrylicRestartLock` (the restart lock is always innermost and is
+never held while taking the other two). The runtime dependency fast apply holds
+the restart lock across its reload, DNS flush and appliedGeneration stamp, so a
+`ready` published by the worker cannot be invalidated by another process's
+restart.
+
+The watchdog's "DNS resolution failed" repair action goes through the same
+decision: it restarts the proxy only when the service is down or unresponsive.
+A resolution failure the proxy still answers for (dead upstream, network
+outage) is not fixed by restarting Acrylic; the health report keeps it
+DEGRADED and the next cycle re-evaluates. `.\OpenPath.ps1 restart` follows the
+same rule and then triggers a normal update cycle.
+
 ### DNS Does Not Resolve
 
 ```powershell
@@ -455,6 +507,22 @@ installer offers that as an explicit administrator decision (setup dialog or
 `-DisableSmartAppControl`) and never changes SAC silently; see
 `DEPLOYMENT.md` ("Smart App Control"). The signing channel remains parked
 (Phase 8e decision; `docs/design/windows-native-host-signing.md`).
+
+What the installer's `smartAppControl.result` means (also in
+`data\config.json` and the install log):
+
+- `verified` - SAC is off now: the policy value is `0`, no VerifiedAndReputable
+  policy is currently enforced in `CiTool.exe -lp` (a policy that stays listed
+  with `Is Currently Enforced: false` is expected after a disable), and the
+  usermode code-integrity enforcement status is `0`. No reboot needed.
+- `reboot-required` - one check did not settle; the WARN line names it. A
+  listing with `Is Currently Enforced: true`, a Device Guard status that
+  disagrees with the listing, or a failed `CiTool -r` refresh all land here.
+  Reboot and re-check:
+  `& "$env:SystemRoot\System32\CiTool.exe" -lp` (only blocks with
+  `Is Currently Enforced: true` count as applied) and
+  `Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard`
+  (`UsermodeCodeIntegrityPolicyEnforcementStatus` `0` = off).
 
 If the machine is not enrolled, re-enroll:
 

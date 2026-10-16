@@ -228,4 +228,230 @@ Describe 'Installer Smart App Control phase (Phase 8e E1)' {
             $helper | Should -Match 'TimedOut'
         }
     }
+
+
+    Context 'CiTool listing parser and the second signal (Phase 8f F0)' {
+        BeforeAll {
+            # Literal `CiTool.exe -lp` text measured on VM 111 (run 38868428115,
+            # sac-eval-off; identical in run 38868444409, sac-on-off, at both
+            # sampled moments). The disabled VerifiedAndReputableDesktop policy
+            # stays listed with 'Is Currently Enforced: false'.
+            $script:SacListOff = @'
+Policy:
+    Policy ID: 0283ac0f-fff1-49ae-ada1-8a933130cad6
+    Base Policy ID: 0283ac0f-fff1-49ae-ada1-8a933130cad6
+    Friendly Name: VerifiedAndReputableDesktop
+    Version: 0.0.0.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: false
+    Is Authorized: false
+    Status: 0
+Policy:
+    Policy ID: 1283ac0f-fff1-49ae-ada1-8a933130cad6
+    Base Policy ID: 1283ac0f-fff1-49ae-ada1-8a933130cad6
+    Friendly Name: VerifiedAndReputableDesktopEvaluation
+    Version: 0.0.0.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: false
+    Is Authorized: false
+    Status: 0
+Policy:
+    Policy ID: 784c4414-79f4-4c32-a6a5-f0fb42a51d0d
+    Base Policy ID: 784c4414-79f4-4c32-a6a5-f0fb42a51d0d
+    Friendly Name: Microsoft Windows Cross Certificates for Code Integrity Exceptions Policy
+    Version: 10.27766.0.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: true
+    Is Authorized: true
+    Status: 0
+Policy:
+    Policy ID: 82443e1e-8a39-4b4a-96a8-f40ddc00b9f3
+    Base Policy ID: 82443e1e-8a39-4b4a-96a8-f40ddc00b9f3
+    Friendly Name: WindowsE_Lockdown_Policy
+    Version: 10.0.22117.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: false
+    Is Authorized: false
+    Status: 0
+Policy:
+    Policy ID: cdd5cb55-db68-4d71-aa38-3df2b6473a52
+    Base Policy ID: 82443e1e-8a39-4b4a-96a8-f40ddc00b9f3
+    Friendly Name: WindowsE_Lockdown_Test_Policy_Supplemental
+    Version: 10.0.21349.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: false
+    Is Authorized: false
+    Status: 0
+Policy:
+    Policy ID: 5951a96a-e0b5-4d3d-8fb8-3e5b61030784
+    Base Policy ID: 5951a96a-e0b5-4d3d-8fb8-3e5b61030784
+    Friendly Name: Windows10S_Lockdown_Policy_Supplementable
+    Version: 10.0.15039.0
+'@
+            # Literal output from run 38868461616 (sac-on-keep): the policy
+            # block says 'Is Currently Enforced: true' (SAC enforced).
+            $script:SacListOn = @'
+Policy:
+    Policy ID: 0283ac0f-fff1-49ae-ada1-8a933130cad6
+    Base Policy ID: 0283ac0f-fff1-49ae-ada1-8a933130cad6
+    Friendly Name: VerifiedAndReputableDesktop
+    Version: 0.0.0.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: true
+    Is Authorized: true
+    Status: 0
+Policy:
+    Policy ID: 1283ac0f-fff1-49ae-ada1-8a933130cad6
+    Base Policy ID: 1283ac0f-fff1-49ae-ada1-8a933130cad6
+    Friendly Name: VerifiedAndReputableDesktopEvaluation
+    Version: 0.0.0.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: false
+    Is Authorized: false
+    Status: 0
+Policy:
+    Policy ID: 784c4414-79f4-4c32-a6a5-f0fb42a51d0d
+    Base Policy ID: 784c4414-79f4-4c32-a6a5-f0fb42a51d0d
+    Friendly Name: Microsoft Windows Cross Certificates for Code Integrity Exceptions Policy
+    Version: 10.27766.0.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: true
+    Is Authorized: true
+    Status: 0
+Policy:
+    Policy ID: 82443e1e-8a39-4b4a-96a8-f40ddc00b9f3
+    Base Policy ID: 82443e1e-8a39-4b4a-96a8-f40ddc00b9f3
+    Friendly Name: WindowsE_Lockdown_Policy
+    Version: 10.0.22117.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: false
+    Is Authorized: false
+    Status: 0
+Policy:
+    Policy ID: cdd5cb55-db68-4d71-aa38-3df2b6473a52
+    Base Policy ID: 82443e1e-8a39-4b4a-96a8-f40ddc00b9f3
+    Friendly Name: WindowsE_Lockdown_Test_Policy_Supplemental
+    Version: 10.0.21349.0
+    Platform Policy: true
+    Policy is Signed: true
+    Has File on Disk: true
+    Is Currently Enforced: false
+    Is Authorized: false
+    Status: 0
+Policy:
+    Policy ID: 5951a96a-e0b5-4d3d-8fb8-3e5b61030784
+    Base Policy ID: 5951a96a-e0b5-4d3d-8fb8-3e5b61030784
+    Friendly Name: Windows10S_Lockdown_Policy_Supplementable
+    Version: 10.0.15039.0
+'@
+        }
+
+        It 'Counts a VerifiedAndReputable policy as applied only while its block is enforced' {
+            Test-OpenPathSmartAppControlPolicyApplied -ListOutput $script:SacListOff | Should -BeFalse
+            Test-OpenPathSmartAppControlPolicyApplied -ListOutput $script:SacListOn | Should -BeTrue
+            # The unrelated enforced policy in the same listing must not count.
+            Test-OpenPathSmartAppControlPolicyApplied -ListOutput ($script:SacListOff.Replace('VerifiedAndReputableDesktop', 'SomeOtherPolicy')) | Should -BeFalse
+            # A listing that names the policy without the enforcement field, and
+            # empty/no-policy outputs, keep the fail-safe mapping.
+            Test-OpenPathSmartAppControlPolicyApplied -ListOutput 'Policies: VerifiedAndReputable' | Should -BeTrue
+            Test-OpenPathSmartAppControlPolicyApplied -ListOutput 'Policies: none' | Should -BeFalse
+            Test-OpenPathSmartAppControlPolicyApplied -ListOutput '' | Should -BeFalse
+        }
+
+        It 'Verifies the disable from the real post-disable listing with umci at 0' {
+            # 1c363288 passed the step only when `CiTool -lp` did *not* contain
+            # the policy name, so this exact listing produced
+            # `result=reboot-required` on the two flag scenes (openpath.log
+            # 12:40:58 and 12:57:59, guest time) even though SAC was already
+            # off. The listing plus umci=0 must verify.
+            $script:SacF0Calls = 0
+            $stateReader = {
+                $script:SacF0Calls = [int]$script:SacF0Calls + 1
+                if ([int]$script:SacF0Calls -le 1) {
+                    return [pscustomobject]@{ State = 'evaluation'; VerifiedAndReputableState = 2; UsermodeCodeIntegrityPolicyEnforcementStatus = 1 }
+                }
+                return [pscustomobject]@{ State = 'off'; VerifiedAndReputableState = 0; UsermodeCodeIntegrityPolicyEnforcementStatus = 0 }
+            }
+            $outcome = Invoke-OpenPathSmartAppControlStep `
+                -Unattended `
+                -DisableSmartAppControl `
+                -StateReader $stateReader `
+                -RegistryWriter { param([string]$Name, [int]$Value) } `
+                -CiToolInvoker {
+                    param([string[]]$Arguments)
+                    if ($Arguments -contains '-lp') { return [pscustomobject]@{ ExitCode = 0; Output = $script:SacListOff; Missing = $false } }
+                    return [pscustomobject]@{ ExitCode = 0; Output = ''; Missing = $false }
+                }
+            $outcome.Action | Should -Be 'disabled'
+            $outcome.Result | Should -Be 'verified'
+            $outcome.RebootRequired | Should -BeFalse
+            $outcome.Warning | Should -Be ''
+        }
+
+        It 'Requires a reboot when the listing and the Device Guard signal disagree' {
+            $script:SacF0Calls = 0
+            $stateReader = {
+                $script:SacF0Calls = [int]$script:SacF0Calls + 1
+                if ([int]$script:SacF0Calls -le 1) {
+                    return [pscustomobject]@{ State = 'evaluation'; VerifiedAndReputableState = 2; UsermodeCodeIntegrityPolicyEnforcementStatus = 2 }
+                }
+                return [pscustomobject]@{ State = 'off'; VerifiedAndReputableState = 0; UsermodeCodeIntegrityPolicyEnforcementStatus = 2 }
+            }
+            $outcome = Invoke-OpenPathSmartAppControlStep `
+                -Unattended `
+                -DisableSmartAppControl `
+                -StateReader $stateReader `
+                -RegistryWriter { param([string]$Name, [int]$Value) } `
+                -CiToolInvoker {
+                    param([string[]]$Arguments)
+                    if ($Arguments -contains '-lp') { return [pscustomobject]@{ ExitCode = 0; Output = $script:SacListOff; Missing = $false } }
+                    return [pscustomobject]@{ ExitCode = 0; Output = ''; Missing = $false }
+                }
+            $outcome.Result | Should -Be 'reboot-required'
+            $outcome.RebootRequired | Should -BeTrue
+            $outcome.Warning | Should -Match 'UsermodeCodeIntegrityPolicyEnforcementStatus=2'
+            $outcome.Warning | Should -Match 'disagree'
+        }
+
+        It 'Keeps a still-enforced policy a reboot requirement' {
+            $script:SacF0Calls = 0
+            $stateReader = {
+                $script:SacF0Calls = [int]$script:SacF0Calls + 1
+                if ([int]$script:SacF0Calls -le 1) {
+                    return [pscustomobject]@{ State = 'enforcement'; VerifiedAndReputableState = 1; UsermodeCodeIntegrityPolicyEnforcementStatus = 2 }
+                }
+                return [pscustomobject]@{ State = 'off'; VerifiedAndReputableState = 0; UsermodeCodeIntegrityPolicyEnforcementStatus = 0 }
+            }
+            $outcome = Invoke-OpenPathSmartAppControlStep `
+                -Unattended `
+                -DisableSmartAppControl `
+                -StateReader $stateReader `
+                -RegistryWriter { param([string]$Name, [int]$Value) } `
+                -CiToolInvoker {
+                    param([string[]]$Arguments)
+                    if ($Arguments -contains '-lp') { return [pscustomobject]@{ ExitCode = 0; Output = $script:SacListOn; Missing = $false } }
+                    return [pscustomobject]@{ ExitCode = 0; Output = ''; Missing = $false }
+                }
+            $outcome.Result | Should -Be 'reboot-required'
+            $outcome.Warning | Should -Match 'still reports an enforced VerifiedAndReputable policy'
+        }
+    }
 }

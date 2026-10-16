@@ -1,0 +1,319 @@
+2026-10-16 10:45:43 [WARN] [Installer.SmartAppControl.ps1] [PID:1768] Smart App Control decision: previous=evaluation action=none result=not-requested rebootRequired=False decidedAt=2026-10-16T10:45:40.3290139Z
+2026-10-16 10:45:52 [INFO] [DNS.Acrylic.Config.ps1] [PID:1768] Configuring Acrylic...
+2026-10-16 10:45:52 [INFO] [DNS.Acrylic.Config.ps1] [PID:1768] Acrylic configuration updated
+2026-10-16 10:45:57 [INFO] [Installer.Offline.ps1] [PID:1768] Saved deferred enrollment state for classroom release-e2e-classroom
+2026-10-16 10:45:57 [WARN] [Browser.FirefoxNativeHost.psm1] [PID:1768] Firefox native host request setup is incomplete; skipping native host registration. OpenPath request setup is incomplete: missing or invalid whitelistUrl.
+2026-10-16 10:45:57 [INFO] [Services.psm1] [PID:1768] Registering scheduled tasks...
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Granted BUILTIN\\Users read/execute access to scheduled task OpenPath-Update
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Registered: OpenPath-Update (every 5 min)
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Granted BUILTIN\\Users read/execute access to scheduled task OpenPath-RuntimeDependencyApply
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Registered: OpenPath-RuntimeDependencyApply (on demand runtime dependencies)
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Registered: OpenPath-RuntimeDependencyWorker (resident runtime dependency worker)
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Granted BUILTIN\\Users read/execute access to scheduled task OpenPath-CaptivePortalRecovery
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Registered: OpenPath-CaptivePortalRecovery (on demand captive portal recovery)
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Registered: OpenPath-Watchdog (every 1 min)
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Registered: OpenPath-Startup (at boot)
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Registered: OpenPath-SSE (persistent SSE listener)
+2026-10-16 10:45:58 [INFO] [Services.psm1] [PID:1768] Registered: OpenPath-AgentUpdate (daily silent software update)
+2026-10-16 10:45:59 [INFO] [AppControl.psm1] [PID:1768] Created local group OpenPath-Restricted
+2026-10-16 10:45:59 [INFO] [AppControl.psm1] [PID:1768] OpenPath-Restricted membership synced: added 1 non-admin user(s)
+2026-10-16 10:46:05 [INFO] [AppControl.psm1] [PID:1768] OpenPath non-admin app control applied in Enforced mode
+2026-10-16 10:46:07 [INFO] [Common.Integrity.ps1] [PID:1768] Integrity backup saved
+2026-10-16 10:46:08 [INFO] [Common.Integrity.ps1] [PID:1768] Integrity baseline generated for 53 files
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: Privacy: this agent sends data only to the server configured during installation; nothing is sent to third parties.
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: - Server: https://localhost:18443
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: - Whitelist source: the whitelist URL configured in data\config.json
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: - Enrollment (alta): the machine name and classroom identifiers register this computer with the server.
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: - Whitelist sync: the agent downloads the classroom whitelist and identifies the machine with its machine token.
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: - Health reports: hostname, DNS and service state, agent version and reason codes (POST https://localhost:18443/trpc/healthReports.submit).
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: - Student requests: when a student asks for access from the blocked page, the requested domain and the student reason are submitted to the server.
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: - Third-party component: when the installation package does not bundle Acrylic DNS Proxy, the installer downloads it from its SourceForge open-source release.
+2026-10-16 10:46:08 [INFO] [Installer.Runtime.ps1] [PID:1768] Privacy notice: - These transfers cannot be disabled: they are how classroom enforcement works.
+2026-10-16 10:46:23 [INFO] [Browser.FirefoxNativeHost.psm1] [PID:4040] Compiled native host ready (Built, source=compiled, sha256=824ba929bdeab42acb7d6034002dfd6630ee851e78bca6b5d4f593ab8457f025).
+2026-10-16 10:46:29 [INFO] [Update.Runtime.psm1] [PID:4992] === Starting openpath update ===
+2026-10-16 10:46:35 [WARN] [Installer.Offline.ps1] [PID:4992] Deferred enrollment retry failed without exposing credentials: Unable to connect to the remote server
+2026-10-16 10:46:35 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stage=enrollment ms=5552 lock=cycle
+2026-10-16 10:46:35 [WARN] [Update.Runtime.psm1] [PID:4992] Machine client config sync skipped: fixture: unknown host or path
+2026-10-16 10:46:35 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stage=config-sync ms=29 lock=cycle
+2026-10-16 10:46:35 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stage=portal-state ms=7 lock=cycle
+2026-10-16 10:46:35 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stage=reconcile ms=13 lock=cycle
+2026-10-16 10:46:35 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stage=backup ms=6 lock=cycle
+2026-10-16 10:46:35 [INFO] [Common.Http.Whitelist.ps1] [PID:4992] Downloading whitelist from http://192.168.1.150/w/firstvisit/whitelist.txt
+2026-10-16 10:46:35 [INFO] [Common.Http.Whitelist.ps1] [PID:4992] Parsed: 10 whitelisted, 1 blocked subdomains, 2 blocked paths, disabled=False
+2026-10-16 10:46:35 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stage=download ms=179 lock=cycle
+2026-10-16 10:46:36 [INFO] [DNS.Acrylic.Config.ps1] [PID:4992] Generating AcrylicHosts.txt with 10 domains...
+2026-10-16 10:46:36 [INFO] [DNS.Acrylic.Config.ps1] [PID:4992] Configuring Acrylic...
+2026-10-16 10:46:36 [INFO] [DNS.Acrylic.Config.ps1] [PID:4992] Acrylic configuration updated
+2026-10-16 10:46:36 [INFO] [DNS.Acrylic.Config.ps1] [PID:4992] AcrylicHosts.txt updated
+2026-10-16 10:46:36 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update writers scope=whitelist-queue-apply ms=649
+2026-10-16 10:46:36 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] Restarting Acrylic service...
+2026-10-16 10:46:37 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] Acrylic service restarted successfully
+2026-10-16 10:46:38 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] Configuring local DNS...
+2026-10-16 10:46:40 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] Saved original DNS snapshot to C:\OpenPath\data\original-dns.json
+2026-10-16 10:46:40 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] Set DNS for adapter: Ethernet
+2026-10-16 10:46:40 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] DNS cache flushed
+2026-10-16 10:46:40 [INFO] [Browser.FirefoxPolicy.psm1] [PID:4992] Configuring Firefox managed extension policy...
+2026-10-16 10:46:40 [INFO] [Browser.FirefoxPolicy.psm1] [PID:4992] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:46:40 [INFO] [Browser.FirefoxPolicy.psm1] [PID:4992] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:46:40 [INFO] [Browser.psm1] [PID:4992] Configuring Chrome/Edge policies...
+2026-10-16 10:46:40 [INFO] [Browser.psm1] [PID:4992] Policies written to: HKLM:\SOFTWARE\Policies\Google\Chrome
+2026-10-16 10:46:40 [INFO] [Browser.psm1] [PID:4992] Policies written to: HKLM:\SOFTWARE\Policies\Microsoft\Edge
+2026-10-16 10:46:40 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] Configuring local DNS...
+2026-10-16 10:46:40 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] Set DNS for adapter: Ethernet
+2026-10-16 10:46:40 [INFO] [DNS.Acrylic.Service.ps1] [PID:4992] DNS cache flushed
+2026-10-16 10:46:40 [WARN] [Common.Http.Health.ps1] [PID:4992] Health report failed (non-critical, streak=1): fixture: unknown post
+2026-10-16 10:46:40 [INFO] [Update.Script.Apply.ps1] [PID:4992] === OpenPath update completed successfully ===
+2026-10-16 10:46:40 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stage=apply ms=5132 lock=cycle
+2026-10-16 10:46:40 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stages totalMs=10918 enrollment=5552 config-sync=29 portal-state=7 reconcile=13 backup=6 download=179 apply=5132
+2026-10-16 10:46:40 [INFO] [Browser.FirefoxNativeHost.psm1] [PID:4992] Compiled native host ensured (BuildSkipped, source=compiled, sha256=824ba929bdeab42acb7d6034002dfd6630ee851e78bca6b5d4f593ab8457f025).
+2026-10-16 10:46:40 [INFO] [Update.Runtime.psm1] [PID:4992] OpenPath update stage=native-host ms=76 lock=released
+2026-10-16 10:47:05 [WARN] [EndpointStateReconciler.ps1] [PID:4880] Watchdog: Firewall rules missing, reconfiguring...
+2026-10-16 10:47:05 [INFO] [Firewall.Policy.ps1] [PID:4880] Configuring Windows Firewall...
+2026-10-16 10:47:05 [INFO] [Firewall.State.ps1] [PID:4880] Removing openpath firewall rules...
+2026-10-16 10:47:06 [INFO] [Firewall.Policy.ps1] [PID:4880] Egress floor: restored DefaultOutboundAction from pre-floor state (fallback Allow)
+2026-10-16 10:47:06 [INFO] [Firewall.State.ps1] [PID:4880] Firewall rules removed
+2026-10-16 10:47:51 [INFO] [Start-RuntimeDependencyWorker.ps1] [PID:1052] Runtime dependency worker runtime session pre-warmed (ms=6420)
+2026-10-16 10:47:51 [INFO] [Start-SSEListener.ps1] [PID:1996] SSE listener starting (endpoint: http://192.168.1.150/api/machines/events)
+2026-10-16 10:47:52 [INFO] [Start-SSEListener.ps1] [PID:1996] SSE: Connecting...
+2026-10-16 10:47:52 [WARN] [Start-SSEListener.ps1] [PID:1996] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:47:52 [INFO] [Start-SSEListener.ps1] [PID:1996] SSE: Connection lost - reconnecting in 5s
+2026-10-16 10:47:53 [INFO] [RuntimeDependency.Worker.ps1] [PID:1052] Runtime dependency worker prewarm stage=prewarm ms=1646 nativeHostWarmMs=505 dnsFlushTypeMs=413 sectionsMs=42 policySetsMs=156 overlayMs=215 acrylicRenderMs=302 ready=True
+2026-10-16 10:47:53 [INFO] [RuntimeDependency.Worker.ps1] [PID:1052] Runtime dependency worker started (pid=1052 queue=C:\OpenPath\data\runtime-dependency-queue)
+2026-10-16 10:47:57 [INFO] [Start-SSEListener.ps1] [PID:1996] SSE: Connecting...
+2026-10-16 10:47:57 [WARN] [Start-SSEListener.ps1] [PID:1996] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:47:57 [INFO] [Start-SSEListener.ps1] [PID:1996] SSE: Connection lost - reconnecting in 10s
+2026-10-16 10:47:59 [INFO] [Update.Runtime.psm1] [PID:2004] === Starting openpath update ===
+2026-10-16 10:48:02 [WARN] [Update.Runtime.psm1] [PID:6372] Waiting up to 45 seconds for the existing OpenPath update to finish
+2026-10-16 10:48:38 [INFO] [Start-RuntimeDependencyWorker.ps1] [PID:1984] Runtime dependency worker runtime session pre-warmed (ms=5254)
+2026-10-16 10:48:38 [INFO] [Update.Runtime.psm1] [PID:1964] === Starting openpath update ===
+2026-10-16 10:48:39 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE listener starting (endpoint: http://192.168.1.150/api/machines/events)
+2026-10-16 10:48:39 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connecting...
+2026-10-16 10:48:40 [WARN] [Start-SSEListener.ps1] [PID:1952] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:48:40 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connection lost - reconnecting in 5s
+2026-10-16 10:48:41 [INFO] [RuntimeDependency.Worker.ps1] [PID:1984] Runtime dependency worker prewarm stage=prewarm ms=1463 nativeHostWarmMs=415 dnsFlushTypeMs=298 sectionsMs=35 policySetsMs=188 overlayMs=247 acrylicRenderMs=259 ready=True
+2026-10-16 10:48:41 [INFO] [RuntimeDependency.Worker.ps1] [PID:1984] Runtime dependency worker started (pid=1984 queue=C:\OpenPath\data\runtime-dependency-queue)
+2026-10-16 10:48:45 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connecting...
+2026-10-16 10:48:45 [WARN] [Start-SSEListener.ps1] [PID:1952] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:48:45 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connection lost - reconnecting in 10s
+2026-10-16 10:48:45 [WARN] [Installer.Offline.ps1] [PID:1964] Deferred enrollment retry failed without exposing credentials: Unable to connect to the remote server
+2026-10-16 10:48:45 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stage=enrollment ms=5813 lock=cycle
+2026-10-16 10:48:45 [WARN] [Update.Runtime.psm1] [PID:1964] Machine client config sync skipped: fixture: unknown host or path
+2026-10-16 10:48:45 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stage=config-sync ms=42 lock=cycle
+2026-10-16 10:48:45 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stage=portal-state ms=20 lock=cycle
+2026-10-16 10:48:45 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Restarting Acrylic service...
+2026-10-16 10:48:46 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Acrylic service restarted successfully
+2026-10-16 10:48:49 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Configuring local DNS...
+2026-10-16 10:48:50 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Set DNS for adapter: Ethernet
+2026-10-16 10:48:50 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] DNS cache flushed
+2026-10-16 10:48:50 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stage=reconcile ms=4906 lock=cycle
+2026-10-16 10:48:50 [INFO] [Update.Script.Config.ps1] [PID:1964] Backed up current whitelist for rollback
+2026-10-16 10:48:50 [INFO] [Update.Script.Config.ps1] [PID:1964] Checkpoint created at C:\OpenPath\data\checkpoints\checkpoint-20261016-104850-687
+2026-10-16 10:48:50 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stage=backup ms=107 lock=cycle
+2026-10-16 10:48:50 [INFO] [Common.Http.Whitelist.ps1] [PID:1964] Downloading whitelist from http://192.168.1.150/w/firstvisit/whitelist.txt
+2026-10-16 10:48:50 [INFO] [Common.Http.Whitelist.ps1] [PID:1964] Parsed: 10 whitelisted, 1 blocked subdomains, 2 blocked paths, disabled=False
+2026-10-16 10:48:50 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stage=download ms=181 lock=cycle
+2026-10-16 10:48:51 [INFO] [DNS.Acrylic.Config.ps1] [PID:1964] Generating AcrylicHosts.txt with 10 domains...
+2026-10-16 10:48:51 [INFO] [DNS.Acrylic.Config.ps1] [PID:1964] AcrylicHosts.txt effective content unchanged; skipping rewrite
+2026-10-16 10:48:51 [INFO] [DNS.Acrylic.Config.ps1] [PID:1964] Configuring Acrylic...
+2026-10-16 10:48:51 [INFO] [DNS.Acrylic.Config.ps1] [PID:1964] Acrylic configuration unchanged; skipping rewrite
+2026-10-16 10:48:51 [INFO] [DNS.Acrylic.Config.ps1] [PID:1964] AcrylicHosts.txt updated
+2026-10-16 10:48:51 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update writers scope=whitelist-queue-apply ms=801
+2026-10-16 10:48:51 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Restarting Acrylic service...
+2026-10-16 10:48:52 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Acrylic service restarted successfully
+2026-10-16 10:48:52 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Configuring local DNS...
+2026-10-16 10:48:52 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Set DNS for adapter: Ethernet
+2026-10-16 10:48:52 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] DNS cache flushed
+2026-10-16 10:48:52 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1964] Configuring Firefox managed extension policy...
+2026-10-16 10:48:52 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1964] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:48:52 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1964] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:48:52 [INFO] [Browser.psm1] [PID:1964] Configuring Chrome/Edge policies...
+2026-10-16 10:48:53 [INFO] [Browser.psm1] [PID:1964] Policies written to: HKLM:\SOFTWARE\Policies\Google\Chrome
+2026-10-16 10:48:53 [INFO] [Browser.psm1] [PID:1964] Policies written to: HKLM:\SOFTWARE\Policies\Microsoft\Edge
+2026-10-16 10:48:53 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Configuring local DNS...
+2026-10-16 10:48:53 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] Set DNS for adapter: Ethernet
+2026-10-16 10:48:53 [INFO] [DNS.Acrylic.Service.ps1] [PID:1964] DNS cache flushed
+2026-10-16 10:48:53 [WARN] [Common.Http.Health.ps1] [PID:1964] Health report failed (non-critical, streak=2): fixture: unknown post
+2026-10-16 10:48:53 [INFO] [Update.Script.Apply.ps1] [PID:1964] === OpenPath update completed successfully ===
+2026-10-16 10:48:53 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stage=apply ms=2498 lock=cycle
+2026-10-16 10:48:53 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stages totalMs=13567 enrollment=5813 config-sync=42 portal-state=20 reconcile=4906 backup=107 download=181 apply=2498
+2026-10-16 10:48:53 [INFO] [Browser.FirefoxNativeHost.psm1] [PID:1964] Compiled native host ensured (BuildSkipped, source=compiled, sha256=824ba929bdeab42acb7d6034002dfd6630ee851e78bca6b5d4f593ab8457f025).
+2026-10-16 10:48:53 [INFO] [Update.Runtime.psm1] [PID:1964] OpenPath update stage=native-host ms=176 lock=released
+2026-10-16 10:48:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connecting...
+2026-10-16 10:48:55 [WARN] [Start-SSEListener.ps1] [PID:1952] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:48:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connection lost - reconnecting in 20s
+2026-10-16 10:49:15 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connecting...
+2026-10-16 10:49:15 [WARN] [Start-SSEListener.ps1] [PID:1952] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:49:15 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connection lost - reconnecting in 40s
+2026-10-16 10:49:19 [INFO] [Browser.FirefoxPolicy.psm1] [PID:3848] Configuring Firefox managed extension policy...
+2026-10-16 10:49:19 [INFO] [Browser.FirefoxPolicy.psm1] [PID:3848] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:49:19 [INFO] [Browser.FirefoxPolicy.psm1] [PID:3848] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:49:19 [INFO] [Watchdog.Runtime.ps1] [PID:3848] Watchdog: refreshed Firefox managed extension policy
+2026-10-16 10:49:24 [WARN] [Common.Http.Health.ps1] [PID:3848] Health report failed (non-critical, streak=3): fixture: unknown post
+2026-10-16 10:49:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connecting...
+2026-10-16 10:49:55 [WARN] [Start-SSEListener.ps1] [PID:1952] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:49:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connection lost - reconnecting in 60s
+2026-10-16 10:50:09 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1200] Configuring Firefox managed extension policy...
+2026-10-16 10:50:09 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1200] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:50:09 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1200] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:50:09 [INFO] [Watchdog.Runtime.ps1] [PID:1200] Watchdog: refreshed Firefox managed extension policy
+2026-10-16 10:50:11 [WARN] [Common.Http.Health.ps1] [PID:1200] Health report failed (non-critical, streak=4): fixture: unknown post
+2026-10-16 10:50:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connecting...
+2026-10-16 10:50:55 [WARN] [Start-SSEListener.ps1] [PID:1952] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:50:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connection lost - reconnecting in 60s
+2026-10-16 10:51:03 [INFO] [Update.Runtime.psm1] [PID:1808] === Starting openpath update ===
+2026-10-16 10:51:08 [INFO] [RuntimeDependency.Worker.ps1] [PID:1984] Runtime dependency worker detected 3 queue file(s) queueFileAgeMs=63
+2026-10-16 10:51:08 [INFO] [Update.Runtime.psm1] [PID:1984] === Starting runtime dependency fast apply ===
+2026-10-16 10:51:08 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply detected 3 queue file(s)
+2026-10-16 10:51:08 [INFO] [RuntimeDependency.Overlay.ps1] [PID:1984] runtime-dependency auto-allow: anchor=anchor1-dy9h45.192.168.1.150.sslip.io dependency=styles1-5kqmhv.192.168.1.150.sslip.io type=stylesheet
+2026-10-16 10:51:08 [INFO] [RuntimeDependency.Overlay.ps1] [PID:1984] runtime-dependency auto-allow: anchor=anchor1-dy9h45.192.168.1.150.sslip.io dependency=core1-dnhi25.192.168.1.150.sslip.io type=script
+2026-10-16 10:51:08 [INFO] [RuntimeDependency.Overlay.ps1] [PID:1984] runtime-dependency auto-allow: anchor=anchor1-dy9h45.192.168.1.150.sslip.io dependency=image1-zbl1vz.192.168.1.150.sslip.io type=image
+2026-10-16 10:51:08 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency queue processed: processed=3 rejected=0
+2026-10-16 10:51:09 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Generating AcrylicHosts.txt with 10 domains...
+2026-10-16 10:51:09 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Configuring Acrylic...
+2026-10-16 10:51:09 [WARN] [Installer.Offline.ps1] [PID:1808] Deferred enrollment retry failed without exposing credentials: Unable to connect to the remote server
+2026-10-16 10:51:09 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Acrylic configuration updated
+2026-10-16 10:51:09 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stage=enrollment ms=5910 lock=cycle
+2026-10-16 10:51:09 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] AcrylicHosts.txt updated
+2026-10-16 10:51:09 [INFO] [DNS.Acrylic.Service.ps1] [PID:1984] Restarting Acrylic service...
+2026-10-16 10:51:09 [WARN] [Update.Runtime.psm1] [PID:1808] Machine client config sync skipped: fixture: unknown host or path
+2026-10-16 10:51:09 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stage=config-sync ms=81 lock=cycle
+2026-10-16 10:51:09 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stage=portal-state ms=9 lock=cycle
+2026-10-16 10:51:09 [INFO] [Browser.FirefoxPolicy.psm1] [PID:8416] Configuring Firefox managed extension policy...
+2026-10-16 10:51:09 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Restarting Acrylic service...
+2026-10-16 10:51:09 [INFO] [Browser.FirefoxPolicy.psm1] [PID:8416] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:51:09 [INFO] [Browser.FirefoxPolicy.psm1] [PID:8416] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:51:09 [INFO] [Watchdog.Runtime.ps1] [PID:8416] Watchdog: refreshed Firefox managed extension policy
+2026-10-16 10:51:10 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Acrylic service restarted successfully
+2026-10-16 10:51:10 [INFO] [DNS.Acrylic.Service.ps1] [PID:1984] Acrylic service restarted successfully
+2026-10-16 10:51:10 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply flushed the Windows DNS client cache (ms=8)
+2026-10-16 10:51:10 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply overlay generation stamped: appliedGeneration=1
+2026-10-16 10:51:10 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply iteration 1 staged ready in 1895 ms
+2026-10-16 10:51:10 [INFO] [RuntimeDependency.Overlay.ps1] [PID:1984] runtime-dependency auto-allow: anchor=anchor1-dy9h45.192.168.1.150.sslip.io dependency=deferred1-i68wyx.192.168.1.150.sslip.io type=script
+2026-10-16 10:51:10 [INFO] [RuntimeDependency.Overlay.ps1] [PID:1984] runtime-dependency auto-allow: anchor=anchor1-dy9h45.192.168.1.150.sslip.io dependency=font1-4pc73g.192.168.1.150.sslip.io type=font
+2026-10-16 10:51:10 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency queue processed: processed=2 rejected=0
+2026-10-16 10:51:10 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Generating AcrylicHosts.txt with 10 domains...
+2026-10-16 10:51:10 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Configuring Acrylic...
+2026-10-16 10:51:10 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Acrylic configuration updated
+2026-10-16 10:51:10 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] AcrylicHosts.txt updated
+2026-10-16 10:51:10 [INFO] [DNS.Acrylic.Service.ps1] [PID:1984] Restarting Acrylic service...
+2026-10-16 10:51:11 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Configuring local DNS...
+2026-10-16 10:51:11 [INFO] [DNS.Acrylic.Service.ps1] [PID:1984] Acrylic service restarted successfully
+2026-10-16 10:51:11 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply flushed the Windows DNS client cache (ms=0)
+2026-10-16 10:51:11 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply overlay generation stamped: appliedGeneration=2
+2026-10-16 10:51:11 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply iteration 2 staged ready in 992 ms
+2026-10-16 10:51:11 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply metrics: processed=5 rejected=0 changed=True acrylicHostsChanged=True iterations=2 queueProcessedMs=529 overlayWriteMs=142 acrylicHostUpdateMs=565 acrylicReloadMs=1474 detectedQueueFiles=3 dnsFlushMs=8 dnsFlushOk=True appliedGeneration=2 mirrorSynced=False mirrorSyncMs=16
+2026-10-16 10:51:11 [INFO] [Update.Runtime.psm1] [PID:1984] === Runtime dependency fast apply completed ===
+2026-10-16 10:51:11 [INFO] [RuntimeDependency.Worker.ps1] [PID:1984] Runtime dependency worker applied queue batch: cycles=558 ms=3589 exitCode=0
+2026-10-16 10:51:11 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Set DNS for adapter: Ethernet
+2026-10-16 10:51:12 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] DNS cache flushed
+2026-10-16 10:51:12 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stage=reconcile ms=2741 lock=cycle
+2026-10-16 10:51:12 [INFO] [Update.Script.Config.ps1] [PID:1808] Backed up current whitelist for rollback
+2026-10-16 10:51:12 [INFO] [Update.Script.Config.ps1] [PID:1808] Checkpoint created at C:\OpenPath\data\checkpoints\checkpoint-20261016-105112-138
+2026-10-16 10:51:12 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stage=backup ms=146 lock=cycle
+2026-10-16 10:51:12 [INFO] [Common.Http.Whitelist.ps1] [PID:1808] Downloading whitelist from http://192.168.1.150/w/firstvisit/whitelist.txt
+2026-10-16 10:51:12 [INFO] [Common.Http.Whitelist.ps1] [PID:1808] Parsed: 10 whitelisted, 1 blocked subdomains, 2 blocked paths, disabled=False
+2026-10-16 10:51:12 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stage=download ms=341 lock=cycle
+2026-10-16 10:51:12 [WARN] [Common.Http.Health.ps1] [PID:8416] Health report failed (non-critical, streak=5): fixture: unknown post
+2026-10-16 10:51:13 [INFO] [DNS.Acrylic.Config.ps1] [PID:1808] Generating AcrylicHosts.txt with 10 domains...
+2026-10-16 10:51:13 [INFO] [DNS.Acrylic.Config.ps1] [PID:1808] AcrylicHosts.txt effective content unchanged; skipping rewrite
+2026-10-16 10:51:13 [INFO] [DNS.Acrylic.Config.ps1] [PID:1808] Configuring Acrylic...
+2026-10-16 10:51:13 [INFO] [DNS.Acrylic.Config.ps1] [PID:1808] Acrylic configuration unchanged; skipping rewrite
+2026-10-16 10:51:13 [INFO] [DNS.Acrylic.Config.ps1] [PID:1808] AcrylicHosts.txt updated
+2026-10-16 10:51:13 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update writers scope=whitelist-queue-apply ms=891
+2026-10-16 10:51:13 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Restarting Acrylic service...
+2026-10-16 10:51:14 [INFO] [RuntimeDependency.Worker.ps1] [PID:1984] Runtime dependency worker detected 1 queue file(s) queueFileAgeMs=43
+2026-10-16 10:51:14 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Acrylic service restarted successfully
+2026-10-16 10:51:14 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Configuring local DNS...
+2026-10-16 10:51:14 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Set DNS for adapter: Ethernet
+2026-10-16 10:51:14 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] DNS cache flushed
+2026-10-16 10:51:14 [INFO] [Update.Runtime.psm1] [PID:1984] === Starting runtime dependency fast apply ===
+2026-10-16 10:51:14 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply detected 1 queue file(s)
+2026-10-16 10:51:14 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1808] Configuring Firefox managed extension policy...
+2026-10-16 10:51:14 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1808] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:51:14 [INFO] [Browser.FirefoxPolicy.psm1] [PID:1808] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:51:14 [INFO] [Browser.psm1] [PID:1808] Configuring Chrome/Edge policies...
+2026-10-16 10:51:14 [INFO] [RuntimeDependency.Overlay.ps1] [PID:1984] runtime-dependency auto-allow: anchor=anchor1-dy9h45.192.168.1.150.sslip.io dependency=api1-se3b7q.192.168.1.150.sslip.io type=xmlhttprequest
+2026-10-16 10:51:14 [INFO] [Browser.psm1] [PID:1808] Policies written to: HKLM:\SOFTWARE\Policies\Google\Chrome
+2026-10-16 10:51:15 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency queue processed: processed=1 rejected=0
+2026-10-16 10:51:15 [INFO] [Browser.psm1] [PID:1808] Policies written to: HKLM:\SOFTWARE\Policies\Microsoft\Edge
+2026-10-16 10:51:15 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Configuring local DNS...
+2026-10-16 10:51:15 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] Set DNS for adapter: Ethernet
+2026-10-16 10:51:15 [INFO] [DNS.Acrylic.Service.ps1] [PID:1808] DNS cache flushed
+2026-10-16 10:51:15 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Generating AcrylicHosts.txt with 10 domains...
+2026-10-16 10:51:15 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Configuring Acrylic...
+2026-10-16 10:51:15 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] Acrylic configuration updated
+2026-10-16 10:51:15 [INFO] [DNS.Acrylic.Config.ps1] [PID:1984] AcrylicHosts.txt updated
+2026-10-16 10:51:15 [INFO] [DNS.Acrylic.Service.ps1] [PID:1984] Restarting Acrylic service...
+2026-10-16 10:51:15 [WARN] [Common.Http.Health.ps1] [PID:1808] Health report failed (non-critical, streak=6): fixture: unknown post
+2026-10-16 10:51:15 [INFO] [Update.Script.Apply.ps1] [PID:1808] === OpenPath update completed successfully ===
+2026-10-16 10:51:15 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stage=apply ms=3074 lock=cycle
+2026-10-16 10:51:15 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stages totalMs=12302 enrollment=5910 config-sync=81 portal-state=9 reconcile=2741 backup=146 download=341 apply=3074
+2026-10-16 10:51:15 [INFO] [Browser.FirefoxNativeHost.psm1] [PID:1808] Compiled native host ensured (BuildSkipped, source=compiled, sha256=824ba929bdeab42acb7d6034002dfd6630ee851e78bca6b5d4f593ab8457f025).
+2026-10-16 10:51:15 [INFO] [Update.Runtime.psm1] [PID:1808] OpenPath update stage=native-host ms=117 lock=released
+2026-10-16 10:51:16 [INFO] [DNS.Acrylic.Service.ps1] [PID:1984] Acrylic service restarted successfully
+2026-10-16 10:51:16 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply flushed the Windows DNS client cache (ms=0)
+2026-10-16 10:51:16 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply overlay generation stamped: appliedGeneration=3
+2026-10-16 10:51:16 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply iteration 1 staged ready in 1753 ms
+2026-10-16 10:51:16 [INFO] [Update.Runtime.psm1] [PID:1984] Runtime dependency fast apply metrics: processed=1 rejected=0 changed=True acrylicHostsChanged=True iterations=1 queueProcessedMs=262 overlayWriteMs=78 acrylicHostUpdateMs=494 acrylicReloadMs=829 detectedQueueFiles=1 dnsFlushMs=0 dnsFlushOk=True appliedGeneration=3 mirrorSynced=False mirrorSyncMs=4
+2026-10-16 10:51:16 [INFO] [Update.Runtime.psm1] [PID:1984] === Runtime dependency fast apply completed ===
+2026-10-16 10:51:16 [INFO] [RuntimeDependency.Worker.ps1] [PID:1984] Runtime dependency worker applied queue batch: cycles=568 ms=2140 exitCode=0
+2026-10-16 10:51:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connecting...
+2026-10-16 10:51:55 [WARN] [Start-SSEListener.ps1] [PID:1952] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:51:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connection lost - reconnecting in 60s
+2026-10-16 10:52:08 [INFO] [Browser.FirefoxPolicy.psm1] [PID:8852] Configuring Firefox managed extension policy...
+2026-10-16 10:52:09 [INFO] [Browser.FirefoxPolicy.psm1] [PID:8852] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:52:09 [INFO] [Browser.FirefoxPolicy.psm1] [PID:8852] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:52:09 [INFO] [Watchdog.Runtime.ps1] [PID:8852] Watchdog: refreshed Firefox managed extension policy
+2026-10-16 10:52:11 [WARN] [Common.Http.Health.ps1] [PID:8852] Health report failed (non-critical, streak=7): fixture: unknown post
+2026-10-16 10:52:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connecting...
+2026-10-16 10:52:55 [WARN] [Start-SSEListener.ps1] [PID:1952] SSE: Connection error: Exception calling "EnsureSuccessStatusCode" with "0" argument(s): "Response status code does not indicate success: 404 (Not Found)."
+2026-10-16 10:52:55 [INFO] [Start-SSEListener.ps1] [PID:1952] SSE: Connection lost - reconnecting in 60s
+2026-10-16 10:53:02 [INFO] [Update.Runtime.psm1] [PID:4504] === Starting openpath update ===
+2026-10-16 10:53:08 [WARN] [Installer.Offline.ps1] [PID:4504] Deferred enrollment retry failed without exposing credentials: Unable to connect to the remote server
+2026-10-16 10:53:08 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stage=enrollment ms=5428 lock=cycle
+2026-10-16 10:53:08 [WARN] [Update.Runtime.psm1] [PID:4504] Machine client config sync skipped: fixture: unknown host or path
+2026-10-16 10:53:08 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stage=config-sync ms=37 lock=cycle
+2026-10-16 10:53:08 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stage=portal-state ms=7 lock=cycle
+2026-10-16 10:53:08 [INFO] [Browser.FirefoxPolicy.psm1] [PID:3128] Configuring Firefox managed extension policy...
+2026-10-16 10:53:08 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Restarting Acrylic service...
+2026-10-16 10:53:08 [INFO] [Browser.FirefoxPolicy.psm1] [PID:3128] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:53:08 [INFO] [Browser.FirefoxPolicy.psm1] [PID:3128] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:53:08 [INFO] [Watchdog.Runtime.ps1] [PID:3128] Watchdog: refreshed Firefox managed extension policy
+2026-10-16 10:53:09 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Acrylic service restarted successfully
+2026-10-16 10:53:10 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Configuring local DNS...
+2026-10-16 10:53:10 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Set DNS for adapter: Ethernet
+2026-10-16 10:53:10 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] DNS cache flushed
+2026-10-16 10:53:11 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stage=reconcile ms=2453 lock=cycle
+2026-10-16 10:53:11 [INFO] [Update.Script.Config.ps1] [PID:4504] Backed up current whitelist for rollback
+2026-10-16 10:53:11 [INFO] [Update.Script.Config.ps1] [PID:4504] Checkpoint created at C:\OpenPath\data\checkpoints\checkpoint-20261016-105311-086
+2026-10-16 10:53:11 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stage=backup ms=132 lock=cycle
+2026-10-16 10:53:11 [INFO] [Common.Http.Whitelist.ps1] [PID:4504] Downloading whitelist from http://192.168.1.150/w/firstvisit/whitelist.txt
+2026-10-16 10:53:11 [WARN] [Common.Http.Health.ps1] [PID:3128] Health report failed (non-critical, streak=8): fixture: unknown post
+2026-10-16 10:53:11 [INFO] [Common.Http.Whitelist.ps1] [PID:4504] Parsed: 10 whitelisted, 1 blocked subdomains, 2 blocked paths, disabled=False
+2026-10-16 10:53:11 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stage=download ms=246 lock=cycle
+2026-10-16 10:53:11 [INFO] [DNS.Acrylic.Config.ps1] [PID:4504] Generating AcrylicHosts.txt with 10 domains...
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Config.ps1] [PID:4504] AcrylicHosts.txt effective content unchanged; skipping rewrite
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Config.ps1] [PID:4504] Configuring Acrylic...
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Config.ps1] [PID:4504] Acrylic configuration unchanged; skipping rewrite
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Config.ps1] [PID:4504] AcrylicHosts.txt updated
+2026-10-16 10:53:12 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update writers scope=whitelist-queue-apply ms=648
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Restarting Acrylic service...
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Acrylic service restarted successfully
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Configuring local DNS...
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Set DNS for adapter: Ethernet
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] DNS cache flushed
+2026-10-16 10:53:12 [INFO] [Browser.FirefoxPolicy.psm1] [PID:4504] Configuring Firefox managed extension policy...
+2026-10-16 10:53:12 [INFO] [Browser.FirefoxPolicy.psm1] [PID:4504] Firefox machine ExtensionSettings policy written to: HKLM:\SOFTWARE\Policies\Mozilla\Firefox
+2026-10-16 10:53:12 [INFO] [Browser.FirefoxPolicy.psm1] [PID:4504] Firefox managed extension policy written to: C:\Program Files\Mozilla Firefox\distribution\policies.json
+2026-10-16 10:53:12 [INFO] [Browser.psm1] [PID:4504] Configuring Chrome/Edge policies...
+2026-10-16 10:53:12 [INFO] [Browser.psm1] [PID:4504] Policies written to: HKLM:\SOFTWARE\Policies\Google\Chrome
+2026-10-16 10:53:12 [INFO] [Browser.psm1] [PID:4504] Policies written to: HKLM:\SOFTWARE\Policies\Microsoft\Edge
+2026-10-16 10:53:12 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Configuring local DNS...
+2026-10-16 10:53:13 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] Set DNS for adapter: Ethernet
+2026-10-16 10:53:13 [INFO] [DNS.Acrylic.Service.ps1] [PID:4504] DNS cache flushed
+2026-10-16 10:53:13 [WARN] [Common.Http.Health.ps1] [PID:4504] Health report failed (non-critical, streak=9): fixture: unknown post
+2026-10-16 10:53:13 [INFO] [Update.Script.Apply.ps1] [PID:4504] === OpenPath update completed successfully ===
+2026-10-16 10:53:13 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stage=apply ms=1751 lock=cycle
+2026-10-16 10:53:13 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stages totalMs=10054 enrollment=5428 config-sync=37 portal-state=7 reconcile=2453 backup=132 download=246 apply=1751
+2026-10-16 10:53:13 [INFO] [Browser.FirefoxNativeHost.psm1] [PID:4504] Compiled native host ensured (BuildSkipped, source=compiled, sha256=824ba929bdeab42acb7d6034002dfd6630ee851e78bca6b5d4f593ab8457f025).
+2026-10-16 10:53:13 [INFO] [Update.Runtime.psm1] [PID:4504] OpenPath update stage=native-host ms=70 lock=released

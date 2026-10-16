@@ -935,4 +935,39 @@ download.mozilla.org/firefox/releases
             }
         }
     }
+
+    Context "Restore-OpenPathProtectedMode (Phase 8f F2)" {
+        It "Keeps the DNS flush and the firewall when the Acrylic restart is skipped" {
+            # Phase 8f: Restart-AcrylicService now returns $true without
+            # touching the service when the running proxy already loaded the
+            # current content; the protected-mode restore must still flush the
+            # DNS client cache and reassert the firewall.
+            $script:f2Flush = $false
+            $script:f2Firewall = $false
+            Mock Restart-AcrylicService { $true } -ModuleName Common
+            Mock Set-LocalDNS { $script:f2Flush = $true } -ModuleName Common
+            # Test-FirewallActive is intentionally NOT mocked: this suite never
+            # imports the Firewall module, so the restore skips the
+            # active-check branch and always reaches the apply branch
+            # deterministically on every platform.
+            Mock Set-OpenPathFirewall { $script:f2Firewall = $true; return $true } -ModuleName Common
+            Mock Get-AcrylicPath { 'C:\OpenPath\Acrylic DNS Proxy' } -ModuleName Common
+
+            $config = [PSCustomObject]@{
+                enableFirewall = $true
+                primaryDNS     = '8.8.8.8'
+            }
+            $result = Restore-OpenPathProtectedMode -Config $config -PassThru
+
+            $result.Executed | Should -BeTrue
+            $result.Restarted | Should -BeTrue
+            $result.Flushed | Should -BeTrue
+            $result.FirewallConfigured | Should -BeTrue
+            $script:f2Flush | Should -BeTrue
+            $script:f2Firewall | Should -BeTrue
+            Should -Invoke Restart-AcrylicService -ModuleName Common -Times 1 -Exactly
+            Should -Invoke Set-LocalDNS -ModuleName Common -Times 1 -Exactly
+            Should -Invoke Set-OpenPathFirewall -ModuleName Common -Times 1 -Exactly
+        }
+    }
 }

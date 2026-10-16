@@ -1947,6 +1947,72 @@ PrimaryServerAddress=198.51.100.7
             $fromTrigger.verdict | Should -Be 'CONTENTION-PASS'
         }
 
+        It 'Fails the restart invariants on the literal nightly update-contention log (Phase 8f F5)' {
+            # Literal openpath.log of the update-contention scene from the
+            # scheduled nightly 38866058026 (2026-10-16, SHA 1c363288): ten
+            # Acrylic restarts in seven minutes, nine of them inside Update
+            # cycles whose hosts file and INI were unchanged, plus one overlap
+            # between two processes. The invariants must catch both.
+            $fixture = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\fixtures\update-contention-nightly-38866058026-openpath-log.txt'
+            Test-Path -LiteralPath $fixture | Should -BeTrue
+            $lines = @(Get-Content -LiteralPath $fixture)
+
+            $invariants = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $lines
+            $invariants.restartCount | Should -Be 10
+            $invariants.unchangedCycles | Should -Be 3
+            $invariants.unchangedCycleRestarts | Should -Be 9
+            $invariants.overlapCount | Should -Be 1
+            $invariants.reasons | Should -Contain 'acrylic-restart-unchanged'
+            $invariants.reasons | Should -Contain 'acrylic-restart-overlap'
+            $invariants.reasons | Should -Not -Contain 'acrylic-restart-near-ready'
+
+            # Through the scene verdict: the wave counters can be perfect and
+            # the invariants still force CONTENTION-RED.
+            $verdict = Get-OpenPathFirstVisitUpdateContention -OpenPathLines $lines -DiagnosticLines @() -CanaryMetrics ([pscustomobject]@{
+                    holds = 1; readyCount = 1; readyP95Ms = 500; readyMaxMs = 500
+                    outcomeCounts = [ordered]@{ ready = 1 }
+                })
+            $verdict.verdict | Should -Be 'CONTENTION-RED'
+            $verdict.reasons | Should -Contain 'acrylic-restart-unchanged'
+            $verdict.reasons | Should -Contain 'acrylic-restart-overlap'
+            $verdict.acrylicRestarts.unchangedCycleRestarts | Should -Be 9
+        }
+
+        It 'Flags a restart next to a ready event and stays quiet otherwise (Phase 8f F5)' {
+            $restartAt = [DateTimeOffset]::ParseExact('2026-10-16 10:00:00', 'yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
+            $baseMs = [long]$restartAt.ToUnixTimeMilliseconds()
+            $restartLines = @(
+                '2026-10-16 10:00:00 [INFO] [DNS.Acrylic.Service.ps1] [PID:900] Restarting Acrylic service...',
+                '2026-10-16 10:00:01 [INFO] [DNS.Acrylic.Service.ps1] [PID:900] Acrylic service restarted successfully'
+            )
+            $nearDiagnostics = @(
+                ('2026-10-16 10:00:01 [INFO] [OpenPath-NativeHost] stage=extension-diagnostic {"kind":"hold-outcome","outcome":"ready","ts":' + ($baseMs + 1500) + '}')
+            )
+            $near = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $restartLines -DiagnosticLines $nearDiagnostics
+            $near.reasons | Should -Contain 'acrylic-restart-near-ready'
+            $near.nearReadyCount | Should -Be 1
+
+            $farDiagnostics = @(
+                ('2026-10-16 10:01:00 [INFO] [OpenPath-NativeHost] stage=extension-diagnostic {"kind":"hold-outcome","outcome":"ready","ts":' + ($baseMs + 60000) + '}')
+            )
+            $far = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $restartLines -DiagnosticLines $farDiagnostics
+            $far.reasons | Should -Not -Contain 'acrylic-restart-near-ready'
+            $far.nearReadyCount | Should -Be 0
+
+            # A completed unchanged cycle with a skip line (the Phase 8f
+            # product shape) stays quiet: the skipped line is not a restart.
+            $healthy = @(
+                '2026-10-16 10:05:00 [INFO] [Update.Runtime.psm1] [PID:901] === Starting openpath update ===',
+                '2026-10-16 10:05:01 [INFO] [DNS.Acrylic.Config.ps1] [PID:901] AcrylicHosts.txt effective content unchanged; skipping rewrite',
+                '2026-10-16 10:05:01 [INFO] [DNS.Acrylic.Config.ps1] [PID:901] Acrylic configuration unchanged; skipping rewrite',
+                '2026-10-16 10:05:02 [INFO] [DNS.Acrylic.Service.ps1] [PID:901] Acrylic restart skipped reason=stable caller=Restore-OpenPathProtectedMode pid=901 ms=12',
+                '2026-10-16 10:05:03 [INFO] [Update.Runtime.psm1] [PID:901] OpenPath update stages totalMs=3000 enrollment=1 config-sync=1 portal-state=1 reconcile=1 backup=1 download=1 apply=1'
+            )
+            $quiet = Get-OpenPathFirstVisitAcrylicRestartInvariants -OpenPathLines $healthy
+            $quiet.restartCount | Should -Be 0
+            $quiet.reasons.Count | Should -Be 0
+        }
+
         It 'Classifies VM stalls, guest saturation and worker-only gaps' {
             $workerGaps = @(Get-OpenPathFirstVisitWorkerGaps -OpenPathLines @(
                     '2026-10-08 10:00:00 [INFO] [RuntimeDependency.Worker.ps1] [PID:2] Runtime dependency worker detected 5 queue file(s) queueFileAgeMs=5',
@@ -2098,6 +2164,10 @@ PrimaryServerAddress=198.51.100.7
             $controller | Should -Match '-Step ''host-recompile'''
             $controller | Should -Match 'on-before-install'
             $controller | Should -Match 'Get-OpenPathFirstVisitUpdateContention'
+            # Phase 8f F5: the restart invariant reasons join productReasons so
+            # the scene files as PRODUCT red even when the waves pass.
+            $controller | Should -Match 'acrylic-restart-'
+            $controller | Should -Match 'restart invariants'
             $controller | Should -Match 'Get-OpenPathFirstVisitStallClassification'
             $controller | Should -Match 'infraVmStall'
 
@@ -2381,16 +2451,19 @@ PrimaryServerAddress=198.51.100.7
             $script:laneGuestSource | Should -Not -Match '\$initCountBefore'
         }
 
-        It 'Decides the SAC scene verdict from two sampled moments (Phase 8e)' {
+        It 'Decides the SAC scene verdict from two sampled moments (Phase 8e, F0 criteria)' {
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitSacScene.psm1') -Force
-            $stateOffEarly = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: false'); json = '{}' } }
-            $stateOffLate = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: false'); json = '{}' } }
-            $stateOnEarly = [pscustomobject]@{ registryValue = 1; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: true'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
-            $stateOn = [pscustomobject]@{ registryValue = 1; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: true'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
+            # Literal measured shapes: registry value plus the Device Guard
+            # umciEnforcementStatus second signal plus the CiTool listing.
+            $offRaw = @('Policy:', '    Friendly Name: VerifiedAndReputableDesktop', '    Is Currently Enforced: false')
+            $onRaw = @('Policy:', '    Friendly Name: VerifiedAndReputableDesktop', '    Is Currently Enforced: true')
+            $stateOffEarly = [pscustomobject]@{ registryValue = 0; deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 0 }; configSmartAppControl = [pscustomobject]@{ result = 'verified' }; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = $offRaw; json = '{}' } }
+            $stateOffLate = [pscustomobject]@{ registryValue = 0; deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 0 }; configSmartAppControl = [pscustomobject]@{ result = 'verified' }; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = $offRaw; json = '{}' } }
+            $stateOnEarly = [pscustomobject]@{ registryValue = 1; deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 2 }; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = $onRaw; json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
+            $stateOn = [pscustomobject]@{ registryValue = 1; deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 2 }; at = '2026-10-13T10:07:00Z'; ciTool = [pscustomobject]@{ raw = $onRaw; json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
             # The installer turns SAC off but `CiTool -lp` keeps listing the
-            # disabled policy until Windows settles: registry 0, policy listed
-            # with 'Is Currently Enforced: false' (measured on VM 111).
-            $stateJustDisabled = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policy:', 'Friendly Name: VerifiedAndReputableDesktop', 'Is Currently Enforced: false'); json = '{}' } }
+            # disabled policy until Windows settles: registry 0, umci 0, policy
+            # listed with 'Is Currently Enforced: false' (measured on VM 111).
             $controlRan = [pscustomobject]@{ plainSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }); motwSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }) }
             $controlBlocked = [pscustomobject]@{ plainSamples = @([pscustomobject]@{ started = $true; exitCode = 7 }); motwSamples = @([pscustomobject]@{ started = $false; exitCode = $null }) }
             $probe = [pscustomobject]@{ pingResponded = $true; deniedPowershell = $true }
@@ -2403,6 +2476,18 @@ PrimaryServerAddress=198.51.100.7
             ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
             $passed.status | Should -Be 'SAC-PASS'
             $passed.gapSeconds | Should -Be 420
+            $passed.firstUmci | Should -Be 0
+            $passed.secondUmci | Should -Be 0
+
+            # Phase 8f F0: the positive control is informational now (it does
+            # not discriminate with SAC on), so a blocked MOTW sample no longer
+            # fails the verdict.
+            $controlInformational = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlBlocked },
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOffLate; control = $controlBlocked }
+            ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
+            $controlInformational.status | Should -Be 'SAC-PASS'
+            $controlInformational.secondMotwRan | Should -BeFalse
 
             $redValue = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
                 [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlRan },
@@ -2411,34 +2496,39 @@ PrimaryServerAddress=198.51.100.7
             $redValue.status | Should -Be 'SAC-RED'
             $redValue.reasons | Should -Contain 'sac-second-value:1'
             $redValue.reasons | Should -Contain 'sac-second-policy-applied'
-            # A policy listing right after the install (before the reboot that
-            # settles it) is recorded but not a failure on its own.
-            $stateJustDisabled = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = @('Policies: VerifiedAndReputable'); json = '{"policies":[{"name":"VerifiedAndReputable"}]}' } }
-            $settled = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
-                [pscustomobject]@{ label = 'install-end'; state = $stateJustDisabled; control = $controlRan },
+            $redValue.reasons | Should -Contain 'sac-second-umci:2'
+
+            # The persisted installer record must not disagree: a stale
+            # reboot-required record fails the scene even with SAC state off.
+            $redConfig = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = [pscustomobject]@{ registryValue = 0; deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 0 }; configSmartAppControl = [pscustomobject]@{ result = 'reboot-required' }; at = '2026-10-13T10:00:00Z'; ciTool = [pscustomobject]@{ raw = $offRaw; json = '{}' } }; control = $controlRan },
                 [pscustomobject]@{ label = 'post-visit'; state = $stateOffLate; control = $controlRan }
             ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
-            $settled.status | Should -Be 'SAC-PASS'
-            $settled.firstPolicyApplied | Should -BeTrue
-            $settled.secondPolicyApplied | Should -BeFalse
+            $redConfig.reasons | Should -Contain 'sac-config-result:reboot-required'
 
-            $redControl = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'on-off' -Samples @(
-                [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlRan },
-                [pscustomobject]@{ label = 'post-visit'; state = $stateOffLate; control = $controlBlocked }
+            # Both moments must show no applied policy now: a policy still
+            # enforced at install end is a real failure (the settled listing
+            # variant keeps 'Is Currently Enforced: false').
+            $redFirstPolicy = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'on-off' -Samples @(
+                [pscustomobject]@{ label = 'install-end'; state = $stateOnEarly; control = $controlRan },
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOffLate; control = $controlRan }
             ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
-            $redControl.reasons | Should -Contain 'sac-second-control-motw-blocked'
+            $redFirstPolicy.reasons | Should -Contain 'sac-first-policy-applied'
+            $redFirstPolicy.reasons | Should -Contain 'sac-first-value:1'
+            $redFirstPolicy.reasons | Should -Contain 'sac-first-umci:2'
 
             $redEarly = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'eval-off' -Samples @(
                 [pscustomobject]@{ label = 'install-end'; state = $stateOffEarly; control = $controlRan },
-                [pscustomobject]@{ label = 'post-visit'; state = [pscustomobject]@{ registryValue = 0; at = '2026-10-13T10:02:00Z'; ciTool = [pscustomobject]@{ raw = @('none'); json = '{}' } }; control = $controlRan }
+                [pscustomobject]@{ label = 'post-visit'; state = [pscustomobject]@{ registryValue = 0; deviceGuard = [pscustomobject]@{ umciEnforcementStatus = 0 }; at = '2026-10-13T10:02:00Z'; ciTool = [pscustomobject]@{ raw = @('none'); json = '{}' } }; control = $controlRan }
             ) -HostProbe $probe -Recompile $recompile -ProductVerdict $passedProduct
             $redEarly.reasons | Should -Contain 'sac-second-sample-too-early:120s'
 
-            # on-keep: SAC stays enforced; the watchdog code and the durable
-            # installer warning are required, the host is not.
+            # on-keep: SAC stays enforced (policy applied and umci=2 at both
+            # moments); the watchdog code and the durable installer warning are
+            # required, the control stays informational.
             $keepPass = Get-OpenPathFirstVisitSacSceneVerdict -Kind 'on-keep' -Samples @(
                 [pscustomobject]@{ label = 'install-end'; state = $stateOnEarly; control = $controlBlocked },
-                [pscustomobject]@{ label = 'post-visit'; state = $stateOn; control = $controlBlocked }
+                [pscustomobject]@{ label = 'post-visit'; state = $stateOn; control = $controlRan }
             ) -Watchdog ([pscustomobject]@{ reasonCodes = @('smart_app_control_enforced'); installWarningSeen = $true })
             $keepPass.status | Should -Be 'SAC-PASS'
 
@@ -2448,13 +2538,30 @@ PrimaryServerAddress=198.51.100.7
             ) -Watchdog ([pscustomobject]@{ reasonCodes = @(); installWarningSeen = $false })
             $keepRed.status | Should -Be 'SAC-RED'
             $keepRed.reasons | Should -Contain 'sac-second-value:0'
+            $keepRed.reasons | Should -Contain 'sac-second-policy-missing'
+            $keepRed.reasons | Should -Contain 'sac-second-umci:0'
             $keepRed.reasons | Should -Contain 'sac-watchdog-code-missing'
             $keepRed.reasons | Should -Contain 'sac-install-warning-missing'
+        }
+
+        It 'Shares one CiTool listing parser between the product and the harness (Phase 8f F0)' {
+            $sacSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\FirstVisitSacScene.psm1') -Raw
+            $installerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'lib' 'install' 'Installer.SmartAppControl.ps1') -Raw
+            # The harness dot-sources the product file and delegates: no second
+            # block-splitting implementation to drift (the 8e defect).
+            $sacSource | Should -Match 'Installer\.SmartAppControl\.ps1'
+            $sacSource | Should -Match 'Test-OpenPathSmartAppControlPolicyApplied -ListOutput'
+            $sacSource | Should -Not -Match "regex\]::Split"
+            $installerSource | Should -Match 'function Test-OpenPathSmartAppControlPolicyApplied'
+            $installerSource | Should -Match 'Is Currently Enforced:\\s\*true'
         }
 
         It 'Wires the SAC scenes into the suite, controller, harness and outcome (Phase 8e)' {
             $script:laneGuestSource | Should -Match "'sac-watchdog' \{"
             $script:laneGuestSource | Should -Match 'DisableSmartAppControlInstall'
+            # Phase 8f F0: the sac-state step carries the persisted decision so
+            # config.json.smartAppControl.result is scene evidence.
+            $script:laneGuestSource | Should -Match 'configSmartAppControl'
             $script:laneControllerSource | Should -Match '\$sacSceneKind'
             $script:laneControllerSource | Should -Match '-DisableSmartAppControlInstall'
             # Windows PowerShell 5.1 rejects the `-Name:$true` form for -File

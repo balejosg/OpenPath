@@ -10,9 +10,24 @@
 #   - on-keep (control): SAC is applied and enforced before the install and the
 #     setup receives no flag; SAC must stay on and the install must record the
 #     visible warning.
-# The positive control (a freshly compiled exe with and without MOTW) is the
-# truth of "SAC is off": with SAC off it must never block; with SAC on it is
-# informational only (the lab already measured it oscillating).
+# Phase 8f F0: "SAC is really off" is decided by the registry value plus two
+# independent signals - Win32_DeviceGuard.UsermodeCodeIntegrityPolicyEnforcement
+# Status (0 = off) and the CiTool -lp policy listing (a VerifiedAndReputable
+# policy counts as applied only while its block says 'Is Currently Enforced:
+# true'). The positive control (a freshly compiled exe with and without MOTW)
+# is informational only: with SAC on it oscillates in the lab, so it cannot
+# discriminate (Phase 8e review, fact 3).
+#
+# The CiTool listing parser is the product's own single implementation
+# (windows/lib/install/Installer.SmartAppControl.ps1), dot-sourced here so the
+# harness verdict and the installer can never drift apart again (the 8e defect
+# was exactly that drift).
+
+$script:OpenPathSacPolicyParserPath = Join-Path $PSScriptRoot '..\..\..\..\windows\lib\install\Installer.SmartAppControl.ps1'
+if (-not (Test-Path -LiteralPath $script:OpenPathSacPolicyParserPath)) {
+    throw "Smart App Control policy parser not found at $script:OpenPathSacPolicyParserPath"
+}
+. $script:OpenPathSacPolicyParserPath
 
 function Get-OpenPathFirstVisitSacSceneField {
     # Resolves a property from an object, array or $null without throwing.
@@ -71,27 +86,21 @@ function Test-OpenPathFirstVisitSacPolicyApplied {
     .SYNOPSIS
         A SAC policy counts as applied only while it is currently enforced.
     .DESCRIPTION
-        `CiTool.exe -lp` keeps listing the disabled VerifiedAndReputable
-        policies after the installer turns SAC off (measured on VM 111:
-        'Friendly Name: VerifiedAndReputableDesktop' with
-        'Is Currently Enforced: false'), so a raw substring is not enough.
-        The text output is split into policy blocks; a block that names a
-        VerifiedAndReputable policy counts only when it is enforced (or when
-        the enforcement field is absent, which keeps older outputs strict).
+        Delegates to the product's single parser (Phase 8f F0): `CiTool.exe -lp`
+        keeps listing the disabled VerifiedAndReputable policies after the
+        installer turns SAC off (measured on VM 111: 'Friendly Name:
+        VerifiedAndReputableDesktop' with 'Is Currently Enforced: false'), so a
+        raw substring is not enough. The text output is split into policy
+        blocks; a block that names a VerifiedAndReputable policy counts only
+        when it is enforced (or when the enforcement field is absent, which
+        keeps older outputs strict).
     #>
     param([AllowNull()][object]$State = $null)
 
     $ciTool = Get-OpenPathFirstVisitSacSceneField -InputObject $State -Name 'ciTool'
     $raw = @(Get-OpenPathFirstVisitSacSceneField -InputObject $ciTool -Name 'raw')
     $text = ($raw -join "`n")
-    if (-not $text -or $text -notmatch 'VerifiedAndReputable') { return $false }
-    $blocks = [regex]::Split($text, '(?m)^\s*Policy:\s*$')
-    foreach ($block in $blocks) {
-        if ($block -notmatch 'VerifiedAndReputable') { continue }
-        if ($block -match 'Is Currently Enforced:\s*true') { return $true }
-        if ($block -notmatch 'Is Currently Enforced:') { return $true }
-    }
-    return $false
+    return [bool](Test-OpenPathSmartAppControlPolicyApplied -ListOutput $text)
 }
 
 function Get-OpenPathFirstVisitSacSceneVerdict {
@@ -103,10 +112,15 @@ function Get-OpenPathFirstVisitSacSceneVerdict {
         ("install-end"), the second after the visit ("post-visit"). PASS
         requires a gap of at least 300 seconds between them (the scene
         criterion is "at install end and 5 minutes later").
-        eval-off/on-off additionally require the student probe to answer and a
-        forced recompile to end Built; on-keep requires the watchdog reason
-        code and the durable installer warning instead (the host may or may not
-        work with SAC on).
+        Phase 8f F0: for eval-off/on-off, "SAC is really off" requires, at BOTH
+        moments, registry value 0, umciEnforcementStatus 0 and no
+        VerifiedAndReputable policy applied in the CiTool listing; the scenes
+        additionally require the student probe to answer and a forced recompile
+        to end Built. on-keep requires the policy applied and
+        umciEnforcementStatus 2 at both moments plus the watchdog reason code
+        and the durable installer warning (the host may or may not work with
+        SAC on). The positive control is informational in all three scenes: it
+        does not discriminate with SAC on, so it never fails the verdict.
     #>
     [CmdletBinding()]
     param(
@@ -140,6 +154,8 @@ function Get-OpenPathFirstVisitSacSceneVerdict {
 
     $firstValue = Get-OpenPathFirstVisitSacSceneField -InputObject $firstState -Name 'registryValue'
     $secondValue = Get-OpenPathFirstVisitSacSceneField -InputObject $secondState -Name 'registryValue'
+    $firstUmci = Get-OpenPathFirstVisitSacSceneField -InputObject (Get-OpenPathFirstVisitSacSceneField -InputObject $firstState -Name 'deviceGuard') -Name 'umciEnforcementStatus'
+    $secondUmci = Get-OpenPathFirstVisitSacSceneField -InputObject (Get-OpenPathFirstVisitSacSceneField -InputObject $secondState -Name 'deviceGuard') -Name 'umciEnforcementStatus'
     $firstPolicy = Test-OpenPathFirstVisitSacPolicyApplied -State $firstState
     $secondPolicy = Test-OpenPathFirstVisitSacPolicyApplied -State $secondState
     $firstPlainRan = Test-OpenPathFirstVisitSacControlRan -Control $firstControl
@@ -157,18 +173,21 @@ function Get-OpenPathFirstVisitSacSceneVerdict {
     if ($Kind -in @('eval-off', 'on-off')) {
         if (-not (($null -ne $firstValue) -and [int]$firstValue -eq 0)) { $reasons.Add("sac-first-value:$firstValue") | Out-Null }
         if (-not (($null -ne $secondValue) -and [int]$secondValue -eq 0)) { $reasons.Add("sac-second-value:$secondValue") | Out-Null }
-        # The policy listing settles after the reboot that the scene already
-        # performs before the visit: right after `CiTool -r` the disabled
-        # policy can still be listed (measured on VM 111), so only the second
-        # moment - the one the criterion describes - requires it gone.
+        # Phase 8f F0: both moments must show no applied policy and the second
+        # signal at 0; "SAC really off" now uses umci plus the CiTool listing
+        # (the 8e-only criterion was the registry value plus the second sample's
+        # policy listing).
+        if ($firstPolicy) { $reasons.Add('sac-first-policy-applied') | Out-Null }
         if ($secondPolicy) { $reasons.Add('sac-second-policy-applied') | Out-Null }
-        if (-not $firstPlainRan) { $reasons.Add('sac-first-control-plain-blocked') | Out-Null }
-        if (-not $firstMotwRan) { $reasons.Add('sac-first-control-motw-blocked') | Out-Null }
-        if (-not $secondPlainRan) { $reasons.Add('sac-second-control-plain-blocked') | Out-Null }
-        if (-not $secondMotwRan) { $reasons.Add('sac-second-control-motw-blocked') | Out-Null }
+        if (-not (($null -ne $firstUmci) -and [int]$firstUmci -eq 0)) { $reasons.Add("sac-first-umci:$firstUmci") | Out-Null }
+        if (-not (($null -ne $secondUmci) -and [int]$secondUmci -eq 0)) { $reasons.Add("sac-second-umci:$secondUmci") | Out-Null }
         if (-not $hostProbePresent) { $reasons.Add('sac-host-probe-missing') | Out-Null }
         elseif (-not $hostProbePing) { $reasons.Add('sac-host-probe-ping-failed') | Out-Null }
         if ($recompileStatus -ne 'Built') { $reasons.Add("sac-recompile:$recompileStatus") | Out-Null }
+        # Phase 8f F0: the persisted installer record must agree with the
+        # sampled state ("verified" means SAC is off now, no reboot notice).
+        $firstConfigResult = [string](Get-OpenPathFirstVisitSacSceneField -InputObject (Get-OpenPathFirstVisitSacSceneField -InputObject $firstState -Name 'configSmartAppControl') -Name 'result')
+        if ($firstConfigResult -and $firstConfigResult -ne 'verified') { $reasons.Add("sac-config-result:$firstConfigResult") | Out-Null }
         if ($null -ne $ProductVerdict) {
             $productState = [string](Get-OpenPathFirstVisitSacSceneField -InputObject $ProductVerdict -Name 'status')
             if ($productState -and $productState -ne 'passed') { $reasons.Add("sac-product-verdict:$productState") | Out-Null }
@@ -180,6 +199,8 @@ function Get-OpenPathFirstVisitSacSceneVerdict {
         if (-not (($null -ne $secondValue) -and [int]$secondValue -eq 1)) { $reasons.Add("sac-second-value:$secondValue") | Out-Null }
         if (-not $firstPolicy) { $reasons.Add('sac-first-policy-missing') | Out-Null }
         if (-not $secondPolicy) { $reasons.Add('sac-second-policy-missing') | Out-Null }
+        if (-not (($null -ne $firstUmci) -and [int]$firstUmci -eq 2)) { $reasons.Add("sac-first-umci:$firstUmci") | Out-Null }
+        if (-not (($null -ne $secondUmci) -and [int]$secondUmci -eq 2)) { $reasons.Add("sac-second-umci:$secondUmci") | Out-Null }
         if ($watchdogCodes -notcontains 'smart_app_control_enforced') { $reasons.Add('sac-watchdog-code-missing') | Out-Null }
         if (-not $installWarningSeen) { $reasons.Add('sac-install-warning-missing') | Out-Null }
     }
@@ -191,6 +212,8 @@ function Get-OpenPathFirstVisitSacSceneVerdict {
         gapSeconds           = $gapSeconds
         firstValue           = $firstValue
         secondValue          = $secondValue
+        firstUmci            = $firstUmci
+        secondUmci           = $secondUmci
         firstPolicyApplied   = $firstPolicy
         secondPolicyApplied  = $secondPolicy
         firstPlainRan        = $firstPlainRan

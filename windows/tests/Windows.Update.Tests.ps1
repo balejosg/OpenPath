@@ -383,17 +383,31 @@ Describe "Update Script" {
                 'mirrorSyncMs',
                 '[System.Threading.Thread]::Sleep(150)',
                 '$updateWorkerBusyStage',
-                'WorkerStatePath'
+                'WorkerStatePath',
+                'Invoke-OpenPathAcrylicRestartLockScope'
             )
+
+            # Phase 8f F4: the reload, the DNS flush and the applied-generation
+            # stamp run inside the global restart-lock scope, so no other
+            # process can restart Acrylic between the worker's reload and its
+            # stamp.
+            $fastApplyStart = $runtimeContent.IndexOf('function Invoke-OpenPathRuntimeDependencyFastApply')
+            $updateCycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
+            $fastApplyBody = $runtimeContent.Substring($fastApplyStart, $updateCycleStart - $fastApplyStart)
+            $scopeIndex = $fastApplyBody.IndexOf('$reloadScope = Invoke-OpenPathAcrylicRestartLockScope')
+            $flushIndex = $fastApplyBody.IndexOf('Clear-OpenPathDnsClientCache')
+            $stampIndex = $fastApplyBody.IndexOf('Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null')
+            ($scopeIndex -ge 0) | Should -BeTrue
+            ($flushIndex -gt $scopeIndex) | Should -BeTrue
+            ($stampIndex -gt $flushIndex) | Should -BeTrue
+            $fastApplyBody | Should -Match '(?s)\$reloadScope = Invoke-OpenPathAcrylicRestartLockScope.*?Clear-OpenPathDnsClientCache.*?Set-OpenPathRuntimeDependencyOverlayApplied'
+            $fastApplyBody | Should -Match 'could not take the Acrylic restart lock; dependencies remain pending'
 
             # Hot path: the config read + mirror rebuild must not run unconditionally
             # on every dependency batch (it cost ~5 s of the Phase 2A baseline).
             $runtimeContent | Should -Match 'function Sync-FirefoxNativeHostMirrorIfChanged'
             $runtimeContent | Should -Match 'function Get-OpenPathNativeHostMirrorSyncStatePath'
 
-            $fastApplyStart = $runtimeContent.IndexOf('function Invoke-OpenPathRuntimeDependencyFastApply')
-            $updateCycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
-            $fastApplyBody = $runtimeContent.Substring($fastApplyStart, $updateCycleStart - $fastApplyStart)
             $fastApplyBody | Should -Match '(?s)Test-Path \$whitelistPath.*?Invoke-OpenPathRuntimeDependencyQueueApply'
             $fastApplyBody | Should -Not -Match 'Get-OpenPathWhitelistDownloadResult'
             $fastApplyBody | Should -Not -Match 'Sync-FirefoxNativeHostMirror -Config \$config'
