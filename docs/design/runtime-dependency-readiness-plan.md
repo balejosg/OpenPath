@@ -871,6 +871,12 @@ Phase 8f makes the restart decision explicit and shared:
   taking the other two). The restart lock is a separate mutex because the
   writers lock is held across the fast apply's whole body while restarts also
   come from callers that never take the writers lock.
+- **Probe placement.** The local control query runs before the restart lock is
+  taken: the UDP probe can take seconds on a slow upstream (0.4-1.3 s typical
+  and a 4.2 s hold measured on VM 111) and holding the lock across it delayed
+  other processes' restarts and the dependency ready path (worker lock waits
+  452-527 ms). The lock is held only across the restart itself, and across the
+  worker's reload + flush + stamp.
 - **Ready inside the restart lock.** The fast apply wraps its restart, DNS
   flush and `appliedGeneration` stamp in
   `Invoke-OpenPathAcrylicRestartLockScope`, so no other process can restart

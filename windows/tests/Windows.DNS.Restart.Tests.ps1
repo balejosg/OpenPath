@@ -161,7 +161,8 @@ param(
     [int]$LockWaitTimeoutSeconds = 30,
     [int]$HoldMs = 4000,
     [int]$FakeRestartMs = 1500,
-    [int]$StartDelayMs = 0
+    [int]$StartDelayMs = 0,
+    [int]$ProbeMs = 0
 )
 $ErrorActionPreference = 'Stop'
 
@@ -180,6 +181,8 @@ function Get-AcrylicService {
 }
 function Test-OpenPathAcrylicControlQuery {
     param([int]$TimeoutSeconds = 3, [string]$Server = '127.0.0.1', [int]$Port = 53)
+    Add-Content -LiteralPath $LogFile -Value ("probe t=" + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+    if ($ProbeMs -gt 0) { Start-Sleep -Milliseconds $ProbeMs }
     return $true
 }
 function Invoke-AcrylicServiceRestartCore {
@@ -196,8 +199,9 @@ if ($StartDelayMs -gt 0) { Start-Sleep -Milliseconds $StartDelayMs }
 
 if ($Mode -eq 'hold') {
     $scope = Invoke-OpenPathAcrylicRestartLockScope -MutexName $MutexName -Stage 'test-hold' -Action {
-        Add-Content -LiteralPath $LogFile -Value 'held'
+        Add-Content -LiteralPath $LogFile -Value ("held t=" + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
         Start-Sleep -Milliseconds $HoldMs
+        Add-Content -LiteralPath $LogFile -Value ("released t=" + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
         return 'scope-done'
     }
     Add-Content -LiteralPath $LogFile -Value ("scopeResult=" + [string]$scope.Result + " acquired=" + [string]$scope.Acquired)
@@ -303,6 +307,89 @@ else {
             Test-Path -LiteralPath $statePath | Should -BeTrue
             $savedState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
             $savedState.combinedSha256 | Should -Not -BeNullOrEmpty
+        }
+
+        It "Runs the control probe outside the restart lock (Phase 8f follow-up)" {
+            $pwshPath = (Get-Process -Id $PID).Path
+            if (-not $pwshPath -or -not (Test-Path -LiteralPath $pwshPath)) {
+                $pwshPath = (Get-Command -Name 'pwsh' -ErrorAction SilentlyContinue).Source
+            }
+            $pwshPath | Should -Not -BeNullOrEmpty
+
+            $root = Join-Path $TestDrive ("restart-probe-" + [guid]::NewGuid().ToString('N'))
+            $acrylicDir = Join-Path $root 'acrylic'
+            $statePath = Join-Path $root 'state.json'
+            New-Item -ItemType Directory -Path $acrylicDir -Force | Out-Null
+            # No `# Generated:` header: the driver hashes the raw content (it
+            # does not load the renderer), so raw and effective content match.
+            Set-Content -LiteralPath (Join-Path $acrylicDir 'AcrylicHosts.txt') -Value "FW example.com" -Encoding ascii
+            Set-Content -LiteralPath (Join-Path $acrylicDir 'AcrylicConfiguration.ini') -Value "[GlobalSection]`nPrimaryServerAddress=8.8.8.8" -Encoding ascii
+            # Stable content: load the state the contender will match.
+            $fingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $acrylicDir
+            [pscustomobject]@{ version = 1; combinedSha256 = $fingerprint.CombinedSha256 } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding ascii
+
+            $mutexName = 'OpenPathTest-AcrylicRestart-' + [guid]::NewGuid().ToString('N')
+            $holderLog = Join-Path $root 'hold.log'
+            $contenderLog = Join-Path $root 'contender.log'
+            $driverPath = Join-Path $root 'acrylic-restart-driver.ps1'
+            Set-Content -LiteralPath $driverPath -Value $script:RestartDriverTemplate -Encoding UTF8
+
+            $holder = Start-Process -FilePath $pwshPath -PassThru -ArgumentList @(
+                '-NoLogo', '-NoProfile', '-NonInteractive', '-File', $driverPath,
+                '-RestartFile', $script:RestartModulePath,
+                '-Role', 'H', '-Mode', 'hold', '-HoldMs', '9000',
+                '-StatePath', $statePath, '-AcrylicPath', $acrylicDir,
+                '-MutexName', $mutexName, '-LogFile', $holderLog,
+                '-FakeRestartLog', (Join-Path $root 'fake.log'),
+                '-ResultFile', (Join-Path $root 'result-H.json')
+            ) -RedirectStandardOutput (Join-Path $root 'stdout-H.txt') -RedirectStandardError (Join-Path $root 'stderr-H.txt')
+            try {
+                $heldDeadline = (Get-Date).AddSeconds(60)
+                while (-not ((Test-Path -LiteralPath $holderLog) -and ((Get-Content -LiteralPath $holderLog -Raw) -match 'held t='))) {
+                    if ((Get-Date) -gt $heldDeadline -or $holder.HasExited) { break }
+                    Start-Sleep -Milliseconds 200
+                }
+                Test-Path -LiteralPath $holderLog | Should -BeTrue
+                (Get-Content -LiteralPath $holderLog -Raw) | Should -Match 'held t='
+
+                $contenderResult = Join-Path $root 'result-C.json'
+                $contender = Start-Process -FilePath $pwshPath -PassThru -ArgumentList @(
+                    '-NoLogo', '-NoProfile', '-NonInteractive', '-File', $driverPath,
+                    '-RestartFile', $script:RestartModulePath,
+                    '-Role', 'C', '-StatePath', $statePath, '-AcrylicPath', $acrylicDir,
+                    '-MutexName', $mutexName, '-LogFile', $contenderLog,
+                    '-FakeRestartLog', (Join-Path $root 'contender-fake.log'),
+                    '-ResultFile', $contenderResult,
+                    '-ProbeMs', '300', '-LockWaitTimeoutSeconds', '60'
+                ) -RedirectStandardOutput (Join-Path $root 'stdout-C.txt') -RedirectStandardError (Join-Path $root 'stderr-C.txt')
+                try {
+                    $deadline = (Get-Date).AddSeconds(90)
+                    while (-not (Test-Path -LiteralPath $contenderResult)) {
+                        if ((Get-Date) -gt $deadline -or $contender.HasExited) { break }
+                        Start-Sleep -Milliseconds 200
+                    }
+                    Test-Path -LiteralPath $contenderResult | Should -BeTrue
+                    $payload = Get-Content -LiteralPath $contenderResult -Raw | ConvertFrom-Json
+                    $payload.result | Should -BeTrue
+
+                    $probeMatch = [regex]::Match((Get-Content -LiteralPath $contenderLog -Raw), 'probe t=(\d+)')
+                    $probeMatch.Success | Should -BeTrue
+                    $probeAt = [long]$probeMatch.Groups[1].Value
+                    $releasedMatch = [regex]::Match((Get-Content -LiteralPath $holderLog -Raw), 'released t=(\d+)')
+                    $releasedMatch.Success | Should -BeTrue
+                    $releasedAt = [long]$releasedMatch.Groups[1].Value
+                    # The probe must have run while the holder still owned the
+                    # lock; the old in-lock probe ran after the release.
+                    ($probeAt -lt $releasedAt) | Should -BeTrue
+                    (Get-Content -LiteralPath $contenderLog -Raw) | Should -Match 'Acrylic restart skipped reason=stable'
+                }
+                finally {
+                    if (-not $contender.HasExited) { try { $contender.Kill() } catch { } }
+                }
+            }
+            finally {
+                if (-not $holder.HasExited) { try { $holder.Kill() } catch { } }
+            }
         }
 
         It "Holds the restart lock across a scope action and makes a contender time out (F4)" {

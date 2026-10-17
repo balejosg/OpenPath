@@ -136,6 +136,12 @@ the restart lock across its reload, DNS flush and appliedGeneration stamp, so a
 `ready` published by the worker cannot be invalidated by another process's
 restart.
 
+The local control query runs before the restart lock is taken (the UDP probe
+can take seconds on a slow upstream; holding the lock across it delayed other
+processes' restarts). Only the restart itself, and the worker's reload + flush
+
+- stamp, hold the lock.
+
 The watchdog's "DNS resolution failed" repair action goes through the same
 decision: it restarts the proxy only when the service is down or unresponsive.
 A resolution failure the proxy still answers for (dead upstream, network

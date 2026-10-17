@@ -323,13 +323,17 @@ function Invoke-OpenPathAcrylicRestart {
     .SYNOPSIS
         The single, serialized Acrylic restart entry point (F1-F3).
     .DESCRIPTION
-        Acquires Global\OpenPathAcrylicRestartLock with a bounded wait,
-        re-evaluates the F2 decision inside the lock (a waiter whose content was
-        already loaded by another process coalesces), performs the restart and
-        records the loaded state. Returns $true when the service is left
-        running with the current content (restarted, or already stable) and
-        $false on lock timeout or restart failure; a lock timeout never
-        restarts in parallel.
+        Evaluates the cheap F2 arms and runs the local control probe BEFORE
+        taking Global\OpenPathAcrylicRestartLock: the UDP probe can take
+        seconds on a slow upstream (0.4-1.3 s typical, a 4.2 s hold measured in
+        the lab) and holding the lock across it delayed other processes'
+        restarts and the dependency ready path (worker lock waits 452-527 ms).
+        It then acquires the lock with a bounded wait and re-evaluates the F2
+        decision inside it (a waiter whose content another process already
+        loaded coalesces), performs the restart and records the loaded state.
+        Returns $true when the service is left running with the current content
+        (restarted, or already stable) and $false on lock timeout or restart
+        failure; a lock timeout never restarts in parallel.
     #>
     [CmdletBinding()]
     param(
@@ -345,7 +349,11 @@ function Invoke-OpenPathAcrylicRestart {
 
         [string]$AcrylicPath = '',
 
-        [string]$StatePath = ''
+        [string]$StatePath = '',
+
+        # Test seam: replaces the local control probe (the two-process driver);
+        # production leaves it empty.
+        [scriptblock]$ControlProbeInvoker = $null
     )
 
     $callerName = if ($Caller) { $Caller } else { Get-OpenPathAcrylicCallerName }
@@ -353,7 +361,20 @@ function Invoke-OpenPathAcrylicRestart {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $mutex = $null
     $lockAcquired = $false
+    $probe = if ($ControlProbeInvoker) { $ControlProbeInvoker } else { { Test-OpenPathAcrylicControlQuery } }
+
     try {
+        # Cheap arms + control probe OUTSIDE the restart lock (see the doc).
+        $loadedState = Get-OpenPathAcrylicLoadedState -Path $StatePath
+        $fingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
+        $service = Get-AcrylicService
+        $serviceStatus = if ($service) { [string]$service.Status } else { 'Missing' }
+        $controlResponds = $null
+        $preDecision = Get-OpenPathAcrylicRestartDecision -LoadedState $loadedState -Fingerprint $fingerprint -ServiceStatus $serviceStatus
+        if (-not $preDecision.RestartNeeded) {
+            $controlResponds = [bool](& $probe)
+        }
+
         $mutex = [System.Threading.Mutex]::new($false, $MutexName)
         try {
             $lockAcquired = $mutex.WaitOne(0)
@@ -372,16 +393,13 @@ function Invoke-OpenPathAcrylicRestart {
             return $false
         }
 
+        # Coalescing: re-evaluate inside the lock with the state as it is now
+        # (another process may have loaded the content while the probe ran).
         $loadedState = Get-OpenPathAcrylicLoadedState -Path $StatePath
         $fingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
         $service = Get-AcrylicService
         $serviceStatus = if ($service) { [string]$service.Status } else { 'Missing' }
-
-        $decision = Get-OpenPathAcrylicRestartDecision -LoadedState $loadedState -Fingerprint $fingerprint -ServiceStatus $serviceStatus
-        if (-not $decision.RestartNeeded) {
-            $controlResponds = [bool](Test-OpenPathAcrylicControlQuery)
-            $decision = Get-OpenPathAcrylicRestartDecision -LoadedState $loadedState -Fingerprint $fingerprint -ServiceStatus $serviceStatus -ControlQueryResponds $controlResponds
-        }
+        $decision = Get-OpenPathAcrylicRestartDecision -LoadedState $loadedState -Fingerprint $fingerprint -ServiceStatus $serviceStatus -ControlQueryResponds $controlResponds
 
         if (-not $decision.RestartNeeded) {
             $stopwatch.Stop()
