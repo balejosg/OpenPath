@@ -911,6 +911,15 @@ own runs, 2026-10-16):
   prefix is parsed as UTC (`AssumeUniversal`): the guest clock is UTC and a
   local parse silently shifted every epoch comparison by the runner offset.
 
+A third correction, in the lane controller: the fixture state (page reports,
+request/DNS counters) is **per scene**, never per run. The staging directory
+is reused across a run's scenes and the reload budget counts every deduped
+`navigationType=reload` origin in it, so one reload-type navigation in the
+first scene marked every later scene `too-many-reloads` while their extension
+logs had zero reload decisions (run 39025472474; the same product's final
+batch measured reloads=0 in all six scenes). The prepare now removes and
+recreates `$staging/state` before starting the fixture.
+
 The Phase 8f evidence summary lives in
 `evidence/windows-acrylic-restarts-phase8f-*` at the workspace root, including
 the literal restart table for one unchanged Update cycle.

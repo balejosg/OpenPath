@@ -2217,6 +2217,10 @@ PrimaryServerAddress=198.51.100.7
             $controller | Should -Match '\$contentionLines'
             $controller | Should -Match "Join-Path \`$evidenceDir 'openpath\.log'"
             $controller | Should -Match 'Get-OpenPathFirstVisitUpdateContention -OpenPathLines \$contentionLines'
+            # Phase 8f follow-up: the fixture state is cleared per scene so a
+            # reload from an earlier scene is never counted again.
+            $controller | Should -Match 'rm -rf .{0,6}staging/state'
+            $controller | Should -Match 'mkdir -p .{0,6}staging/state'
             $controller | Should -Match 'Get-OpenPathFirstVisitStallClassification'
             $controller | Should -Match 'infraVmStall'
 

@@ -166,7 +166,15 @@ function Start-OpenPathFirstVisitFixture {
     # A stale instance from an interrupted run keeps the ports bound and the
     # next start fails with EADDRINUSE; clear every fixture instance first.
     # The bracket form keeps pkill from matching its own ssh command line.
-    & $Transport.InvokeHostCommand @('bash', '-lc', "pkill -f 'fixture[_]server.py --state-dir' || true; pkill -f 'dns[_]fixture.py --state-dir' || true; sleep 2; echo cleared") '' | Out-Null
+    # Phase 8f follow-up: the fixture state (reports/requests/dns counters) is
+    # per SCENE, never per run. The same staging directory is reused across a
+    # run's scenes, and an accumulated report from an earlier scene used to be
+    # counted again by every later scene's reload budget (run 39025472474: one
+    # reload-type navigation in the first scene marked settled and
+    # update-contention with `too-many-reloads` while their extension logs had
+    # zero reload decisions and the final batch on the same product measured
+    # reloads=0 in all six scenes).
+    & $Transport.InvokeHostCommand @('bash', '-lc', "pkill -f 'fixture[_]server.py --state-dir' || true; pkill -f 'dns[_]fixture.py --state-dir' || true; sleep 2; rm -rf '$staging/state'; mkdir -p '$staging/state'; echo cleared") '' | Out-Null
     $siteArgs = ''
     if ($fixtureScenario -eq 'site') {
         $siteArgs = "--site-url '$($settings.SiteUrl)' --site-domains '$($settings.SiteDomains -join ',')' "
