@@ -952,6 +952,12 @@ The Phase 8f review found three gaps that the 8f evidence could not explain.
   the lock wait and the restart core) at or below 50 ms p95 per worker
   iteration; the worker also passes `-ContentChanged` only when it actually
   changed the hosts content, so an overlay-only retry keeps the full check.
+  The follow-up push from the auto-run measurement (95 ms p95: a cold
+  `Get-Service` of 53-67 ms plus a 28-37 ms first state write) queries the
+  service only when the content matches (the decision order returns
+  state-unknown/content-changed before the service arm), warms the service
+  handle at worker prewarm, records the state with
+  `[IO.File]::WriteAllText` and takes a single `FileInfo` stat per file.
 - **Slow restarts had no sub-step.** `Invoke-AcrylicServiceRestartCore` now
   logs `stopMs stoppedWaitMs purgeMs startMs runningWaitMs` and warns above
   3 s; `Update-AcrylicHost` logs `lockWaitMs renderMs writeMs iniMs totalMs`

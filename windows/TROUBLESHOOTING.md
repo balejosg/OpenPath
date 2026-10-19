@@ -686,7 +686,10 @@ OpenPath update stamped runtime dependency overlay appliedGeneration=N
   `preDecisionMs` means the content/state read is cold, a large `decisionMs`
   means the in-lock re-evaluation is (check the worker metrics
   `acrylicHostUpdateMs` first). `contentChanged=1` marks the fast apply path
-  that skips the redundant pre-lock read.
+  that skips the redundant pre-lock read. The service query only runs when
+  the content matches (skip/coalesce path); a content-changed restart does
+  not pay the cold `Get-Service` cost, and the worker prewarms the service
+  handle at startup.
 - Phase 8g: `Acrylic restart skipped reason=stable ... probeRetry=1` is the
   G0 fix working: the pre-lock probe failed while another process was
   restarting the service, the loaded state had moved, and the in-lock re-probe

@@ -323,6 +323,18 @@ function Invoke-OpenPathRuntimeDependencyWorkerPrewarm {
     $stageStopwatch.Stop()
     $metrics['dnsFlushTypeMs'] = [int]$stageStopwatch.ElapsedMilliseconds
 
+    # 1b. Acrylic service-control handle: the first restart decision otherwise
+    # pays the cold Get-Service cost (53-67 ms measured in auto-run
+    # 39302099882). The warm-up is read-only and a failure never stops the
+    # worker.
+    try {
+        if (Get-Command -Name 'Get-AcrylicService' -ErrorAction SilentlyContinue) {
+            $null = Get-AcrylicService
+        }
+    }
+    catch {
+    }
+
     # 2. Whitelist sections: cheap file read + parse (reused by every batch).
     $sections = $null
     $stageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()

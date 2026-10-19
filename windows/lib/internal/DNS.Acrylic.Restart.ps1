@@ -106,11 +106,15 @@ function Get-OpenPathAcrylicFileStamp {
     [CmdletBinding()]
     param([string]$Path = '')
 
-    if (-not $Path -or -not (Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue)) {
+    if (-not $Path) {
         return [pscustomobject]@{ Exists = $false; Length = -1; LastWriteUtcTicks = 0 }
     }
     try {
+        # FileInfo.Exists is the single stat; no separate Test-Path round trip.
         $info = [System.IO.FileInfo]::new($Path)
+        if (-not $info.Exists) {
+            return [pscustomobject]@{ Exists = $false; Length = -1; LastWriteUtcTicks = 0 }
+        }
         return [pscustomobject]@{
             Exists             = $true
             Length             = [long]$info.Length
@@ -290,11 +294,14 @@ function Set-OpenPathAcrylicLoadedState {
     if (-not $Path -or -not $Fingerprint) { return $false }
 
     try {
-        $directory = Split-Path -Path $Path -Parent
-        if ($directory -and -not (Test-Path -LiteralPath $directory -ErrorAction SilentlyContinue)) {
-            New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop | Out-Null
+        # Phase 8g G1 follow-up: [IO.File]::WriteAllText avoids the
+        # Set-Content cmdlet + BOM cost on the hot path (the first state write
+        # measured 28-37 ms in auto-run 39302099882).
+        $directory = [System.IO.Path]::GetDirectoryName($Path)
+        if ($directory -and -not [System.IO.Directory]::Exists($directory)) {
+            [System.IO.Directory]::CreateDirectory($directory) | Out-Null
         }
-        [pscustomobject][ordered]@{
+        $stateJson = [pscustomobject][ordered]@{
             version        = 1
             hostsSha256    = [string]$Fingerprint.HostsSha256
             iniSha256      = [string]$Fingerprint.IniSha256
@@ -304,7 +311,8 @@ function Set-OpenPathAcrylicLoadedState {
             loadedAtUtc    = [DateTime]::UtcNow.ToString('o')
             reason         = [string]$Reason
             pid            = $PID
-        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $Path -Encoding UTF8 -Force -ErrorAction Stop
+        } | ConvertTo-Json -Depth 4 -Compress
+        [System.IO.File]::WriteAllText($Path, $stateJson, [System.Text.UTF8Encoding]::new($false))
         return $true
     }
     catch {
@@ -559,14 +567,28 @@ function Invoke-OpenPathAcrylicRestart {
         else {
             $fingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
         }
-        $service = Get-AcrylicService
-        $serviceStatus = if ($service) { [string]$service.Status } else { 'Missing' }
+        # Phase 8g G1 follow-up: the decision order is state-unknown ->
+        # content-changed -> service-down -> control-unresponsive. When the
+        # first two arms already decide a restart, querying the service is
+        # redundant (and the cold service-control handle cost 53-67 ms in the
+        # auto-run 39302099882). Query it only when the content matches, which
+        # is the arm that can coalesce or need a liveness restart.
+        $contentDecidesRestart = ($null -eq $loadedState -or
+            [string]::IsNullOrWhiteSpace([string]$loadedState.combinedSha256) -or
+            $null -eq $fingerprint -or
+            [string]::IsNullOrWhiteSpace([string]$fingerprint.CombinedSha256) -or
+            [string]$fingerprint.CombinedSha256 -ne [string]$loadedState.combinedSha256)
+        $serviceStatus = 'Running'
+        if (-not $contentDecidesRestart) {
+            $service = Get-AcrylicService
+            $serviceStatus = if ($service) { [string]$service.Status } else { 'Missing' }
+        }
         # Phase 8g G0: a failed probe taken outside the lock is only trusted
         # when no process recorded a restart since that read. If the loaded
         # state moved (another process restarted and loaded the current
         # content), probe again inside the lock instead of restarting a service
         # that already answered. The successful probe stays outside the lock.
-        if (-not $ContentChanged -and $controlResponds -eq $false -and (Test-OpenPathAcrylicLoadedStateChanged -Before $preLoadedState -After $loadedState)) {
+        if (-not $ContentChanged -and -not $contentDecidesRestart -and $controlResponds -eq $false -and (Test-OpenPathAcrylicLoadedStateChanged -Before $preLoadedState -After $loadedState)) {
             $controlResponds = [bool](& $probe)
             $probeRetry = $true
         }

@@ -121,13 +121,14 @@ Describe "Acrylic restart serialization (Phase 8f F1-F4)" {
         It "Logs the decision breakdown and hashes the content once when the lock wait changed nothing (Phase 8g G1)" {
             InModuleScope DNS {
                 $script:fingerprintCalls = 0
+                $script:serviceCalls = 0
                 Mock Get-OpenPathAcrylicLoadedState { [pscustomobject]@{ version = 1; combinedSha256 = 'hash-1'; loadedAtUtc = '2026-10-19T10:00:00.0000000Z' } } -ModuleName DNS
                 Mock Get-OpenPathAcrylicContentFingerprint {
                     $script:fingerprintCalls += 1
                     [pscustomobject]@{ HostsSha256 = 'h'; IniSha256 = 'i'; CombinedSha256 = 'hash-1'; HostsPresent = $true; IniPresent = $true }
                 } -ModuleName DNS
                 Mock Test-OpenPathAcrylicFingerprintCurrent { $true } -ModuleName DNS
-                Mock Get-AcrylicService { [pscustomobject]@{ Name = 'AcrylicDNSProxySvc'; Status = 'Running' } } -ModuleName DNS
+                Mock Get-AcrylicService { $script:serviceCalls += 1; [pscustomobject]@{ Name = 'AcrylicDNSProxySvc'; Status = 'Running' } } -ModuleName DNS
                 Mock Test-OpenPathAcrylicControlQuery { $true } -ModuleName DNS
                 Mock Invoke-AcrylicServiceRestartCore { return $true } -ModuleName DNS
                 Mock Write-OpenPathLog { param([string]$Message, [string]$Level = 'INFO') $null = $script:orchestratorLog.Add([string]$Message) } -ModuleName DNS
@@ -136,6 +137,9 @@ Describe "Acrylic restart serialization (Phase 8f F1-F4)" {
                 $result = Invoke-OpenPathAcrylicRestart -Caller 'unit-test' -MutexName ('OpenPathTest-AcrylicRestart-' + [guid]::NewGuid().ToString('N')) -StatePath '/nonexistent/state.json' -AcrylicPath '/nonexistent/acrylic'
                 $result | Should -BeTrue
                 $script:fingerprintCalls | Should -Be 1
+                # The skip path needs the service arm: it is queried (pre-lock
+                # and in-lock) because the content matches.
+                $script:serviceCalls | Should -Be 2
                 ($script:orchestratorLog -join "`n") | Should -Match 'Acrylic restart skipped reason=stable caller=unit-test pid=\d+ ms=\d+ preDecisionMs=\d+ lockWaitMs=\d+ decisionMs=\d+'
             }
         }
@@ -145,13 +149,14 @@ Describe "Acrylic restart serialization (Phase 8f F1-F4)" {
                 $script:fingerprintCalls = 0
                 $script:savedCombined = ''
                 $script:restartCalls = 0
+                $script:serviceCalls = 0
                 Mock Get-OpenPathAcrylicLoadedState { [pscustomobject]@{ version = 1; combinedSha256 = 'stale-hash'; loadedAtUtc = '2026-10-19T10:00:00.0000000Z' } } -ModuleName DNS
                 Mock Get-OpenPathAcrylicContentFingerprint {
                     $script:fingerprintCalls += 1
                     [pscustomobject]@{ HostsSha256 = 'h2'; IniSha256 = 'i'; CombinedSha256 = 'hash-2'; HostsPresent = $true; IniPresent = $true }
                 } -ModuleName DNS
                 Mock Test-OpenPathAcrylicFingerprintCurrent { $true } -ModuleName DNS
-                Mock Get-AcrylicService { [pscustomobject]@{ Name = 'AcrylicDNSProxySvc'; Status = 'Running' } } -ModuleName DNS
+                Mock Get-AcrylicService { $script:serviceCalls += 1; [pscustomobject]@{ Name = 'AcrylicDNSProxySvc'; Status = 'Running' } } -ModuleName DNS
                 Mock Test-OpenPathAcrylicControlQuery { $true } -ModuleName DNS
                 Mock Invoke-AcrylicServiceRestartCore { $script:restartCalls += 1; return $true } -ModuleName DNS
                 Mock Set-OpenPathAcrylicLoadedState {
@@ -166,6 +171,8 @@ Describe "Acrylic restart serialization (Phase 8f F1-F4)" {
                 $result | Should -BeTrue
                 $script:restartCalls | Should -Be 1
                 $script:fingerprintCalls | Should -Be 1
+                # The content already decides the restart: no service query.
+                $script:serviceCalls | Should -Be 0
                 $script:savedCombined | Should -Be 'hash-2'
                 ($script:orchestratorLog -join "`n") | Should -Match 'Acrylic restart reason=content-changed caller=unit-test pid=\d+ ms=\d+.*preDecisionMs=0 .*lockWaitMs=\d+ decisionMs=\d+ coreMs=\d+ stateRecordMs=\d+ contentChanged=1'
             }
