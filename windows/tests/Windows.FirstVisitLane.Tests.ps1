@@ -2121,7 +2121,59 @@ PrimaryServerAddress=198.51.100.7
             $classification.gaps[0].classification | Should -Be 'vm-stall'
         }
 
-        It 'Normalizes the persisted scene start back to invariant ISO (Phase 7 L3)' {            (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value ([datetime]::new(2026, 10, 7, 13, 14, 47, [DateTimeKind]::Utc))) | Should -Be '2026-10-07T13:14:47.0000000Z'
+        It 'Never turns missing sampler data into a vm-stall (Phase 8g G2)' {
+            $workerGaps = @(Get-OpenPathFirstVisitWorkerGaps -OpenPathLines @(
+                    '2026-10-08 10:00:00 [INFO] [RuntimeDependency.Worker.ps1] [PID:2] Runtime dependency worker detected 5 queue file(s) queueFileAgeMs=5',
+                    '2026-10-08 10:00:10 [INFO] [RuntimeDependency.Worker.ps1] [PID:2] Runtime dependency worker applied queue batch: cycles=13 ms=10036 exitCode=0'
+                ))
+
+            # The Phase 8f artifacts carried samplerGaps=[null] with
+            # sampleCount=0 and the classifier wrote a fake 0-0 vm-stall gap.
+            $missing = Get-OpenPathFirstVisitStallClassification -LogGaps $workerGaps -SamplerGaps @($null) -SaturationWindows @($null) -HostPressure @($null) -SamplerSampleCount 0
+            $missing.gaps.Count | Should -Be 1
+            $missing.gaps[0].classification | Should -Be 'unknown'
+            $missing.vmStall | Should -BeFalse
+            $missing.classification | Should -Be 'unknown'
+            $missing.samplerAvailable | Should -BeFalse
+
+            $empty = Get-OpenPathFirstVisitStallClassification -LogGaps @() -SamplerGaps @($null) -SaturationWindows @() -HostPressure @() -SamplerSampleCount 0
+            $empty.gaps.Count | Should -Be 0
+            $empty.classification | Should -Be 'none'
+
+            # With samples present the same worker gap is worker-only, never a
+            # zero-length vm-stall.
+            $sampled = Get-OpenPathFirstVisitStallClassification -LogGaps $workerGaps -SamplerGaps @($null) -SaturationWindows @() -HostPressure @() -SamplerSampleCount 500
+            $sampled.gaps[0].classification | Should -Be 'worker-only'
+            $sampled.samplerAvailable | Should -BeTrue
+        }
+
+        It 'Wires the sampler self-kill fix and the host pressure fields (Phase 8g G2)' {
+            $guestPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\Invoke-OpenPathFirstVisitGuest.ps1'
+            $guest = Get-Content -LiteralPath $guestPath -Raw
+            # The stop step used to match its own command line ('-Step
+            # stall-sampler-stop') and kill itself before writing the result.
+            $guest | Should -Match 'stall-sampler\[\.\]ps1'
+            $guest | Should -Match '\$_\.ProcessId -ne \$PID'
+            $guest | Should -Match 'samplerGaps\s*=\s*@\(\)'
+            $guest | Should -Match 'samplerAvailable'
+
+            $pressureScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\first-visit\pressure-sampler.sh') -Raw
+            # Phase 8g: the sampler wrote its samples to stdout, so the output
+            # file stayed empty even while the service ran.
+            $pressureScript | Should -Match '>> "\$out"'
+            $pressureScript | Should -Match 'memAvailableMb'
+            $pressureScript | Should -Match 'swapFreeMb'
+            $pressureScript | Should -Match 'qemuRssMb'
+
+            $controllerPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\controllers\ProxmoxFirstVisit.ps1'
+            $controller = Get-Content -LiteralPath $controllerPath -Raw
+            $controller | Should -Match 'mkdir -p'
+            $controller | Should -Match 'pressureStarted'
+            $controller | Should -Match 'pressureSamples'
+            $controller | Should -Match 'SamplerSampleCount'
+        }
+
+        It 'Normalizes the persisted scene start back to invariant ISO (Phase 7 L3)' {
             (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value '2026-10-07T13:14:47.1234567Z') | Should -Be '2026-10-07T13:14:47.1234567Z'
             (ConvertTo-OpenPathFirstVisitSceneStartedIso -Value $null) | Should -Be ''
         }

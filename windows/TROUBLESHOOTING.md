@@ -680,6 +680,32 @@ OpenPath update stamped runtime dependency overlay appliedGeneration=N
 - A whole-VM pause (hypervisor) shows up as the same >2 s gap in the guest
   sampler (`stall-samples.json` in the lab evidence) and is classified
   `vm-stall`; it is infrastructure, not the product.
+- Phase 8g: a restart or skip line now carries the decision breakdown
+  (`preDecisionMs= lockWaitMs= decisionMs= coreMs= stateRecordMs=`). The
+  decision is everything except the lock wait and the restart core; a large
+  `preDecisionMs` means the content/state read is cold, a large `decisionMs`
+  means the in-lock re-evaluation is (check the worker metrics
+  `acrylicHostUpdateMs` first). `contentChanged=1` marks the fast apply path
+  that skips the redundant pre-lock read.
+- Phase 8g: `Acrylic restart skipped reason=stable ... probeRetry=1` is the
+  G0 fix working: the pre-lock probe failed while another process was
+  restarting the service, the loaded state had moved, and the in-lock re-probe
+  found the service answering, so the waiter coalesced instead of restarting
+  again. A `reason=control-unresponsive` restart with `probeRetry=0` means the
+  state did not move: the service really did not answer after the probe.
+- Phase 8g: a slow restart names its sub-step:
+  `Acrylic service restart slow: totalMs=... stopMs=... stoppedWaitMs=...
+purgeMs=... startMs=... runningWaitMs=...` (WARN above 3 s), and a slow host
+  update names `lockWaitMs renderMs writeMs iniMs totalMs` (WARN above 2 s).
+  The 4.9 s samples seen in the Phase 8f lane were `lockWaitMs` on
+  `Global\OpenPathPolicyStateLock`, not the render.
+- Phase 8g: the stall record must show `guest.sampleCount > 0` and
+  `hostPressureSamples > 0`. `samplerAvailable=false`, a `samplerError` with
+  `pressure-samples-empty`, or a classification of `unknown` means the stall
+  cannot be attributed (the controller also recovers the guest JSONL directly
+  when the stop step loses its body). The stop step must never match its own
+  `-Step stall-sampler-stop` command line; it kills only
+  `stall-sampler[.]ps1` processes other than its own PID.
 
 ### Watchdog or Integrity Fallback Triggered
 

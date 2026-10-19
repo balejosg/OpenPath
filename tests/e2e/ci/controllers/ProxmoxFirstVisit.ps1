@@ -1499,7 +1499,7 @@ function Start-OpenPathFirstVisitSamplers {
         [Parameter(Mandatory = $true)][string]$HarnessGuestPath,
         [Parameter(Mandatory = $true)][string]$Staging
     )
-    $result = [ordered]@{ guestSampler = $null; pressureStarted = $false; pressureOut = ''; error = '' }
+    $result = [ordered]@{ guestSampler = $null; pressureStarted = $false; pressureOut = ''; pressureLog = ''; pressureSamples = 0; error = '' }
     try {
         $step = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $Settings -Phase 'observe' -Step 'stall-sampler-start' -HarnessGuestPath $HarnessGuestPath -TimeoutSeconds 240
         $result.guestSampler = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $step -Name 'body') -Name 'state') -Name 'stallSamplerStart'
@@ -1512,11 +1512,21 @@ function Start-OpenPathFirstVisitSamplers {
         if (Test-Path -LiteralPath $localScript) {
             & $Transport.CopyFileToHost $localScript "$Staging/pressure-sampler.sh" | Out-Null
             $pressureOut = "$Staging/state/pressure-scene.jsonl"
+            $pressureLog = "$Staging/state/pressure-sampler.log"
+            $result.pressureOut = $pressureOut
+            $result.pressureLog = $pressureLog
+            # Phase 8g G2: create the directory, keep the sampler's own log and
+            # verify a first sample before the scene starts. The old launch
+            # wrote into a possibly missing state dir and reported nothing.
             # 2400 s is the upper bound of a scene; the stop still ends it early.
-            $startCommand = "setsid nohup bash $Staging/pressure-sampler.sh '$pressureOut' $Vmid 2400 > /dev/null 2>&1 < /dev/null & sleep 1; echo pressure-started"
+            $startCommand = "mkdir -p '$Staging/state'; rm -f '$pressureOut' '$pressureLog'; setsid nohup bash $Staging/pressure-sampler.sh '$pressureOut' $Vmid 2400 >> '$pressureLog' 2>&1 < /dev/null & for i in 1 2 3 4 5 6 7 8 9 10; do if [ -s '$pressureOut' ]; then break; fi; sleep 1; done; if [ -s '$pressureOut' ]; then echo pressure-started samples=`$(wc -l < '$pressureOut' | tr -d ' '); else echo pressure-failed; tail -3 '$pressureLog' 2>/dev/null || true; fi"
             $out = ([string](& $Transport.InvokeHostCommand @('bash', '-lc', $startCommand) '')).Trim()
             $result.pressureStarted = ($out -match 'pressure-started')
-            $result.pressureOut = $pressureOut
+            $sampleMatch = [regex]::Match($out, 'samples=(\d+)')
+            if ($sampleMatch.Success) { $result.pressureSamples = [int]$sampleMatch.Groups[1].Value }
+            if (-not $result.pressureStarted) {
+                $result.error = (($result.error + " pressure-sampler-did-not-start: " + (($out -replace '\s+', ' '))).Trim())
+            }
         }
         else {
             $result.error = (($result.error + ' pressure-sampler-missing').Trim())
@@ -1542,7 +1552,7 @@ function Stop-OpenPathFirstVisitSamplers {
         [Parameter(Mandatory = $true)][string]$HarnessGuestPath,
         [Parameter(Mandatory = $true)][string]$Staging
     )
-    $result = [ordered]@{ guestSampler = $null; pressure = @(); pressureError = ''; error = '' }
+    $result = [ordered]@{ guestSampler = $null; pressure = @(); pressureSamples = 0; pressureError = ''; error = '' }
     try {
         $step = Send-OpenPathFirstVisitStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $Settings -Phase 'observe' -Step 'stall-sampler-stop' -HarnessGuestPath $HarnessGuestPath -TimeoutSeconds 300 -AllowFailed
         $result.guestSampler = Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject (Get-OpenPathLabField -InputObject $step -Name 'body') -Name 'state') -Name 'stallSampler'
@@ -1559,6 +1569,12 @@ function Stop-OpenPathFirstVisitSamplers {
             try { $samples.Add(($line | ConvertFrom-Json)) | Out-Null } catch { }
         }
         $result.pressure = @($samples.ToArray())
+        $result.pressureSamples = @($result.pressure).Count
+        if ($result.pressureSamples -eq 0) {
+            $logTail = ([string](& $Transport.InvokeHostCommand @('bash', '-lc', "tail -3 '$Staging/state/pressure-sampler.log' 2>/dev/null || true") '')).Trim()
+            $detail = if ($logTail) { ': ' + ($logTail -replace '\s+', ' ') } else { '' }
+            $result.pressureError = "pressure-samples-empty$detail"
+        }
     }
     catch {
         $result.pressureError = [string]$_.Exception.Message
@@ -2134,12 +2150,28 @@ function Invoke-OpenPathFirstVisitObserve {
     $infraVmStall = $false
     if ($samplerEvidence) {
         $guestStall = $samplerEvidence.guestSampler
+        $guestSampleCount = [int](Get-OpenPathLabField -InputObject $guestStall -Name 'sampleCount')
+        $guestStallRecovered = $false
+        # Phase 8g G2: the guest step can still lose its body (a killed step);
+        # recover the sampler JSONL directly from the guest instead of writing
+        # sampleCount=0 and calling the gap a VM stall.
+        if ($guestSampleCount -le 0) {
+            $rawSamplerText = Read-OpenPathFirstVisitGuestText -Transport $Transport -Vmid $Vmid -GuestPath 'C:\OpenPathLab\first-visit\stall-samples.jsonl' -TimeoutSeconds 180
+            if ($rawSamplerText) {
+                $recovered = Get-OpenPathFirstVisitSamplerSummary -Lines @($rawSamplerText -split "`n")
+                $guestStall = $recovered
+                $guestSampleCount = [int]$recovered.sampleCount
+                $guestStallRecovered = $true
+                Write-Host "first-visit stall sampler recovered from the guest JSONL: sampleCount=$guestSampleCount"
+            }
+        }
         $workerGaps = @(Get-OpenPathFirstVisitWorkerGaps -OpenPathLines $openpathTail)
         $stall = Get-OpenPathFirstVisitStallClassification `
             -LogGaps $workerGaps `
-            -SamplerGaps @(Get-OpenPathLabField -InputObject $guestStall -Name 'samplerGaps') `
-            -SaturationWindows @(Get-OpenPathLabField -InputObject $guestStall -Name 'saturationWindows') `
-            -HostPressure @($samplerEvidence.pressure)
+            -SamplerGaps @((Get-OpenPathLabField -InputObject $guestStall -Name 'samplerGaps') | Where-Object { $null -ne $_ }) `
+            -SaturationWindows @((Get-OpenPathLabField -InputObject $guestStall -Name 'saturationWindows') | Where-Object { $null -ne $_ }) `
+            -HostPressure @($samplerEvidence.pressure) `
+            -SamplerSampleCount $guestSampleCount
         if ($null -ne $canaryMetrics) {
             $notReady = @()
             foreach ($entry in @(Get-OpenPathLabField -InputObject $canaryMetrics -Name 'holdOutcomes')) {
@@ -2159,21 +2191,26 @@ function Invoke-OpenPathFirstVisitObserve {
             $stallRecord = [ordered]@{
                 classification = $stall
                 guest = [ordered]@{
-                    sampleCount       = [int](Get-OpenPathLabField -InputObject $guestStall -Name 'sampleCount')
+                    sampleCount       = $guestSampleCount
+                    samplerAvailable  = ($guestSampleCount -gt 0)
+                    recovered         = $guestStallRecovered
                     maxSystemCpu      = Get-OpenPathLabField -InputObject $guestStall -Name 'maxSystemCpu'
-                    samplerGaps       = @(Get-OpenPathLabField -InputObject $guestStall -Name 'samplerGaps')
-                    saturationWindows = @(Get-OpenPathLabField -InputObject $guestStall -Name 'saturationWindows')
-                    decimated         = @(Get-OpenPathLabField -InputObject $guestStall -Name 'decimated')
+                    samplerGaps       = @((Get-OpenPathLabField -InputObject $guestStall -Name 'samplerGaps') | Where-Object { $null -ne $_ })
+                    saturationWindows = @((Get-OpenPathLabField -InputObject $guestStall -Name 'saturationWindows') | Where-Object { $null -ne $_ })
+                    decimated         = @((Get-OpenPathLabField -InputObject $guestStall -Name 'decimated') | Where-Object { $null -ne $_ })
                 }
-                hostPressure = @($samplerEvidence.pressure)
-                samplerError = $samplerEvidence.error
+                hostPressure        = @($samplerEvidence.pressure)
+                hostPressureSamples = [int](Get-OpenPathLabField -InputObject $samplerEvidence -Name 'pressureSamples')
+                pressureStarted     = [bool](Get-OpenPathLabField -InputObject $samplerEvidence -Name 'pressureStarted')
+                pressureLog         = [string](Get-OpenPathLabField -InputObject $samplerEvidence -Name 'pressureLog')
+                samplerError        = ((@([string](Get-OpenPathLabField -InputObject $samplerEvidence -Name 'error'), [string](Get-OpenPathLabField -InputObject $samplerEvidence -Name 'pressureError')) | Where-Object { $_ }) -join '; ')
             }
             [IO.File]::WriteAllText($stallSamplesPath, ($stallRecord | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
         }
         catch { Write-Warning "stall samples record failed: $($_.Exception.Message)" }
         if ($stall.gaps.Count -gt 0) {
             $gapSummary = @($stall.gaps | ForEach-Object { "$($_.classification):$($_.gapMs)ms" }) -join ' '
-            Write-Host "first-visit stall classification: $($stall.classification) gaps=[$gapSummary] vmStall=$($stall.vmStall) infraVmStall=$infraVmStall"
+            Write-Host "first-visit stall classification: $($stall.classification) gaps=[$gapSummary] vmStall=$($stall.vmStall) infraVmStall=$infraVmStall sampler=$guestSampleCount pressure=$($samplerEvidence.pressureSamples)"
         }
     }
     if ($verdictDocument -and $infraVmStall) {

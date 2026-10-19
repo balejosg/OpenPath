@@ -94,6 +94,34 @@ function Get-OpenPathAcrylicLoadedStatePath {
     return (Join-Path (Join-Path $dataRoot 'data') 'acrylic-loaded-state.json')
 }
 
+function Get-OpenPathAcrylicFileStamp {
+    <#
+    .SYNOPSIS
+        Cheap metadata stamp (length + last write) of one Acrylic file.
+    .DESCRIPTION
+        Phase 8g G1: the loaded state can be recorded from the fingerprint that
+        the decision already read when neither file changed during the restart;
+        this stamp is the cheap proof (no content read, no hash).
+    #>
+    [CmdletBinding()]
+    param([string]$Path = '')
+
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{ Exists = $false; Length = -1; LastWriteUtcTicks = 0 }
+    }
+    try {
+        $info = [System.IO.FileInfo]::new($Path)
+        return [pscustomobject]@{
+            Exists             = $true
+            Length             = [long]$info.Length
+            LastWriteUtcTicks  = [long]$info.LastWriteTimeUtc.Ticks
+        }
+    }
+    catch {
+        return [pscustomobject]@{ Exists = $false; Length = -1; LastWriteUtcTicks = 0 }
+    }
+}
+
 function Get-OpenPathAcrylicContentFingerprint {
     <#
     .SYNOPSIS
@@ -103,6 +131,10 @@ function Get-OpenPathAcrylicContentFingerprint {
         uses Get-AcrylicHostsEffectiveContent (the renderer's timestamp-free
         view): a re-render of the same effective content keeps the fingerprint
         stable. The combined hash is what the F2 decision compares.
+        Each file carries a before/after metadata stamp; the stamp is marked
+        stable only when it did not move across the content read, which is what
+        lets the restart reuse the fingerprint for the loaded state (Phase 8g
+        G1) instead of hashing the same content a second time.
     #>
     [CmdletBinding()]
     param([string]$AcrylicPath = '')
@@ -113,25 +145,35 @@ function Get-OpenPathAcrylicContentFingerprint {
 
     $hostsRaw = ''
     $iniRaw = ''
+    $hostsPath = ''
+    $iniPath = ''
     $hostsPresent = $false
     $iniPresent = $false
+    $hostsBefore = Get-OpenPathAcrylicFileStamp -Path ''
+    $hostsAfter = $hostsBefore
+    $iniBefore = $hostsBefore
+    $iniAfter = $hostsBefore
     if ($AcrylicPath) {
         $hostsPath = Join-Path $AcrylicPath 'AcrylicHosts.txt'
-        if (Test-Path -LiteralPath $hostsPath -ErrorAction SilentlyContinue) {
+        $iniPath = Join-Path $AcrylicPath 'AcrylicConfiguration.ini'
+        $hostsBefore = Get-OpenPathAcrylicFileStamp -Path $hostsPath
+        if ($hostsBefore.Exists) {
             try {
                 $hostsRaw = [System.IO.File]::ReadAllText($hostsPath)
                 $hostsPresent = $true
             }
             catch { $hostsRaw = '' }
         }
-        $iniPath = Join-Path $AcrylicPath 'AcrylicConfiguration.ini'
-        if (Test-Path -LiteralPath $iniPath -ErrorAction SilentlyContinue) {
+        $hostsAfter = Get-OpenPathAcrylicFileStamp -Path $hostsPath
+        $iniBefore = Get-OpenPathAcrylicFileStamp -Path $iniPath
+        if ($iniBefore.Exists) {
             try {
                 $iniRaw = [System.IO.File]::ReadAllText($iniPath)
                 $iniPresent = $true
             }
             catch { $iniRaw = '' }
         }
+        $iniAfter = Get-OpenPathAcrylicFileStamp -Path $iniPath
     }
 
     $hostsEffective = $hostsRaw
@@ -150,14 +192,60 @@ function Get-OpenPathAcrylicContentFingerprint {
         $sha256.Dispose()
     }
 
+    $hostsStampStable = ($hostsBefore.Exists -eq $hostsAfter.Exists -and
+        [long]$hostsBefore.Length -eq [long]$hostsAfter.Length -and
+        [long]$hostsBefore.LastWriteUtcTicks -eq [long]$hostsAfter.LastWriteUtcTicks)
+    $iniStampStable = ($iniBefore.Exists -eq $iniAfter.Exists -and
+        [long]$iniBefore.Length -eq [long]$iniAfter.Length -and
+        [long]$iniBefore.LastWriteUtcTicks -eq [long]$iniAfter.LastWriteUtcTicks)
+
     return [pscustomobject]@{
-        AcrylicPath      = $AcrylicPath
-        HostsPresent     = $hostsPresent
-        IniPresent       = $iniPresent
-        HostsSha256      = $hostsHash
-        IniSha256        = $iniHash
-        CombinedSha256   = $combinedHash
+        AcrylicPath            = $AcrylicPath
+        HostsPath              = $hostsPath
+        IniPath                = $iniPath
+        HostsPresent           = $hostsPresent
+        IniPresent             = $iniPresent
+        HostsSha256            = $hostsHash
+        IniSha256              = $iniHash
+        CombinedSha256         = $combinedHash
+        HostsLength            = [long]$hostsAfter.Length
+        HostsLastWriteUtcTicks = [long]$hostsAfter.LastWriteUtcTicks
+        IniLength              = [long]$iniAfter.Length
+        IniLastWriteUtcTicks   = [long]$iniAfter.LastWriteUtcTicks
+        HostsStampStable       = [bool]$hostsStampStable
+        IniStampStable         = [bool]$iniStampStable
     }
+}
+
+function Test-OpenPathAcrylicFingerprintCurrent {
+    <#
+    .SYNOPSIS
+        True when neither Acrylic file moved since the fingerprint was read.
+    .DESCRIPTION
+        Phase 8g G1: a fingerprint whose content read was stable can be reused
+        while its metadata stamp still matches, so the restart does not read and
+        hash the same content again to record the loaded state.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Fingerprint = $null, [string]$AcrylicPath = '')
+
+    if ($null -eq $Fingerprint -or -not $Fingerprint.PSObject.Properties['HostsStampStable']) { return $false }
+    if (-not [bool]$Fingerprint.HostsStampStable -or -not [bool]$Fingerprint.IniStampStable) { return $false }
+
+    $hostsPath = [string]$Fingerprint.HostsPath
+    $iniPath = [string]$Fingerprint.IniPath
+    if (-not $hostsPath -and $AcrylicPath) { $hostsPath = Join-Path $AcrylicPath 'AcrylicHosts.txt' }
+    if (-not $iniPath -and $AcrylicPath) { $iniPath = Join-Path $AcrylicPath 'AcrylicConfiguration.ini' }
+    if (-not $hostsPath -or -not $iniPath) { return $false }
+
+    $hosts = Get-OpenPathAcrylicFileStamp -Path $hostsPath
+    $ini = Get-OpenPathAcrylicFileStamp -Path $iniPath
+    return ([bool]$hosts.Exists -eq [bool]$Fingerprint.HostsPresent -and
+        [long]$hosts.Length -eq [long]$Fingerprint.HostsLength -and
+        [long]$hosts.LastWriteUtcTicks -eq [long]$Fingerprint.HostsLastWriteUtcTicks -and
+        [bool]$ini.Exists -eq [bool]$Fingerprint.IniPresent -and
+        [long]$ini.Length -eq [long]$Fingerprint.IniLength -and
+        [long]$ini.LastWriteUtcTicks -eq [long]$Fingerprint.IniLastWriteUtcTicks)
 }
 
 function Get-OpenPathAcrylicLoadedState {
@@ -223,6 +311,40 @@ function Set-OpenPathAcrylicLoadedState {
         Write-OpenPathLog "Failed to record the Acrylic loaded state at $($Path): $_" -Level WARN
         return $false
     }
+}
+
+function Test-OpenPathAcrylicLoadedStateChanged {
+    <#
+    .SYNOPSIS
+        True when a loaded-state record differs from an earlier read.
+    .DESCRIPTION
+        Phase 8g G0: the control probe runs outside the restart lock. When it
+        failed, the in-lock decision may only trust that failure if no process
+        recorded a restart since the read; a new `loadedAtUtc` (or a different
+        writer PID) proves that another process restarted the service, so the
+        probe must be repeated inside the lock instead of restarting again.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Before = $null, [AllowNull()][object]$After = $null)
+
+    if ($null -eq $Before -and $null -eq $After) { return $false }
+    if ($null -eq $Before -or $null -eq $After) { return $true }
+
+    $beforeAt = if ($Before.PSObject.Properties['loadedAtUtc']) {
+        $value = $Before.loadedAtUtc
+        if ($value -is [datetime]) { $value.ToUniversalTime().ToString('o', [System.Globalization.CultureInfo]::InvariantCulture) } else { [string]$value }
+    }
+    else { '' }
+    $afterAt = if ($After.PSObject.Properties['loadedAtUtc']) {
+        $value = $After.loadedAtUtc
+        if ($value -is [datetime]) { $value.ToUniversalTime().ToString('o', [System.Globalization.CultureInfo]::InvariantCulture) } else { [string]$value }
+    }
+    else { '' }
+    if ($beforeAt -ne $afterAt) { return $true }
+
+    $beforePid = if ($Before.PSObject.Properties['pid']) { [int]$Before.pid } else { 0 }
+    $afterPid = if ($After.PSObject.Properties['pid']) { [int]$After.pid } else { 0 }
+    return ($beforePid -ne $afterPid)
 }
 
 function Test-OpenPathAcrylicControlQuery {
@@ -351,6 +473,12 @@ function Invoke-OpenPathAcrylicRestart {
 
         [string]$StatePath = '',
 
+        # Phase 8g G1: the caller (the runtime dependency fast apply) already
+        # wrote new content. The pre-lock fingerprint/state read is then
+        # redundant: one in-lock read decides (and still coalesces with a
+        # process that loaded the same content first).
+        [switch]$ContentChanged,
+
         # Test seam: replaces the local control probe (the two-process driver);
         # production leaves it empty.
         [scriptblock]$ControlProbeInvoker = $null
@@ -359,22 +487,45 @@ function Invoke-OpenPathAcrylicRestart {
     $callerName = if ($Caller) { $Caller } else { Get-OpenPathAcrylicCallerName }
     if (-not $PSBoundParameters.ContainsKey('StatePath')) { $StatePath = Get-OpenPathAcrylicLoadedStatePath }
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $preDecisionStopwatch = [System.Diagnostics.Stopwatch]::new()
+    $lockWaitStopwatch = [System.Diagnostics.Stopwatch]::new()
+    $decisionStopwatch = [System.Diagnostics.Stopwatch]::new()
+    $coreStopwatch = [System.Diagnostics.Stopwatch]::new()
+    $stateStopwatch = [System.Diagnostics.Stopwatch]::new()
+    $preDecisionMs = 0
+    $lockWaitMs = 0
+    $decisionMs = 0
+    $coreMs = 0
+    $stateRecordMs = 0
+    $probeRetry = $false
+    $contentChangedFlag = if ($ContentChanged) { ' contentChanged=1' } else { '' }
     $mutex = $null
     $lockAcquired = $false
+    $preLoadedState = $null
+    $preFingerprint = $null
+    $controlResponds = $null
     $probe = if ($ControlProbeInvoker) { $ControlProbeInvoker } else { { Test-OpenPathAcrylicControlQuery } }
 
     try {
         # Cheap arms + control probe OUTSIDE the restart lock (see the doc).
-        $loadedState = Get-OpenPathAcrylicLoadedState -Path $StatePath
-        $fingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
-        $service = Get-AcrylicService
-        $serviceStatus = if ($service) { [string]$service.Status } else { 'Missing' }
-        $controlResponds = $null
-        $preDecision = Get-OpenPathAcrylicRestartDecision -LoadedState $loadedState -Fingerprint $fingerprint -ServiceStatus $serviceStatus
-        if (-not $preDecision.RestartNeeded) {
-            $controlResponds = [bool](& $probe)
+        # With -ContentChanged the caller already knows the content moved, so
+        # the pre-lock read is skipped and only the in-lock decision (which
+        # coalesces) runs.
+        $preDecisionStopwatch.Start()
+        if (-not $ContentChanged) {
+            $preLoadedState = Get-OpenPathAcrylicLoadedState -Path $StatePath
+            $preFingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
+            $service = Get-AcrylicService
+            $serviceStatus = if ($service) { [string]$service.Status } else { 'Missing' }
+            $preDecision = Get-OpenPathAcrylicRestartDecision -LoadedState $preLoadedState -Fingerprint $preFingerprint -ServiceStatus $serviceStatus
+            if (-not $preDecision.RestartNeeded) {
+                $controlResponds = [bool](& $probe)
+            }
         }
+        $preDecisionStopwatch.Stop()
+        $preDecisionMs = $preDecisionStopwatch.ElapsedMilliseconds
 
+        $lockWaitStopwatch.Start()
         $mutex = [System.Threading.Mutex]::new($false, $MutexName)
         try {
             $lockAcquired = $mutex.WaitOne(0)
@@ -386,47 +537,83 @@ function Invoke-OpenPathAcrylicRestart {
             $lockAcquired = $true
             Write-OpenPathLog "Acrylic restart lock was abandoned by a previous process - continuing caller=$callerName pid=$PID" -Level WARN
         }
+        $lockWaitStopwatch.Stop()
+        $lockWaitMs = $lockWaitStopwatch.ElapsedMilliseconds
 
         if (-not $lockAcquired) {
             $stopwatch.Stop()
-            Write-OpenPathLog "Acrylic restart skipped reason=lock-timeout caller=$callerName pid=$PID waitMs=$($stopwatch.ElapsedMilliseconds)" -Level WARN
+            Write-OpenPathLog "Acrylic restart skipped reason=lock-timeout caller=$callerName pid=$PID waitMs=$($stopwatch.ElapsedMilliseconds) preDecisionMs=$preDecisionMs lockWaitMs=$lockWaitMs$contentChangedFlag" -Level WARN
             return $false
         }
 
         # Coalescing: re-evaluate inside the lock with the state as it is now
         # (another process may have loaded the content while the probe ran).
+        $decisionStopwatch.Start()
         $loadedState = Get-OpenPathAcrylicLoadedState -Path $StatePath
-        $fingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
+        # Reuse the pre-lock fingerprint only when neither file moved since it
+        # was read (Phase 8g G1: one read/hash per unchanged content).
+        $fingerprint = $null
+        if ($preFingerprint -and (Test-OpenPathAcrylicFingerprintCurrent -Fingerprint $preFingerprint -AcrylicPath $AcrylicPath)) {
+            $fingerprint = $preFingerprint
+        }
+        else {
+            $fingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
+        }
         $service = Get-AcrylicService
         $serviceStatus = if ($service) { [string]$service.Status } else { 'Missing' }
+        # Phase 8g G0: a failed probe taken outside the lock is only trusted
+        # when no process recorded a restart since that read. If the loaded
+        # state moved (another process restarted and loaded the current
+        # content), probe again inside the lock instead of restarting a service
+        # that already answered. The successful probe stays outside the lock.
+        if (-not $ContentChanged -and $controlResponds -eq $false -and (Test-OpenPathAcrylicLoadedStateChanged -Before $preLoadedState -After $loadedState)) {
+            $controlResponds = [bool](& $probe)
+            $probeRetry = $true
+        }
         $decision = Get-OpenPathAcrylicRestartDecision -LoadedState $loadedState -Fingerprint $fingerprint -ServiceStatus $serviceStatus -ControlQueryResponds $controlResponds
+        $decisionStopwatch.Stop()
+        $decisionMs = $decisionStopwatch.ElapsedMilliseconds
+        $probeRetryFlag = if ($probeRetry) { ' probeRetry=1' } else { '' }
 
         if (-not $decision.RestartNeeded) {
             $stopwatch.Stop()
-            Write-OpenPathLog "Acrylic restart skipped reason=stable caller=$callerName pid=$PID ms=$($stopwatch.ElapsedMilliseconds)"
+            Write-OpenPathLog "Acrylic restart skipped reason=stable caller=$callerName pid=$PID ms=$($stopwatch.ElapsedMilliseconds) preDecisionMs=$preDecisionMs lockWaitMs=$lockWaitMs decisionMs=$decisionMs$probeRetryFlag$contentChangedFlag"
             return $true
         }
 
         $coreCommand = Get-Command -Name 'Invoke-AcrylicServiceRestartCore' -ErrorAction SilentlyContinue
         if (-not $coreCommand) {
             $stopwatch.Stop()
-            Write-OpenPathLog "Acrylic restart failed reason=$($decision.Reason) caller=$callerName pid=$PID detail=restart core unavailable" -Level ERROR
+            Write-OpenPathLog "Acrylic restart failed reason=$($decision.Reason) caller=$callerName pid=$PID detail=restart core unavailable preDecisionMs=$preDecisionMs lockWaitMs=$lockWaitMs decisionMs=$decisionMs$probeRetryFlag$contentChangedFlag" -Level ERROR
             return $false
         }
 
+        $coreStopwatch.Start()
         $restarted = [bool](Invoke-AcrylicServiceRestartCore -TimeoutSeconds $TimeoutSeconds -SkipBatchFallback:$SkipBatchFallback)
+        $coreStopwatch.Stop()
+        $coreMs = $coreStopwatch.ElapsedMilliseconds
         $stopwatch.Stop()
         if (-not $restarted) {
-            Write-OpenPathLog "Acrylic restart failed reason=$($decision.Reason) caller=$callerName pid=$PID ms=$($stopwatch.ElapsedMilliseconds)" -Level WARN
+            Write-OpenPathLog "Acrylic restart failed reason=$($decision.Reason) caller=$callerName pid=$PID ms=$($stopwatch.ElapsedMilliseconds) preDecisionMs=$preDecisionMs lockWaitMs=$lockWaitMs decisionMs=$decisionMs coreMs=$coreMs$probeRetryFlag$contentChangedFlag" -Level WARN
             return $false
         }
 
-        # Recompute the fingerprint after the restart: the on-disk content at the
-        # moment the service started is what it actually loaded.
-        $loadedFingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
+        # Record what the running Acrylic loaded. The in-lock fingerprint is
+        # reused when no writer moved the files during the restart (Phase 8g
+        # G1); otherwise it is recomputed from what the service actually read.
+        $stateStopwatch.Start()
+        $loadedFingerprint = $null
+        if (Test-OpenPathAcrylicFingerprintCurrent -Fingerprint $fingerprint -AcrylicPath $AcrylicPath) {
+            $loadedFingerprint = $fingerprint
+        }
+        else {
+            $loadedFingerprint = Get-OpenPathAcrylicContentFingerprint -AcrylicPath $AcrylicPath
+        }
         if (-not $loadedFingerprint.CombinedSha256) { $loadedFingerprint = $fingerprint }
         $null = Set-OpenPathAcrylicLoadedState -Fingerprint $loadedFingerprint -Reason $decision.Reason -Path $StatePath
-        Write-OpenPathLog "Acrylic restart reason=$($decision.Reason) caller=$callerName pid=$PID ms=$($stopwatch.ElapsedMilliseconds)"
+        $stateStopwatch.Stop()
+        $stateRecordMs = $stateStopwatch.ElapsedMilliseconds
+        Write-OpenPathLog "Acrylic restart reason=$($decision.Reason) caller=$callerName pid=$PID ms=$($stopwatch.ElapsedMilliseconds) preDecisionMs=$preDecisionMs lockWaitMs=$lockWaitMs decisionMs=$decisionMs coreMs=$coreMs stateRecordMs=$stateRecordMs$probeRetryFlag$contentChangedFlag"
         return $true
     }
     finally {

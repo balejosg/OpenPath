@@ -531,7 +531,10 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                 $reloadScope = Invoke-OpenPathAcrylicRestartLockScope -Stage 'runtime-dependency-fast-apply' -Action {
                     & $updateWorkerBusyStage('acrylic-reload')
                     $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-                    $acrylicReloaded = [bool](Restart-AcrylicService)
+                    # Phase 8g G1: the fast apply just wrote the hosts file, so
+                    # the restart skips its redundant pre-lock read/hash and
+                    # decides once inside the lock.
+                    $acrylicReloaded = [bool](Restart-AcrylicService -ContentChanged:([bool]$queueResult.AcrylicHostsChanged))
                     $reloadStopwatch.Stop()
                     $metrics['acrylicReloadMs'] = [int]$metrics['acrylicReloadMs'] + [int]$reloadStopwatch.ElapsedMilliseconds
 

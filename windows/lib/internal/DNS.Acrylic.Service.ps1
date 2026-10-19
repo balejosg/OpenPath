@@ -462,6 +462,12 @@ function Invoke-AcrylicServiceRestartCore {
         [switch]$SkipBatchFallback
     )
 
+    $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $stopMs = 0
+    $stoppedWaitMs = 0
+    $purgeMs = 0
+    $startMs = 0
+    $runningWaitMs = 0
     Write-OpenPathLog "Restarting Acrylic service..."
     try {
         $service = Get-AcrylicService
@@ -477,8 +483,14 @@ function Invoke-AcrylicServiceRestartCore {
                 # (including pre-whitelist negative) answers in place and
                 # whitelisted hosts stay unresolved after the restart.
                 try {
+                    $stopStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                     Stop-Service -Name $serviceName -Force -ErrorAction Stop
+                    $stopStopwatch.Stop()
+                    $stopMs = $stopStopwatch.ElapsedMilliseconds
+                    $stoppedStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                     Wait-AcrylicServiceStatus -Name $serviceName -Status 'Stopped' -TimeoutSeconds $TimeoutSeconds | Out-Null
+                    $stoppedStopwatch.Stop()
+                    $stoppedWaitMs = $stoppedStopwatch.ElapsedMilliseconds
                 }
                 catch {
                     Write-OpenPathLog "Stop-Service failed for Acrylic; retrying stop/start: $_" -Level WARN
@@ -487,13 +499,30 @@ function Invoke-AcrylicServiceRestartCore {
                     }
                 }
             }
+            $purgeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             Clear-AcrylicCache | Out-Null
-            if (-not (Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds)) {
+            $purgeStopwatch.Stop()
+            $purgeMs = $purgeStopwatch.ElapsedMilliseconds
+            # Phase 8g G3: the start arm also carries its own Stopwatch so a
+            # 10 s restart names the slow sub-step (Start-Service vs the wait).
+            $startStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $started = Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds
+            $startStopwatch.Stop()
+            $startMs = $startStopwatch.ElapsedMilliseconds
+            if (-not $started) {
                 throw 'Acrylic service did not report Running after the cache purge'
             }
+            $runningStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             $service = Wait-AcrylicServiceStatus -Name $serviceName -Status 'Running' -TimeoutSeconds $TimeoutSeconds
+            $runningStopwatch.Stop()
+            $runningWaitMs = $runningStopwatch.ElapsedMilliseconds
             if ($service.Status -eq 'Running') {
-                Write-OpenPathLog "Acrylic service restarted successfully"
+                $totalStopwatch.Stop()
+                $breakdown = "totalMs=$($totalStopwatch.ElapsedMilliseconds) stopMs=$stopMs stoppedWaitMs=$stoppedWaitMs purgeMs=$purgeMs startMs=$startMs runningWaitMs=$runningWaitMs"
+                Write-OpenPathLog "Acrylic service restarted successfully $breakdown"
+                if ($totalStopwatch.ElapsedMilliseconds -gt 3000) {
+                    Write-OpenPathLog "Acrylic service restart slow: $breakdown" -Level WARN
+                }
                 return $true
             }
         }
@@ -502,15 +531,18 @@ function Invoke-AcrylicServiceRestartCore {
             & cmd /c "$acrylicPath\RestartAcrylicService.bat" 2>$null
             Start-Sleep -Seconds 2
             if (Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds) {
-                Write-OpenPathLog "Acrylic service restarted via batch file"
+                $totalStopwatch.Stop()
+                Write-OpenPathLog "Acrylic service restarted via batch file totalMs=$($totalStopwatch.ElapsedMilliseconds) stopMs=$stopMs stoppedWaitMs=$stoppedWaitMs purgeMs=$purgeMs startMs=$startMs runningWaitMs=$runningWaitMs"
                 return $true
             }
         }
-        Write-OpenPathLog "Could not restart Acrylic service" -Level ERROR
+        $totalStopwatch.Stop()
+        Write-OpenPathLog "Could not restart Acrylic service totalMs=$($totalStopwatch.ElapsedMilliseconds) stopMs=$stopMs stoppedWaitMs=$stoppedWaitMs purgeMs=$purgeMs startMs=$startMs runningWaitMs=$runningWaitMs" -Level ERROR
         return $false
     }
     catch {
-        Write-OpenPathLog "Error restarting Acrylic: $_" -Level ERROR
+        $totalStopwatch.Stop()
+        Write-OpenPathLog "Error restarting Acrylic: $_ totalMs=$($totalStopwatch.ElapsedMilliseconds) stopMs=$stopMs stoppedWaitMs=$stoppedWaitMs purgeMs=$purgeMs startMs=$startMs runningWaitMs=$runningWaitMs" -Level ERROR
         return $false
     }
 }
@@ -531,14 +563,19 @@ function Restart-AcrylicService {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [int]$TimeoutSeconds = 20,
-        [switch]$SkipBatchFallback
+        [switch]$SkipBatchFallback,
+        # Phase 8g G1: the caller already wrote the new hosts/INI content; the
+        # restart decision then reads and hashes the content once inside the
+        # lock instead of twice.
+        [switch]$ContentChanged
     )
 
     if (-not $PSCmdlet.ShouldProcess("Acrylic DNS Proxy service", "Restart")) { return $false }
     return [bool](Invoke-OpenPathAcrylicRestart `
             -Caller (Get-OpenPathAcrylicCallerName) `
             -TimeoutSeconds $TimeoutSeconds `
-            -SkipBatchFallback:$SkipBatchFallback)
+            -SkipBatchFallback:$SkipBatchFallback `
+            -ContentChanged:$ContentChanged)
 }
 
 function Initialize-OpenPathDnsFlushType {

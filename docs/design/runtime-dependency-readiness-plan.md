@@ -923,3 +923,53 @@ recreates `$staging/state` before starting the fixture.
 The Phase 8f evidence summary lives in
 `evidence/windows-acrylic-restarts-phase8f-*` at the workspace root, including
 the literal restart table for one unchanged Update cycle.
+
+## Phase 8g: probe race, decision cost and slow-step attribution
+
+The Phase 8f review found three gaps that the 8f evidence could not explain.
+
+- **The failed probe was stale across the lock.** The probe runs outside the
+  restart lock (8f), but the in-lock decision reused its `false` value. If the
+  probe coincided with another process restarting Acrylic, the waiter restarted
+  again with `reason=control-unresponsive` even though the other process had
+  already loaded the current content (nightly 39107011741: worker restart at
+  10:35:54, ready at 10:35:55.203, Update PID 5312 restarted 10:35:55-56 with
+  `control-unresponsive ms=2394`, then `acrylic-restart-unchanged` and
+  `acrylic-restart-near-ready`). 8g keeps the successful probe outside the
+  lock; when it failed, the decision re-probes **inside** the lock only if the
+  loaded state moved since the pre-lock read (`loadedAtUtc` or writer PID).
+  If no process restarted, the failure stands and the liveness restart is
+  legitimate. The skip/reason line carries `probeRetry=1` when this happened.
+- **The decision paid two extra content reads on the hot path.** The worker
+  knows it just wrote the content, yet the restart hashed the files before the
+  lock, again inside it and a third time to record the loaded state. 8g adds
+  `-ContentChanged` from the fast apply (one in-lock read), reuses a
+  fingerprint inside the lock while its length + last-write stamp did not
+  move, and records the loaded state from that same fingerprint. Every
+  restart and skip now logs the decision breakdown:
+  `preDecisionMs= lockWaitMs= decisionMs= coreMs= stateRecordMs=` (plus
+  `contentChanged=1`/`probeRetry=1`). The goal is a decision (everything but
+  the lock wait and the restart core) at or below 50 ms p95 per worker
+  iteration; the worker also passes `-ContentChanged` only when it actually
+  changed the hosts content, so an overlay-only retry keeps the full check.
+- **Slow restarts had no sub-step.** `Invoke-AcrylicServiceRestartCore` now
+  logs `stopMs stoppedWaitMs purgeMs startMs runningWaitMs` and warns above
+  3 s; `Update-AcrylicHost` logs `lockWaitMs renderMs writeMs iniMs totalMs`
+  and warns above 2 s. The 4.9 s `acrylicHostUpdateMs` sample in run
+  39140034212 is the wait for `Global\OpenPathPolicyStateLock` ("queue
+  processed" 18:26:24 -> "Generating AcrylicHosts.txt" 18:26:28), which the
+  8f metrics attributed to the whole host update without naming it.
+- **Stall diagnosis was dead.** The guest stop step matched its own command
+  line (`-Step stall-sampler-stop` contains `stall-sampler`) and killed itself
+  before writing the result; every scene since Phase 8e reported
+  `sampleCount=0`, `samplerGaps=[null]` and a fake 0-0 `vm-stall`. 8g matches
+  only the sampler script (`stall-sampler[.]ps1`, excluding `$PID`), recovers
+  the JSONL directly from the guest if the step body is still lost, never
+  classifies missing samples as a VM stall (`unknown` instead), and the host
+  pressure sampler records memory available, swap free and the VM's RSS in
+  addition to PSI/load/CPU. `stall-samples.json` carries
+  `samplerAvailable`, `hostPressureSamples` and the sampler log tail.
+
+The G4 batch (`update-contention x5`, `class-boot x2`, `settled x2`) and its
+slow-step table live in the Phase 8g evidence summary, alongside the per-scene
+restart invariants.

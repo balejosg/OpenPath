@@ -227,6 +227,49 @@ function Get-OpenPathFirstVisitWorkerGaps {
     return @($gaps.ToArray())
 }
 
+function Get-OpenPathFirstVisitSamplerSummary {
+    <#
+    .SYNOPSIS
+    Parses raw sampler JSONL lines into the guest stall evidence shape.
+    .DESCRIPTION
+    Phase 8g G2: the guest stop step used to lose its body when the step was
+    killed, leaving the controller with sampleCount=0 and no gaps. The
+    controller recovers the sampler file with this same pure parser, so the
+    evidence survives a lost step result.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][string[]]$Lines = @())
+
+    $raw = @(@($Lines) | Where-Object { $null -ne $_ })
+    $summary = [ordered]@{
+        sampleCount       = [int]$raw.Count
+        samplerGaps       = @()
+        saturationWindows = @()
+        maxSystemCpu      = -1
+        decimated         = @()
+    }
+    if ($raw.Count -eq 0) { return [pscustomobject]$summary }
+
+    $ticks = @(Get-OpenPathFirstVisitSamplerTickValues -Lines $raw)
+    $summary.samplerGaps = @(Get-OpenPathFirstVisitSamplerGapsFromTicks -Ticks $ticks)
+    $cpuSamples = New-Object System.Collections.Generic.List[object]
+    $maxCpu = -1.0
+    foreach ($line in @($raw | Where-Object { $_ -and $_.IndexOf('cpuSample') -ge 0 })) {
+        try { $sample = $line | ConvertFrom-Json } catch { continue }
+        $cpuSamples.Add($sample) | Out-Null
+        if ($null -ne $sample.systemCpu -and [double]$sample.systemCpu -gt $maxCpu) { $maxCpu = [double]$sample.systemCpu }
+    }
+    $summary.saturationWindows = @(Get-OpenPathFirstVisitCpuSaturation -Samples $cpuSamples.ToArray())
+    $summary.maxSystemCpu = [math]::Round($maxCpu, 1)
+    $decimated = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $raw.Count; $i += 20) {
+        if ($decimated.Count -ge 900) { break }
+        $decimated.Add([string]$raw[$i]) | Out-Null
+    }
+    $summary.decimated = @($decimated.ToArray())
+    return [pscustomobject]$summary
+}
+
 function Get-OpenPathFirstVisitStallClassification {
     <#
     .SYNOPSIS
@@ -243,29 +286,45 @@ function Get-OpenPathFirstVisitStallClassification {
         [AllowNull()][object[]]$LogGaps = @(),
         [AllowNull()][object[]]$SamplerGaps = @(),
         [AllowNull()][object[]]$SaturationWindows = @(),
-        [AllowNull()][object[]]$HostPressure = @()
+        [AllowNull()][object[]]$HostPressure = @(),
+        # Phase 8g G2: 0 means the guest sampler produced no evidence. A
+        # worker gap can then never be called a vm-stall; the record stays
+        # 'unknown' until the sampler is fixed. -1 keeps the legacy behavior
+        # for callers that pass parsed gaps but no count.
+        [int]$SamplerSampleCount = -1
     )
     $classified = New-Object System.Collections.Generic.List[object]
     $vmStall = $false
     $guestSaturated = $false
-    foreach ($gap in @($LogGaps)) {
+    $logGapList = @(@($LogGaps) | Where-Object { $null -ne $_ })
+    $samplerGapList = @(@($SamplerGaps) | Where-Object { $null -ne $_ })
+    $saturationList = @(@($SaturationWindows) | Where-Object { $null -ne $_ })
+    $pressureList = @(@($HostPressure) | Where-Object { $null -ne $_ })
+    $samplerAvailable = if ($SamplerSampleCount -ge 0) { $SamplerSampleCount -gt 0 } else { $true }
+    foreach ($gap in $logGapList) {
         $start = [long](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'startMs')
         $end = [long](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'endMs')
         $classification = 'worker-only'
         $evidence = ''
         $culprits = @()
-        foreach ($samplerGap in @($SamplerGaps)) {
-            $samplerStart = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'startMs')
-            $samplerEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'endMs')
-            if ($samplerStart -le $end -and $samplerEnd -ge $start) {
-                $classification = 'vm-stall'
-                $evidence = "sampler gap $samplerStart-$samplerEnd"
-                $vmStall = $true
-                break
+        if ($samplerAvailable) {
+            foreach ($samplerGap in $samplerGapList) {
+                $samplerStart = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'startMs')
+                $samplerEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'endMs')
+                if ($samplerStart -le $end -and $samplerEnd -ge $start) {
+                    $classification = 'vm-stall'
+                    $evidence = "sampler gap $samplerStart-$samplerEnd"
+                    $vmStall = $true
+                    break
+                }
             }
         }
+        else {
+            $classification = 'unknown'
+            $evidence = 'guest sampler produced no samples (sampleCount=0)'
+        }
         if ($classification -eq 'worker-only') {
-            foreach ($window in @($SaturationWindows)) {
+            foreach ($window in $saturationList) {
                 $windowStart = [long](Get-OpenPathFirstVisitStallField -InputObject $window -Name 'startMs')
                 $windowEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $window -Name 'endMs')
                 if ($windowStart -le $end -and $windowEnd -ge $start) {
@@ -278,15 +337,37 @@ function Get-OpenPathFirstVisitStallClassification {
             }
         }
         $pressureNote = ''
-        foreach ($sample in @($HostPressure)) {
+        $nearestSample = $null
+        $nearestDelta = [long]::MaxValue
+        foreach ($sample in $pressureList) {
             $pressureTs = Get-OpenPathFirstVisitStallField -InputObject $sample -Name 't'
             if ($null -eq $pressureTs) { continue }
             if ([long]$pressureTs -ge $start -and [long]$pressureTs -le $end) {
-                $cpuSome = Get-OpenPathFirstVisitStallField -InputObject $sample -Name 'cpuSome'
-                $ioSome = Get-OpenPathFirstVisitStallField -InputObject $sample -Name 'ioSome'
-                $pressureNote = "host cpu=$cpuSome io=$ioSome qemu=$([string](Get-OpenPathFirstVisitStallField -InputObject $sample -Name 'qemuCpu'))"
+                $nearestSample = $sample
+                $nearestDelta = 0
                 break
             }
+            $midpoint = $start + [long](($end - $start) / 2)
+            $delta = [math]::Abs([long]$pressureTs - $midpoint)
+            if ($delta -lt $nearestDelta) { $nearestDelta = $delta; $nearestSample = $sample }
+        }
+        # Phase 8g G2: a small guest/host clock skew must not hide the pressure
+        # sample; use the nearest one within 10 s and say how far it was.
+        if ($null -ne $nearestSample -and $nearestDelta -le 10000) {
+            $cpuSome = Get-OpenPathFirstVisitStallField -InputObject $nearestSample -Name 'cpuSome'
+            $ioSome = Get-OpenPathFirstVisitStallField -InputObject $nearestSample -Name 'ioSome'
+            $memorySome = Get-OpenPathFirstVisitStallField -InputObject $nearestSample -Name 'memorySome'
+            $memAvailable = Get-OpenPathFirstVisitStallField -InputObject $nearestSample -Name 'memAvailableMb'
+            $swapFree = Get-OpenPathFirstVisitStallField -InputObject $nearestSample -Name 'swapFreeMb'
+            $qemuCpu = Get-OpenPathFirstVisitStallField -InputObject $nearestSample -Name 'qemuCpu'
+            $qemuRss = Get-OpenPathFirstVisitStallField -InputObject $nearestSample -Name 'qemuRssMb'
+            $pressureNote = "host cpu=$cpuSome io=$ioSome"
+            if ($null -ne $memorySome) { $pressureNote += " mem=$memorySome" }
+            if ($null -ne $memAvailable) { $pressureNote += " memAvailMb=$memAvailable" }
+            if ($null -ne $swapFree) { $pressureNote += " swapFreeMb=$swapFree" }
+            $pressureNote += " qemu=$qemuCpu"
+            if ($null -ne $qemuRss) { $pressureNote += " qemuRssMb=$qemuRss" }
+            if ($nearestDelta -gt 0) { $pressureNote += " deltaMs=$nearestDelta" }
         }
         $classified.Add([ordered]@{
                 source         = [string](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'source')
@@ -304,37 +385,41 @@ function Get-OpenPathFirstVisitStallClassification {
     # Sampler gaps that do not cover any worker/native gap are still whole-VM
     # pauses: keep them classified in the record (source=sampler) so acceptance
     # (c) has every >2 s gap, including the ones with no product log gap.
-    foreach ($samplerGap in @($SamplerGaps)) {
-        $samplerStart = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'startMs')
-        $samplerEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'endMs')
-        $overlaps = $false
-        foreach ($gap in @($LogGaps)) {
-            $logStart = [long](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'startMs')
-            $logEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'endMs')
-            if ($samplerStart -le $logEnd -and $samplerEnd -ge $logStart) { $overlaps = $true; break }
+    if ($samplerAvailable) {
+        foreach ($samplerGap in $samplerGapList) {
+            $samplerStart = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'startMs')
+            $samplerEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'endMs')
+            $overlaps = $false
+            foreach ($gap in $logGapList) {
+                $logStart = [long](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'startMs')
+                $logEnd = [long](Get-OpenPathFirstVisitStallField -InputObject $gap -Name 'endMs')
+                if ($samplerStart -le $logEnd -and $samplerEnd -ge $logStart) { $overlaps = $true; break }
+            }
+            if ($overlaps) { continue }
+            $classified.Add([ordered]@{
+                    source         = 'sampler'
+                    startMs        = $samplerStart
+                    endMs          = $samplerEnd
+                    gapMs          = [int](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'gapMs')
+                    classification = 'vm-stall'
+                    evidence       = 'sampler gap with no worker/native gap in the same window'
+                    culprits       = @()
+                    hostPressure   = ''
+                    firstLine      = ''
+                    nextLine       = ''
+                }) | Out-Null
+            $vmStall = $true
         }
-        if ($overlaps) { continue }
-        $classified.Add([ordered]@{
-                source         = 'sampler'
-                startMs        = $samplerStart
-                endMs          = $samplerEnd
-                gapMs          = [int](Get-OpenPathFirstVisitStallField -InputObject $samplerGap -Name 'gapMs')
-                classification = 'vm-stall'
-                evidence       = 'sampler gap with no worker/native gap in the same window'
-                culprits       = @()
-                hostPressure   = ''
-                firstLine      = ''
-                nextLine       = ''
-            }) | Out-Null
-        $vmStall = $true
     }
     return [ordered]@{
-        gaps            = @($classified.ToArray())
-        vmStall         = $vmStall
-        guestSaturated  = $guestSaturated
-        classification  = if ($classified.Count -eq 0) { 'none' }
+        gaps             = @($classified.ToArray())
+        vmStall          = $vmStall
+        guestSaturated   = $guestSaturated
+        samplerAvailable = $samplerAvailable
+        classification   = if ($classified.Count -eq 0) { 'none' }
             elseif ($vmStall) { 'vm-stall' }
             elseif ($guestSaturated) { 'guest-saturated' }
+            elseif (-not $samplerAvailable) { 'unknown' }
             else { 'worker-only' }
     }
 }
@@ -346,4 +431,5 @@ Export-ModuleMember -Function `
     Get-OpenPathFirstVisitSamplerGaps, `
     Get-OpenPathFirstVisitCpuSaturation, `
     Get-OpenPathFirstVisitWorkerGaps, `
+    Get-OpenPathFirstVisitSamplerSummary, `
     Get-OpenPathFirstVisitStallClassification

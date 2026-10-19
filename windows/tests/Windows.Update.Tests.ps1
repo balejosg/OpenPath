@@ -347,6 +347,44 @@ Describe "Update Script" {
             $applyContent | Should -Match "(?s)Handle-OpenPathDownloadFailure.*?\`$runtimeDependencyQueueChanged = \[bool\]\(Invoke-OpenPathUpdateWritersLockScope -Stage 'download-failure-queue-apply'.*?-QueueChanged \`$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan"
         }
 
+        It "Logs the Acrylic host update and restart sub-step breakdown (Phase 8g G3)" {
+            $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
+            $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
+            $restartPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Restart.ps1"
+            $configContent = Get-Content $configPath -Raw
+            $serviceContent = Get-Content $servicePath -Raw
+            $restartContent = Get-Content $restartPath -Raw
+
+            Assert-ContentContainsAll -Content $configContent -Needles @(
+                'Invoke-OpenPathPolicyStateLocked -Metrics $hostMetrics',
+                'Acrylic host update breakdown:',
+                'lockWaitMs=',
+                'renderMs=',
+                'writeMs=',
+                'iniMs=',
+                'totalMs=',
+                'Acrylic host update slow:'
+            )
+            Assert-ContentContainsAll -Content $serviceContent -Needles @(
+                'Acrylic service restarted successfully $breakdown',
+                'Acrylic service restart slow:',
+                'stopMs=',
+                'stoppedWaitMs=',
+                'purgeMs=',
+                'startMs=',
+                'runningWaitMs='
+            )
+            Assert-ContentContainsAll -Content $restartContent -Needles @(
+                'preDecisionMs=',
+                'lockWaitMs=',
+                'decisionMs=',
+                'coreMs=',
+                'stateRecordMs=',
+                'probeRetry=1',
+                'contentChanged=1'
+            )
+        }
+
         It "Keeps runtime dependency queue apply scalar when Acrylic emits helper output" {
             $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
@@ -370,7 +408,7 @@ Describe "Update Script" {
                 '$overlayUnappliedBefore',
                 '$maxDrainIterations',
                 '$queueResult.AcrylicHostsChanged',
-                '$acrylicReloaded = [bool](Restart-AcrylicService)',
+                '$acrylicReloaded = [bool](Restart-AcrylicService -ContentChanged:([bool]$queueResult.AcrylicHostsChanged))',
                 'Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null',
                 'Runtime dependency fast apply could not write the Acrylic hosts file',
                 'Runtime dependency fast apply metrics',

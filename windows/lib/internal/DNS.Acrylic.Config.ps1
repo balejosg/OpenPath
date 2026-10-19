@@ -28,11 +28,16 @@ function Invoke-OpenPathPolicyStateLocked {
         [scriptblock]$Action,
         [string]$MutexName = 'Global\OpenPathPolicyStateLock',
         # bounds the wait for the named system mutex before throwing a timeout error.
-        [int]$TimeoutMilliseconds = 15000
+        [int]$TimeoutMilliseconds = 15000,
+        # Phase 8g G3: optional metrics bag. LockWaitMs records the bounded
+        # wait so Update-AcrylicHost can attribute the "queue processed" ->
+        # "Generating AcrylicHosts.txt" gap instead of guessing.
+        [AllowNull()][System.Collections.IDictionary]$Metrics = $null
     )
 
     $mutex = $null
     $lockAcquired = $false
+    $waitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         $mutex = [System.Threading.Mutex]::new($false, $MutexName)
         try {
@@ -40,6 +45,10 @@ function Invoke-OpenPathPolicyStateLocked {
         }
         catch [System.Threading.AbandonedMutexException] {
             $lockAcquired = $true
+        }
+        finally {
+            $waitStopwatch.Stop()
+            if ($null -ne $Metrics) { $Metrics['LockWaitMs'] = [int]$waitStopwatch.ElapsedMilliseconds }
         }
 
         if (-not $lockAcquired) {
@@ -117,58 +126,101 @@ function Update-AcrylicHost {
     }
     if (-not $PSCmdlet.ShouldProcess("AcrylicHosts.txt", "Update whitelist configuration")) { return $false }
 
-    return [bool](Invoke-OpenPathPolicyStateLocked -Action {
-        $hostsPath = "$acrylicPath\AcrylicHosts.txt"
-        $dnsSettings = Get-OpenPathDnsSettings
-        $captivePortalDomains = @()
-        try {
-            $openPathConfig = Get-OpenPathConfig
-            if ($openPathConfig.PSObject.Properties['captivePortalDomains']) {
-                $captivePortalDomains = @($openPathConfig.captivePortalDomains)
-            }
-        }
-        catch {
-            Write-Debug "OpenPath captive portal domains unavailable, using none: $_"
-        }
-        $runtimeDependencyDomains = Get-OpenPathRuntimeDependencyDomains -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -Prune
-        $definition = New-AcrylicHostsDefinition -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -RuntimeDependencyDomains $runtimeDependencyDomains -CaptivePortalDomains $captivePortalDomains -DnsSettings $dnsSettings
-        if ($definition.WasTruncated) {
-            Write-OpenPathLog "Truncating whitelist from $($definition.OriginalWhitelistedDomainCount) to $($dnsSettings.MaxDomains) domains" -Level WARN
-        }
-        Write-OpenPathLog "Generating AcrylicHosts.txt with $(@($definition.EffectiveWhitelistedDomains).Count) domains..."
-        $content = ConvertTo-AcrylicHostsContent -Definition $definition
-        # Phase 7 P3: the generated header carries a timestamp, so a re-render a
-        # second later is byte-different even when nothing effective changed.
-        # Comparing the effective content keeps the file (and its reload) stable
-        # instead of forcing an Acrylic restart for a header-only diff.
-        $existingHostsContent = ''
-        if (Test-Path -LiteralPath $hostsPath -ErrorAction SilentlyContinue) {
-            try {
-                $existingHostsContent = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction Stop
-            }
-            catch {
-                $existingHostsContent = ''
-            }
-        }
-        $hostsWritten = $false
-        if ($existingHostsContent -and (Test-AcrylicHostsContentEquivalent -Left $existingHostsContent -Right $content)) {
-            Write-OpenPathLog "AcrylicHosts.txt effective content unchanged; skipping rewrite"
-        }
-        else {
-            $hostsWritten = [bool](Write-AcrylicHostsFile -Path $hostsPath -Content $content -SkipIfUnchanged)
-            if (-not $hostsWritten) {
-                Write-OpenPathLog "AcrylicHosts.txt unchanged; skipping rewrite"
-            }
-        }
+    $updateStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $hostMetrics = [ordered]@{
+        LockWaitMs = 0
+        RenderMs   = 0
+        WriteMs    = 0
+        IniMs      = 0
+        TotalMs    = 0
+    }
+    try {
+        $updated = [bool](Invoke-OpenPathPolicyStateLocked -Metrics $hostMetrics -Action {
+                # Phase 8g G3: renderMs covers everything from the lock
+                # acquisition to the rendered content (config reads, runtime
+                # dependency pruning, model and render): the part between
+                # "queue processed" and "Generating AcrylicHosts.txt" is
+                # lockWaitMs + the start of renderMs.
+                $renderStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $hostsPath = "$acrylicPath\AcrylicHosts.txt"
+                $dnsSettings = Get-OpenPathDnsSettings
+                $captivePortalDomains = @()
+                try {
+                    $openPathConfig = Get-OpenPathConfig
+                    if ($openPathConfig.PSObject.Properties['captivePortalDomains']) {
+                        $captivePortalDomains = @($openPathConfig.captivePortalDomains)
+                    }
+                }
+                catch {
+                    Write-Debug "OpenPath captive portal domains unavailable, using none: $_"
+                }
+                $runtimeDependencyDomains = Get-OpenPathRuntimeDependencyDomains -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -Prune
+                $definition = New-AcrylicHostsDefinition -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -RuntimeDependencyDomains $runtimeDependencyDomains -CaptivePortalDomains $captivePortalDomains -DnsSettings $dnsSettings
+                if ($definition.WasTruncated) {
+                    Write-OpenPathLog "Truncating whitelist from $($definition.OriginalWhitelistedDomainCount) to $($dnsSettings.MaxDomains) domains" -Level WARN
+                }
+                Write-OpenPathLog "Generating AcrylicHosts.txt with $(@($definition.EffectiveWhitelistedDomains).Count) domains..."
+                $content = ConvertTo-AcrylicHostsContent -Definition $definition
+                $renderStopwatch.Stop()
+                $hostMetrics['RenderMs'] = [int]$renderStopwatch.ElapsedMilliseconds
 
-        $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -BlockedSubdomains $definition.BlockedSubdomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains -CaptivePortalDomains $definition.CaptivePortalDomains
-        if (-not $configurationUpdated) {
-            Write-OpenPathLog "Failed to update AcrylicConfiguration.ini" -Level ERROR
-            return $false
-        }
-        Write-OpenPathLog "AcrylicHosts.txt updated"
-        return $true
-    })
+                $writeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                # Phase 7 P3: the generated header carries a timestamp, so a re-render a
+                # second later is byte-different even when nothing effective changed.
+                # Comparing the effective content keeps the file (and its reload) stable
+                # instead of forcing an Acrylic restart for a header-only diff.
+                $existingHostsContent = ''
+                if (Test-Path -LiteralPath $hostsPath -ErrorAction SilentlyContinue) {
+                    try {
+                        $existingHostsContent = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction Stop
+                    }
+                    catch {
+                        $existingHostsContent = ''
+                    }
+                }
+                $hostsWritten = $false
+                if ($existingHostsContent -and (Test-AcrylicHostsContentEquivalent -Left $existingHostsContent -Right $content)) {
+                    Write-OpenPathLog "AcrylicHosts.txt effective content unchanged; skipping rewrite"
+                }
+                else {
+                    $hostsWritten = [bool](Write-AcrylicHostsFile -Path $hostsPath -Content $content -SkipIfUnchanged)
+                    if (-not $hostsWritten) {
+                        Write-OpenPathLog "AcrylicHosts.txt unchanged; skipping rewrite"
+                    }
+                }
+                $writeStopwatch.Stop()
+                $hostMetrics['WriteMs'] = [int]$writeStopwatch.ElapsedMilliseconds
+
+                $iniStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -BlockedSubdomains $definition.BlockedSubdomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains -CaptivePortalDomains $definition.CaptivePortalDomains
+                $iniStopwatch.Stop()
+                $hostMetrics['IniMs'] = [int]$iniStopwatch.ElapsedMilliseconds
+                if (-not $configurationUpdated) {
+                    Write-OpenPathLog "Failed to update AcrylicConfiguration.ini" -Level ERROR
+                    return $false
+                }
+                Write-OpenPathLog "AcrylicHosts.txt updated"
+                return $true
+            })
+    }
+    catch {
+        $updateStopwatch.Stop()
+        $hostMetrics['TotalMs'] = [int]$updateStopwatch.ElapsedMilliseconds
+        Write-OpenPathLog "Acrylic host update failed: $_ lockWaitMs=$($hostMetrics['LockWaitMs']) renderMs=$($hostMetrics['RenderMs']) writeMs=$($hostMetrics['WriteMs']) iniMs=$($hostMetrics['IniMs']) totalMs=$($hostMetrics['TotalMs'])" -Level WARN
+        throw
+    }
+
+    $updateStopwatch.Stop()
+    $hostMetrics['TotalMs'] = [int]$updateStopwatch.ElapsedMilliseconds
+    $hostBreakdown = "lockWaitMs=$($hostMetrics['LockWaitMs']) renderMs=$($hostMetrics['RenderMs']) writeMs=$($hostMetrics['WriteMs']) iniMs=$($hostMetrics['IniMs']) totalMs=$($hostMetrics['TotalMs'])"
+    Write-OpenPathLog "Acrylic host update breakdown: $hostBreakdown"
+    # Phase 8g G3: the worker's Update-AcrylicHost must name its slow sub-step
+    # when it exceeds two seconds (the 4.9 s samples in 39140034212 were the
+    # policy-state lock wait, not the render).
+    if ($updateStopwatch.ElapsedMilliseconds -gt 2000) {
+        Write-OpenPathLog "Acrylic host update slow: $hostBreakdown" -Level WARN
+    }
+    return $updated
 }
 
 function Set-AcrylicConfiguration {

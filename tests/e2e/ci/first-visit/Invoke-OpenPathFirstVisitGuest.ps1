@@ -1220,12 +1220,25 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         New-Dir (Split-Path -Parent $scriptPath)
         [IO.File]::WriteAllText($scriptPath, $sampler, [Text.UTF8Encoding]::new($false))
         $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -PassThru -WindowStyle Hidden
+        # Phase 8g G2: verify the sampler wrote its first ticks; a sampler that
+        # never starts must be visible in the start record, not only as a
+        # sampleCount=0 in the stop result.
+        $startDeadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $startDeadline -and -not (Test-Path -LiteralPath $outPath)) {
+            Start-Sleep -Milliseconds 200
+        }
+        $startedSamples = 0
+        if (Test-Path -LiteralPath $outPath) {
+            try { $startedSamples = @([IO.File]::ReadAllLines($outPath)).Count } catch { $startedSamples = 0 }
+        }
         $script:Body.stallSamplerStart = [ordered]@{
-            pid       = [int]$proc.Id
-            script    = $scriptPath
-            out       = $outPath
-            stop      = $stopPath
-            startedAt = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+            pid              = [int]$proc.Id
+            script           = $scriptPath
+            out              = $outPath
+            stop             = $stopPath
+            sampleCount      = [int]$startedSamples
+            filePresent      = [bool](Test-Path -LiteralPath $outPath)
+            startedAt        = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
         }
         Complete-Step
     }
@@ -1238,6 +1251,7 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         $stopPath = 'C:\OpenPathLab\first-visit\stall-sampler.stop'
         $result = [ordered]@{
             stopped           = $false
+            samplerAvailable  = $false
             sampleCount       = 0
             samplerGaps       = @()
             saturationWindows = @()
@@ -1249,7 +1263,13 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
             [IO.File]::WriteAllText($stopPath, 'stop', [Text.UTF8Encoding]::new($false))
             $deadline = (Get-Date).AddSeconds(15)
             while ((Get-Date) -lt $deadline) {
-                $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue | Where-Object { [string]$_.CommandLine -match 'stall-sampler' })
+                # Phase 8g G2: match the sampler SCRIPT (`stall-sampler.ps1`),
+                # never the step name: the old `-match 'stall-sampler'` also
+                # matched this stop step's own command line (`-Step
+                # stall-sampler-stop`) and killed the harness before it wrote
+                # the result (body.state={} in every Phase 8f scene).
+                $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+                        Where-Object { $_.ProcessId -ne $PID -and [string]$_.CommandLine -match 'stall-sampler[.]ps1' })
                 if ($procs.Count -eq 0) { break }
                 Start-Sleep -Milliseconds 500
             }
@@ -1260,6 +1280,7 @@ while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $stopFile)) {
         if (Test-Path -LiteralPath $outPath) {
             $raw = @([System.IO.File]::ReadAllLines($outPath))
             $result.sampleCount = $raw.Count
+            $result.samplerAvailable = ($raw.Count -gt 0)
             if ($script:StallModuleLoaded) {
                 # Phase 7 fix: parsing every 50 ms line into an object timed this
                 # step out on ~20-minute scenes (partial results). Ticks are
