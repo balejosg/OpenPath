@@ -744,6 +744,7 @@ run_wedu_direct_diagnostic() {
   direct_args=(
     --mode captive-portal-wedu-lab
     --proxmox-host "$PROXMOX_HOST"
+    --vmid "$WINDOWS_VMID"
     --runner-repo-root "$WINDOWS_REPO_ROOT"
     --artifact-dir "$ARTIFACT_DIR"
     --timeout-seconds "$DIRECT_TIMEOUT_SECONDS"

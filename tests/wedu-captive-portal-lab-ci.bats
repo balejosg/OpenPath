@@ -78,3 +78,7 @@ setup() {
   run awk '/^wait_for_openpath_runner_online\(\)/,/^}/' "$SCRIPT"
   [[ "$output" == *'[ -z "$WINDOWS_RUNNER_NAME" ]'* ]]
 }
+
+@test "WEDU lab direct runner is pinned to the lab VMID, not its 105 default" {
+  grep -q -- '--vmid "$WINDOWS_VMID"' "$SCRIPT"
+}
