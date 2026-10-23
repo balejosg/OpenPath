@@ -69,3 +69,12 @@ setup() {
     [ -n "$set_line" ]
     [ "$loop_line" -lt "$set_line" ]
 }
+
+@test "WEDU lab targets dedicated VM 110 by default and skips runner checks without a runner name" {
+  grep -q 'OPENPATH_WEDU_CI_WINDOWS_VMID:-110' "$SCRIPT"
+  grep -q 'OPENPATH_WEDU_CI_WINDOWS_RUNNER_NAME:-}' "$SCRIPT"
+  run awk '/^assert_openpath_runner_idle\(\)/,/^}/' "$SCRIPT"
+  [[ "$output" == *'[ -z "$WINDOWS_RUNNER_NAME" ]'* ]]
+  run awk '/^wait_for_openpath_runner_online\(\)/,/^}/' "$SCRIPT"
+  [[ "$output" == *'[ -z "$WINDOWS_RUNNER_NAME" ]'* ]]
+}

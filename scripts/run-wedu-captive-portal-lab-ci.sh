@@ -7,9 +7,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/wedu-captive-portal-lab-controller.sh"
 
 PROXMOX_HOST="${OPENPATH_WEDU_CI_PROXMOX_HOST:-whitelist-proxmox}"
-WINDOWS_VMID="${OPENPATH_WEDU_CI_WINDOWS_VMID:-105}"
+WINDOWS_VMID="${OPENPATH_WEDU_CI_WINDOWS_VMID:-110}"
 GATEWAY_VMID="${OPENPATH_WEDU_CI_GATEWAY_VMID:-121}"
-WINDOWS_RUNNER_NAME="${OPENPATH_WEDU_CI_WINDOWS_RUNNER_NAME:-openpath-windows-105}"
+# Empty (default) = dedicated lab target without a GitHub runner: skip runner idle/online checks.
+WINDOWS_RUNNER_NAME="${OPENPATH_WEDU_CI_WINDOWS_RUNNER_NAME:-}"
 GATEWAY_URL="${OPENPATH_WEDU_LAB_GATEWAY_URL:-http://10.77.0.1}"
 # Dedicated resolver IP that DHCP advertises (DHCP option 6), separate from the
 # gateway/DHCP-server IP 10.77.0.1. This split (DNS != gateway != dhcp-server)
@@ -32,6 +33,7 @@ LOCK_MODE="full-lab"
 LOCK_ACQUIRED=0
 SNAPSHOT_NAME=""
 SNAPSHOT_CREATED=0
+VM_STARTED_BY_LAB=0
 RUNNER_SERVICES_STOPPED=0
 ORIGINAL_NET0=""
 ORIGINAL_BOOT=""
@@ -260,6 +262,10 @@ get_openpath_runner_state() {
 
 assert_openpath_runner_idle() {
   local state
+  if [ -z "$WINDOWS_RUNNER_NAME" ]; then
+    log "no Windows runner configured; skipping runner idle check"
+    return 0
+  fi
   state="$(get_openpath_runner_state || true)"
   if [ "$state" != "online/busy=false" ]; then
     fail "Expected $WINDOWS_RUNNER_NAME to be online/busy=false before WEDU lab, got: ${state:-missing}"
@@ -268,6 +274,9 @@ assert_openpath_runner_idle() {
 
 wait_for_openpath_runner_online() {
   local state
+  if [ -z "$WINDOWS_RUNNER_NAME" ]; then
+    return 0
+  fi
   for attempt in $(seq 1 24); do
     state="$(get_openpath_runner_state || true)"
     log "runner_state attempt=$attempt $WINDOWS_RUNNER_NAME=${state:-missing}"
@@ -756,6 +765,16 @@ run_wedu_direct_diagnostic() {
   node "$REPO_ROOT/scripts/assert-wedu-captive-portal-result.mjs" "$ARTIFACT_DIR" --evidence-mode target-platform
 }
 
+# The dedicated WEDU target is kept powered off between runs to preserve host RAM.
+ensure_windows_vm_running() {
+  if ssh_proxmox qm status "$WINDOWS_VMID" | grep -q 'status: stopped'; then
+    log "VM $WINDOWS_VMID is stopped; starting it for the WEDU lab"
+    VM_STARTED_BY_LAB=1
+    ssh_proxmox qm start "$WINDOWS_VMID"
+    wait_windows_qga 60 || fail "QGA did not become ready after starting VM $WINDOWS_VMID"
+  fi
+}
+
 restore_windows_vm() {
   if [ "$SNAPSHOT_CREATED" -eq 1 ]; then
     if ssh_proxmox qm status "$WINDOWS_VMID" | grep -q 'status: running'; then
@@ -785,6 +804,9 @@ cleanup() {
   stop_overlay_server
   if [ "$SNAPSHOT_CREATED" -eq 1 ] || [ "$RUNNER_SERVICES_STOPPED" -eq 1 ]; then
     restore_windows_vm || CLEANUP_FAILED=1
+  fi
+  if [ "$VM_STARTED_BY_LAB" -eq 1 ]; then
+    ssh_proxmox qm shutdown "$WINDOWS_VMID" --timeout 120 || ssh_proxmox qm stop "$WINDOWS_VMID" || warn "Failed to power off VM $WINDOWS_VMID"
   fi
   if [ "$LOCK_ACQUIRED" -eq 1 ]; then
     reset_gateway_captive || CLEANUP_FAILED=1
@@ -826,6 +848,7 @@ main() {
   openpath_wedu_acquire_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER" "$LOCK_MODE"
   LOCK_ACQUIRED=1
   assert_openpath_runner_idle
+  ensure_windows_vm_running
   wait_windows_qga 12 || fail "QGA is not ready before WEDU lab"
   capture_vm_config
   stop_all_action_runner_services >/dev/null

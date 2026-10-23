@@ -669,6 +669,13 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
     'WEDU lab workflow should not cancel an in-flight VM restore'
   );
 
+  assert.ok(
+    script.includes('OPENPATH_WEDU_CI_WINDOWS_VMID:-110') &&
+      script.includes('OPENPATH_WEDU_CI_WINDOWS_RUNNER_NAME:-}') &&
+      script.includes('[ -z "$WINDOWS_RUNNER_NAME" ]'),
+    'WEDU lab should default to dedicated VM 110 and skip runner checks when no runner is configured'
+  );
+
   for (const required of [
     'trap cleanup EXIT',
     'LOCK_ACQUIRED=1',
