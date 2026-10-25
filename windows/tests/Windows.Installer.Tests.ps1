@@ -1324,6 +1324,9 @@ function global:sc.exe {
     param([Parameter(ValueFromRemainingArguments = `$true)][string[]]`$Arguments)
     Add-OpenPathInstallerTestTrace "fixture:sc.exe:`$(`$Arguments -join ' ')"
     `$global:LASTEXITCODE = 0
+    if (`$Arguments.Count -ge 2 -and `$Arguments[0] -eq 'query' -and `$Arguments[1] -eq 'applockerfltr') {
+        return 'STATE              : 4  RUNNING'
+    }
 }
 function global:Test-AppLockerPolicy {
     [CmdletBinding()]
