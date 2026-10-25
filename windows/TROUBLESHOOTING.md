@@ -241,6 +241,8 @@ Event ID 8004 is an AppLocker block event. If a legitimate application is being 
 
 User-scoped AppLocker rules apply to the local `OpenPath-Restricted` group, which the installer keeps in sync with all enabled non-administrator local users. Local administrators are not members and are exempt.
 
+**AppLocker policy is loaded but nothing is blocked (no 8004 events, `Test-AppLockerPolicy` says Denied):** the `applockerfltr` kernel filter driver is not running. It is `DEMAND_START` and `AppIDSvc` does not reliably load it after a reboot. Check with `sc.exe query applockerfltr`; the installer now sets it to automatic start and the watchdog reports `appcontrol_filter_driver_not_running` and repairs it. Manual fix: `sc.exe config applockerfltr start= auto; sc.exe start applockerfltr`, then log the student out and in.
+
 **Administrator blocked by AppLocker (event 8004 on an admin session):** check whether the admin account is a member of `OpenPath-Restricted`:
 
 ```powershell

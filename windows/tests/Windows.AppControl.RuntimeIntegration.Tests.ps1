@@ -55,6 +55,7 @@ Describe 'AppControl public runtime integration' {
             Mock Get-OpenPathAppControlProbeTarget { [pscustomobject]@{ UserSid = 'S-1-5-21-1'; GroupSid = 'S-1-5-32-545'; ProfileAvailable = $false; ProfilePath = ''; ValidationMode = 'test' } }
             Mock Invoke-OpenPathAppLockerPackageEvaluation { $trace.Add('evaluator'); @([pscustomobject]@{ PolicyDecision = 'Allowed' }) }
             Mock Set-OpenPathAppIdentityServiceAutomatic {}
+            Mock Start-OpenPathAppLockerFilterDriver {}
             Mock Start-Service {}
             Mock Test-OpenPathAppIdentityServiceRunning { $true }
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{ status = 'observed' } }

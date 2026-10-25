@@ -588,6 +588,7 @@ Describe "AppControl Module" {
                 Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
                 Mock Set-AppLockerPolicy { $script:setTrace.Add('policy') }
                 Mock Set-OpenPathAppIdentityServiceAutomatic { $script:setTrace.Add('service') }; Mock Start-Service {}
+                Mock Start-OpenPathAppLockerFilterDriver {}
                 Mock Test-OpenPathAppIdentityServiceRunning { $true }
                 Mock Invoke-OpenPathAppControlPolicyConverterActivation { $script:setTrace.Add('activation'); [pscustomobject]@{status='observed';code='task-run-observed'} }
                 Mock Test-OpenPathNonAdminAppControlActive { $script:setTrace.Add('health'); $true }
@@ -623,6 +624,33 @@ Describe "AppControl Module" {
                 $diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
                 @($diagnostic.ReasonCodes) | Should -Contain 'appcontrol_appidsvc_start_failed'
                 $diagnostic.InternalRollbackAttempted | Should -BeTrue
+                $diagnostic.InternalRollbackSucceeded | Should -BeTrue
+            }
+        }
+
+        It 'fails closed and restores the prior policy when applockerfltr cannot start' {
+            $diagnosticPath = Join-Path $TestDrive 'filter-driver-failed.json'
+            InModuleScope AppControl -Parameters @{ DiagnosticPath = $diagnosticPath } {
+                param($DiagnosticPath)
+                $script:setPolicyCalls = 0
+                Mock Test-AdminPrivileges { $true }
+                Mock Test-OpenPathAppControlAvailable { $true }
+                Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' }
+                Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
+                Mock Set-AppLockerPolicy { $script:setPolicyCalls++ }
+                Mock Set-OpenPathAppIdentityServiceAutomatic {}
+                Mock Start-Service {}
+                Mock Test-OpenPathAppIdentityServiceRunning { $true }
+                Mock Start-OpenPathAppLockerFilterDriver { throw 'injected applockerfltr start failure' }
+                Mock Invoke-OpenPathAppControlPolicyConverterActivation { throw 'activation must not run' }
+                Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' }
+                Mock Write-OpenPathLog {}
+                Mock Sync-OpenPathRestrictedGroup { $true }
+
+                New-TestAppControlInstalledConfig -Root $TestDrive
+                Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $DiagnosticPath -Confirm:$false | Should -BeFalse
+                $diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
+                @($diagnostic.ReasonCodes) | Should -Contain 'appcontrol_filter_driver_start_failed'
                 $diagnostic.InternalRollbackSucceeded | Should -BeTrue
             }
         }
@@ -672,6 +700,7 @@ Describe "AppControl Module" {
                 $script:activationSetPolicyArgs.Add([pscustomobject]@{ XMLPolicy=$XMLPolicy; ErrorAction=[string]$ErrorAction })
             } -ModuleName AppControl
             Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl
+            Mock Start-OpenPathAppLockerFilterDriver {} -ModuleName AppControl
             Mock Start-Service {} -ModuleName AppControl
             Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
@@ -702,6 +731,7 @@ Describe "AppControl Module" {
                 if ($script:activationSetPolicyCalls -eq 2) { throw 'injected rollback detail' }
             } -ModuleName AppControl
             Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl
+            Mock Start-OpenPathAppLockerFilterDriver {} -ModuleName AppControl
             Mock Start-Service {} -ModuleName AppControl
             Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
@@ -732,6 +762,7 @@ Describe "AppControl Module" {
             Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
             Mock Set-AppLockerPolicy { $script:activationSetPolicyCalls++ } -ModuleName AppControl
             Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl; Mock Start-Service {} -ModuleName AppControl
+            Mock Start-OpenPathAppLockerFilterDriver {} -ModuleName AppControl
             Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { throw 'injected helper exception' } -ModuleName AppControl
             Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' } -ModuleName AppControl
@@ -1544,6 +1575,7 @@ Describe "AppControl Module" {
                     }
                 } -ModuleName AppControl
                 Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl
+                Mock Start-OpenPathAppLockerFilterDriver {} -ModuleName AppControl
                 Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
                 Mock Sync-OpenPathRestrictedGroup { $true } -ModuleName AppControl
                 function global:Start-Service {}
@@ -1706,6 +1738,7 @@ Describe "AppControl Module" {
         }
 
         It "Returns true when local and effective policies and Test-AppLockerPolicy validate expected enforcement" {
+            Mock Test-OpenPathAppLockerFilterDriverRunning { $true } -ModuleName AppControl
             $global:opLegacyProbeGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opLegacyProbeStudentSid = 'S-1-5-21-10-20-30-1001'
             $global:opLegacyProbeProfilePath = Join-Path $TestDrive 'legacy-student'
@@ -1799,6 +1832,7 @@ Describe "AppControl Module" {
         }
 
         BeforeEach {
+            Mock Test-OpenPathAppLockerFilterDriverRunning { $true } -ModuleName AppControl
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
             Mock Get-Command { [pscustomobject]@{ Name = 'Test-AppLockerPolicy' } } `
                 -ModuleName AppControl `
@@ -2195,6 +2229,8 @@ Describe "AppControl Module" {
             # Existing health cases isolate the compatibility inbox probe; the
             # dedicated inbox tests below override this mock with packages.
             Mock Get-OpenPathInboxPackagedAppProbePackages { @() } -ModuleName AppControl
+            $global:opHealthFilterDriverRunning = $true
+            Mock Test-OpenPathAppLockerFilterDriverRunning { [bool]$global:opHealthFilterDriverRunning } -ModuleName AppControl
         }
 
         AfterEach {
@@ -2205,7 +2241,7 @@ Describe "AppControl Module" {
                 $env:SystemRoot = $global:opHealthPreviousSystemRoot
             }
             Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
-            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthRuntimeEvaluationCallCount, Variable:\opHealthRuntimeFirstPath, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthInboxAppDecision, Variable:\opHealthPreviousSystemRoot, Variable:\opHealthRequestedTargetSid -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthFilterDriverRunning, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthRuntimeEvaluationCallCount, Variable:\opHealthRuntimeFirstPath, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthInboxAppDecision, Variable:\opHealthPreviousSystemRoot, Variable:\opHealthRequestedTargetSid -ErrorAction SilentlyContinue
         }
 
         It "returns a deterministic healthy contract and keeps the boolean compatibility seam" -Tag 'AppControlShardA1' {
@@ -2364,6 +2400,15 @@ Describe "AppControl Module" {
             $health.Healthy | Should -BeFalse
             $health.AppIdentityServiceRunning | Should -BeFalse
             @($health.ReasonCodes) | Should -Contain 'appcontrol_appidsvc_not_running'
+        }
+
+        It "reports a stopped applockerfltr filter driver even when AppIDSvc runs" -Tag 'AppControlShardA1' {
+            $global:opHealthFilterDriverRunning = $false
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeFalse
+            $health.AppIdentityServiceRunning | Should -BeTrue
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_filter_driver_not_running'
         }
 
         It "reports an arbitrary executable allowed by the effective evaluator" -Tag 'AppControlShardA1' {

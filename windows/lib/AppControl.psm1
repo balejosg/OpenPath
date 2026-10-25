@@ -1522,6 +1522,68 @@ function Set-OpenPathAppIdentityServiceAutomatic {
     }
 }
 
+function Test-OpenPathAppLockerFilterDriverRunning {
+    <#
+    .SYNOPSIS
+    Returns true when the applockerfltr kernel filter driver is loaded.
+    .DESCRIPTION
+    AppLocker only blocks launches while applockerfltr is running. Its start type is
+    DEMAND_START and AppIDSvc does not reliably load it after a reboot, so a loaded
+    policy plus a running AppIDSvc can still enforce nothing.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $scCommand = Get-Command -Name 'sc.exe' -ErrorAction SilentlyContinue
+    if (-not $scCommand) {
+        return $false
+    }
+
+    try {
+        $scOutput = @(& $scCommand.Name query applockerfltr 2>&1 | ForEach-Object { [string]$_ })
+        return [bool]($scOutput -match 'STATE\s*:\s*4\s+RUNNING')
+    }
+    catch {
+        return $false
+    }
+}
+
+function Start-OpenPathAppLockerFilterDriver {
+    <#
+    .SYNOPSIS
+    Sets applockerfltr to automatic start and loads it when it is stopped.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $scCommand = Get-Command -Name 'sc.exe' -ErrorAction Stop
+    $configOutput = @(& $scCommand.Name config applockerfltr start= auto 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        $boundedOutput = (@($configOutput | ForEach-Object { [string]$_ }) -join ' ').Trim()
+        if ($boundedOutput.Length -gt 240) {
+            $boundedOutput = $boundedOutput.Substring(0, 240)
+        }
+        throw "sc.exe could not configure applockerfltr for automatic start (exit $LASTEXITCODE): $boundedOutput"
+    }
+
+    if (Test-OpenPathAppLockerFilterDriverRunning) {
+        return
+    }
+
+    $startOutput = @(& $scCommand.Name start applockerfltr 2>&1)
+    # 1056: the driver is already running.
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1056) {
+        $boundedOutput = (@($startOutput | ForEach-Object { [string]$_ }) -join ' ').Trim()
+        if ($boundedOutput.Length -gt 240) {
+            $boundedOutput = $boundedOutput.Substring(0, 240)
+        }
+        throw "sc.exe could not start applockerfltr (exit $LASTEXITCODE): $boundedOutput"
+    }
+    if (-not (Test-OpenPathAppLockerFilterDriverRunning)) {
+        throw 'applockerfltr did not reach Running after sc.exe start'
+    }
+}
+
 function Get-OpenPathSidString {
     param(
         [AllowNull()]
@@ -2180,6 +2242,7 @@ function Get-OpenPathNonAdminAppControlHealth {
     $capabilityAvailable = $false
     $restrictedTargetValid = $false
     $appIdentityServiceRunning = $false
+    $filterDriverRunning = $false
     $localPolicyPresent = $false
     $localPolicyValid = $false
     $effectivePolicyPresent = $false
@@ -2273,6 +2336,11 @@ function Get-OpenPathNonAdminAppControlHealth {
         $appIdentityServiceRunning = [bool](Test-OpenPathAppIdentityServiceRunning)
         if (-not $appIdentityServiceRunning) {
             & $addReasonCode 'appcontrol_appidsvc_not_running'
+        }
+
+        $filterDriverRunning = [bool](Test-OpenPathAppLockerFilterDriverRunning)
+        if (-not $filterDriverRunning) {
+            & $addReasonCode 'appcontrol_filter_driver_not_running'
         }
 
         $localPolicyText = $null
@@ -2559,6 +2627,7 @@ function Get-OpenPathNonAdminAppControlHealth {
     $healthy = [bool]($capabilityAvailable -and
         $restrictedTargetValid -and
         $appIdentityServiceRunning -and
+        $filterDriverRunning -and
         $localPolicyPresent -and
         $localPolicyValid -and
         $effectivePolicyPresent -and
@@ -3418,6 +3487,9 @@ function Set-OpenPathNonAdminAppControl {
             throw 'AppIDSvc did not reach Running after Start-Service'
         }
 
+        $diagnosticSubstep = 'filter-driver'
+        Start-OpenPathAppLockerFilterDriver
+
         $diagnosticSubstep = 'policy-activation'
         $activation = Invoke-OpenPathAppControlPolicyConverterActivation
         if ($activation.status -ne 'observed') {
@@ -3499,6 +3571,7 @@ function Set-OpenPathNonAdminAppControl {
                 'policy-apply' { 'appcontrol_policy_apply_failed' }
                 'service-config' { 'appcontrol_appidsvc_configuration_failed' }
                 'service-start' { 'appcontrol_appidsvc_start_failed' }
+                'filter-driver' { 'appcontrol_filter_driver_start_failed' }
                 'policy-activation' { 'appcontrol_policy_activation_failed' }
                 default { 'appcontrol_health_evaluation_failed' }
             }
