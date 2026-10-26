@@ -1534,7 +1534,14 @@ $url = '<URL>'
 $guestPath = '<GUESTPATH>'
 $parent = Split-Path -Parent $guestPath
 New-Item -ItemType Directory -Path $parent -Force | Out-Null
-Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $guestPath -ErrorAction Stop
+$curl = Get-Command -Name 'curl.exe' -ErrorAction SilentlyContinue
+if ($curl) {
+    & $curl.Source -fsS --retry 3 --retry-delay 2 -o $guestPath $url
+    if ($LASTEXITCODE -ne 0) { throw "curl.exe failed with exit code $LASTEXITCODE" }
+}
+else {
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $guestPath -ErrorAction Stop
+}
 Write-Output 'downloaded'
 '@
         $script = $script.Replace('<URL>', ([string]$Url).Replace("'", "''")).Replace('<GUESTPATH>', ([string]$GuestPath).Replace("'", "''"))
