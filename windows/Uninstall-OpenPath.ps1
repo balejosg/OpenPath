@@ -261,6 +261,83 @@ function Restore-OpenPathOriginalDns {
     Clear-DnsClientCache -ErrorAction SilentlyContinue
 }
 
+function Remove-OpenPathFirefoxManagedExtension {
+    # Install force-installs the extension through the machine registry policy
+    # (HKLM\SOFTWARE\Policies\Mozilla\Firefox\ExtensionSettings). Deleting only
+    # distribution\policies.json leaves that registry policy in place, and dropping a
+    # policy never removes an add-on that Firefox already installed: the extension has to
+    # be uninstalled explicitly through the Extensions\Uninstall policy.
+    $policyKey = 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
+    $extensionIds = New-Object System.Collections.Generic.List[string]
+    $extensionIds.Add('openpath-block-monitor@openpath')
+    # Pre-2026-05-10 agents registered the extension under the previous id.
+    $extensionIds.Add('monitor-bloqueos@openpath')
+
+    $configPath = Join-Path $OpenPathRoot 'data\config.json'
+    if (Test-Path $configPath) {
+        try {
+            $configuredId = [string](Get-Content $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).firefoxExtensionId
+            if ($configuredId.Trim()) { $extensionIds.Add($configuredId.Trim()) }
+        }
+        catch {
+            Write-Warning "Ignoring unreadable OpenPath config at ${configPath}: $_"
+        }
+    }
+
+    $settingsValue = $null
+    try { $settingsValue = (Get-ItemProperty -Path $policyKey -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings } catch {}
+
+    $remaining = [ordered]@{}
+    $hadManagedEntry = $false
+    foreach ($entry in @($settingsValue)) {
+        if (-not $entry) { continue }
+        try { $parsed = [string]$entry | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        foreach ($property in @($parsed.PSObject.Properties)) {
+            $installUrl = if ($property.Value.PSObject.Properties['install_url']) { [string]$property.Value.install_url } else { '' }
+            if ($property.Name -in $extensionIds -or $installUrl -match '/api/extensions/firefox/openpath\.xpi(?:[?#]|$)') {
+                $hadManagedEntry = $true
+                if ($property.Name -notin $extensionIds) { $extensionIds.Add($property.Name) }
+            }
+            else {
+                $remaining[$property.Name] = $property.Value
+            }
+        }
+    }
+
+    if ($hadManagedEntry) {
+        if ($remaining.Count -eq 0) {
+            Remove-ItemProperty -Path $policyKey -Name 'ExtensionSettings' -ErrorAction SilentlyContinue
+        }
+        else {
+            New-ItemProperty -Path $policyKey -Name 'ExtensionSettings' -Value @($remaining | ConvertTo-Json -Depth 10 -Compress) -PropertyType MultiString -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
+
+    $firefoxInstalled = @(
+        "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
+        "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe"
+    ) | Where-Object { $_ -and (Test-Path $_) }
+    if (-not $hadManagedEntry -and -not $firefoxInstalled) { return }
+
+    $uninstallKey = "$policyKey\Extensions\Uninstall"
+    if (-not (Test-Path $uninstallKey)) {
+        New-Item -Path $uninstallKey -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    $existing = @()
+    try {
+        $existing = @((Get-Item -Path $uninstallKey -ErrorAction Stop).Property | ForEach-Object {
+                [string](Get-ItemProperty -Path $uninstallKey -Name $_).$_
+            })
+    }
+    catch {}
+    $slot = @($existing).Count
+    foreach ($id in @($extensionIds | Select-Object -Unique)) {
+        if ($id -in $existing) { continue }
+        $slot++
+        New-ItemProperty -Path $uninstallKey -Name ([string]$slot) -Value $id -PropertyType String -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+}
+
 function Restore-OpenPathOutboundDefault {
     # The optional egress floor flips each profile's DefaultOutboundAction to Block; deleting
     # its Allow rules without restoring the default would leave all egress blocked.
@@ -436,6 +513,8 @@ foreach ($path in $firefoxPolicies) {
         Remove-Item $path -Force -ErrorAction SilentlyContinue
     }
 }
+
+Remove-OpenPathFirefoxManagedExtension
 
 $firefoxNativeHostRegistryPaths = @(
     'HKLM\SOFTWARE\Mozilla\NativeMessagingHosts\whitelist_native_host',

@@ -414,4 +414,56 @@ Describe "Installer cleanup helper" {
         )
         $content | Should -Match '(?s)function Remove-OpenPathFirewallRules \{\s+Restore-OpenPathOutboundDefault'
     }
+    It "Standalone uninstall removes the Firefox force-install policy and schedules the add-on uninstall" {
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+        foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OpenPathFirefoxManagedExtension' }, $true)) {
+            . ([scriptblock]::Create($fn.Extent.Text))
+        }
+
+        $OpenPathRoot = Join-Path $TestDrive 'OpenPath'
+        $script:registryWrites = @()
+        $script:registryRemoved = @()
+        $script:extensionSettings = @(
+            '{"renamed-id@openpath":{"installation_mode":"force_installed","install_url":"https://x.example/api/extensions/firefox/openpath.xpi?openpath_version=1"},"other@vendor":{"installation_mode":"allowed"}}'
+        )
+
+        function global:Test-Path {
+            param([string]$Path, [string]$LiteralPath)
+            $target = [string]$Path + [string]$LiteralPath
+            return ($target -like '*firefox.exe')
+        }
+        function global:Get-ItemProperty {
+            [CmdletBinding()] param([string]$Path, [string]$Name)
+            if ($Name -eq 'ExtensionSettings') { return [pscustomobject]@{ ExtensionSettings = $script:extensionSettings } }
+            throw 'not found'
+        }
+        function global:Get-Item { [CmdletBinding()] param([string]$Path) throw 'not found' }
+        function global:New-Item { [CmdletBinding()] param([string]$Path, [switch]$Force) }
+        function global:Remove-ItemProperty { [CmdletBinding()] param([string]$Path, [string]$Name) $script:registryRemoved += $Name }
+        function global:New-ItemProperty {
+            [CmdletBinding()] param([string]$Path, [string]$Name, $Value, [string]$PropertyType, [switch]$Force)
+            $script:registryWrites += [pscustomobject]@{ Path = $Path; Name = $Name; Value = $Value }
+        }
+
+        try {
+            Remove-OpenPathFirefoxManagedExtension
+
+            # Only the OpenPath entry (matched by install_url, whatever its id) is dropped.
+            $settingsWrite = @($script:registryWrites | Where-Object Name -eq 'ExtensionSettings')
+            $settingsWrite.Count | Should -Be 1
+            $settingsWrite[0].Value[0] | Should -Match 'other@vendor'
+            $settingsWrite[0].Value[0] | Should -Not -Match 'renamed-id@openpath'
+
+            $uninstallIds = @($script:registryWrites | Where-Object { $_.Path -like '*Extensions\Uninstall' } | ForEach-Object { $_.Value })
+            $uninstallIds | Should -Contain 'renamed-id@openpath'
+            $uninstallIds | Should -Contain 'openpath-block-monitor@openpath'
+        }
+        finally {
+            foreach ($name in 'Test-Path', 'Get-ItemProperty', 'Get-Item', 'New-Item', 'Remove-ItemProperty', 'New-ItemProperty') {
+                Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+            }
+            Remove-Variable -Name registryWrites, registryRemoved, extensionSettings -Scope Script -ErrorAction SilentlyContinue
+        }
+    }
 }
