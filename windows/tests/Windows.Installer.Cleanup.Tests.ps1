@@ -309,4 +309,109 @@ Describe "Installer cleanup helper" {
             "data\firewall-rules.json"
         )
     }
+    It "Standalone uninstall restores DNS from v2 snapshots and never keeps a loopback resolver" {
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+        $wanted = @(
+            'Select-OpenPathUninstallScalarValue',
+            'ConvertTo-OpenPathUninstallNullableInt',
+            'Test-OpenPathUninstallLoopbackAddress',
+            'Restore-OpenPathOriginalDns'
+        )
+        foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wanted }, $true)) {
+            . ([scriptblock]::Create($fn.Extent.Text))
+        }
+
+        $createdCDrive = $false
+        if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
+            New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
+            $createdCDrive = $true
+        }
+
+        $OpenPathRoot = 'C:\OpenPath'
+        $script:setDnsCalls = @()
+
+        function global:Test-Path {
+            param([string]$Path)
+            return ([string]$Path).Replace('/', '\') -eq 'C:\OpenPath\data\original-dns.json'
+        }
+
+        function global:Get-Content {
+            param([string]$Path, [switch]$Raw)
+            return @'
+{
+  "version": 2,
+  "networkFingerprint": "x",
+  "adapters": [
+    { "InterfaceGuid": "live-guid", "InterfaceAlias": "Ethernet", "InterfaceIndex": 12, "ServerAddresses": ["127.0.0.1"] },
+    { "InterfaceGuid": "wifi-guid", "InterfaceAlias": "Wi-Fi", "InterfaceIndex": 7, "ServerAddresses": ["192.168.1.1", "127.0.0.1"] }
+  ]
+}
+'@
+        }
+
+        function global:Get-NetAdapter {
+            [pscustomobject]@{ InterfaceGuid = 'live-guid'; Name = 'Ethernet'; ifIndex = 12; Status = 'Up' }
+            [pscustomobject]@{ InterfaceGuid = 'wifi-guid'; Name = 'Wi-Fi'; ifIndex = 7; Status = 'Up' }
+        }
+
+        function global:Get-DnsClientServerAddress {
+            [CmdletBinding()] param()
+            [pscustomobject]@{ InterfaceIndex = 99; ServerAddresses = @('127.0.0.1') }
+            [pscustomobject]@{ InterfaceIndex = 12; ServerAddresses = @() }
+        }
+
+        function global:Set-DnsClientServerAddress {
+            [CmdletBinding()]
+            param([int]$InterfaceIndex, [string[]]$ServerAddresses, [switch]$ResetServerAddresses)
+            $script:setDnsCalls += [pscustomobject]@{
+                InterfaceIndex = $InterfaceIndex
+                ServerAddresses = @($ServerAddresses)
+                ResetServerAddresses = $ResetServerAddresses.IsPresent
+            }
+        }
+
+        function global:Clear-DnsClientCache {}
+
+        try {
+            Restore-OpenPathOriginalDns
+
+            $ethernet = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 12)
+            $ethernet.Count | Should -Be 1
+            $ethernet[0].ResetServerAddresses | Should -BeTrue
+
+            $wifi = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 7)
+            $wifi.Count | Should -Be 1
+            $wifi[0].ServerAddresses | Should -Be @('192.168.1.1')
+
+            # Safety net: an adapter outside the snapshot still pinned to loopback is reset.
+            $stray = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 99)
+            $stray.Count | Should -Be 1
+            $stray[0].ResetServerAddresses | Should -BeTrue
+        }
+        finally {
+            Remove-Item Function:\Test-Path -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-Content -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-NetAdapter -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-DnsClientServerAddress -ErrorAction SilentlyContinue
+            Remove-Item Function:\Set-DnsClientServerAddress -ErrorAction SilentlyContinue
+            Remove-Item Function:\Clear-DnsClientCache -ErrorAction SilentlyContinue
+            Remove-Variable -Name setDnsCalls -Scope Script -ErrorAction SilentlyContinue
+            if ($createdCDrive) {
+                Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    It "Standalone uninstall restores the outbound firewall default left by the egress floor" {
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $content = Get-Content $uninstallPath -Raw
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            'function Restore-OpenPathOutboundDefault',
+            'egress-floor-prev-outbound.json',
+            'Set-NetFirewallProfile -Profile $profileName -DefaultOutboundAction $action'
+        )
+        $content | Should -Match '(?s)function Remove-OpenPathFirewallRules \{\s+Restore-OpenPathOutboundDefault'
+    }
 }

@@ -397,7 +397,9 @@ function Restore-OpenPathInstallerDnsSettings {
 
     $snapshotPath = Join-Path 'C:\OpenPath' 'data\original-dns.json'
     if (Test-Path $snapshotPath) {
-        $snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)
+        # v2 snapshots wrap the entries in an `adapters` property; legacy ones are a bare array.
+        $snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json
+        $snapshot = if ($snapshotPayload.PSObject.Properties['adapters']) { @($snapshotPayload.adapters) } else { @($snapshotPayload) }
         $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
         foreach ($entry in $snapshot) {
             $adapter = $adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1
@@ -415,7 +417,8 @@ function Restore-OpenPathInstallerDnsSettings {
             $adapterInterfaceIndex = ConvertTo-OpenPathInstallerNullableInt -Value $adapter.ifIndex
             if ($null -eq $adapterInterfaceIndex) { continue }
 
-            $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
+            # A loopback entry is OpenPath's own pin (Acrylic); never restore it.
+            $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ -and $_ -notmatch '^(127\.|::1$|0\.0\.0\.0$)' })
             if ($servers.Count -gt 0) {
                 Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction Stop
             }

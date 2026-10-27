@@ -191,11 +191,21 @@ function Get-OpenPathUninstallFirewallManifestRuleNames {
     }
 }
 
+function Test-OpenPathUninstallLoopbackAddress {
+    param([object]$Address)
+
+    $text = ([string]$Address).Trim()
+    return ($text -eq '::1' -or $text -eq '0.0.0.0' -or $text -match '^127\.')
+}
+
 function Restore-OpenPathOriginalDns {
     $snapshotPath = Join-Path $OpenPathRoot 'data\original-dns.json'
     if ((Test-Path $snapshotPath) -and (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) {
         try {
-            $snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)
+            # v2 snapshots wrap the per-adapter entries in an `adapters` property;
+            # legacy snapshots are a bare array of entries.
+            $snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json
+            $snapshot = if ($snapshotPayload.PSObject.Properties['adapters']) { @($snapshotPayload.adapters) } else { @($snapshotPayload) }
             $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
             foreach ($entry in $snapshot) {
                 $adapter = $adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1
@@ -213,7 +223,11 @@ function Restore-OpenPathOriginalDns {
                 $adapterInterfaceIndex = ConvertTo-OpenPathUninstallNullableInt -Value $adapter.ifIndex
                 if ($null -eq $adapterInterfaceIndex) { continue }
 
-                $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                # A loopback address in the snapshot is OpenPath's own pin (Acrylic), which is
+                # being removed: never restore it.
+                $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
+                        $_ -and -not (Test-OpenPathUninstallLoopbackAddress -Address $_)
+                    })
                 if ($servers.Count -gt 0) {
                     Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction SilentlyContinue
                 }
@@ -221,21 +235,71 @@ function Restore-OpenPathOriginalDns {
                     Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
                 }
             }
-            Clear-DnsClientCache -ErrorAction SilentlyContinue
-            return
         }
         catch {
             Write-Host "  Snapshot DNS restore failed: $_" -ForegroundColor Yellow
         }
     }
+    else {
+        Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {
+            Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+        }
+    }
 
-    Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {
-        Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+    # Safety net: whatever the snapshot said, no adapter may keep a loopback resolver once
+    # the local DNS proxy is gone, or the machine loses name resolution.
+    if (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue) {
+        foreach ($dnsEntry in @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
+            $stillLoopback = @($dnsEntry.ServerAddresses | Where-Object {
+                    $_ -and (Test-OpenPathUninstallLoopbackAddress -Address $_)
+                })
+            if ($stillLoopback.Count -gt 0) {
+                Set-DnsClientServerAddress -InterfaceIndex $dnsEntry.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+            }
+        }
     }
     Clear-DnsClientCache -ErrorAction SilentlyContinue
 }
 
+function Restore-OpenPathOutboundDefault {
+    # The optional egress floor flips each profile's DefaultOutboundAction to Block; deleting
+    # its Allow rules without restoring the default would leave all egress blocked.
+    if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) { return }
+
+    $previous = @{}
+    $statePath = Join-Path $OpenPathRoot 'data\egress-floor-prev-outbound.json'
+    $hasState = Test-Path $statePath
+    if ($hasState) {
+        try {
+            $parsed = (Get-Content $statePath -ErrorAction Stop) -join "`n" | ConvertFrom-Json -ErrorAction Stop
+            foreach ($property in $parsed.PSObject.Properties) {
+                $previous[$property.Name] = [string]$property.Value
+            }
+        }
+        catch {
+            Write-Warning "Ignoring unreadable egress-floor state at $statePath; restoring Allow. $_"
+        }
+    }
+
+    foreach ($profileName in @('Domain', 'Private', 'Public')) {
+        $current = $null
+        if (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue) {
+            $current = [string](Get-NetFirewallProfile -Profile $profileName -ErrorAction SilentlyContinue).DefaultOutboundAction
+        }
+        if (-not $hasState -and $current -ne 'Block') { continue }
+
+        # Never restore Block, even when a damaged state file records it.
+        $action = 'Allow'
+        if ($previous[$profileName] -in @('Allow', 'NotConfigured')) {
+            $action = $previous[$profileName]
+        }
+        Set-NetFirewallProfile -Profile $profileName -DefaultOutboundAction $action -ErrorAction SilentlyContinue
+    }
+}
+
 function Remove-OpenPathFirewallRules {
+    Restore-OpenPathOutboundDefault
+
     $manifestPath = Join-Path $OpenPathRoot 'data\firewall-rules.json'
     foreach ($ruleName in @(Get-OpenPathUninstallFirewallManifestRuleNames -Path $manifestPath)) {
         Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue |
