@@ -142,6 +142,7 @@ old_entry = "$TEST_TMP_DIR/unpacked-extension"
 assert old_entry not in install_entries, install_entries
 assert "https://school.example/api/extensions/firefox/openpath.xpi" not in install_entries
 assert policies["policies"]["ExtensionSettings"]["openpath-block-monitor@openpath"]["install_url"] == "https://school.example/api/extensions/firefox/openpath.xpi"
+assert policies["policies"]["ExtensionSettings"]["openpath-block-monitor@openpath"]["private_browsing"] is True
 PYEOF
 }
 

@@ -361,6 +361,7 @@ function Set-OpenPathFirefoxMachineExtensionPolicy {
         $settings[[string]$ManagedExtensionPolicy.ExtensionId] = [ordered]@{
             installation_mode = 'force_installed'
             install_url = [string]$ManagedExtensionPolicy.InstallUrl
+            private_browsing = $true
         }
 
         $value = ConvertTo-OpenPathFirefoxMachineExtensionSettingsValue -Settings $settings
@@ -377,7 +378,7 @@ function Set-OpenPathFirefoxMachineExtensionPolicy {
 function Test-OpenPathFirefoxMachineExtensionPolicy {
     <#
     .SYNOPSIS
-    Returns true when the live registry entry matches the expected extension ID, mode, and install URL.
+    Returns true when the live registry entry matches the expected extension ID, mode, install URL, and private browsing access.
     #>
     param(
         [AllowNull()]
@@ -404,8 +405,9 @@ function Test-OpenPathFirefoxMachineExtensionPolicy {
 
     $installMode = if ($entry.PSObject.Properties['installation_mode']) { [string]$entry.installation_mode } else { '' }
     $installUrl = if ($entry.PSObject.Properties['install_url']) { [string]$entry.install_url } else { '' }
+    $privateBrowsing = $entry.PSObject.Properties['private_browsing'] -and $entry.private_browsing -eq $true
 
-    return ($installMode -eq 'force_installed' -and $installUrl -eq [string]$ManagedExtensionPolicy.InstallUrl)
+    return ($installMode -eq 'force_installed' -and $installUrl -eq [string]$ManagedExtensionPolicy.InstallUrl -and $privateBrowsing)
 }
 
 function New-OpenPathFirefoxManagedExtensionReadyResult {
@@ -1105,7 +1107,7 @@ function Test-OpenPathFirefoxManagedExtensionReady {
         return New-OpenPathFirefoxManagedExtensionReadyResult `
             -Ready $false `
             -FailureCode 'firefox-machine-policy-missing' `
-            -Message "Firefox machine ExtensionSettings does not contain $extensionId with installation_mode=force_installed and install_url=$installUrl." `
+            -Message "Firefox machine ExtensionSettings does not contain $extensionId with installation_mode=force_installed, install_url=$installUrl and private_browsing=true." `
             -PolicyPath $policyPath `
             -InstallUrl $installUrl `
             -ExtensionId $extensionId `
@@ -1290,6 +1292,7 @@ function Sync-OpenPathFirefoxManagedExtensionPolicy {
                         $managedExtensionPolicy.ExtensionId = @{
                             installation_mode = 'force_installed'
                             install_url = $managedExtensionPolicy.InstallUrl
+                            private_browsing = $true
                         }
                     }
                 }

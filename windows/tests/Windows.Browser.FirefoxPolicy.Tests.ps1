@@ -658,12 +658,32 @@ Describe "Browser Module - Firefox Policy" {
             $policy.policies.PSObject.Properties.Name | Should -Be @('ExtensionSettings')
             $policy.policies.ExtensionSettings.($contract.extensionId).installation_mode | Should -Be 'force_installed'
             $policy.policies.ExtensionSettings.($contract.extensionId).install_url | Should -Be $contract.configuredInstallUrl
+            $policy.policies.ExtensionSettings.($contract.extensionId).private_browsing | Should -BeTrue
 
             $script:capturedMachinePolicyPath | Should -Be 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
             $script:capturedMachinePolicyValue.Count | Should -Be 1
             $machinePolicy = $script:capturedMachinePolicyValue[0] | ConvertFrom-Json
             $machinePolicy.($contract.extensionId).installation_mode | Should -Be 'force_installed'
             $machinePolicy.($contract.extensionId).install_url | Should -Be $contract.configuredInstallUrl
+            $machinePolicy.($contract.extensionId).private_browsing | Should -BeTrue
+        }
+
+        It "Treats a machine policy entry without private browsing access as not applied" {
+            $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
+            $managedPolicy = [PSCustomObject]@{
+                ExtensionId = $contract.extensionId
+                InstallUrl = $contract.configuredInstallUrl
+            }
+            $script:machineEntryJson = $null
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ ExtensionSettings = @($script:machineEntryJson) }
+            } -ModuleName Browser.FirefoxPolicy
+
+            $script:machineEntryJson = (@{ $contract.extensionId = @{ installation_mode = 'force_installed'; install_url = $contract.configuredInstallUrl } } | ConvertTo-Json -Compress)
+            Test-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $managedPolicy | Should -BeFalse
+
+            $script:machineEntryJson = (@{ $contract.extensionId = @{ installation_mode = 'force_installed'; install_url = $contract.configuredInstallUrl; private_browsing = $true } } | ConvertTo-Json -Compress)
+            Test-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $managedPolicy | Should -BeTrue
         }
 
         It "Version-keys configured managed API Firefox install URLs from release metadata" {

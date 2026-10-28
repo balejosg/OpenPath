@@ -302,6 +302,9 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
         extension_settings[ext_id] = {
             "installation_mode": "force_installed",
             "install_url": install_url,
+            # Keep the extension active in private windows (Firefox 136+);
+            # otherwise its block monitor and page observers go dark there.
+            "private_browsing": True,
         }
 
         apply_firefox_hardening(policy_root, ext_id)
