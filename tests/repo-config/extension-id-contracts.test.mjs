@@ -27,6 +27,12 @@ const EXTENSION_ID_SITES = [
     contexts: (id) => [`return '${id}'`],
   },
   {
+    // Uninstall must remove the managed add-on even when the installed manifest
+    // or config is already gone, so it keeps the canonical id as a fallback.
+    file: 'windows/Uninstall-OpenPath.ps1',
+    contexts: (id) => [`$extensionIds.Add('${id}')`],
+  },
+  {
     file: 'linux/lib/firefox-policy.sh',
     contexts: (id) => [`FIREFOX_MANAGED_EXTENSION_ID="\${FIREFOX_MANAGED_EXTENSION_ID:-${id}}"`],
   },
