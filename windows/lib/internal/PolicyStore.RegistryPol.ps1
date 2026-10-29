@@ -46,7 +46,12 @@ function Read-OpenPathRegistryPolFile {
         return @()
     }
 
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+    }
+    catch {
+        throw "local-gpo-unreadable: cannot read ${Path}: $($_.Exception.Message)"
+    }
     if ($bytes.Length -lt 8 -or
         [System.Text.Encoding]::ASCII.GetString($bytes, 0, 4) -ne 'PReg' -or
         [BitConverter]::ToUInt32($bytes, 4) -ne 1) {
@@ -130,11 +135,17 @@ function Write-OpenPathRegistryPolFile {
 
     $tmpPath = "$Path.openpath-tmp"
     $bakPath = "$Path.openpath-bak"
-    [System.IO.File]::WriteAllBytes($tmpPath, $content)
-    if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        Copy-Item -LiteralPath $Path -Destination $bakPath -Force
+    try {
+        [System.IO.File]::WriteAllBytes($tmpPath, $content)
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            Copy-Item -LiteralPath $Path -Destination $bakPath -Force -ErrorAction Stop
+        }
+        Move-Item -LiteralPath $tmpPath -Destination $Path -Force -ErrorAction Stop
     }
-    Move-Item -LiteralPath $tmpPath -Destination $Path -Force
+    catch {
+        Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+        throw
+    }
 }
 
 function ConvertTo-OpenPathRegistryPolData {

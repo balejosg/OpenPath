@@ -99,6 +99,37 @@ Describe 'PolicyStore.RegistryPol' {
         (([System.IO.File]::ReadAllBytes($path)) -join ',') | Should -Not -Be ($afterFirst -join ',')
     }
 
+    It 'Read maps I/O failures to local-gpo-unreadable' {
+        $dirAsFile = Join-Path $script:Case 'Registry.pol'
+        New-Item -ItemType Directory -Path $dirAsFile -Force | Out-Null
+        Mock Test-Path { $true } -ParameterFilter { $PathType -eq 'Leaf' }
+        { Read-OpenPathRegistryPolFile -Path $dirAsFile } | Should -Throw 'local-gpo-unreadable:*'
+    }
+
+    It 'Failed replace throws, keeps original bytes and leaves no tmp file' {
+        $path = Join-Path $script:Case 'Registry.pol'
+        $one = ConvertTo-OpenPathRegistryPolData -Type DWord -Value 1
+        $two = ConvertTo-OpenPathRegistryPolData -Type DWord -Value 2
+        Write-OpenPathRegistryPolFile -Path $path -Entries @([pscustomobject]@{ Key = 'A'; ValueName = 'B'; Type = $one.Type; Data = $one.Data })
+        $original = [System.IO.File]::ReadAllBytes($path)
+        Mock Move-Item { throw 'simulated lock' }
+        { Write-OpenPathRegistryPolFile -Path $path -Entries @([pscustomobject]@{ Key = 'A'; ValueName = 'B'; Type = $two.Type; Data = $two.Data }) } | Should -Throw '*simulated lock*'
+        (([System.IO.File]::ReadAllBytes($path)) -join ',') | Should -Be ($original -join ',')
+        Test-Path -LiteralPath "$path.openpath-tmp" | Should -BeFalse
+    }
+
+    It 'Failed backup aborts before replacing' {
+        $path = Join-Path $script:Case 'Registry.pol'
+        $one = ConvertTo-OpenPathRegistryPolData -Type DWord -Value 1
+        $two = ConvertTo-OpenPathRegistryPolData -Type DWord -Value 2
+        Write-OpenPathRegistryPolFile -Path $path -Entries @([pscustomobject]@{ Key = 'A'; ValueName = 'B'; Type = $one.Type; Data = $one.Data })
+        $original = [System.IO.File]::ReadAllBytes($path)
+        Mock Copy-Item { throw 'simulated backup failure' }
+        { Write-OpenPathRegistryPolFile -Path $path -Entries @([pscustomobject]@{ Key = 'A'; ValueName = 'B'; Type = $two.Type; Data = $two.Data }) } | Should -Throw '*simulated backup failure*'
+        (([System.IO.File]::ReadAllBytes($path)) -join ',') | Should -Be ($original -join ',')
+        Test-Path -LiteralPath "$path.openpath-tmp" | Should -BeFalse
+    }
+
     It 'Gpt version bump preserves user half' {
         $gpt = Join-Path $script:Case 'gpt.ini'
         [System.IO.File]::WriteAllText($gpt, "[General]`r`ngPCMachineExtensionNames=[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}]`r`nVersion=65540`r`n")
