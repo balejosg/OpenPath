@@ -61,6 +61,7 @@
 - Windows offline installer (trailer contract, deferred enrollment): [`windows/DEPLOYMENT.md`](../windows/DEPLOYMENT.md), contract in `shared/src/windows-offline-installer.ts`
 - Windows troubleshooting: [`windows/TROUBLESHOOTING.md`](../windows/TROUBLESHOOTING.md)
 - Windows outbound egress floor (opt-in + canary): [`docs/windows-egress-floor.md`](windows-egress-floor.md)
+- Windows browser policy ownership and the local GPO store: [`docs/windows-browser-policy-ownership.md`](windows-browser-policy-ownership.md)
 
 ## Evaluation
 
