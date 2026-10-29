@@ -188,7 +188,7 @@ Describe 'PolicyStore.Owner' {
             return $path
         }
         function script:New-Rsop {
-            param([string]$Key, [string]$ValueName, [string]$GpoId, [int]$Precedence)
+            param([string]$Key, [string]$ValueName, [string]$GpoId, [object]$Precedence)
             [pscustomobject]@{ registryKey = $Key; valueName = $ValueName; GPOID = $GpoId; precedence = $Precedence }
         }
     }
@@ -264,6 +264,85 @@ Describe 'PolicyStore.Owner' {
         $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $pol
         $r.Owner | Should -Be 'LocalGpo'
         @($r.Evidence) -contains 'rsop-unavailable' | Should -BeTrue
+    }
+
+    It 'Record for a different valueName in the same key does not match' {
+        Mock Get-OpenPathRsopRegistryPolicySetting { @(New-Rsop $script:FfKey 'Other' $script:DomainGuid 1) }
+        (Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing).Owner | Should -Be 'None'
+    }
+
+    It 'Local record wins when it has precedence 1 and domain has 2' {
+        Mock Get-OpenPathRsopRegistryPolicySetting {
+            @((New-Rsop $script:FfKey 'ExtensionSettings' $script:DomainGuid 2), (New-Rsop $script:FfKey 'ExtensionSettings' 'LocalGPO' 1))
+        }
+        (Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing).Owner | Should -Be 'LocalGpo'
+    }
+
+    It 'Handles uint32 precedence' {
+        Mock Get-OpenPathRsopRegistryPolicySetting {
+            @([pscustomobject]@{ registryKey = $script:FfKey; valueName = 'ExtensionSettings'; GPOID = 'LocalGPO'; precedence = [uint32]2 },
+              [pscustomobject]@{ registryKey = $script:FfKey; valueName = 'ExtensionSettings'; GPOID = $script:DomainGuid; precedence = [uint32]1 })
+        }
+        (Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing).Owner | Should -Be 'DomainGpo'
+    }
+
+    It 'No RSOP_GPO match gives empty GpoName without throwing' {
+        Mock Get-OpenPathRsopRegistryPolicySetting { @(New-Rsop $script:FfKey 'ExtensionSettings' $script:DomainGuid 1) }
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
+        $r.Owner | Should -Be 'DomainGpo'
+        $r.GpoName | Should -Be ''
+    }
+
+    It 'RSOP_GPO query failure adds rsop-gpo-name-unavailable' {
+        Mock Get-OpenPathRsopRegistryPolicySetting { @(New-Rsop $script:FfKey 'ExtensionSettings' $script:DomainGuid 1) }
+        Mock Get-OpenPathRsopGpo { throw 'gpo down' }
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
+        $r.Owner | Should -Be 'DomainGpo'
+        @($r.Evidence) -contains 'rsop-gpo-name-unavailable' | Should -BeTrue
+    }
+
+    It 'Whole-key lookup through RSoP matches any value' {
+        $key = 'Software\Policies\Google\Chrome\ExtensionInstallBlocklist'
+        Mock Get-OpenPathRsopRegistryPolicySetting { @(New-Rsop 'Software\Policies\Google\Chrome\ExtensionInstallBlocklist' '1' $script:DomainGuid 1) }
+        (Get-OpenPathPolicyValueOwner -Key $key -ValueName '' -LocalPolPath $script:Missing).Owner | Should -Be 'DomainGpo'
+    }
+
+    It 'Whole-key tie at precedence 1 prefers the domain record regardless of order' {
+        $key = 'Software\Policies\Google\Chrome\ExtensionInstallBlocklist'
+        Mock Get-OpenPathRsopRegistryPolicySetting {
+            @((New-Rsop $key '1' 'LocalGPO' 1), (New-Rsop $key '2' $script:DomainGuid 1))
+        }
+        (Get-OpenPathPolicyValueOwner -Key $key -ValueName '' -LocalPolPath $script:Missing).Owner | Should -Be 'DomainGpo'
+        Mock Get-OpenPathRsopRegistryPolicySetting {
+            @((New-Rsop $key '2' $script:DomainGuid 1), (New-Rsop $key '1' 'LocalGPO' 1))
+        }
+        (Get-OpenPathPolicyValueOwner -Key $key -ValueName '' -LocalPolPath $script:Missing).Owner | Should -Be 'DomainGpo'
+    }
+
+    It 'Missing GPOID is skipped with rsop-gpoid-missing evidence' {
+        Mock Get-OpenPathRsopRegistryPolicySetting { @(New-Rsop $script:FfKey 'ExtensionSettings' '' 1) }
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
+        $r.Owner | Should -Be 'None'
+        @($r.Evidence) -contains 'rsop-gpoid-missing' | Should -BeTrue
+    }
+
+    It 'Null precedence sorts last' {
+        Mock Get-OpenPathRsopRegistryPolicySetting {
+            @((New-Rsop $script:FfKey 'ExtensionSettings' $script:DomainGuid $null), (New-Rsop $script:FfKey 'ExtensionSettings' 'LocalGPO' 3))
+        }
+        (Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing).Owner | Should -Be 'LocalGpo'
+    }
+
+    It 'Chrome and Edge MDM markers resolve to Mdm' {
+        Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Chrome~Policy~googlechrome' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
+        (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Google\Chrome' -ValueName 'X' -LocalPolPath $script:Missing).Owner | Should -Be 'Mdm'
+        Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Edge~Policy~microsoft_edge' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
+        (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Microsoft\Edge' -ValueName 'X' -LocalPolPath $script:Missing).Owner | Should -Be 'Mdm'
+    }
+
+    It 'A Firefox MDM area does not make a Chrome key Mdm' {
+        Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Firefox~Policy~firefox~Extensions' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
+        (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Google\Chrome' -ValueName 'X' -LocalPolPath $script:Missing).Owner | Should -Be 'None'
     }
 
     It 'Unreadable local Registry.pol propagates local-gpo-unreadable' {

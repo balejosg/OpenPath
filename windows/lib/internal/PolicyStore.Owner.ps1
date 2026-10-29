@@ -50,9 +50,17 @@ function Get-OpenPathPolicyValueOwner {
         $_ -and
         [string]::Equals(([string]$_.registryKey).Trim('\'), $normalizedKey, [System.StringComparison]::OrdinalIgnoreCase) -and
         (Test-OpenPathPolicyNameMatch -RecordValueName $_.valueName -ValueName $ValueName)
-    } | Sort-Object { [int]$_.precedence })
+    })
+    $withId = @($rsopHits | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.GPOID) })
+    if ($withId.Count -lt $rsopHits.Count) { $evidence.Add('rsop-gpoid-missing') }
+    $rsopHits = $withId
     if ($rsopHits.Count -gt 0) {
-        $winner = $rsopHits[0]
+        $rank = { param($r) if ($null -eq $r.precedence -or [string]$r.precedence -eq '') { [int64][int]::MaxValue } else { [int64]$r.precedence } }
+        $minPrecedence = ($rsopHits | ForEach-Object { & $rank $_ } | Measure-Object -Minimum).Minimum
+        $top = @($rsopHits | Where-Object { (& $rank $_) -eq $minPrecedence })
+        # Whole-key lookups can tie at the top; prefer an externally managed record (fail safe).
+        $winner = $top | Where-Object { [string]$_.GPOID -ne 'LocalGPO' } | Select-Object -First 1
+        if (-not $winner) { $winner = $top[0] }
         $gpoId = [string]$winner.GPOID
         if ($gpoId -eq 'LocalGPO') {
             $evidence.Add('rsop:LocalGPO')
