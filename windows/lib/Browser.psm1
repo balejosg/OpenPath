@@ -595,6 +595,7 @@ Export-ModuleMember -Function @(
     # through the store; both consume Browser.psm1 only.
     'Invoke-OpenPathPolicyRefresh',
     'Remove-OpenPathFirefoxMachineExtensionPolicy',
+    'Get-OpenPathPolicyValueOwner',
     'Sync-OpenPathFirefoxNetworkAutoconfig',
     'Set-ChromePolicy',
     'Remove-BrowserPolicy',

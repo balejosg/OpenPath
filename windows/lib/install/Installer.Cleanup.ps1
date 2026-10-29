@@ -472,7 +472,9 @@ function Remove-OpenPathInstallerBrowserArtifacts {
     }
     elseif (Get-Command -Name Remove-OpenPathFirefoxMachineExtensionPolicy -ErrorAction SilentlyContinue) {
         try {
-            Remove-OpenPathFirefoxMachineExtensionPolicy | Out-Null
+            if (-not (Remove-OpenPathFirefoxMachineExtensionPolicy)) {
+                Write-InstallerWarning '  The Firefox machine extension policy entry was not removed (absent, externally managed, or a store failure); see the OpenPath log.'
+            }
         }
         catch {
             Write-InstallerWarning "  Could not remove the Firefox machine extension policy: $_"
@@ -564,6 +566,55 @@ function Remove-OpenPathInstallerInstallRoot {
     }
 }
 
+function Invoke-OpenPathInstallerBrowserArtifactsCleanupWithOldModules {
+    <#
+    .SYNOPSIS
+        Runs the browser artifact cleanup with the OLD install's Browser.psm1 so the policy store (and its ledger under data\) removes OpenPath's entries from the local GPO before the install root is wiped
+    .DESCRIPTION
+        Reinstall cleanup runs before the installer imports its modules. Without the old Browser
+        module only the registry keys could be deleted, leaving OpenPath's entries in Registry.pol
+        and (once data\policy-store-ledger.json is wiped) unrecognisable as OpenPath's afterwards.
+        The modules imported here are removed again so the installer imports the new code fresh.
+    .PARAMETER OpenPathRoot
+        Root directory of the existing installation
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenPathRoot
+    )
+
+    $browserModulePath = Join-Path $OpenPathRoot 'lib\Browser.psm1'
+    $loadedBefore = @(Get-Module -All -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.Path })
+    $imported = $false
+    if (Test-Path -LiteralPath $browserModulePath -PathType Leaf) {
+        try {
+            Import-Module $browserModulePath -Force -Global -ErrorAction Stop
+            $imported = $true
+        }
+        catch {
+            Write-InstallerWarning "  Could not load the existing Browser module to clean the local GPO policy store: $_"
+        }
+    }
+
+    try {
+        Remove-OpenPathInstallerBrowserArtifacts
+    }
+    finally {
+        if ($imported) {
+            # Remove everything this cleanup loaded from the old install (Browser and its nested
+            # modules, PolicyStore, Common...) so no stale copy survives into the new install.
+            $libPrefix = (Join-Path $OpenPathRoot 'lib') + [System.IO.Path]::DirectorySeparatorChar
+            foreach ($module in @(Get-Module -All -ErrorAction SilentlyContinue)) {
+                $modulePath = [string]$module.Path
+                if (-not $modulePath -or $modulePath -in $loadedBefore) { continue }
+                if ($modulePath.StartsWith($libPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+}
+
 function Invoke-OpenPathInstallerExistingInstallCleanup {
     <#
     .SYNOPSIS
@@ -600,7 +651,7 @@ function Invoke-OpenPathInstallerExistingInstallCleanup {
     Remove-OpenPathInstallerFirewallRules
     Remove-OpenPathInstallerAppLockerRules -OpenPathRoot $OpenPathRoot
     Remove-OpenPathInstallerRestrictedGroup
-    Remove-OpenPathInstallerBrowserArtifacts
+    Invoke-OpenPathInstallerBrowserArtifactsCleanupWithOldModules -OpenPathRoot $OpenPathRoot
     Stop-OpenPathInstallerAcrylicService -KeepAcrylic:$KeepAcrylic
     Remove-OpenPathInstallerInstallRoot -KeepLogs:$KeepLogs -OpenPathRoot $OpenPathRoot
 

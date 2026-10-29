@@ -859,6 +859,9 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
                     Write-InstallerWarning "  WARNING: Group Policy refresh did not complete cleanly (ExitCode=$($policyRefresh.ExitCode)); readiness will decide"
                 }
             }
+            else {
+                Write-InstallerWarning '  WARNING: Invoke-OpenPathPolicyRefresh is not available; Firefox readiness is checked without a forced Group Policy refresh'
+            }
             $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig
             if (-not $firefoxReady.Ready) {
                 Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$firefoxReady.FailureCode)

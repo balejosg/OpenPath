@@ -41,6 +41,7 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'lib\internal\WindowsRoot.ps1')
 $OpenPathRoot = Resolve-OpenPathWindowsRoot
+$script:OpenPathBrowserPolicyIssues = 0
 
 function Convert-ToRegistryProviderPath {
     param(
@@ -261,10 +262,62 @@ function Restore-OpenPathOriginalDns {
     Clear-DnsClientCache -ErrorAction SilentlyContinue
 }
 
+function Remove-OpenPathFirefoxExtensionSettingsEntries {
+    # Direct registry removal of the OpenPath entries (matched by id or by the OpenPath XPI
+    # install_url) from the Firefox ExtensionSettings value. Foreign entries are rewritten as they
+    # were and are never resurrected: the value is read fresh, filtered and written back.
+    param(
+        [Parameter(Mandatory = $true)][string]$PolicyKey,
+        [Parameter(Mandatory = $true)][string[]]$ExtensionIds
+    )
+
+    $settingsValue = $null
+    try { $settingsValue = (Get-ItemProperty -Path $PolicyKey -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings } catch {}
+
+    $remaining = [ordered]@{}
+    $removedAny = $false
+    foreach ($entry in @($settingsValue)) {
+        if (-not $entry) { continue }
+        try { $parsed = [string]$entry | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        foreach ($property in @($parsed.PSObject.Properties)) {
+            $installUrl = if ($property.Value.PSObject.Properties['install_url']) { [string]$property.Value.install_url } else { '' }
+            if ($property.Name -in $ExtensionIds -or $installUrl -match '/api/extensions/firefox/openpath\.xpi(?:[?#]|$)') {
+                $removedAny = $true
+            }
+            else {
+                $remaining[$property.Name] = $property.Value
+            }
+        }
+    }
+
+    if (-not $removedAny) { return }
+    if ($remaining.Count -eq 0) {
+        Remove-ItemProperty -Path $PolicyKey -Name 'ExtensionSettings' -ErrorAction SilentlyContinue
+    }
+    else {
+        New-ItemProperty -Path $PolicyKey -Name 'ExtensionSettings' -Value @($remaining | ConvertTo-Json -Depth 10 -Compress) -PropertyType MultiString -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+}
+
+function Test-OpenPathUninstallFirefoxPolicyExternallyManaged {
+    # True only when the policy store positively reports a domain GPO or MDM as the owner of the
+    # Firefox ExtensionSettings value. Unknown owners are treated as not external.
+    if (-not (Get-Command -Name Get-OpenPathPolicyValueOwner -ErrorAction SilentlyContinue)) { return $false }
+    try {
+        $ownerInfo = Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Mozilla\Firefox' -ValueName 'ExtensionSettings'
+        return [bool]($ownerInfo -and ([string]$ownerInfo.Owner -eq 'DomainGpo' -or [string]$ownerInfo.Owner -eq 'Mdm'))
+    }
+    catch {
+        return $false
+    }
+}
+
 function Remove-OpenPathFirefoxManagedExtension {
-    # With -EntryRemovedByStore the OpenPath entry in ExtensionSettings is removed through the
-    # local GPO policy store (so it also leaves Registry.pol, not only the registry); the direct
-    # registry write below is then skipped and kept only as the fallback when the store is unavailable.
+    # With -EntryRemovedByStore the OpenPath entries in ExtensionSettings are removed through the
+    # local GPO policy store (so they also leave Registry.pol, not only the registry). For any id the
+    # store could not remove, the direct registry removal runs as a fallback unless a domain GPO or
+    # MDM owns the value (then it is left untouched and a warning is printed). Without the flag only
+    # the direct registry removal runs.
     param([switch]$EntryRemovedByStore)
 
     # Install force-installs the extension through the machine registry policy
@@ -292,7 +345,6 @@ function Remove-OpenPathFirefoxManagedExtension {
     $settingsValue = $null
     try { $settingsValue = (Get-ItemProperty -Path $policyKey -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings } catch {}
 
-    $remaining = [ordered]@{}
     $hadManagedEntry = $false
     foreach ($entry in @($settingsValue)) {
         if (-not $entry) { continue }
@@ -303,9 +355,6 @@ function Remove-OpenPathFirefoxManagedExtension {
                 $hadManagedEntry = $true
                 if ($property.Name -notin $extensionIds) { $extensionIds.Add($property.Name) }
             }
-            else {
-                $remaining[$property.Name] = $property.Value
-            }
         }
     }
 
@@ -313,24 +362,35 @@ function Remove-OpenPathFirefoxManagedExtension {
         # Legacy and renamed ids (matched by install_url above) are not covered by
         # Remove-BrowserPolicy, which only knows the current id. Each call is a no-op when the
         # id is absent and never touches entries it does not own.
-        if (Get-Command -Name Remove-OpenPathFirefoxMachineExtensionPolicy -ErrorAction SilentlyContinue) {
-            foreach ($storeId in @($extensionIds | Select-Object -Unique)) {
-                try {
-                    Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy ([pscustomobject]@{ ExtensionId = $storeId }) | Out-Null
-                }
-                catch {
-                    Write-Warning "Could not remove Firefox policy entry ${storeId} through the policy store: $_"
-                }
+        $storeFailedIds = New-Object System.Collections.Generic.List[string]
+        $storeCommandAvailable = [bool](Get-Command -Name Remove-OpenPathFirefoxMachineExtensionPolicy -ErrorAction SilentlyContinue)
+        foreach ($storeId in @($extensionIds | Select-Object -Unique)) {
+            if (-not $storeCommandAvailable) { $storeFailedIds.Add($storeId); continue }
+            try {
+                $removed = Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy ([pscustomobject]@{ ExtensionId = $storeId })
+                # $false also means "id not present"; the direct fallback below is a no-op then.
+                if (-not $removed) { $storeFailedIds.Add($storeId) }
+            }
+            catch {
+                Write-Warning "Could not remove Firefox policy entry ${storeId} through the policy store: $_"
+                $storeFailedIds.Add($storeId)
+            }
+        }
+
+        if ($storeFailedIds.Count -gt 0 -and $hadManagedEntry) {
+            if (Test-OpenPathUninstallFirefoxPolicyExternallyManaged) {
+                $script:OpenPathBrowserPolicyIssues++
+                Write-Host "  WARNING: The Firefox ExtensionSettings policy is managed by a domain GPO or MDM; the OpenPath entry was left in place. Remove it from that policy." -ForegroundColor Yellow
+            }
+            else {
+                Remove-OpenPathFirefoxExtensionSettingsEntries -PolicyKey $policyKey -ExtensionIds @($storeFailedIds)
+                $script:OpenPathBrowserPolicyIssues++
+                Write-Host "  WARNING: The policy store did not remove the Firefox OpenPath entry; it was removed from the registry directly. The local GPO may re-apply it at the next Group Policy refresh." -ForegroundColor Yellow
             }
         }
     }
     elseif ($hadManagedEntry) {
-        if ($remaining.Count -eq 0) {
-            Remove-ItemProperty -Path $policyKey -Name 'ExtensionSettings' -ErrorAction SilentlyContinue
-        }
-        else {
-            New-ItemProperty -Path $policyKey -Name 'ExtensionSettings' -Value @($remaining | ConvertTo-Json -Depth 10 -Compress) -PropertyType MultiString -Force -ErrorAction SilentlyContinue | Out-Null
-        }
+        Remove-OpenPathFirefoxExtensionSettingsEntries -PolicyKey $policyKey -ExtensionIds @($extensionIds)
     }
 
     $firefoxInstalled = @(
@@ -547,7 +607,8 @@ if ($browserPolicyStoreAvailable) {
         $browserPolicyRemovedViaStore = $true
     }
     catch {
-        Write-Warning "Could not remove browser policies through the policy store; using direct registry removal: $_"
+        $script:OpenPathBrowserPolicyIssues++
+        Write-Host "  WARNING: Could not remove browser policies through the policy store; removing the Chromium policy keys from the registry directly (the local GPO may re-apply them): $_" -ForegroundColor Yellow
     }
 }
 
@@ -610,7 +671,12 @@ if (-not $browserPolicyRemovedViaStore) {
         }
     }
 }
-Write-Host "  Browser policies removed" -ForegroundColor Green
+if ($script:OpenPathBrowserPolicyIssues -gt 0) {
+    Write-Host "  Browser policies removed with warnings (see above)" -ForegroundColor Yellow
+}
+else {
+    Write-Host "  Browser policies removed" -ForegroundColor Green
+}
 
 # Step 5: Stop and optionally remove Acrylic
 Write-Host "[5/6] Stopping Acrylic DNS..." -ForegroundColor Yellow

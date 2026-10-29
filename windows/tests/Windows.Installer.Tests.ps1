@@ -2811,6 +2811,23 @@ exit `$installerExitCode
             $printed.Contains($adminEntry) | Should -BeTrue
         }
 
+        It "Warns instead of silently skipping when the policy refresh command is unavailable" {
+            Remove-Item Function:\Invoke-OpenPathPolicyRefresh -ErrorAction SilentlyContinue
+            $action = Get-OpenPathReadinessPhaseAction
+            & $action
+
+            @($script:readinessCalls) | Should -Be @('ready')
+            @($script:readinessWarnings | Where-Object { $_ -match 'Invoke-OpenPathPolicyRefresh is not available' }).Count | Should -Be 1
+        }
+
+        It "Browser.psm1 exports the policy refresh and Firefox removal commands the installer consumes" {
+            $browserModule = Get-Content (Join-Path $PSScriptRoot ".." "lib" "Browser.psm1") -Raw
+            $exportBlock = [regex]::Match($browserModule, '(?s)Export-ModuleMember -Function @\((.*?)\r?\n\)').Groups[1].Value
+            foreach ($name in 'Invoke-OpenPathPolicyRefresh', 'Remove-OpenPathFirefoxMachineExtensionPolicy', 'Get-OpenPathPolicyValueOwner', 'Remove-BrowserPolicy') {
+                $exportBlock | Should -Match "'$name'"
+            }
+        }
+
         It "Wires the refresh immediately before the readiness check in the installer source" {
             $content = Get-Content (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1") -Raw
             $content | Should -Match '(?s)Invoke-OpenPathPolicyRefresh -Force -TimeoutSeconds 120.*Test-OpenPathFirefoxManagedExtensionReady -Config \$firefoxReadyConfig'
