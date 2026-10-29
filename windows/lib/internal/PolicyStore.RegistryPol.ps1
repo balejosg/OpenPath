@@ -4,6 +4,43 @@
 $script:OpenPathRegistryCseGuid = '{35378EAC-683F-11D2-A89A-00C04FBBCFA2}'
 $script:OpenPathRegistryToolGuid = '{D02B1F72-3407-48AE-BA88-E8213C6761F1}'
 
+# Attributes that make a replace or an in-place write fail; cleared for the write, then restored.
+$script:OpenPathProtectedFileAttributes = [int]([System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System -bor [System.IO.FileAttributes]::ReadOnly)
+
+function Get-OpenPathPolicyFileAttributes {
+    param([string]$Path)
+    return [System.IO.File]::GetAttributes($Path)
+}
+
+function Set-OpenPathPolicyFileAttributes {
+    param([string]$Path, [System.IO.FileAttributes]$Attributes)
+    [System.IO.File]::SetAttributes($Path, $Attributes)
+}
+
+function Clear-OpenPathPolicyFileProtection {
+    # Clears Hidden/System/ReadOnly on an existing file and returns the bits it cleared (0 when none).
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return [System.IO.FileAttributes]0 }
+    $attributes = [int](Get-OpenPathPolicyFileAttributes -Path $Path)
+    $protected = $attributes -band $script:OpenPathProtectedFileAttributes
+    if ($protected -ne 0) {
+        $remaining = $attributes -band (-bnot $script:OpenPathProtectedFileAttributes)
+        if ($remaining -eq 0) { $remaining = [int][System.IO.FileAttributes]::Normal }
+        Set-OpenPathPolicyFileAttributes -Path $Path -Attributes ([System.IO.FileAttributes]$remaining)
+    }
+    return [System.IO.FileAttributes]$protected
+}
+
+function Restore-OpenPathPolicyFileProtection {
+    # Adds back the bits Clear-OpenPathPolicyFileProtection removed.
+    param([string]$Path, [System.IO.FileAttributes]$Attributes)
+
+    if ([int]$Attributes -eq 0 -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    $current = [int](Get-OpenPathPolicyFileAttributes -Path $Path) -band (-bnot [int][System.IO.FileAttributes]::Normal)
+    Set-OpenPathPolicyFileAttributes -Path $Path -Attributes ([System.IO.FileAttributes]($current -bor [int]$Attributes))
+}
+
 function Read-OpenPathRegistryPolString {
     # Reads a UTF-16LE NUL-terminated string at $Position and advances past the terminator.
     param(
@@ -147,9 +184,12 @@ function Write-OpenPathRegistryPolFile {
 
     $tmpPath = "$Path.openpath-tmp"
     $bakPath = "$Path.openpath-bak"
+    $protection = [System.IO.FileAttributes]0
     try {
         [System.IO.File]::WriteAllBytes($tmpPath, $content)
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $protection = Clear-OpenPathPolicyFileProtection -Path $Path
+            Clear-OpenPathPolicyFileProtection -Path $bakPath | Out-Null
             Copy-Item -LiteralPath $Path -Destination $bakPath -Force -ErrorAction Stop
         }
         Move-Item -LiteralPath $tmpPath -Destination $Path -Force -ErrorAction Stop
@@ -157,6 +197,10 @@ function Write-OpenPathRegistryPolFile {
     catch {
         Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
         throw
+    }
+    finally {
+        # On success this protects the new file, on failure the original one, as before the write.
+        Restore-OpenPathPolicyFileProtection -Path $Path -Attributes $protection
     }
 }
 
@@ -261,14 +305,20 @@ function Step-OpenPathLocalGpoMachineVersion {
         if ($cseIndex -ge 0) { $cseIndex++ }
     }
 
-    # Machine half = low 16 bits, user half = high 16 bits.
+    # Machine half = low 16 bits, user half = high 16 bits; the value is an unsigned 32-bit number.
+    # [int64] keeps a user half >= 0x8000 intact (0xFFFF0000 as a literal would be a negative Int32).
     $current = [int64]0
     if ($versionIndex -ge 0) {
         $m = [regex]::Match([string]$lines[$versionIndex], '=\s*(\d+)')
-        if ($m.Success) { $current = [int64]$m.Groups[1].Value }
+        if ($m.Success) {
+            $parsed = [int64]0
+            if ([int64]::TryParse($m.Groups[1].Value, [ref]$parsed)) { $current = $parsed -band [int64]4294967295 }
+        }
     }
-    $machine = (($current -band 0xFFFF) + 1) -band 0xFFFF
-    $newVersion = [int](($current -band 0xFFFF0000) -bor $machine)
+    $machine = ($current -band [int64]65535) + 1
+    # Wrap to 1, not 0: version 0 means "no machine policy" to the Group Policy engine.
+    if ($machine -gt 65535) { $machine = [int64]1 }
+    $newVersion = [int64](($current -band [int64]4294901760) -bor $machine)
     $versionLine = "Version=$newVersion"
     if ($versionIndex -ge 0) {
         $lines[$versionIndex] = $versionLine
@@ -303,6 +353,12 @@ function Step-OpenPathLocalGpoMachineVersion {
     }
 
     $output = ($lines.ToArray() -join $newline) + $newline
-    [System.IO.File]::WriteAllText($GptIniPath, $output, $latin1)
+    $protection = Clear-OpenPathPolicyFileProtection -Path $GptIniPath
+    try {
+        [System.IO.File]::WriteAllText($GptIniPath, $output, $latin1)
+    }
+    finally {
+        Restore-OpenPathPolicyFileProtection -Path $GptIniPath -Attributes $protection
+    }
     return $newVersion
 }

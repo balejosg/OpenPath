@@ -856,7 +856,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
                 $policyRefresh = Invoke-OpenPathPolicyRefresh -Force -TimeoutSeconds 120
                 Write-InstallerVerbose "  Group Policy refresh: ExitCode=$($policyRefresh.ExitCode) DurationMs=$($policyRefresh.DurationMs)"
                 if ($policyRefresh.ExitCode -ne 0) {
-                    Write-InstallerWarning "  WARNING: Group Policy refresh did not complete cleanly (ExitCode=$($policyRefresh.ExitCode)); readiness will decide"
+                    Write-InstallerWarning "  WARNING: Group Policy refresh did not complete cleanly (ExitCode=$($policyRefresh.ExitCode)); some policies may require a restart; readiness will decide"
                 }
             }
             else {

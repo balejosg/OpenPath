@@ -104,16 +104,37 @@ function Remove-OpenPathPolicyStoreLedger {
 }
 
 function Start-OpenPathGpUpdateProcess {
-    # Isolated process launch so tests can assert the argument string.
-    param([string]$Arguments, [int]$TimeoutSeconds = 120)
+    # Isolated process launch so tests can assert the argument string. stdin is redirected and
+    # answered with N, so a "restart now?" prompt (policies that need a reboot) can never block.
+    param([string]$Arguments, [int]$TimeoutSeconds = 120, [string]$FilePath = 'gpupdate.exe')
 
-    $process = Start-Process -FilePath 'gpupdate.exe' -ArgumentList $Arguments -PassThru -WindowStyle Hidden -ErrorAction Stop
-    $waitMs = ([Math]::Max($TimeoutSeconds, 0) + 30) * 1000
-    if (-not $process.WaitForExit($waitMs)) {
-        try { $process.Kill() } catch { $null = $_ }
-        return -1
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.Arguments = $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    # Output stays hidden as with the former hidden window; both pipes are drained so they cannot fill up.
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        $null = $process.StandardOutput.ReadToEndAsync()
+        $null = $process.StandardError.ReadToEndAsync()
+        try {
+            $process.StandardInput.WriteLine('N')
+            $process.StandardInput.WriteLine('N')
+            $process.StandardInput.Close()
+        }
+        catch { $null = $_ }
+        $waitMs = ([Math]::Max($TimeoutSeconds, 0) + 30) * 1000
+        if (-not $process.WaitForExit($waitMs)) {
+            try { $process.Kill() } catch { $null = $_ }
+            return -1
+        }
+        return [int]$process.ExitCode
     }
-    return [int]$process.ExitCode
+    finally { $process.Dispose() }
 }
 
 # ---- internal helpers -------------------------------------------------------
@@ -1004,6 +1025,9 @@ function Invoke-OpenPathPolicyRefresh {
         $exitCode = -1
     }
     $stopwatch.Stop()
+    if ($exitCode -ne 0) {
+        Write-OpenPathLog "Policy store: gpupdate exited with $exitCode; some policy changes may require a restart (a restart prompt is answered N)" -Level WARN
+    }
     return [pscustomobject]@{ ExitCode = $exitCode; DurationMs = [int]$stopwatch.ElapsedMilliseconds }
 }
 

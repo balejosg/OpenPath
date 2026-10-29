@@ -2785,6 +2785,7 @@ exit `$installerExitCode
 
             @($script:readinessCalls) | Should -Be @('refresh', 'ready')
             @($script:readinessWarnings | Where-Object { $_ -match 'ExitCode' }).Count | Should -BeGreaterThan 0
+            @($script:readinessWarnings | Where-Object { $_ -match 'restart' }).Count | Should -BeGreaterThan 0
         }
 
         It "Does not refresh or test readiness outside registered classroom mode" {

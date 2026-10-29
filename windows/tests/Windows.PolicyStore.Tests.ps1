@@ -138,6 +138,68 @@ Describe 'PolicyStore.RegistryPol' {
         [System.IO.File]::ReadAllText($gpt) | Should -Match 'Version=65541\r\n'
     }
 
+    It 'Gpt version bump keeps a user half at or above 0x8000 and writes the unsigned value' {
+        $gpt = Join-Path $script:Case 'gpt.ini'
+        [System.IO.File]::WriteAllText($gpt, "[General]`r`nVersion=2147483649`r`n")
+        Step-OpenPathLocalGpoMachineVersion -GptIniPath $gpt | Should -Be 2147483650
+        [System.IO.File]::ReadAllText($gpt) | Should -Match 'Version=2147483650\r\n'
+        [System.IO.File]::WriteAllText($gpt, "[General]`r`nVersion=4294901765`r`n")
+        Step-OpenPathLocalGpoMachineVersion -GptIniPath $gpt | Should -Be 4294901766
+        [System.IO.File]::ReadAllText($gpt) | Should -Match 'Version=4294901766\r\n'
+    }
+
+    It 'Gpt machine half wraps from 65535 to 1, never 0' {
+        $gpt = Join-Path $script:Case 'gpt.ini'
+        [System.IO.File]::WriteAllText($gpt, "[General]`r`nVersion=131071`r`n")
+        Step-OpenPathLocalGpoMachineVersion -GptIniPath $gpt | Should -Be 65537
+        [System.IO.File]::ReadAllText($gpt) | Should -Match 'Version=65537\r\n'
+    }
+
+    It 'Gpt bump clears a read-only attribute for the write and restores it' {
+        $gpt = Join-Path $script:Case 'gpt.ini'
+        [System.IO.File]::WriteAllText($gpt, "[General]`r`nVersion=3`r`n")
+        [System.IO.File]::SetAttributes($gpt, [System.IO.FileAttributes]::ReadOnly)
+        try {
+            Step-OpenPathLocalGpoMachineVersion -GptIniPath $gpt | Should -Be 4
+            [System.IO.File]::ReadAllText($gpt) | Should -Match 'Version=4'
+            ([System.IO.File]::GetAttributes($gpt) -band [System.IO.FileAttributes]::ReadOnly) | Should -Be ([System.IO.FileAttributes]::ReadOnly)
+        }
+        finally { [System.IO.File]::SetAttributes($gpt, [System.IO.FileAttributes]::Normal) }
+    }
+
+    It 'Registry.pol replace keeps the protected attributes of the original file' {
+        $path = Join-Path $script:Case 'Registry.pol'
+        $one = ConvertTo-OpenPathRegistryPolData -Type DWord -Value 1
+        $two = ConvertTo-OpenPathRegistryPolData -Type DWord -Value 2
+        Write-OpenPathRegistryPolFile -Path $path -Entries @([pscustomobject]@{ Key = 'A'; ValueName = 'B'; Type = $one.Type; Data = $one.Data })
+        [System.IO.File]::SetAttributes($path, [System.IO.FileAttributes]::ReadOnly)
+        try {
+            Write-OpenPathRegistryPolFile -Path $path -Entries @([pscustomobject]@{ Key = 'A'; ValueName = 'B'; Type = $two.Type; Data = $two.Data })
+            $read = @(Read-OpenPathRegistryPolFile -Path $path)
+            ConvertFrom-OpenPathRegistryPolData -Type $read[0].Type -Data $read[0].Data | Should -Be 2
+            ([System.IO.File]::GetAttributes($path) -band [System.IO.FileAttributes]::ReadOnly) | Should -Be ([System.IO.FileAttributes]::ReadOnly)
+        }
+        finally {
+            foreach ($f in @($path, "$path.openpath-bak")) {
+                if ([System.IO.File]::Exists($f)) { [System.IO.File]::SetAttributes($f, [System.IO.FileAttributes]::Normal) }
+            }
+        }
+    }
+
+    It 'Protected attribute helpers clear Hidden, System and ReadOnly and restore them' {
+        Mock Test-Path { $true }
+        $script:attrSet = @()
+        $attrs = [System.IO.FileAttributes]'Hidden, System, ReadOnly, Archive'
+        Mock Get-OpenPathPolicyFileAttributes { $attrs }
+        Mock Set-OpenPathPolicyFileAttributes { $script:attrSet += [System.IO.FileAttributes]$Attributes }
+        $cleared = Clear-OpenPathPolicyFileProtection -Path 'x'
+        $cleared | Should -Be ([System.IO.FileAttributes]'Hidden, System, ReadOnly')
+        $script:attrSet[0] | Should -Be ([System.IO.FileAttributes]::Archive)
+        Mock Get-OpenPathPolicyFileAttributes { [System.IO.FileAttributes]::Archive }
+        Restore-OpenPathPolicyFileProtection -Path 'x' -Attributes $cleared
+        $script:attrSet[1] | Should -Be ([System.IO.FileAttributes]'Hidden, System, ReadOnly, Archive')
+    }
+
     It 'Gpt created when missing' {
         $gpt = Join-Path (Join-Path $script:Case 'gp') 'gpt.ini'
         $result = Step-OpenPathLocalGpoMachineVersion -GptIniPath $gpt
@@ -1096,6 +1158,21 @@ Describe 'PolicyStore module' {
         Should -Invoke Start-OpenPathGpUpdateProcess -ModuleName PolicyStore -Times 1 -Exactly -ParameterFilter { $Arguments -eq '/target:computer /force /wait:60' }
         Invoke-OpenPathPolicyRefresh | Out-Null
         Should -Invoke Start-OpenPathGpUpdateProcess -ModuleName PolicyStore -Times 1 -Exactly -ParameterFilter { $Arguments -eq '/target:computer /wait:120' }
+    }
+
+    It 'Refresh answers N on stdin so a restart prompt cannot hang the process' {
+        $pwshPath = (Get-Process -Id $PID).Path
+        $exit = & (Get-Module PolicyStore) {
+            param($exe)
+            Start-OpenPathGpUpdateProcess -FilePath $exe -Arguments '-NoProfile -NonInteractive -Command "$l = [Console]::In.ReadLine(); exit ([int][char]$l[0])"' -TimeoutSeconds 30
+        } $pwshPath
+        $exit | Should -Be ([int][char]'N')
+    }
+
+    It 'Refresh warns that a restart may be required when gpupdate does not exit cleanly' {
+        Mock Start-OpenPathGpUpdateProcess { 1 } -ModuleName PolicyStore
+        (Invoke-OpenPathPolicyRefresh -Force).ExitCode | Should -Be 1
+        Should -Invoke Write-OpenPathLog -ModuleName PolicyStore -ParameterFilter { $Level -eq 'WARN' -and $Message -match 'restart' }
     }
 
     It 'Refresh never throws when gpupdate cannot start' {
