@@ -204,6 +204,7 @@ Describe 'PolicyStore.Owner' {
         Mock Get-OpenPathRsopRegistryPolicySetting { @() }
         Mock Get-OpenPathRsopGpo { @() }
         Mock Get-ChildItem { @() } -ParameterFilter { $Path -like '*PolicyManager*' }
+        Mock Get-OpenPathPolicyMdmAreaValueNames { @() }
         Mock Test-Path { $false } -ParameterFilter { "$LiteralPath$Path" -like "HKLM:*" }
         Mock Get-ItemProperty { $null }
     }
@@ -238,10 +239,58 @@ Describe 'PolicyStore.Owner' {
         $r.Owner | Should -Be 'LocalGpo'
     }
 
-    It 'MDM area Firefox~Policy~firefox~Extensions -> Mdm' {
+    It 'MDM area Firefox~Policy~firefox~Extensions with the value -> Mdm' {
         Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Firefox~Policy~firefox~Extensions'; Name = 'HKEY_LOCAL_MACHINE\x\Firefox~Policy~firefox~Extensions' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
+        Mock Get-OpenPathPolicyMdmAreaValueNames { @('ExtensionSettings') } -ParameterFilter { $AreaName -eq 'Firefox~Policy~firefox~Extensions' }
         $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
         $r.Owner | Should -Be 'Mdm'
+        @($r.Evidence) | Should -Contain 'mdm:Firefox~Policy~firefox~Extensions'
+    }
+
+    It 'MDM value names match exactly or as a ~ValueName suffix, case-insensitively' {
+        Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Edge~Policy~microsoft_edge' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
+        Mock Get-OpenPathPolicyMdmAreaValueNames { @('microsoft_edge~Policy~microsoft_edge~DnsOverHttpsMode', 'urlblocklist') }
+        (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Microsoft\Edge' -ValueName 'DnsOverHttpsMode' -LocalPolPath $script:Missing).Owner | Should -Be 'Mdm'
+        (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Microsoft\Edge\URLBlocklist' -ValueName '' -LocalPolPath $script:Missing).Owner | Should -Be 'Mdm'
+    }
+
+    It 'An MDM-managed browser area without the requested value does not block it' {
+        Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Edge~Policy~microsoft_edge' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
+        Mock Get-OpenPathPolicyMdmAreaValueNames { @('HomepageLocation', 'microsoft_edge~Policy~microsoft_edge~DnsOverHttpsModeExtra', 'URLBlocklist_ProviderSet') }
+        (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Microsoft\Edge' -ValueName 'DnsOverHttpsMode' -LocalPolPath $script:Missing).Owner | Should -Be 'None'
+        (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Microsoft\Edge\URLBlocklist' -ValueName '' -LocalPolPath $script:Missing).Owner | Should -Be 'None'
+        (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Microsoft\Edge\ExtensionInstallForcelist' -ValueName '' -LocalPolPath $script:Missing).Owner | Should -Be 'None'
+    }
+
+    It 'MDM area value names are read from the PolicyManager area key' {
+        Mock Test-Path { $true } -ParameterFilter { "$LiteralPath$Path" -like '*PolicyManager*' }
+        Mock Get-ItemProperty { [pscustomobject]@{ URLBlocklist = 'x'; PSPath = 'p'; PSChildName = 'c' } } -ParameterFilter { "$LiteralPath$Path" -like '*PolicyManager\current\device\Chrome~Policy~googlechrome' }
+        $names = @(& (Get-Command Get-OpenPathPolicyMdmAreaValueNames -CommandType Function).ScriptBlock -AreaName 'Chrome~Policy~googlechrome')
+        $names | Should -Be @('URLBlocklist')
+    }
+
+    It 'RSoP is queried with a WQL filter on the registry key, with backslashes and quotes escaped' {
+        Get-OpenPathRsopRegistryPolicyFilter -Key "Software\Policies\Vendor's\Chrome" |
+            Should -BeExactly "registryKey = 'Software\\Policies\\Vendor\'s\\Chrome' OR registryKey = '\\Software\\Policies\\Vendor\'s\\Chrome'"
+    }
+
+    It 'The RSoP CIM query passes the filter' {
+        $script:cimFilter = $null
+        $stubbed = -not (Get-Command -Name Get-CimInstance -ErrorAction SilentlyContinue)
+        # Get-CimInstance does not exist on non-Windows PowerShell; give Pester something to mock.
+        if ($stubbed) { function global:Get-CimInstance { param($Namespace, $ClassName, $Filter) } }
+        try {
+            Mock Get-CimInstance { $script:cimFilter = $Filter; @() }
+            & (Get-Command Get-OpenPathRsopRegistryPolicySetting -CommandType Function).ScriptBlock -Key 'Software\Policies\Google\Chrome'
+        }
+        finally { if ($stubbed) { Remove-Item Function:\Get-CimInstance -ErrorAction SilentlyContinue } }
+        $script:cimFilter | Should -BeExactly "registryKey = 'Software\\Policies\\Google\\Chrome' OR registryKey = '\\Software\\Policies\\Google\\Chrome'"
+    }
+
+    It 'Owner lookup asks RSoP only for the requested key' {
+        Mock Get-OpenPathRsopRegistryPolicySetting { @(New-Rsop $script:FfKey 'ExtensionSettings' 'LocalGPO' 1) }
+        Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing | Out-Null
+        Should -Invoke Get-OpenPathRsopRegistryPolicySetting -Times 1 -Exactly -ParameterFilter { $Key -eq $script:FfKey }
     }
 
     It 'Registry-only value -> Unknown' {
@@ -334,6 +383,7 @@ Describe 'PolicyStore.Owner' {
     }
 
     It 'Chrome and Edge MDM markers resolve to Mdm' {
+        Mock Get-OpenPathPolicyMdmAreaValueNames { @('X') }
         Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Chrome~Policy~googlechrome' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
         (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Google\Chrome' -ValueName 'X' -LocalPolPath $script:Missing).Owner | Should -Be 'Mdm'
         Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Edge~Policy~microsoft_edge' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
@@ -341,6 +391,7 @@ Describe 'PolicyStore.Owner' {
     }
 
     It 'A Firefox MDM area does not make a Chrome key Mdm' {
+        Mock Get-OpenPathPolicyMdmAreaValueNames { @('X') }
         Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Firefox~Policy~firefox~Extensions' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
         (Get-OpenPathPolicyValueOwner -Key 'Software\Policies\Google\Chrome' -ValueName 'X' -LocalPolPath $script:Missing).Owner | Should -Be 'None'
     }
@@ -869,6 +920,41 @@ Describe 'PolicyStore module' {
         $global:PSTReg["$regKey|Other"].Value | Should -Be 'keep-me'
         $global:PSTReg["$regKey|1"].Value | Should -Be 'z'
         $global:PSTReg.ContainsKey("$regKey|2") | Should -BeFalse
+    }
+
+    It 'List sync with a precomputed owner skips the owner lookup and still honors it' {
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x') -PrecomputedOwner ([pscustomobject]@{ Owner = 'Unknown'; GpoName = ''; Evidence = @() })
+        $r.Applied | Should -BeTrue
+        $r.Owner | Should -Be 'Unknown'
+        Should -Invoke Get-OpenPathPolicyValueOwner -ModuleName PolicyStore -Times 0 -Exactly
+        $blocked = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('y') -PrecomputedOwner ([pscustomobject]@{ Owner = 'Mdm'; GpoName = ''; Evidence = @() })
+        $blocked.FailureCode | Should -Be 'policy-externally-managed'
+        @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol | ForEach-Object { ConvertFrom-OpenPathRegistryPolData -Type $_.Type -Data $_.Data }) | Should -Be @('x')
+    }
+
+    It 'Pruning replaces registry-only legacy numbered values once Registry.pol holds the list' {
+        $regKey = "hklm:\$($script:ChromeListKey.ToLowerInvariant())"
+        $global:PSTKeys[$regKey] = $true
+        foreach ($i in 1..3) { $global:PSTReg["$regKey|$i"] = [pscustomobject]@{ Type = 'String'; Value = "legacy-$i" } }
+        $global:PSTReg["$regKey|Note"] = [pscustomobject]@{ Type = 'String'; Value = 'keep' }
+
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x') -PruneUnownedRegistryValues
+        $r.Applied | Should -BeTrue
+        $global:PSTReg["$regKey|1"].Value | Should -Be 'x'
+        $global:PSTReg.ContainsKey("$regKey|2") | Should -BeFalse
+        $global:PSTReg.ContainsKey("$regKey|3") | Should -BeFalse
+        $global:PSTReg["$regKey|Note"].Value | Should -Be 'keep'
+    }
+
+    It 'Pruning leaves the registry list untouched when Registry.pol could not be written' {
+        $regKey = "hklm:\$($script:ChromeListKey.ToLowerInvariant())"
+        $global:PSTKeys[$regKey] = $true
+        foreach ($i in 1..3) { $global:PSTReg["$regKey|$i"] = [pscustomobject]@{ Type = 'String'; Value = "legacy-$i" } }
+        Mock Write-OpenPathRegistryPolFile { throw 'disk full' } -ModuleName PolicyStore
+
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x') -PruneUnownedRegistryValues
+        $r.FailureCode | Should -Be 'local-gpo-write-failed'
+        foreach ($i in 1..3) { $global:PSTReg["$regKey|$i"].Value | Should -Be "legacy-$i" }
     }
 
     It 'Unchanged second list sync does not write or delete registry values' {

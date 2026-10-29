@@ -256,7 +256,7 @@ function Clear-OpenPathLegacyChromiumListValues {
     # pre-store versions rewrote list keys directly in the registry on every run, so their numbered
     # values are neither in the ledger nor in Registry.pol and the diff-based mirror would never
     # delete them. When the list key is registry-only (owner Unknown) remove those numbered values
-    # once; after the first sync the values live in Registry.pol and this never repeats.
+    # before the store removal (uninstall); syncing prunes them through the store instead.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -292,6 +292,48 @@ function Clear-OpenPathLegacyChromiumListValues {
     catch {
         Write-OpenPathLog "Could not clear legacy Chromium policy values for ${ListKey}: $_" -Level WARN
     }
+}
+
+function Get-OpenPathChromiumListOwner {
+    # resolves the owner of a chromium list key once; the result is handed to the list sync so it is not
+    # looked up again. returns $null when the lookup fails (the sync then resolves it itself)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ListKey
+    )
+
+    try {
+        return (Get-OpenPathPolicyValueOwner -Key $ListKey -ValueName '')
+    }
+    catch {
+        Write-OpenPathLog "Could not resolve the owner of ${ListKey}: $_" -Level WARN
+        return $null
+    }
+}
+
+function Sync-OpenPathChromiumPolicyList {
+    # syncs one chromium list key through the store. a registry-only key (owner Unknown) was written
+    # directly by a pre-store version: the store prunes those numbered values only after Registry.pol
+    # holds the new list, so a failed sync never leaves the list empty (fail-closed for the blocklist)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ListKey,
+
+        [AllowEmptyCollection()]
+        [string[]]$Values = @()
+    )
+
+    $owner = Get-OpenPathChromiumListOwner -ListKey $ListKey
+    $syncParams = @{ Key = $ListKey; Values = @($Values) }
+    if ($owner) {
+        $syncParams.PrecomputedOwner = $owner
+        if ([string]$owner.Owner -eq 'Unknown') {
+            $syncParams.PruneUnownedRegistryValues = $true
+        }
+    }
+    return (Sync-OpenPathManagedPolicyList @syncParams)
 }
 
 function Test-OpenPathChromiumStoreResult {
@@ -392,8 +434,7 @@ function Set-ChromePolicy {
         $browserApplied = $true
         try {
             $blocklistKey = "$($browser.StoreKey)\URLBlocklist"
-            Clear-OpenPathLegacyChromiumListValues -ListKey $blocklistKey
-            $result = Sync-OpenPathManagedPolicyList -Key $blocklistKey -Values @($blocklistValues.ToArray())
+            $result = Sync-OpenPathChromiumPolicyList -ListKey $blocklistKey -Values @($blocklistValues.ToArray())
             if (-not (Test-OpenPathChromiumStoreResult -Result $result -Key $blocklistKey)) {
                 $browserApplied = $false
             }
@@ -411,9 +452,8 @@ function Set-ChromePolicy {
 
             if ($managedExtensionPolicy) {
                 $forcelistKey = "$($browser.StoreKey)\ExtensionInstallForcelist"
-                Clear-OpenPathLegacyChromiumListValues -ListKey $forcelistKey
                 $forcelistValue = "$($managedExtensionPolicy.ExtensionId);$($managedExtensionPolicy.UpdateUrl)"
-                $result = Sync-OpenPathManagedPolicyList -Key $forcelistKey -Values @($forcelistValue)
+                $result = Sync-OpenPathChromiumPolicyList -ListKey $forcelistKey -Values @($forcelistValue)
                 if (-not (Test-OpenPathChromiumStoreResult -Result $result -Key $forcelistKey)) {
                     $browserApplied = $false
                 }

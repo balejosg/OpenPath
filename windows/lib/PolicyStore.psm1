@@ -160,11 +160,13 @@ function New-OpenPathPolicyStoreResult {
 
 function Get-OpenPathPolicyStoreGate {
     # Resolves the owner of a value. Blocked=$true means no write may happen.
-    param([string]$Key, [AllowEmptyString()][string]$ValueName, [string]$PolPath)
+    # A caller that already resolved the owner (Set-ChromePolicy for its legacy check) passes it in.
+    param([string]$Key, [AllowEmptyString()][string]$ValueName, [string]$PolPath, [AllowNull()][object]$PrecomputedOwner = $null)
 
     $gate = [pscustomobject]@{ Blocked = $false; FailureCode = ''; Owner = ''; GpoName = '' }
     try {
-        $owner = Get-OpenPathPolicyValueOwner -Key $Key -ValueName $ValueName -LocalPolPath $PolPath
+        if ($PrecomputedOwner) { $owner = $PrecomputedOwner }
+        else { $owner = Get-OpenPathPolicyValueOwner -Key $Key -ValueName $ValueName -LocalPolPath $PolPath }
     }
     catch {
         if ([string]$_.Exception.Message -like 'local-gpo-unreadable*') {
@@ -731,7 +733,14 @@ function Sync-OpenPathManagedPolicyList {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Values
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Values,
+
+        # Owner already resolved by the caller for this key (skips a second lookup).
+        [AllowNull()][object]$PrecomputedOwner = $null,
+
+        # The key was registry-only (written directly by a pre-store version): once Registry.pol holds
+        # the list, the registry mirror also deletes numbered values that are not in it.
+        [switch]$PruneUnownedRegistryValues
     )
 
     $result = New-OpenPathPolicyStoreResult
@@ -739,7 +748,7 @@ function Sync-OpenPathManagedPolicyList {
     if (-not $lock) { $result.FailureCode = 'local-gpo-busy'; return $result }
     try {
         $paths = Get-OpenPathLocalGpoPaths
-        $gate = Get-OpenPathPolicyStoreGate -Key $Key -ValueName '' -PolPath $paths.RegistryPol
+        $gate = Get-OpenPathPolicyStoreGate -Key $Key -ValueName '' -PolPath $paths.RegistryPol -PrecomputedOwner $PrecomputedOwner
         $result.Owner = $gate.Owner
         $result.GpoName = $gate.GpoName
         if ($gate.Blocked) { $result.FailureCode = $gate.FailureCode; return $result }
@@ -865,12 +874,18 @@ function Sync-OpenPathManagedPolicyList {
             $current = @{}
             foreach ($p in @(Get-OpenPathPolicyRegistryProperties -Key $Key | Where-Object { $_.Name -match '^\d+$' })) { $current[[string]$p.Name] = $p.Value }
 
+            $pruned = 0
             foreach ($name in @($current.Keys)) {
                 if ($desired.ContainsKey($name)) { continue }
                 $currentText = [string](@($current[$name]) | Select-Object -First 1)
-                if (Test-OpenPathPolicyValueInSet -Set $union -Text $currentText) {
+                $isOwned = Test-OpenPathPolicyValueInSet -Set $union -Text $currentText
+                if ($isOwned -or $PruneUnownedRegistryValues) {
                     Remove-ItemProperty -Path "HKLM:\$($Key.Trim('\'))" -Name $name -Force -ErrorAction Stop
+                    if (-not $isOwned) { $pruned++ }
                 }
+            }
+            if ($pruned -gt 0) {
+                Write-OpenPathLog "Policy store: removed $pruned legacy registry-only value(s) from $Key after syncing it through the local GPO" -Level INFO
             }
             foreach ($name in @($desired.Keys)) {
                 $want = $desired[$name]

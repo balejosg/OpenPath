@@ -35,8 +35,8 @@ Describe "Browser Module - Chromium Policy" {
 
                 Mock Get-OpenPathChromiumManagedPolicy { $script:managedPolicy } -ModuleName Browser
                 Mock Sync-OpenPathManagedPolicyList {
-                    param([string]$Key, [string[]]$Values)
-                    $script:listCalls += [PSCustomObject]@{ Key = $Key; Values = @($Values) }
+                    param([string]$Key, [string[]]$Values, [object]$PrecomputedOwner, [switch]$PruneUnownedRegistryValues)
+                    $script:listCalls += [PSCustomObject]@{ Key = $Key; Values = @($Values); PrecomputedOwner = $PrecomputedOwner; Prune = [bool]$PruneUnownedRegistryValues }
                     if ($script:listResultOverride) { return (& $script:listResultOverride $Key) }
                     return [PSCustomObject]@{ Applied = $true; Changed = $true; Owner = 'None'; GpoName = ''; FailureCode = '' }
                 } -ModuleName Browser
@@ -199,7 +199,7 @@ Describe "Browser Module - Chromium Policy" {
                 @($script:logCalls | Where-Object { $_.Level -eq 'WARN' -and $_.Message -like '*local-gpo-unreadable*' }).Count | Should -BeGreaterThan 0
             }
 
-            It "Clears legacy registry-only numbered list values once before the first sync" {
+            It "Prunes legacy registry-only numbered list values through the sync instead of clearing them first" {
                 $script:legacyOwner = 'Unknown'
                 $script:managedPolicy = [PSCustomObject]@{
                     ExtensionId = 'abcdefghijklmnopabcdefghijklmnop'
@@ -209,30 +209,62 @@ Describe "Browser Module - Chromium Policy" {
 
                 Set-ChromePolicy -BlockedPaths @() | Should -BeTrue
 
-                # 4 list keys x 2 numbered values; non-numbered 'Note' is left alone
-                @($script:removedLegacyValues).Count | Should -Be 8
-                @($script:removedLegacyValues | Where-Object { $_.Name -notmatch '^\d+$' }).Count | Should -Be 0
-                @($script:logCalls | Where-Object { $_.Level -eq 'INFO' -and $_.Message -like '*legacy*' }).Count | Should -BeGreaterThan 0
+                @($script:listCalls).Count | Should -Be 4
+                @($script:listCalls | Where-Object { -not $_.Prune }).Count | Should -Be 0
+                @($script:removedLegacyValues).Count | Should -Be 0
             }
 
-            It "Does not clear list values when the key is already owned by a GPO or absent" {
+            It "A failed sync of a legacy registry-only list leaves its values in place" {
+                $script:legacyOwner = 'Unknown'
+                $script:listResultOverride = {
+                    param($Key)
+                    return [PSCustomObject]@{ Applied = $false; Changed = $false; Owner = ''; GpoName = ''; FailureCode = 'local-gpo-write-failed' }
+                }
+
+                Set-ChromePolicy -BlockedPaths @() | Should -BeFalse
+
+                @($script:removedLegacyValues).Count | Should -Be 0
+            }
+
+            It "Does not prune list values when the key is already owned by a GPO or absent" {
                 foreach ($owner in @('LocalGpo', 'None', 'DomainGpo', 'Mdm')) {
-                    $script:removedLegacyValues = @()
+                    $script:listCalls = @()
                     $script:legacyOwner = $owner
                     Set-ChromePolicy -BlockedPaths @() | Out-Null
-                    @($script:removedLegacyValues).Count | Should -Be 0
+                    @($script:listCalls | Where-Object { $_.Prune }).Count | Should -Be 0
                 }
             }
 
-            It "Skips legacy cleanup for the forcelist when there is no managed extension" {
+            It "Skips legacy pruning for the forcelist when there is no managed extension" {
                 $script:legacyOwner = 'Unknown'
                 $script:managedPolicy = $null
 
                 Set-ChromePolicy -BlockedPaths @() | Should -BeTrue
 
-                # only the two URLBlocklist keys are cleaned
-                @($script:removedLegacyValues).Count | Should -Be 4
-                @($script:removedLegacyValues | Where-Object { $_.Path -like '*ExtensionInstallForcelist*' }).Count | Should -Be 0
+                @($script:listCalls).Count | Should -Be 2
+                @($script:listCalls | Where-Object { $_.Prune -and $_.Key -like '*URLBlocklist' }).Count | Should -Be 2
+            }
+
+            It "Looks up each list owner once and hands it to the sync" {
+                $script:managedPolicy = [PSCustomObject]@{
+                    ExtensionId = 'abcdefghijklmnopabcdefghijklmnop'
+                    Version = '2.0.0'
+                    UpdateUrl = 'https://openpath.example.invalid/api/extensions/chromium/updates.xml'
+                }
+
+                Set-ChromePolicy -BlockedPaths @() | Should -BeTrue
+
+                Should -Invoke Get-OpenPathPolicyValueOwner -ModuleName Browser -Times 4 -Exactly
+                @($script:listCalls | Where-Object { $null -eq $_.PrecomputedOwner }).Count | Should -Be 0
+            }
+
+            It "Lets the sync resolve the owner itself when the lookup fails" {
+                Mock Get-OpenPathPolicyValueOwner { throw 'rsop down' } -ModuleName Browser
+
+                Set-ChromePolicy -BlockedPaths @() | Should -BeTrue
+
+                @($script:listCalls).Count | Should -Be 2
+                @($script:listCalls | Where-Object { $null -ne $_.PrecomputedOwner -or $_.Prune }).Count | Should -Be 0
             }
         }
     }

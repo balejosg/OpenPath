@@ -1,8 +1,20 @@
 # Owner detection for a Windows policy value: RSoP -> local Registry.pol -> MDM -> registry.
 
+function Get-OpenPathRsopRegistryPolicyFilter {
+    # WQL filter for one registry key. WQL string literals escape backslash and single quote with a
+    # backslash. RSoP stores keys without a leading backslash; the variant with one is matched as well.
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    $escaped = $Key.Trim('\').Replace('\', '\\').Replace("'", "\'")
+    return "registryKey = '$escaped' OR registryKey = '\\$escaped'"
+}
+
 function Get-OpenPathRsopRegistryPolicySetting {
-    # Isolated CIM query so tests can mock it. Throws when RSoP is unavailable.
-    return @(Get-CimInstance -Namespace 'root\rsop\computer' -ClassName 'RSOP_RegistryPolicySetting' -ErrorAction Stop)
+    # Isolated CIM query so tests can mock it; asks only for the records of one key. Throws when RSoP is unavailable.
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    $filter = Get-OpenPathRsopRegistryPolicyFilter -Key $Key
+    return @(Get-CimInstance -Namespace 'root\rsop\computer' -ClassName 'RSOP_RegistryPolicySetting' -Filter $filter -ErrorAction Stop)
 }
 
 function Get-OpenPathRsopGpo {
@@ -25,6 +37,25 @@ function Get-OpenPathPolicyMdmAreaMarker {
     return ''
 }
 
+function Get-OpenPathPolicyMdmAreaValueNames {
+    # Value names of one PolicyManager\current\device area (isolated so tests can mock it).
+    param([Parameter(Mandatory = $true)][string]$AreaName)
+
+    $path = "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\$AreaName"
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
+    $props = Get-ItemProperty -LiteralPath $path -ErrorAction SilentlyContinue
+    if (-not $props) { return @() }
+    return @($props.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' } | ForEach-Object { [string]$_.Name })
+}
+
+function Test-OpenPathPolicyMdmValueNameMatch {
+    # An MDM area value manages the policy when its name is the policy value name or ends with ~<name>.
+    param([string]$MdmValueName, [string]$ValueName)
+
+    if ([string]::Equals($MdmValueName, $ValueName, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    return ([string]$MdmValueName).EndsWith("~$ValueName", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Get-OpenPathPolicyValueOwner {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -41,13 +72,14 @@ function Get-OpenPathPolicyValueOwner {
     # 1. RSoP
     $rsop = @()
     try {
-        $rsop = @(Get-OpenPathRsopRegistryPolicySetting)
+        $rsop = @(Get-OpenPathRsopRegistryPolicySetting -Key $normalizedKey)
     }
     catch {
         $evidence.Add('rsop-unavailable')
     }
     $rsopHits = @($rsop | Where-Object {
         $_ -and
+        # Second check after the WQL filter: exact key, case-insensitive.
         [string]::Equals(([string]$_.registryKey).Trim('\'), $normalizedKey, [System.StringComparison]::OrdinalIgnoreCase) -and
         (Test-OpenPathPolicyNameMatch -RecordValueName $_.valueName -ValueName $ValueName)
     })
@@ -92,14 +124,19 @@ function Get-OpenPathPolicyValueOwner {
         return (& $result 'LocalGpo' '')
     }
 
-    # 3. MDM PolicyManager area
+    # 3. MDM PolicyManager area: only when a browser area holds this very value (a whole-key lookup
+    #    matches the key's last segment, e.g. URLBlocklist), not merely because the browser is managed.
     $marker = Get-OpenPathPolicyMdmAreaMarker -Key $normalizedKey
     if ($marker) {
+        $mdmValueName = $ValueName
+        if ([string]::IsNullOrEmpty($mdmValueName)) { $mdmValueName = ($normalizedKey -split '\\')[-1] }
         $areas = @(Get-ChildItem -Path 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device' -ErrorAction SilentlyContinue)
         foreach ($area in $areas) {
             $name = [string]$area.PSChildName
-            if (-not $name) { $name = [string]$area.Name }
-            if ($name -like "*$marker*") {
+            if (-not $name) { $name = ([string]$area.Name -split '\\')[-1] }
+            if ($name -notlike "*$marker*") { continue }
+            $managed = @(Get-OpenPathPolicyMdmAreaValueNames -AreaName $name | Where-Object { Test-OpenPathPolicyMdmValueNameMatch -MdmValueName $_ -ValueName $mdmValueName })
+            if ($managed.Count -gt 0) {
                 $evidence.Add("mdm:$name")
                 return (& $result 'Mdm' '')
             }
