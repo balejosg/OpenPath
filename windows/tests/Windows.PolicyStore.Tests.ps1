@@ -378,7 +378,7 @@ Describe 'PolicyStore module' {
     }
 
     AfterAll {
-        Remove-Variable -Name PSTPaths, PSTReg, PSTKeys, PSTLedger -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable -Name PSTPaths, PSTReg, PSTKeys, PSTLedger, PSTWrites -Scope Global -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
@@ -718,6 +718,89 @@ Describe 'PolicyStore module' {
         $r.Removed | Should -BeFalse
         (([System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)) -join ',') | Should -Be ($before -join ',')
         Test-Path -LiteralPath $global:PSTPaths.GptIni | Should -BeFalse
+    }
+
+    It 'Foreign entry equal to a caller value stays foreign through sync, resync and remove' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:ChromeListKey '1' String 'vendor-a'))
+        $regKey = "hklm:\$($script:ChromeListKey.ToLowerInvariant())"
+        $global:PSTKeys[$regKey] = $true
+        $global:PSTReg["$regKey|1"] = [pscustomobject]@{ Type = 'String'; Value = 'vendor-a' }
+
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('vendor-a', 'x') | Out-Null
+        $ledger = Get-Content -LiteralPath $global:PSTPaths.Ledger -Raw | ConvertFrom-Json
+        @($ledger.lists.$($script:ChromeListKey)) -join ',' | Should -Be 'x'
+        $r2 = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('vendor-a', 'x')
+        $r2.Changed | Should -BeFalse
+        Remove-OpenPathManagedPolicyList -Key $script:ChromeListKey | Out-Null
+
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol)
+        $read.Count | Should -Be 1
+        $read[0].ValueName | Should -Be '1'
+        ConvertFrom-OpenPathRegistryPolData -Type $read[0].Type -Data $read[0].Data | Should -Be 'vendor-a'
+        $global:PSTReg["$regKey|1"].Value | Should -Be 'vendor-a'
+        $global:PSTReg.ContainsKey("$regKey|2") | Should -BeFalse
+    }
+
+    It 'List registry mirror keeps foreign registry-only numbered values and non-numbered values' {
+        $regKey = "hklm:\$($script:ChromeListKey.ToLowerInvariant())"
+        $global:PSTKeys[$regKey] = $true
+        $global:PSTReg["$regKey|9"] = [pscustomobject]@{ Type = 'String'; Value = 'ghost-foreign' }
+        $global:PSTReg["$regKey|Other"] = [pscustomobject]@{ Type = 'String'; Value = 'keep-me' }
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x', 'y') | Out-Null
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('z') | Out-Null
+        $global:PSTReg["$regKey|9"].Value | Should -Be 'ghost-foreign'
+        $global:PSTReg["$regKey|Other"].Value | Should -Be 'keep-me'
+        $global:PSTReg["$regKey|1"].Value | Should -Be 'z'
+        $global:PSTReg.ContainsKey("$regKey|2") | Should -BeFalse
+    }
+
+    It 'Unchanged second list sync does not write or delete registry values' {
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x', 'y') | Out-Null
+        $global:PSTWrites = 0
+        Mock New-ItemProperty { $global:PSTWrites++ } -ModuleName PolicyStore
+        Mock Remove-ItemProperty { $global:PSTWrites++ } -ModuleName PolicyStore
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x', 'y')
+        $r.Applied | Should -BeTrue
+        $r.Changed | Should -BeFalse
+        $global:PSTWrites | Should -Be 0
+        Remove-Variable -Name PSTWrites -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'Ledger write failure fails closed without touching Registry.pol, gpt.ini or the registry' {
+        Mock Write-OpenPathPolicyStoreLedger { throw 'disk full' } -ModuleName PolicyStore
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x')
+        $r.Applied | Should -BeFalse
+        $r.Changed | Should -BeFalse
+        $r.FailureCode | Should -Be 'ledger-write-failed'
+        Test-Path -LiteralPath $global:PSTPaths.RegistryPol | Should -BeFalse
+        Test-Path -LiteralPath $global:PSTPaths.GptIni | Should -BeFalse
+        $global:PSTReg.Count | Should -Be 0
+    }
+
+    It 'Ledger is written atomically without leaving a tmp file' {
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x') | Out-Null
+        Test-Path -LiteralPath $global:PSTPaths.Ledger | Should -BeTrue
+        Test-Path -LiteralPath "$($global:PSTPaths.Ledger).openpath-tmp" | Should -BeFalse
+    }
+
+    It 'gpt.ini bump failure still reports Changed with a failure code' {
+        Mock Step-OpenPathLocalGpoMachineVersion { throw 'gpt locked' } -ModuleName PolicyStore
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.Changed | Should -BeTrue
+        $r.Applied | Should -BeFalse
+        $r.FailureCode | Should -Be 'gpt-ini-bump-failed'
+        $s = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x')
+        $s.Changed | Should -BeTrue
+        $s.FailureCode | Should -Be 'gpt-ini-bump-failed'
+    }
+
+    It 'Get returns MultiString as string[] even with a single element' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:FfKey 'Lines' MultiString @('{"a":1}')))
+        $r = Get-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'Lines'
+        $r.Type | Should -Be 'MultiString'
+        $r.Value.GetType().Name | Should -Be 'String[]'
+        $r.Value.Count | Should -Be 1
+        $r.Value[0] | Should -Be '{"a":1}'
     }
 
     It 'Refresh builds gpupdate arguments' {

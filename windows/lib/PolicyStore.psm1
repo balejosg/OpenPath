@@ -74,6 +74,13 @@ function Test-OpenPathPolicyEntrySequenceEqual {
     return $true
 }
 
+function Test-OpenPathPolicyValueInSet {
+    param([string[]]$Set, [AllowNull()][string]$Text)
+    if ($null -eq $Text) { return $false }
+    foreach ($item in @($Set)) { if (Test-OpenPathPolicyNameEqual $item $Text) { return $true } }
+    return $false
+}
+
 function New-OpenPathPolicyStoreResult {
     return [pscustomobject]@{ Applied = $false; Changed = $false; Owner = ''; GpoName = ''; FailureCode = '' }
 }
@@ -113,9 +120,25 @@ function Read-OpenPathPolicyStoreEntries {
 }
 
 function Save-OpenPathPolicyStoreEntries {
+    # Never throws. Written=$true once Registry.pol was replaced; FailureCode reports a write or gpt.ini bump failure.
     param([object[]]$Entries, [string]$PolPath, [string]$GptIniPath)
-    Write-OpenPathRegistryPolFile -Path $PolPath -Entries $Entries
-    Step-OpenPathLocalGpoMachineVersion -GptIniPath $GptIniPath | Out-Null
+
+    $out = [pscustomobject]@{ Written = $false; FailureCode = '' }
+    try {
+        Write-OpenPathRegistryPolFile -Path $PolPath -Entries $Entries
+        $out.Written = $true
+    }
+    catch {
+        Write-OpenPathLog "Policy store: Registry.pol write failed ($($_.Exception.Message))" -Level ERROR
+        $out.FailureCode = 'local-gpo-write-failed'
+        return $out
+    }
+    try { Step-OpenPathLocalGpoMachineVersion -GptIniPath $GptIniPath | Out-Null }
+    catch {
+        Write-OpenPathLog "Policy store: gpt.ini version bump failed ($($_.Exception.Message))" -Level ERROR
+        $out.FailureCode = 'gpt-ini-bump-failed'
+    }
+    return $out
 }
 
 function Get-OpenPathPolicyTypeName {
@@ -163,7 +186,15 @@ function Write-OpenPathPolicyStoreLedger {
     if ($directory -and -not (Test-Path -LiteralPath $directory -PathType Container)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
-    [System.IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding($false)))
+    $tmpPath = "$path.openpath-tmp"
+    try {
+        [System.IO.File]::WriteAllText($tmpPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmpPath -Destination $path -Force -ErrorAction Stop
+    }
+    catch {
+        Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+        throw
+    }
 }
 
 function Set-OpenPathPolicyRegistryValue {
@@ -218,11 +249,9 @@ function Get-OpenPathManagedPolicyValue {
         if ($entry) {
             $typeName = Get-OpenPathPolicyTypeName -Type $entry.Type
             if ($typeName) {
-                return [pscustomobject]@{
-                    Type = $typeName
-                    Value = (ConvertFrom-OpenPathRegistryPolData -Type $entry.Type -Data $entry.Data)
-                    Source = 'LocalGpo'
-                }
+                $polValue = ConvertFrom-OpenPathRegistryPolData -Type $entry.Type -Data $entry.Data
+                if ($typeName -eq 'MultiString') { $polValue = [string[]]@($polValue) }
+                return [pscustomobject]@{ Type = $typeName; Value = $polValue; Source = 'LocalGpo' }
             }
         }
     }
@@ -235,7 +264,7 @@ function Get-OpenPathManagedPolicyValue {
         $value = $prop.Value
         $typeName = 'String'
         if ($value -is [int] -or $value -is [uint32]) { $typeName = 'DWord' }
-        elseif ($value -is [array]) { $typeName = 'MultiString' }
+        elseif ($value -is [array]) { $typeName = 'MultiString'; $value = [string[]]@($value) }
         return [pscustomobject]@{ Type = $typeName; Value = $value; Source = 'Registry' }
     }
     return [pscustomobject]@{ Type = $null; Value = $null; Source = 'None' }
@@ -285,14 +314,11 @@ function Set-OpenPathManagedPolicyValue {
     if (-not $PSCmdlet.ShouldProcess("$Key|$ValueName", 'Set managed policy value')) { return $result }
 
     if ($changed) {
-        try { Save-OpenPathPolicyStoreEntries -Entries @($newEntries.ToArray()) -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni }
-        catch {
-            Write-OpenPathLog "Policy store: Registry.pol write failed for $Key|$ValueName ($($_.Exception.Message))" -Level ERROR
-            $result.FailureCode = 'local-gpo-write-failed'
-            return $result
-        }
+        $save = Save-OpenPathPolicyStoreEntries -Entries @($newEntries.ToArray()) -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni
+        if (-not $save.Written) { $result.FailureCode = $save.FailureCode; return $result }
+        $result.Changed = $true
+        if ($save.FailureCode) { $result.FailureCode = $save.FailureCode; return $result }
     }
-    $result.Changed = $changed
 
     try { Set-OpenPathPolicyRegistryValue -Key $Key -ValueName $ValueName -Type $Type -Value $Value }
     catch {
@@ -328,13 +354,10 @@ function Remove-OpenPathManagedPolicyValue {
 
     $kept = @($entries | Where-Object { -not ((Test-OpenPathPolicyKeyEqual $_.Key $Key) -and (Test-OpenPathPolicyNameEqual $_.ValueName $ValueName)) })
     if ($kept.Count -ne $entries.Count) {
-        try { Save-OpenPathPolicyStoreEntries -Entries $kept -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni }
-        catch {
-            Write-OpenPathLog "Policy store: Registry.pol write failed removing $Key|$ValueName ($($_.Exception.Message))" -Level ERROR
-            $result.FailureCode = 'local-gpo-write-failed'
-            return $result
-        }
+        $save = Save-OpenPathPolicyStoreEntries -Entries $kept -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni
+        if (-not $save.Written) { $result.FailureCode = $save.FailureCode; return $result }
         $result.Removed = $true
+        if ($save.FailureCode) { $result.FailureCode = $save.FailureCode }
     }
 
     try { if (Remove-OpenPathPolicyRegistryValue -Key $Key -ValueName $ValueName) { $result.Removed = $true } }
@@ -370,10 +393,12 @@ function Sync-OpenPathManagedPolicyList {
     }
 
     $ledger = Read-OpenPathPolicyStoreLedger
-    $owned = @()
-    if ($ledger.Lists.ContainsKey($Key)) { $owned = @($ledger.Lists[$Key]) }
-    $newValues = @($Values | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+    $oldOwned = @()
+    if ($ledger.Lists.ContainsKey($Key)) { $oldOwned = @($ledger.Lists[$Key]) }
+    $requested = @($Values | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
 
+    # Classify the key's numbered entries: ledger-owned ones are dropped, the rest are foreign and kept.
+    $foreignTexts = New-Object System.Collections.Generic.List[string]
     $merged = New-Object System.Collections.ArrayList
     $insertAt = -1
     $lastKeyIndex = -1
@@ -384,11 +409,11 @@ function Sync-OpenPathManagedPolicyList {
         if ($isNumbered) {
             $text = $null
             if ([int]$entry.Type -eq 1) { $text = [string](ConvertFrom-OpenPathRegistryPolData -Type $entry.Type -Data $entry.Data) }
-            $isOwned = ($null -ne $text) -and (@($owned | Where-Object { Test-OpenPathPolicyNameEqual $_ $text }).Count -gt 0)
-            if ($isOwned) {
+            if (Test-OpenPathPolicyValueInSet -Set $oldOwned -Text $text) {
                 if ($insertAt -lt 0) { $insertAt = $merged.Count }
                 continue
             }
+            if ($null -ne $text) { $foreignTexts.Add($text) }
             $number = 0
             if ([int]::TryParse([string]$entry.ValueName, [ref]$number) -and $number -gt $maxForeign) { $maxForeign = $number }
         }
@@ -396,9 +421,18 @@ function Sync-OpenPathManagedPolicyList {
         if ($isListKey) { $lastKeyIndex = $merged.Count - 1 }
     }
 
+    # A requested value that already exists as a foreign entry is satisfied by it: not re-added, not owned.
+    $newOwned = New-Object System.Collections.Generic.List[string]
+    foreach ($v in $requested) {
+        if (Test-OpenPathPolicyValueInSet -Set @($foreignTexts) -Text $v) { continue }
+        if (Test-OpenPathPolicyValueInSet -Set @($newOwned) -Text $v) { continue }
+        $newOwned.Add($v)
+    }
+    $newOwned = @($newOwned)
+
     $added = @()
     $n = $maxForeign
-    foreach ($v in $newValues) {
+    foreach ($v in $newOwned) {
         $n++
         $d = ConvertTo-OpenPathRegistryPolData -Type String -Value $v
         $added += [pscustomobject]@{ Key = $Key.Trim('\'); ValueName = [string]$n; Type = $d.Type; Data = $d.Data }
@@ -412,37 +446,61 @@ function Sync-OpenPathManagedPolicyList {
 
     if (-not $PSCmdlet.ShouldProcess($Key, 'Sync managed policy list')) { return $result }
 
-    if ($changed) {
-        try { Save-OpenPathPolicyStoreEntries -Entries $newEntries -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni }
-        catch {
-            Write-OpenPathLog "Policy store: Registry.pol write failed for list $Key ($($_.Exception.Message))" -Level ERROR
-            $result.FailureCode = 'local-gpo-write-failed'
-            return $result
-        }
-    }
-    $result.Changed = $changed
-
-    $ledgerDiffers = (($owned -join "`n") -ne ($newValues -join "`n")) -or ($newValues.Count -eq 0 -and $ledger.Lists.ContainsKey($Key))
-    if ($ledgerDiffers) {
-        if ($newValues.Count -gt 0) { $ledger.Lists[$Key] = $newValues } else { $ledger.Lists.Remove($Key) }
+    # Ledger first (fail closed): record old + new owned values before Registry.pol can contain the new ones,
+    # so a failed ledger write can never leave untracked OpenPath entries behind.
+    $union = @($oldOwned)
+    foreach ($v in $newOwned) { if (-not (Test-OpenPathPolicyValueInSet -Set $union -Text $v)) { $union += $v } }
+    if ($union.Count -ne $oldOwned.Count) {
+        $ledger.Lists[$Key] = [string[]]$union
         try { Write-OpenPathPolicyStoreLedger -Ledger $ledger }
         catch {
-            Write-OpenPathLog "Policy store: ledger write failed for $Key ($($_.Exception.Message))" -Level ERROR
+            Write-OpenPathLog "Policy store: ledger write failed for $Key, aborting without changes ($($_.Exception.Message))" -Level ERROR
             $result.FailureCode = 'ledger-write-failed'
             return $result
         }
     }
 
+    if ($changed) {
+        $save = Save-OpenPathPolicyStoreEntries -Entries $newEntries -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni
+        if (-not $save.Written) { $result.FailureCode = $save.FailureCode; return $result }
+        $result.Changed = $true
+        if ($save.FailureCode) { $result.FailureCode = $save.FailureCode; return $result }
+    }
+
+    # Narrow the ledger to the new owned set; a failure here is harmless (extra values simply no longer match pol).
+    $stored = @($union)
+    if (($stored -join "`n") -ne ($newOwned -join "`n")) {
+        if ($newOwned.Count -gt 0) { $ledger.Lists[$Key] = [string[]]$newOwned } else { $ledger.Lists.Remove($Key) }
+        try { Write-OpenPathPolicyStoreLedger -Ledger $ledger }
+        catch { Write-OpenPathLog "Policy store: could not narrow ledger for $Key ($($_.Exception.Message))" -Level WARN }
+    }
+
+    # Diff-based registry mirror: only numbered names; never touch other values.
     try {
-        foreach ($p in @(Get-OpenPathPolicyRegistryProperties -Key $Key | Where-Object { $_.Name -match '^\d+$' })) {
-            Remove-ItemProperty -Path "HKLM:\$($Key.Trim('\'))" -Name $p.Name -Force -ErrorAction Stop
-        }
+        $desired = @{}
         foreach ($entry in $newEntries) {
             if (-not (Test-OpenPathPolicyKeyEqual $entry.Key $Key) -or ([string]$entry.ValueName -notmatch '^\d+$')) { continue }
             $typeName = Get-OpenPathPolicyTypeName -Type $entry.Type
             if (-not $typeName) { continue }
-            $value = ConvertFrom-OpenPathRegistryPolData -Type $entry.Type -Data $entry.Data
-            Set-OpenPathPolicyRegistryValue -Key $Key -ValueName $entry.ValueName -Type $typeName -Value $value
+            $desired[[string]$entry.ValueName] = [pscustomobject]@{
+                Type = $typeName
+                Value = (ConvertFrom-OpenPathRegistryPolData -Type $entry.Type -Data $entry.Data)
+            }
+        }
+        $current = @{}
+        foreach ($p in @(Get-OpenPathPolicyRegistryProperties -Key $Key | Where-Object { $_.Name -match '^\d+$' })) { $current[[string]$p.Name] = $p.Value }
+
+        foreach ($name in @($current.Keys)) {
+            if ($desired.ContainsKey($name)) { continue }
+            $currentText = [string](@($current[$name]) | Select-Object -First 1)
+            if (Test-OpenPathPolicyValueInSet -Set $union -Text $currentText) {
+                Remove-ItemProperty -Path "HKLM:\$($Key.Trim('\'))" -Name $name -Force -ErrorAction Stop
+            }
+        }
+        foreach ($name in @($desired.Keys)) {
+            $want = $desired[$name]
+            if ($current.ContainsKey($name) -and ((@($current[$name]) -join "`n") -ceq (@($want.Value) -join "`n"))) { continue }
+            Set-OpenPathPolicyRegistryValue -Key $Key -ValueName $name -Type $want.Type -Value $want.Value
         }
     }
     catch {
@@ -453,7 +511,6 @@ function Sync-OpenPathManagedPolicyList {
     $result.Applied = $true
     return $result
 }
-
 function Remove-OpenPathManagedPolicyList {
     <#
     .SYNOPSIS
@@ -486,13 +543,10 @@ function Remove-OpenPathManagedPolicyList {
         -not $drop
     })
     if ($kept.Count -ne $entries.Count) {
-        try { Save-OpenPathPolicyStoreEntries -Entries $kept -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni }
-        catch {
-            Write-OpenPathLog "Policy store: Registry.pol write failed removing list $Key ($($_.Exception.Message))" -Level ERROR
-            $result.FailureCode = 'local-gpo-write-failed'
-            return $result
-        }
+        $save = Save-OpenPathPolicyStoreEntries -Entries $kept -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni
+        if (-not $save.Written) { $result.FailureCode = $save.FailureCode; return $result }
         $result.Removed = $true
+        if ($save.FailureCode) { $result.FailureCode = $save.FailureCode }
     }
 
     try {
