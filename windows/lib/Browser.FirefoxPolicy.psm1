@@ -1400,13 +1400,36 @@ function Remove-OpenPathFirefoxMachineExtensionPolicy {
         elseif ($original -and -not $original.InPol) {
             # The value was not in the local GPO before OpenPath: the remaining entries came from the
             # registry (another writer), so drop the local GPO entry and give them back to the registry only.
-            $removeResult = Remove-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -DiscardOriginal
+            # The Registry CSE deletes a value it applied from Registry.pol once that pol entry is gone, so
+            # the remainder is written only after a policy refresh (the version bump makes a normal refresh
+            # enough) has done that deletion. The registry value is never deleted by OpenPath itself:
+            # the remainder overwrites it in place.
+            $policyValue = ConvertTo-OpenPathFirefoxMachineExtensionSettingsPolicyValue -Settings $settings -ExistingType $state.Type
+            $removeResult = Remove-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -DiscardOriginal -KeepRegistryValue
             if ($removeResult.FailureCode) {
                 Write-OpenPathLog "Failed to remove Firefox machine ExtensionSettings policy: $($removeResult.FailureCode)" -Level WARN
                 return $false
             }
-            $policyValue = ConvertTo-OpenPathFirefoxMachineExtensionSettingsPolicyValue -Settings $settings -ExistingType $state.Type
-            New-ItemProperty -Path $registryPath -Name 'ExtensionSettings' -PropertyType $policyValue.Type -Value $policyValue.Value -Force -ErrorAction Stop | Out-Null
+
+            $refreshExitCode = $null
+            if (Get-Command -Name 'Invoke-OpenPathPolicyRefresh' -ErrorAction SilentlyContinue) {
+                $refresh = Invoke-OpenPathPolicyRefresh -TimeoutSeconds 60
+                if ($refresh) { $refreshExitCode = $refresh.ExitCode }
+            }
+
+            if ($null -ne $refreshExitCode -and [int]$refreshExitCode -eq 0) {
+                New-ItemProperty -Path $registryPath -Name 'ExtensionSettings' -PropertyType $policyValue.Type -Value $policyValue.Value -Force -ErrorAction Stop | Out-Null
+            }
+            else {
+                # Without a completed refresh the CSE would delete a registry-only remainder later, so keep
+                # the remaining entries in the local GPO instead.
+                Write-OpenPathLog "Group Policy refresh before handing the Firefox ExtensionSettings remainder back to the registry did not complete (ExitCode=$refreshExitCode); keeping the remaining entries in the local GPO" -Level WARN
+                $setResult = Set-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -Type $policyValue.Type -Value $policyValue.Value -ReleaseOriginal
+                if (-not $setResult.Applied -or $setResult.FailureCode -eq 'gpt-ini-bump-failed') {
+                    Write-OpenPathLog "Failed to keep the remaining Firefox ExtensionSettings entries in the local GPO: $($setResult.FailureCode) (owner: $($setResult.Owner))" -Level WARN
+                    return $false
+                }
+            }
         }
         else {
             $policyValue = ConvertTo-OpenPathFirefoxMachineExtensionSettingsPolicyValue -Settings $settings -ExistingType $state.Type

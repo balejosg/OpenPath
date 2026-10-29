@@ -651,13 +651,15 @@ function Remove-OpenPathManagedPolicyValue {
     When the ledger recorded that Registry.pol held another value before OpenPath's first write, that
     entry is put back (in Registry.pol and the registry mirror); when it recorded no entry, or recorded
     nothing at all (lost or legacy ledger), the value is deleted. The recorded original is then cleared.
-    -DiscardOriginal always deletes.
+    -DiscardOriginal always deletes. -KeepRegistryValue removes only the Registry.pol entry and leaves
+    the registry value for the caller to overwrite in place (no delete-then-recreate window).
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][string]$ValueName,
-        [switch]$DiscardOriginal
+        [switch]$DiscardOriginal,
+        [switch]$KeepRegistryValue
     )
 
     $result = [pscustomobject]@{ Removed = $false; Restored = $false; FailureCode = '' }
@@ -727,7 +729,7 @@ function Remove-OpenPathManagedPolicyValue {
                     Write-OpenPathLog "Policy store: restored $Key|$ValueName in Registry.pol only (registry type $($original.Type) is not mirrored); Group Policy re-applies it" -Level WARN
                     $result.Restored = $true
                 }
-                if (Remove-OpenPathPolicyRegistryValue -Key $Key -ValueName $ValueName) { $result.Removed = $true }
+                if (-not $KeepRegistryValue -and (Remove-OpenPathPolicyRegistryValue -Key $Key -ValueName $ValueName)) { $result.Removed = $true }
             }
         }
         catch {

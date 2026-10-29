@@ -805,6 +805,19 @@ Describe 'PolicyStore module' {
         Get-OpenPathPolicyStoreOriginal -Key $script:FfKey -ValueName 'ExtensionSettings' | Should -BeNullOrEmpty
     }
 
+    It 'KeepRegistryValue removes only the Registry.pol entry and leaves the registry value for an in-place overwrite' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:SrpKey 'Enabled' DWord 1))
+        Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson | Out-Null
+        $version = Get-GptVersion
+        $r = Remove-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -DiscardOriginal -KeepRegistryValue
+        $r.Removed | Should -BeTrue
+        @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol | Where-Object { $_.ValueName -eq 'ExtensionSettings' }).Count | Should -Be 0
+        Get-GptVersion | Should -Be ($version + 1)
+        $global:PSTReg["hklm:\$($script:FfKey.ToLowerInvariant())|ExtensionSettings"].Value | Should -Be $script:OpenPathJson
+        Should -Invoke Remove-ItemProperty -ModuleName PolicyStore -Times 0 -Exactly
+        Get-OpenPathPolicyStoreOriginal -Key $script:FfKey -ValueName 'ExtensionSettings' | Should -BeNullOrEmpty
+    }
+
     It 'Originals survive list syncs and owner updates in the ledger' {
         Set-OpenPathManagedPolicyValue -Key 'Software\Policies\Test' -ValueName 'Flag' -Type DWord -Value 1 | Out-Null
         Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x') | Out-Null

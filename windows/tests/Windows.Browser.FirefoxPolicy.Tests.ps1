@@ -1158,14 +1158,25 @@ Describe "Browser Module - Firefox Policy" {
                 $script:storeSetCalls += [PSCustomObject]@{ Key = $Key; ValueName = $ValueName; Type = $Type; Value = $Value; ReleaseOriginal = [bool]$ReleaseOriginal }
                 [PSCustomObject]@{ Applied = $true; Changed = $true; Owner = 'LocalGpo'; GpoName = $null; FailureCode = $null }
             } -ModuleName Browser.FirefoxPolicy
+            $script:storeSequence = New-Object System.Collections.Generic.List[string]
+            $script:refreshExitCode = 0
+            $script:refreshCalls = @()
             Mock Remove-OpenPathManagedPolicyValue {
-                param([string]$Key, [string]$ValueName, [switch]$DiscardOriginal)
-                $script:storeRemoveCalls += [PSCustomObject]@{ Key = $Key; ValueName = $ValueName; DiscardOriginal = [bool]$DiscardOriginal }
+                param([string]$Key, [string]$ValueName, [switch]$DiscardOriginal, [switch]$KeepRegistryValue)
+                $script:storeSequence.Add('remove')
+                $script:storeRemoveCalls += [PSCustomObject]@{ Key = $Key; ValueName = $ValueName; DiscardOriginal = [bool]$DiscardOriginal; KeepRegistryValue = [bool]$KeepRegistryValue }
                 [PSCustomObject]@{ Removed = $true; Restored = $false; FailureCode = $null }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Invoke-OpenPathPolicyRefresh {
+                param([switch]$Force, [int]$TimeoutSeconds)
+                $script:storeSequence.Add('refresh')
+                $script:refreshCalls += [PSCustomObject]@{ Force = [bool]$Force; TimeoutSeconds = $TimeoutSeconds }
+                [PSCustomObject]@{ ExitCode = $script:refreshExitCode; DurationMs = 1 }
             } -ModuleName Browser.FirefoxPolicy
             Mock Get-OpenPathPolicyStoreOriginal { $script:storeOriginal } -ModuleName Browser.FirefoxPolicy
             Mock New-ItemProperty {
                 param([string]$Path, [string]$Name, [object]$Value, [string]$PropertyType)
+                $script:storeSequence.Add('registry-write')
                 $script:registryOnlyWrites += [PSCustomObject]@{ Path = $Path; Name = $Name; Value = $Value; PropertyType = $PropertyType }
             } -ModuleName Browser.FirefoxPolicy
         }
@@ -1433,12 +1444,57 @@ Describe "Browser Module - Firefox Policy" {
             $script:storeSetCalls.Count | Should -Be 0
             $script:storeRemoveCalls.Count | Should -Be 1
             $script:storeRemoveCalls[0].DiscardOriginal | Should -BeTrue
+            # Only the Registry.pol entry goes; the registry value is later overwritten in place, never deleted by OpenPath.
+            $script:storeRemoveCalls[0].KeepRegistryValue | Should -BeTrue
+            # The Registry CSE deletes a value it applied from Registry.pol once the pol entry is gone,
+            # so the remainder is written only after a policy refresh has run that deletion.
+            @($script:storeSequence) | Should -Be @('remove', 'refresh', 'registry-write')
+            $script:refreshCalls[0].Force | Should -BeFalse
+            $script:refreshCalls[0].TimeoutSeconds | Should -BeGreaterThan 0
             $script:registryOnlyWrites.Count | Should -Be 1
             $script:registryOnlyWrites[0].Path | Should -Be 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
             $script:registryOnlyWrites[0].Name | Should -Be 'ExtensionSettings'
             $script:registryOnlyWrites[0].PropertyType | Should -Be 'MultiString'
             $remaining = @($script:registryOnlyWrites[0].Value)[0] | ConvertFrom-Json
             @($remaining.PSObject.Properties.Name) | Should -Be @('third@party')
+        }
+
+        It "Remove keeps the remainder in the local GPO and warns when the policy refresh before the hand-back fails" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"third@party`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'MultiString'; Value = [string[]]@($stored); Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+            $script:storeOriginal = [PSCustomObject]@{ InPol = $false; Type = [uint32]0; Data = [byte[]]@() }
+            $script:refreshExitCode = 1
+            $script:ffLogs = New-Object System.Collections.Generic.List[string]
+            Mock Write-OpenPathLog { param($Message, $Level) $script:ffLogs.Add("$Level|$Message") } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $script:registryOnlyWrites.Count | Should -Be 0
+            $script:storeSetCalls.Count | Should -Be 1
+            $script:storeSetCalls[0].ReleaseOriginal | Should -BeTrue
+            $script:storeSetCalls[0].Type | Should -Be 'MultiString'
+            (@($script:storeSetCalls[0].Value)[0] | ConvertFrom-Json).PSObject.Properties.Name | Should -Be @('third@party')
+            @($script:ffLogs | Where-Object { $_ -like 'WARN|*refresh*' }).Count | Should -Be 1
+        }
+
+        It "Remove keeps the remainder in the local GPO when the policy refresh command is unavailable" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"third@party`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = $stored; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+            $script:storeOriginal = [PSCustomObject]@{ InPol = $false; Type = [uint32]0; Data = [byte[]]@() }
+            Mock Get-Command { $null } -ModuleName Browser.FirefoxPolicy -ParameterFilter { $Name -eq 'Invoke-OpenPathPolicyRefresh' }
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $script:registryOnlyWrites.Count | Should -Be 0
+            $script:storeSetCalls.Count | Should -Be 1
+            $script:storeSetCalls[0].Type | Should -Be 'String'
+            Should -Invoke Invoke-OpenPathPolicyRefresh -ModuleName Browser.FirefoxPolicy -Times 0 -Exactly
         }
 
         It "Remove keeps the remaining entries in the local GPO and releases the original when the vendor value was there first" {
@@ -1485,6 +1541,7 @@ Describe "Browser Module - Firefox Policy" {
 
             Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
             $script:registryOnlyWrites.Count | Should -Be 0
+            Should -Invoke Invoke-OpenPathPolicyRefresh -ModuleName Browser.FirefoxPolicy -Times 0 -Exactly
         }
 
         It "Serializing, reading back and re-merging vendor entries is a fixed point" {
