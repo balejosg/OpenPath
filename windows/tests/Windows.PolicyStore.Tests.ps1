@@ -429,7 +429,8 @@ Describe 'PolicyStore module' {
         foreach ($n in 'Get-OpenPathManagedPolicyValue', 'Set-OpenPathManagedPolicyValue', 'Remove-OpenPathManagedPolicyValue',
             'Sync-OpenPathManagedPolicyList', 'Remove-OpenPathManagedPolicyList', 'Invoke-OpenPathPolicyRefresh',
             'Get-OpenPathLocalGpoPaths', 'Get-OpenPathPolicyValueOwner',
-            'Get-OpenPathPolicyStoreLastOwner', 'Set-OpenPathPolicyStoreLastOwner', 'Remove-OpenPathPolicyStoreLedger') {
+            'Get-OpenPathPolicyStoreLastOwner', 'Set-OpenPathPolicyStoreLastOwner', 'Remove-OpenPathPolicyStoreLedger',
+            'Get-OpenPathPolicyStoreOriginal') {
             $names -contains $n | Should -BeTrue -Because $n
         }
     }
@@ -610,6 +611,94 @@ Describe 'PolicyStore module' {
         $read.Count | Should -Be 1
         $read[0].Key | Should -Be $script:SrpKey
         $global:PSTReg.ContainsKey("hklm:\$($script:FfKey.ToLowerInvariant())|ExtensionSettings") | Should -BeFalse
+    }
+
+    It 'Set records the original vendor pol value once and Remove restores it' {
+        $chrome = 'Software\Policies\Google\Chrome'
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @(
+            (New-PolEntry $script:SrpKey 'Enabled' DWord 1),
+            (New-PolEntry $chrome 'DnsOverHttpsMode' String 'secure'))
+        $vendorBytes = (New-PolEntry $chrome 'DnsOverHttpsMode' String 'secure').Data
+
+        (Set-OpenPathManagedPolicyValue -Key $chrome -ValueName 'DnsOverHttpsMode' -Type String -Value 'off').Applied | Should -BeTrue
+        (Set-OpenPathManagedPolicyValue -Key $chrome -ValueName 'DnsOverHttpsMode' -Type String -Value 'automatic').Applied | Should -BeTrue
+        $original = Get-OpenPathPolicyStoreOriginal -Key $chrome -ValueName 'DnsOverHttpsMode'
+        $original.InPol | Should -BeTrue
+        [int]$original.Type | Should -Be 1
+        ($original.Data -join ',') | Should -Be ($vendorBytes -join ',')
+
+        $r = Remove-OpenPathManagedPolicyValue -Key $chrome -ValueName 'DnsOverHttpsMode'
+        $r.Removed | Should -BeTrue
+        $r.Restored | Should -BeTrue
+        @($r.FailureCode) -join '' | Should -Be ''
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol)
+        $read.Count | Should -Be 2
+        $doh = @($read | Where-Object { $_.ValueName -eq 'DnsOverHttpsMode' })
+        ConvertFrom-OpenPathRegistryPolData -Type $doh[0].Type -Data $doh[0].Data | Should -Be 'secure'
+        $global:PSTReg["hklm:\$($chrome.ToLowerInvariant())|DnsOverHttpsMode"].Value | Should -Be 'secure'
+        Get-OpenPathPolicyStoreOriginal -Key $chrome -ValueName 'DnsOverHttpsMode' | Should -BeNullOrEmpty
+    }
+
+    It 'Remove deletes the pol entry when the value was absent before the first OpenPath write' {
+        $chrome = 'Software\Policies\Google\Chrome'
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:SrpKey 'Enabled' DWord 1))
+        Set-OpenPathManagedPolicyValue -Key $chrome -ValueName 'DnsOverHttpsMode' -Type String -Value 'off' | Out-Null
+        (Get-OpenPathPolicyStoreOriginal -Key $chrome -ValueName 'DnsOverHttpsMode').InPol | Should -BeFalse
+
+        $r = Remove-OpenPathManagedPolicyValue -Key $chrome -ValueName 'DnsOverHttpsMode'
+        $r.Removed | Should -BeTrue
+        $r.Restored | Should -BeFalse
+        @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol | Where-Object { $_.ValueName -eq 'DnsOverHttpsMode' }).Count | Should -Be 0
+        $global:PSTReg.ContainsKey("hklm:\$($chrome.ToLowerInvariant())|DnsOverHttpsMode") | Should -BeFalse
+        Get-OpenPathPolicyStoreOriginal -Key $chrome -ValueName 'DnsOverHttpsMode' | Should -BeNullOrEmpty
+    }
+
+    It 'An unchanged Set records no original, so a lost or legacy ledger keeps the delete behavior' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:FfKey 'ExtensionSettings' String $script:OpenPathJson))
+        (Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson).Changed | Should -BeFalse
+        Get-OpenPathPolicyStoreOriginal -Key $script:FfKey -ValueName 'ExtensionSettings' | Should -BeNullOrEmpty
+        (Remove-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings').Restored | Should -BeFalse
+        @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol).Count | Should -Be 0
+    }
+
+    It 'Recording the original fails closed when the ledger cannot be written' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:FfKey 'ExtensionSettings' String $script:HpJson))
+        $before = [System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)
+        Mock Write-OpenPathPolicyStoreLedger { throw 'disk full' } -ModuleName PolicyStore
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.Applied | Should -BeFalse
+        $r.FailureCode | Should -Be 'ledger-write-failed'
+        (([System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)) -join ',') | Should -Be ($before -join ',')
+        $global:PSTReg.Count | Should -Be 0
+    }
+
+    It 'ReleaseOriginal writes without recording and clears an existing original' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:FfKey 'ExtensionSettings' String $script:HpJson))
+        Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson | Out-Null
+        (Get-OpenPathPolicyStoreOriginal -Key $script:FfKey -ValueName 'ExtensionSettings').InPol | Should -BeTrue
+        (Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:HpJson -ReleaseOriginal).Applied | Should -BeTrue
+        Get-OpenPathPolicyStoreOriginal -Key $script:FfKey -ValueName 'ExtensionSettings' | Should -BeNullOrEmpty
+        (Set-OpenPathManagedPolicyValue -Key 'Software\Policies\Test' -ValueName 'Flag' -Type DWord -Value 1 -ReleaseOriginal).Applied | Should -BeTrue
+        Get-OpenPathPolicyStoreOriginal -Key 'Software\Policies\Test' -ValueName 'Flag' | Should -BeNullOrEmpty
+    }
+
+    It 'DiscardOriginal deletes instead of restoring and clears the original' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:FfKey 'ExtensionSettings' String $script:HpJson))
+        Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson | Out-Null
+        $r = Remove-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -DiscardOriginal
+        $r.Removed | Should -BeTrue
+        $r.Restored | Should -BeFalse
+        @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol).Count | Should -Be 0
+        Get-OpenPathPolicyStoreOriginal -Key $script:FfKey -ValueName 'ExtensionSettings' | Should -BeNullOrEmpty
+    }
+
+    It 'Originals survive list syncs and owner updates in the ledger' {
+        Set-OpenPathManagedPolicyValue -Key 'Software\Policies\Test' -ValueName 'Flag' -Type DWord -Value 1 | Out-Null
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x') | Out-Null
+        Set-OpenPathPolicyStoreLastOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -Owner 'LocalGpo' | Out-Null
+        (Get-OpenPathPolicyStoreOriginal -Key 'Software\Policies\Test' -ValueName 'Flag').InPol | Should -BeFalse
+        $ledger = Get-Content -LiteralPath $global:PSTPaths.Ledger -Raw | ConvertFrom-Json
+        $ledger.originals.'Software\Policies\Test|Flag'.inPol | Should -BeFalse
     }
 
     It 'Remove of a missing value is a silent no-op' {

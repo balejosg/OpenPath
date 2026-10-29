@@ -1385,16 +1385,32 @@ function Remove-OpenPathFirefoxMachineExtensionPolicy {
 
         $settings.Remove($extensionId)
         $storeKey = Get-OpenPathFirefoxMachinePolicyStoreKey
+        # The store recorded whether the local GPO held ExtensionSettings before OpenPath's first write.
+        $original = $null
+        try { $original = Get-OpenPathPolicyStoreOriginal -Key $storeKey -ValueName 'ExtensionSettings' }
+        catch { Write-OpenPathLog "Could not read the original Firefox ExtensionSettings state: $_" -Level WARN }
+
         if ($settings.Count -eq 0) {
-            $removeResult = Remove-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings'
+            $removeResult = Remove-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -DiscardOriginal
             if ($removeResult.FailureCode) {
                 Write-OpenPathLog "Failed to remove Firefox machine ExtensionSettings policy: $($removeResult.FailureCode)" -Level WARN
                 return $false
             }
         }
+        elseif ($original -and -not $original.InPol) {
+            # The value was not in the local GPO before OpenPath: the remaining entries came from the
+            # registry (another writer), so drop the local GPO entry and give them back to the registry only.
+            $removeResult = Remove-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -DiscardOriginal
+            if ($removeResult.FailureCode) {
+                Write-OpenPathLog "Failed to remove Firefox machine ExtensionSettings policy: $($removeResult.FailureCode)" -Level WARN
+                return $false
+            }
+            $policyValue = ConvertTo-OpenPathFirefoxMachineExtensionSettingsPolicyValue -Settings $settings -ExistingType $state.Type
+            New-ItemProperty -Path $registryPath -Name 'ExtensionSettings' -PropertyType $policyValue.Type -Value $policyValue.Value -Force -ErrorAction Stop | Out-Null
+        }
         else {
             $policyValue = ConvertTo-OpenPathFirefoxMachineExtensionSettingsPolicyValue -Settings $settings -ExistingType $state.Type
-            $setResult = Set-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -Type $policyValue.Type -Value $policyValue.Value
+            $setResult = Set-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -Type $policyValue.Type -Value $policyValue.Value -ReleaseOriginal
             if (-not $setResult.Applied -or $setResult.FailureCode -eq 'gpt-ini-bump-failed') {
                 Write-OpenPathLog "Failed to remove OpenPath from Firefox machine ExtensionSettings policy: $($setResult.FailureCode) (owner: $($setResult.Owner))" -Level WARN
                 return $false

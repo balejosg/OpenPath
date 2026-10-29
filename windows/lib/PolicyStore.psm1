@@ -312,7 +312,9 @@ function Get-OpenPathPolicyTypeName {
 
 function Read-OpenPathPolicyStoreLedger {
     # Missing or corrupt ledger is treated as empty; never throws.
-    $ledger = [pscustomobject]@{ Lists = @{}; LastOwners = @{} }
+    # Lists: OpenPath-owned numbered values per list key. LastOwners: last observed owner per value.
+    # Originals: per scalar "Key|ValueName", the Registry.pol state before OpenPath's first write.
+    $ledger = [pscustomobject]@{ Lists = @{}; LastOwners = @{}; Originals = @{} }
     try {
         $text = Get-OpenPathPolicyStoreLedgerSourceText
         if ([string]::IsNullOrWhiteSpace($text)) { return $ledger }
@@ -323,10 +325,25 @@ function Read-OpenPathPolicyStoreLedger {
         if ($json -and $json.lastOwners) {
             foreach ($p in $json.lastOwners.PSObject.Properties) { $ledger.LastOwners[[string]$p.Name] = [string]$p.Value }
         }
+        if ($json -and $json.originals) {
+            foreach ($p in $json.originals.PSObject.Properties) {
+                $o = $p.Value
+                if ($o -and [bool]$o.inPol) {
+                    $ledger.Originals[[string]$p.Name] = [pscustomobject]@{
+                        InPol = $true
+                        Type = [uint32]$o.type
+                        Data = [byte[]][Convert]::FromBase64String([string]$o.dataBase64)
+                    }
+                }
+                elseif ($o) {
+                    $ledger.Originals[[string]$p.Name] = [pscustomobject]@{ InPol = $false; Type = [uint32]0; Data = [byte[]]@() }
+                }
+            }
+        }
     }
     catch {
         Write-OpenPathLog "Policy store: ledger unreadable, treating as empty ($($_.Exception.Message))" -Level WARN
-        $ledger = [pscustomobject]@{ Lists = @{}; LastOwners = @{} }
+        $ledger = [pscustomobject]@{ Lists = @{}; LastOwners = @{}; Originals = @{} }
     }
     return $ledger
 }
@@ -338,8 +355,41 @@ function Write-OpenPathPolicyStoreLedger {
     foreach ($k in ($Ledger.Lists.Keys | Sort-Object)) { $lists[[string]$k] = [string[]]@($Ledger.Lists[$k]) }
     $owners = [ordered]@{}
     foreach ($k in ($Ledger.LastOwners.Keys | Sort-Object)) { $owners[[string]$k] = [string]$Ledger.LastOwners[$k] }
-    $json = ([ordered]@{ lists = $lists; lastOwners = $owners } | ConvertTo-Json -Depth 5 -Compress)
+    $originals = [ordered]@{}
+    if ($Ledger.PSObject.Properties['Originals'] -and $Ledger.Originals) {
+        foreach ($k in ($Ledger.Originals.Keys | Sort-Object)) {
+            $o = $Ledger.Originals[$k]
+            if ($o.InPol) {
+                $originals[[string]$k] = [ordered]@{ inPol = $true; type = [int64][uint32]$o.Type; dataBase64 = [Convert]::ToBase64String([byte[]]$o.Data) }
+            }
+            else {
+                $originals[[string]$k] = [ordered]@{ inPol = $false }
+            }
+        }
+    }
+    $json = ([ordered]@{ lists = $lists; lastOwners = $owners; originals = $originals } | ConvertTo-Json -Depth 5 -Compress)
     Write-OpenPathPolicyStoreLedgerText -Text $json
+}
+
+function Get-OpenPathPolicyStoreOriginalId {
+    param([string]$Key, [string]$ValueName)
+    return "$($Key.Trim('\'))|$ValueName"
+}
+
+function Get-OpenPathPolicyStoreOriginal {
+    <#
+    .SYNOPSIS
+    Returns the Registry.pol state of a scalar value before OpenPath's first write ({ InPol; Type; Data }), or $null when none is recorded.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$ValueName
+    )
+
+    $ledger = Read-OpenPathPolicyStoreLedger
+    $id = Get-OpenPathPolicyStoreOriginalId -Key $Key -ValueName $ValueName
+    if ($ledger.Originals.ContainsKey($id)) { return $ledger.Originals[$id] }
+    return $null
 }
 
 function Get-OpenPathPolicyStoreLastOwner {
@@ -470,7 +520,11 @@ function Set-OpenPathManagedPolicyValue {
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][string]$ValueName,
         [Parameter(Mandatory = $true)][ValidateSet('String', 'MultiString', 'DWord')][string]$Type,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][object]$Value
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][object]$Value,
+
+        # The write hands the value back (e.g. Firefox removal keeping only vendor entries): record no
+        # original and clear any recorded one afterwards.
+        [switch]$ReleaseOriginal
     )
 
     $result = New-OpenPathPolicyStoreResult
@@ -484,6 +538,8 @@ function Set-OpenPathManagedPolicyValue {
         if ($gate.Blocked) { $result.FailureCode = $gate.FailureCode; return $result }
 
         $data = ConvertTo-OpenPathRegistryPolData -Type $Type -Value $Value
+        $ledger = Read-OpenPathPolicyStoreLedger
+        $originalId = Get-OpenPathPolicyStoreOriginalId -Key $Key -ValueName $ValueName
         $confirmed = $false
         $done = $false
         for ($attempt = 1; $attempt -le $script:LocalGpoMaxWriteAttempts; $attempt++) {
@@ -514,6 +570,25 @@ function Set-OpenPathManagedPolicyValue {
             }
             if (-not $changed) { $done = $true; break }
 
+            # Ledger first (fail closed): remember the Registry.pol state before OpenPath's first write so
+            # Remove can hand a vendor value back. An existing original is never overwritten.
+            if (-not $ReleaseOriginal -and -not $ledger.Originals.ContainsKey($originalId)) {
+                $current = @($entries | Where-Object { (Test-OpenPathPolicyKeyEqual $_.Key $Key) -and (Test-OpenPathPolicyNameEqual $_.ValueName $ValueName) } | Select-Object -First 1)
+                if ($current.Count -gt 0) {
+                    $ledger.Originals[$originalId] = [pscustomobject]@{ InPol = $true; Type = [uint32]$current[0].Type; Data = [byte[]]$current[0].Data }
+                }
+                else {
+                    $ledger.Originals[$originalId] = [pscustomobject]@{ InPol = $false; Type = [uint32]0; Data = [byte[]]@() }
+                }
+                try { Write-OpenPathPolicyStoreLedger -Ledger $ledger }
+                catch {
+                    $ledger.Originals.Remove($originalId)
+                    Write-OpenPathLog "Policy store: ledger write failed for $Key|$ValueName, aborting without changes ($($_.Exception.Message))" -Level ERROR
+                    $result.FailureCode = 'ledger-write-failed'
+                    return $result
+                }
+            }
+
             $save = Save-OpenPathPolicyStoreEntries -Entries @($newEntries.ToArray()) -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni -BaseBytes $snapshot.Bytes
             if ($save.Conflict) { continue }
             if (-not $save.Written) { $result.FailureCode = $save.FailureCode; return $result }
@@ -534,6 +609,11 @@ function Set-OpenPathManagedPolicyValue {
             $result.FailureCode = 'registry-write-failed'
             return $result
         }
+        if ($ReleaseOriginal -and $ledger.Originals.ContainsKey($originalId)) {
+            $ledger.Originals.Remove($originalId)
+            try { Write-OpenPathPolicyStoreLedger -Ledger $ledger }
+            catch { Write-OpenPathLog "Policy store: could not clear the original of $Key|$ValueName ($($_.Exception.Message))" -Level WARN }
+        }
         $result.Applied = $true
         return $result
     }
@@ -543,21 +623,33 @@ function Set-OpenPathManagedPolicyValue {
 function Remove-OpenPathManagedPolicyValue {
     <#
     .SYNOPSIS
-    Removes a value from local Registry.pol (bumping gpt.ini if it was present) and from the registry.
+    Removes OpenPath's value from local Registry.pol and the registry, restoring the vendor value it replaced.
+    .DESCRIPTION
+    When the ledger recorded that Registry.pol held another value before OpenPath's first write, that
+    entry is put back (in Registry.pol and the registry mirror); when it recorded no entry, or recorded
+    nothing at all (lost or legacy ledger), the value is deleted. The recorded original is then cleared.
+    -DiscardOriginal always deletes.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][string]$ValueName
+        [Parameter(Mandatory = $true)][string]$ValueName,
+        [switch]$DiscardOriginal
     )
 
-    $result = [pscustomobject]@{ Removed = $false; FailureCode = '' }
+    $result = [pscustomobject]@{ Removed = $false; Restored = $false; FailureCode = '' }
     $lock = Enter-OpenPathLocalGpoLock
     if (-not $lock) { $result.FailureCode = 'local-gpo-busy'; return $result }
     try {
         $paths = Get-OpenPathLocalGpoPaths
         $gate = Get-OpenPathPolicyStoreGate -Key $Key -ValueName $ValueName -PolPath $paths.RegistryPol
         if ($gate.Blocked) { $result.FailureCode = $gate.FailureCode; return $result }
+
+        $ledger = Read-OpenPathPolicyStoreLedger
+        $originalId = Get-OpenPathPolicyStoreOriginalId -Key $Key -ValueName $ValueName
+        $original = $null
+        if ($ledger.Originals.ContainsKey($originalId)) { $original = $ledger.Originals[$originalId] }
+        $restore = [bool]($original -and $original.InPol -and -not $DiscardOriginal)
 
         $done = $false
         for ($attempt = 1; $attempt -le $script:LocalGpoMaxWriteAttempts; $attempt++) {
@@ -567,8 +659,23 @@ function Remove-OpenPathManagedPolicyValue {
                 throw
             }
             $entries = @($snapshot.Entries)
-            $kept = @($entries | Where-Object { -not ((Test-OpenPathPolicyKeyEqual $_.Key $Key) -and (Test-OpenPathPolicyNameEqual $_.ValueName $ValueName)) })
-            if ($kept.Count -eq $entries.Count) { $done = $true; break }
+            $newEntries = New-Object System.Collections.ArrayList
+            $placed = $false
+            foreach ($entry in $entries) {
+                if ((Test-OpenPathPolicyKeyEqual $entry.Key $Key) -and (Test-OpenPathPolicyNameEqual $entry.ValueName $ValueName)) {
+                    if ($restore -and -not $placed) {
+                        [void]$newEntries.Add([pscustomobject]@{ Key = $entry.Key; ValueName = $entry.ValueName; Type = [uint32]$original.Type; Data = [byte[]]$original.Data })
+                        $placed = $true
+                    }
+                    continue
+                }
+                [void]$newEntries.Add($entry)
+            }
+            if ($restore -and -not $placed) {
+                [void]$newEntries.Add([pscustomobject]@{ Key = $Key.Trim('\'); ValueName = $ValueName; Type = [uint32]$original.Type; Data = [byte[]]$original.Data })
+            }
+            $kept = @($newEntries.ToArray())
+            if (Test-OpenPathPolicyEntrySequenceEqual -A $entries -B $kept) { $done = $true; break }
 
             $save = Save-OpenPathPolicyStoreEntries -Entries $kept -PolPath $paths.RegistryPol -GptIniPath $paths.GptIni -BaseBytes $snapshot.Bytes
             if ($save.Conflict) { continue }
@@ -584,10 +691,32 @@ function Remove-OpenPathManagedPolicyValue {
             return $result
         }
 
-        try { if (Remove-OpenPathPolicyRegistryValue -Key $Key -ValueName $ValueName) { $result.Removed = $true } }
+        try {
+            $typeName = $null
+            if ($restore) { $typeName = Get-OpenPathPolicyTypeName -Type $original.Type }
+            if ($typeName) {
+                $restoredValue = ConvertFrom-OpenPathRegistryPolData -Type $original.Type -Data $original.Data
+                Set-OpenPathPolicyRegistryValue -Key $Key -ValueName $ValueName -Type $typeName -Value $restoredValue
+                $result.Restored = $true
+            }
+            else {
+                if ($restore) {
+                    Write-OpenPathLog "Policy store: restored $Key|$ValueName in Registry.pol only (registry type $($original.Type) is not mirrored); Group Policy re-applies it" -Level WARN
+                    $result.Restored = $true
+                }
+                if (Remove-OpenPathPolicyRegistryValue -Key $Key -ValueName $ValueName) { $result.Removed = $true }
+            }
+        }
         catch {
             Write-OpenPathLog "Policy store: registry removal failed for $Key|$ValueName ($($_.Exception.Message))" -Level ERROR
             $result.FailureCode = 'registry-write-failed'
+            return $result
+        }
+
+        if ($null -ne $original) {
+            $ledger.Originals.Remove($originalId)
+            try { Write-OpenPathPolicyStoreLedger -Ledger $ledger }
+            catch { Write-OpenPathLog "Policy store: could not clear the original of $Key|$ValueName ($($_.Exception.Message))" -Level WARN }
         }
         return $result
     }
@@ -874,5 +1003,6 @@ Export-ModuleMember -Function @(
     'Get-OpenPathPolicyValueOwner',
     'Get-OpenPathPolicyStoreLastOwner',
     'Set-OpenPathPolicyStoreLastOwner',
-    'Remove-OpenPathPolicyStoreLedger'
+    'Remove-OpenPathPolicyStoreLedger',
+    'Get-OpenPathPolicyStoreOriginal'
 )

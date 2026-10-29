@@ -1150,16 +1150,23 @@ Describe "Browser Module - Firefox Policy" {
             }
             $script:storeSetCalls = @()
             $script:storeRemoveCalls = @()
+            $script:storeOriginal = $null
+            $script:registryOnlyWrites = @()
             Mock Write-OpenPathLog { } -ModuleName Browser.FirefoxPolicy
             Mock Set-OpenPathManagedPolicyValue {
-                param([string]$Key, [string]$ValueName, [string]$Type, [object]$Value)
-                $script:storeSetCalls += [PSCustomObject]@{ Key = $Key; ValueName = $ValueName; Type = $Type; Value = $Value }
+                param([string]$Key, [string]$ValueName, [string]$Type, [object]$Value, [switch]$ReleaseOriginal)
+                $script:storeSetCalls += [PSCustomObject]@{ Key = $Key; ValueName = $ValueName; Type = $Type; Value = $Value; ReleaseOriginal = [bool]$ReleaseOriginal }
                 [PSCustomObject]@{ Applied = $true; Changed = $true; Owner = 'LocalGpo'; GpoName = $null; FailureCode = $null }
             } -ModuleName Browser.FirefoxPolicy
             Mock Remove-OpenPathManagedPolicyValue {
-                param([string]$Key, [string]$ValueName)
-                $script:storeRemoveCalls += [PSCustomObject]@{ Key = $Key; ValueName = $ValueName }
-                [PSCustomObject]@{ Removed = $true; FailureCode = $null }
+                param([string]$Key, [string]$ValueName, [switch]$DiscardOriginal)
+                $script:storeRemoveCalls += [PSCustomObject]@{ Key = $Key; ValueName = $ValueName; DiscardOriginal = [bool]$DiscardOriginal }
+                [PSCustomObject]@{ Removed = $true; Restored = $false; FailureCode = $null }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathPolicyStoreOriginal { $script:storeOriginal } -ModuleName Browser.FirefoxPolicy
+            Mock New-ItemProperty {
+                param([string]$Path, [string]$Name, [object]$Value, [string]$PropertyType)
+                $script:registryOnlyWrites += [PSCustomObject]@{ Path = $Path; Name = $Name; Value = $Value; PropertyType = $PropertyType }
             } -ModuleName Browser.FirefoxPolicy
         }
 
@@ -1413,6 +1420,95 @@ Describe "Browser Module - Firefox Policy" {
             $remaining.PSObject.Properties.Name | Should -Be @('https://a.bromium.com/*')
         }
 
+        It "Remove hands the vendor entries back to the registry only when the value was not in the local GPO before OpenPath" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"third@party`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'MultiString'; Value = [string[]]@($stored); Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+            $script:storeOriginal = [PSCustomObject]@{ InPol = $false; Type = [uint32]0; Data = [byte[]]@() }
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $script:storeSetCalls.Count | Should -Be 0
+            $script:storeRemoveCalls.Count | Should -Be 1
+            $script:storeRemoveCalls[0].DiscardOriginal | Should -BeTrue
+            $script:registryOnlyWrites.Count | Should -Be 1
+            $script:registryOnlyWrites[0].Path | Should -Be 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
+            $script:registryOnlyWrites[0].Name | Should -Be 'ExtensionSettings'
+            $script:registryOnlyWrites[0].PropertyType | Should -Be 'MultiString'
+            $remaining = @($script:registryOnlyWrites[0].Value)[0] | ConvertFrom-Json
+            @($remaining.PSObject.Properties.Name) | Should -Be @('third@party')
+        }
+
+        It "Remove keeps the remaining entries in the local GPO and releases the original when the vendor value was there first" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"https://a.bromium.com/*`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = $stored; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+            $script:storeOriginal = [PSCustomObject]@{ InPol = $true; Type = [uint32]1; Data = [byte[]](1, 0) }
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $script:storeRemoveCalls.Count | Should -Be 0
+            $script:registryOnlyWrites.Count | Should -Be 0
+            $script:storeSetCalls.Count | Should -Be 1
+            $script:storeSetCalls[0].ReleaseOriginal | Should -BeTrue
+            $script:storeSetCalls[0].Type | Should -Be 'String'
+            ($script:storeSetCalls[0].Value | ConvertFrom-Json).PSObject.Properties.Name | Should -Be @('https://a.bromium.com/*')
+        }
+
+        It "Remove without a recorded original keeps the remaining entries in the local GPO" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"a@x`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'MultiString'; Value = [string[]]@($stored); Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $script:storeRemoveCalls.Count | Should -Be 0
+            $script:registryOnlyWrites.Count | Should -Be 0
+            $script:storeSetCalls.Count | Should -Be 1
+            $script:storeSetCalls[0].Type | Should -Be 'MultiString'
+        }
+
+        It "Remove returns false when the store cannot drop the value before the registry-only hand-back" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"third@party`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'MultiString'; Value = [string[]]@($stored); Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+            $script:storeOriginal = [PSCustomObject]@{ InPol = $false; Type = [uint32]0; Data = [byte[]]@() }
+            Mock Remove-OpenPathManagedPolicyValue { [PSCustomObject]@{ Removed = $false; Restored = $false; FailureCode = 'local-gpo-busy' } } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+            $script:registryOnlyWrites.Count | Should -Be 0
+        }
+
+        It "Serializing, reading back and re-merging vendor entries is a fixed point" {
+            $vendor = '{"https://a.bromium.com/*":{"installation_mode":"blocked","extra":{"nested":[1,"two",{"three":null}],"flag":false,"single":["only"],"empty":[]}},' +
+                '"quote\"and\\backslash@vendor":{"installation_mode":"allowed","note":"<tag> & ''apos'' \u00e9\u4e2d \t tab"},' +
+                '"unknown@vendor":{"future_property":{"deep":{"deeper":{"deepest":"x"}}},"number":1.5,"big":12345678901}}'
+            $script:fixedPointValue = $vendor
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = $script:fixedPointValue; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Set-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+            $first = [string]$script:storeSetCalls[0].Value
+            $script:fixedPointValue = $first
+            Set-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+            $second = [string]$script:storeSetCalls[1].Value
+
+            $second | Should -BeExactly $first
+            $parsed = $first | ConvertFrom-Json
+            $parsed.'quote"and\backslash@vendor'.note | Should -Be "<tag> & 'apos' $([char]0x00e9)$([char]0x4e2d) `t tab"
+            @($parsed.'https://a.bromium.com/*'.extra.single).Count | Should -Be 1
+            $parsed.'unknown@vendor'.future_property.deep.deeper.deepest | Should -Be 'x'
+        }
+
         It "Remove deletes value when only ours remained" {
             $id = $script:storeContract.extensionId
             $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"}}"
@@ -1426,6 +1522,7 @@ Describe "Browser Module - Firefox Policy" {
             $script:storeRemoveCalls.Count | Should -Be 1
             $script:storeRemoveCalls[0].Key | Should -Be 'Software\Policies\Mozilla\Firefox'
             $script:storeRemoveCalls[0].ValueName | Should -Be 'ExtensionSettings'
+            $script:storeRemoveCalls[0].DiscardOriginal | Should -BeTrue
         }
 
         It "Remove does nothing when our entry is absent" {
