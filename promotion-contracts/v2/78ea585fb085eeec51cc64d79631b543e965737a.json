@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "openpathSha": "78ea585fb085eeec51cc64d79631b543e965737a",
+  "openpathVersion": "4.1.0",
+  "interfaces": {
+    "wrapperIntegration": 1,
+    "windowsOfflineInstaller": 1,
+    "readiness": 1
+  },
+  "components": {
+    "linuxAgent": {
+      "sourceSha": "78ea585fb085eeec51cc64d79631b543e965737a",
+      "inputsSha256": "fa0e8d5593dd58e51efd2eb7d1d374150e90e04c381e4b02e0c358d1399e47b7",
+      "packageName": "openpath-dnsmasq",
+      "packageVersion": "0.0.20261029143807-1",
+      "aptSuite": "unstable",
+      "filename": "pool/unstable/main/openpath-dnsmasq_0.0.20261029143807-1_amd64.deb",
+      "sha256": "7e31c1c7a20311c6330d96951eaf3372002ebd37d84c7d2a4281eea979096715"
+    },
+    "windowsOfflineInstaller": {
+      "sourceSha": "78ea585fb085eeec51cc64d79631b543e965737a",
+      "inputsSha256": "b93c2e4715be563447c814f77ed272dd8386ea5c43fbfde9f28dc78684d90b63",
+      "version": "4.1.0",
+      "releaseTag": "scripts-v4.1.0-78ea585f",
+      "templateAsset": "OpenPath-Windows-Setup-Template.exe",
+      "templateSha256": "827d69f53659299c57944353044f5658526459500c28fdfa64b50386d0511360",
+      "payloadManifestAsset": "payload-manifest.json",
+      "payloadManifestSha256": "7ea1d052322d31995a70b4b883b714cd34ab6e064d97d5d9290f7c2ae28d5b3a"
+    },
+    "browserPolicy": {
+      "sourceSha": "78ea585fb085eeec51cc64d79631b543e965737a",
+      "inputsSha256": "b142718a4507790a0fbacb7a737676eda8e7b194c35369e415959550b0228c50",
+      "firefoxExtensionVersion": "2.0.1",
+      "browserPolicySpecSha256": "79a2b760caa228dabbb914044845647005c640cdd6f74d3c9075cb5b9c78d3e8"
+    }
+  }
+}
