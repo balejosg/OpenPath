@@ -55,18 +55,23 @@ result degrades to `LocalGpo`, `Mdm` heuristics, or `Unknown`.
 
 ## What OpenPath writes and where
 
-All writes go through `PolicyStore.psm1`; no other module writes browser policy keys.
+All normal writes go through `PolicyStore.psm1`. The only exceptions are the legacy
+numbered-value cleanup in `Browser.psm1` and the direct-registry fallback in
+`Uninstall-OpenPath.ps1`.
 
 1. Merge the value into `C:\Windows\System32\GroupPolicy\Machine\Registry.pol`
    (PReg version 1). A new file is created when none exists. Existing entries from
-   other writers are kept. The previous file is kept as `Registry.pol.openpath-bak` while the new bytes are swapped in.
+   other writers are kept. The previous file is kept as `Registry.pol.openpath-bak`
+   while the new bytes are swapped in.
 2. Bump the machine `Version` in `C:\Windows\System32\GroupPolicy\gpt.ini` only when
    the `Registry.pol` bytes actually changed. A no-op sync does not touch either file.
 3. Mirror the value into `HKLM\SOFTWARE\Policies` so it is effective immediately,
    without waiting for a refresh.
-4. The installer forces `gpupdate /target:computer /force` before the Firefox
-   readiness check. The watchdog sync is idempotent and logs a WARN once when the
-   owner of a value changes.
+4. In the classroom-mode, registered install path, the installer forces
+   `gpupdate /target:computer /force` before the Firefox readiness check. The
+   watchdog repeats the Firefox sync each cycle (idempotent) and tracks only the
+   owner of Firefox `ExtensionSettings`: every owner change is recorded in the
+   ledger, and a WARN is logged once only when the new owner is `DomainGpo` or `Mdm`.
 
 Values written:
 
@@ -98,14 +103,18 @@ blocklist then only works if the owning policy contains OpenPath's entries.
 
 - Firefox: the readiness result reports
   `firefox-machine-policy-externally-managed` and prints the entry, shaped like
-  `"<extension-id>": { "installation_mode": "force_installed", "install_url": "https://openpath.example.invalid/..." }`.
+  `"<extension-id>": { "installation_mode": "force_installed", "install_url": "https://openpath.example.invalid/...",
+"private_browsing": true }`. The exact entry is printed in the readiness message.
   Add that entry to the `ExtensionSettings` JSON in the domain GPO or in the MDM
   profile that owns it. Readiness reads the effective `HKLM` value, so it turns
   ready after the next policy refresh.
-- Chrome and Edge: add the OpenPath `ExtensionInstallForcelist` entry and the
-  `URLBlocklist` entries (taken from the agent log) to the owning policy.
+- Chrome and Edge: unlike Firefox, no ready-made entry is printed. The agent log
+  only says `Chromium policy <key> is managed by <Owner> (<GpoName>); OpenPath
+cannot write it`. The entries to add come from the OpenPath policy and whitelist
+  configuration of that machine (the extension force-install entry and the
+  blocked-domain list), which the administrator must copy into the owning policy.
 - After editing the owning policy, run `gpupdate /target:computer /force` (or wait
-  for the MDM sync) and re-run the agent.
+  for the MDM sync). The next watchdog cycle or update run then re-checks the value.
 
 ## The Chromium list ledger
 
