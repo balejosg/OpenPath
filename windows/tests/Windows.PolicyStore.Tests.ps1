@@ -421,9 +421,30 @@ Describe 'PolicyStore module' {
         $names = @((Get-Module PolicyStore).ExportedFunctions.Keys)
         foreach ($n in 'Get-OpenPathManagedPolicyValue', 'Set-OpenPathManagedPolicyValue', 'Remove-OpenPathManagedPolicyValue',
             'Sync-OpenPathManagedPolicyList', 'Remove-OpenPathManagedPolicyList', 'Invoke-OpenPathPolicyRefresh',
-            'Get-OpenPathLocalGpoPaths', 'Get-OpenPathPolicyValueOwner') {
+            'Get-OpenPathLocalGpoPaths', 'Get-OpenPathPolicyValueOwner',
+            'Get-OpenPathPolicyStoreLastOwner', 'Set-OpenPathPolicyStoreLastOwner') {
             $names -contains $n | Should -BeTrue -Because $n
         }
+    }
+
+    It 'Last owner defaults to empty, round-trips and preserves managed lists' {
+        Get-OpenPathPolicyStoreLastOwner -Key $script:FfKey -ValueName 'ExtensionSettings' | Should -Be ''
+        $json = '{"lists":{"k":["a","b"]},"lastOwners":{}}'
+        [System.IO.File]::WriteAllText($global:PSTPaths.Ledger, $json)
+        Set-OpenPathPolicyStoreLastOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -Owner 'DomainGpo' | Should -BeTrue
+        Get-OpenPathPolicyStoreLastOwner -Key $script:FfKey -ValueName 'ExtensionSettings' | Should -Be 'DomainGpo'
+        $ledger = Get-Content -LiteralPath $global:PSTPaths.Ledger -Raw | ConvertFrom-Json
+        @($ledger.lists.k) -join ',' | Should -Be 'a,b'
+        Test-Path -LiteralPath "$($global:PSTPaths.Ledger).openpath-tmp" | Should -BeFalse
+    }
+
+    It 'Last owner helpers never throw on an unwritable or corrupt ledger' {
+        [System.IO.File]::WriteAllText($global:PSTPaths.Ledger, '{not json')
+        { Get-OpenPathPolicyStoreLastOwner -Key $script:FfKey -ValueName 'ExtensionSettings' } | Should -Not -Throw
+        [System.IO.File]::WriteAllText((Join-Path $script:TempRoot 'blocker'), 'x')
+        $global:PSTPaths.Ledger = Join-Path (Join-Path $script:TempRoot 'blocker') 'x.json'
+        { Set-OpenPathPolicyStoreLastOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -Owner 'Mdm' } | Should -Not -Throw
+        Set-OpenPathPolicyStoreLastOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -Owner 'Mdm' | Should -BeFalse
     }
 
     It 'Unchanged value does not touch Registry.pol or gpt.ini' {

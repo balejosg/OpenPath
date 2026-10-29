@@ -197,6 +197,48 @@ function Write-OpenPathPolicyStoreLedger {
     }
 }
 
+function Get-OpenPathPolicyStoreLastOwner {
+    <#
+    .SYNOPSIS
+    Returns the last recorded owner of a policy value from the ledger, or '' when unknown. Never throws.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$ValueName
+    )
+
+    try {
+        $ledger = Read-OpenPathPolicyStoreLedger
+        $id = "$($Key.Trim('\'))|$ValueName"
+        if ($ledger.LastOwners.ContainsKey($id)) { return [string]$ledger.LastOwners[$id] }
+    }
+    catch { }
+    return ''
+}
+
+function Set-OpenPathPolicyStoreLastOwner {
+    <#
+    .SYNOPSIS
+    Records the last observed owner of a policy value in the ledger (preserving managed lists). Never throws.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$ValueName,
+        [Parameter(Mandatory = $true)][string]$Owner
+    )
+
+    try {
+        $ledger = Read-OpenPathPolicyStoreLedger
+        $ledger.LastOwners["$($Key.Trim('\'))|$ValueName"] = $Owner
+        Write-OpenPathPolicyStoreLedger -Ledger $ledger
+        return $true
+    }
+    catch {
+        Write-OpenPathLog "Policy store: could not record owner for $Key|$ValueName ($($_.Exception.Message))" -Level WARN
+        return $false
+    }
+}
+
 function Set-OpenPathPolicyRegistryValue {
     param([string]$Key, [string]$ValueName, [string]$Type, $Value)
 
@@ -606,5 +648,7 @@ Export-ModuleMember -Function @(
     'Remove-OpenPathManagedPolicyList',
     'Invoke-OpenPathPolicyRefresh',
     'Get-OpenPathLocalGpoPaths',
-    'Get-OpenPathPolicyValueOwner'
+    'Get-OpenPathPolicyValueOwner',
+    'Get-OpenPathPolicyStoreLastOwner',
+    'Set-OpenPathPolicyStoreLastOwner'
 )

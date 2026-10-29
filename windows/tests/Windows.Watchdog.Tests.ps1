@@ -50,6 +50,83 @@ Describe "Watchdog Script" {
         }
     }
 
+    Context "Firefox policy sync idempotence against the local GPO" {
+        BeforeAll {
+            $script:LibRoot = Join-Path (Join-Path $PSScriptRoot '..') 'lib'
+            . (Join-Path (Join-Path $script:LibRoot 'internal') 'Watchdog.Runtime.ps1')
+            Import-Module (Join-Path $script:LibRoot 'Common.psm1') -Force -ErrorAction Stop
+            Import-Module (Join-Path $script:LibRoot 'PolicyStore.psm1') -Force -ErrorAction Stop
+            Import-Module (Join-Path $script:LibRoot 'Browser.FirefoxPolicy.psm1') -Force -ErrorAction Stop
+            $script:WdKey = 'Software\Policies\Mozilla\Firefox'
+            $script:WdRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-wd-" + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $script:WdRoot -Force | Out-Null
+            function script:Get-WdGptVersion {
+                $text = [System.IO.File]::ReadAllText($global:WdPaths.GptIni)
+                [int][regex]::Match($text, 'Version=(\d+)').Groups[1].Value
+            }
+        }
+
+        AfterAll {
+            Remove-Variable -Name WdPaths, WdOwner, WdLogs -Scope Global -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $script:WdRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        BeforeEach {
+            $case = Join-Path $script:WdRoot ([guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path (Join-Path $case 'Machine') -Force | Out-Null
+            $global:WdPaths = [pscustomobject]@{
+                RegistryPol = Join-Path (Join-Path $case 'Machine') 'Registry.pol'
+                GptIni = Join-Path $case 'gpt.ini'
+                Ledger = Join-Path $case 'policy-store-ledger.json'
+            }
+            $global:WdOwner = [pscustomobject]@{ Owner = 'None'; GpoName = ''; Evidence = @() }
+            $global:WdLogs = New-Object System.Collections.ArrayList
+
+            Mock Get-OpenPathLocalGpoPaths { [pscustomobject]@{ RegistryPol = $global:WdPaths.RegistryPol; GptIni = $global:WdPaths.GptIni } } -ModuleName PolicyStore
+            Mock Get-OpenPathPolicyStoreLedgerPath { $global:WdPaths.Ledger } -ModuleName PolicyStore
+            Mock Write-OpenPathLog { } -ModuleName PolicyStore
+            Mock Get-OpenPathPolicyValueOwner { $global:WdOwner } -ModuleName PolicyStore
+            Mock Set-OpenPathPolicyRegistryValue { } -ModuleName PolicyStore
+            Mock Get-OpenPathFirefoxManagedExtensionPolicy {
+                [pscustomobject]@{ ExtensionId = 'openpath-block-monitor@openpath'; InstallUrl = 'https://openpath.example.invalid/firefox.xpi' }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Write-OpenPathLog { } -ModuleName Browser.FirefoxPolicy
+            Mock Write-OpenPathLog { [void]$global:WdLogs.Add("$Level|$Message") }
+            Mock Get-OpenPathPolicyValueOwner { $global:WdOwner }
+            Mock Get-Command { $null } -ParameterFilter { $Name -eq 'Sync-OpenPathFirefoxNetworkAutoconfig' }
+        }
+
+        It "Two watchdog cycles bump GPO version once" {
+            Invoke-OpenPathWatchdogFirefoxPolicySync
+            $versionAfterFirst = Get-WdGptVersion
+            $bytesAfterFirst = [System.IO.File]::ReadAllBytes($global:WdPaths.RegistryPol)
+            $versionAfterFirst | Should -Be 1
+
+            Invoke-OpenPathWatchdogFirefoxPolicySync
+
+            Get-WdGptVersion | Should -Be 1
+            ([System.IO.File]::ReadAllBytes($global:WdPaths.RegistryPol) -join ',') | Should -Be ($bytesAfterFirst -join ',')
+        }
+
+        It "Owner change to DomainGpo warns once" {
+            Invoke-OpenPathWatchdogFirefoxPolicySync
+            $global:WdLogs.Clear()
+            $global:WdOwner = [pscustomobject]@{ Owner = 'DomainGpo'; GpoName = 'School Browser Policy'; Evidence = @() }
+
+            Invoke-OpenPathWatchdogFirefoxPolicySync
+            Invoke-OpenPathWatchdogFirefoxPolicySync
+
+            $warns = @($global:WdLogs | Where-Object { $_ -like 'WARN|*DomainGpo*School Browser Policy*' })
+            $warns.Count | Should -Be 1
+            Get-OpenPathPolicyStoreLastOwner -Key $script:WdKey -ValueName 'ExtensionSettings' | Should -Be 'DomainGpo'
+        }
+
+        It "Does not throw out of the watchdog when the owner lookup fails" {
+            Mock Get-OpenPathPolicyValueOwner { throw 'rsop unavailable' }
+            { Invoke-OpenPathWatchdogFirefoxPolicySync } | Should -Not -Throw
+        }
+    }
+
     Context "SSE listener monitoring" {
         It "Checks and restarts SSE listener task" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"

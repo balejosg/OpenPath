@@ -5,6 +5,40 @@ if (-not (Get-Command -Name 'Write-OpenPathAtomicJsonFile' -ErrorAction Silently
     }
 }
 
+function Invoke-OpenPathWatchdogFirefoxPolicySync {
+    # Per-minute Firefox policy sync. The policy store only rewrites Registry.pol and bumps
+    # gpt.ini when the value changes, so an unchanged cycle causes no Group Policy churn.
+    # Also tracks the owner of Firefox ExtensionSettings and warns once per owner change to a
+    # domain GPO or MDM, which OpenPath cannot override. Never throws.
+    $firefoxKey = 'Software\Policies\Mozilla\Firefox'
+    try {
+        if (Sync-OpenPathFirefoxManagedExtensionPolicy) {
+            Write-OpenPathLog "Watchdog: refreshed Firefox managed extension policy"
+        }
+        if (Get-Command -Name 'Sync-OpenPathFirefoxNetworkAutoconfig' -ErrorAction SilentlyContinue) {
+            Sync-OpenPathFirefoxNetworkAutoconfig | Out-Null
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Firefox managed extension policy refresh failed: $_" -Level WARN
+    }
+
+    try {
+        $owner = Get-OpenPathPolicyValueOwner -Key $firefoxKey -ValueName 'ExtensionSettings'
+        $ownerName = [string]$owner.Owner
+        $lastOwner = [string](Get-OpenPathPolicyStoreLastOwner -Key $firefoxKey -ValueName 'ExtensionSettings')
+        if ($ownerName -and $ownerName -ne $lastOwner) {
+            Set-OpenPathPolicyStoreLastOwner -Key $firefoxKey -ValueName 'ExtensionSettings' -Owner $ownerName | Out-Null
+            if ($ownerName -eq 'DomainGpo' -or $ownerName -eq 'Mdm') {
+                Write-OpenPathLog "Watchdog: Firefox ExtensionSettings is now managed by $ownerName ($($owner.GpoName)); OpenPath cannot enforce the Firefox extension until the administrator adds the OpenPath entry to that policy" -Level WARN
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Firefox ExtensionSettings owner check failed: $_" -Level WARN
+    }
+}
+
 function Restore-CheckpointFromWatchdog {
     # rolls back to the most recent stored checkpoint when dns verification fails
     # after rollback: waits for acrylic to settle, then re-verifies resolution and sinkhole
@@ -1380,17 +1414,7 @@ function Invoke-OpenPathWatchdogChecks {
         Write-OpenPathLog "Watchdog: Error during integrity checks: $_" -Level ERROR
     }
 
-    try {
-        if (Sync-OpenPathFirefoxManagedExtensionPolicy) {
-            Write-OpenPathLog "Watchdog: refreshed Firefox managed extension policy"
-        }
-        if (Get-Command -Name 'Sync-OpenPathFirefoxNetworkAutoconfig' -ErrorAction SilentlyContinue) {
-            Sync-OpenPathFirefoxNetworkAutoconfig | Out-Null
-        }
-    }
-    catch {
-        Write-OpenPathLog "Watchdog: Firefox managed extension policy refresh failed: $_" -Level WARN
-    }
+    Invoke-OpenPathWatchdogFirefoxPolicySync
 
     try {
         $appControlResult = Invoke-OpenPathWatchdogAppControlHealth `

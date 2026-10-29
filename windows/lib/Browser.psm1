@@ -596,6 +596,8 @@ Export-ModuleMember -Function @(
     'Invoke-OpenPathPolicyRefresh',
     'Remove-OpenPathFirefoxMachineExtensionPolicy',
     'Get-OpenPathPolicyValueOwner',
+    'Get-OpenPathPolicyStoreLastOwner',
+    'Set-OpenPathPolicyStoreLastOwner',
     'Sync-OpenPathFirefoxNetworkAutoconfig',
     'Set-ChromePolicy',
     'Remove-BrowserPolicy',
