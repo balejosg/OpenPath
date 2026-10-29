@@ -360,10 +360,12 @@ function Remove-OpenPathFirefoxManagedExtension {
     try { $settingsValue = (Get-ItemProperty -Path $policyKey -Name 'ExtensionSettings' -ErrorAction Stop).ExtensionSettings } catch {}
 
     $hadManagedEntry = $false
+    $presentIds = New-Object System.Collections.Generic.List[string]
     foreach ($entry in @($settingsValue)) {
         if (-not $entry) { continue }
         try { $parsed = [string]$entry | ConvertFrom-Json -ErrorAction Stop } catch { continue }
         foreach ($property in @($parsed.PSObject.Properties)) {
+            $presentIds.Add([string]$property.Name)
             $installUrl = if ($property.Value.PSObject.Properties['install_url']) { [string]$property.Value.install_url } else { '' }
             if ($property.Name -in $extensionIds -or $installUrl -match '/api/extensions/firefox/openpath\.xpi(?:[?#]|$)') {
                 $hadManagedEntry = $true
@@ -379,15 +381,20 @@ function Remove-OpenPathFirefoxManagedExtension {
         $storeFailedIds = New-Object System.Collections.Generic.List[string]
         $storeCommandAvailable = [bool](Get-Command -Name Remove-OpenPathFirefoxMachineExtensionPolicy -ErrorAction SilentlyContinue)
         foreach ($storeId in @($extensionIds | Select-Object -Unique)) {
-            if (-not $storeCommandAvailable) { $storeFailedIds.Add($storeId); continue }
+            # The current and legacy ids are always tried; an id that is not in the value is not a failure.
+            $storeIdPresent = ($storeId -in $presentIds)
+            if (-not $storeCommandAvailable) {
+                if ($storeIdPresent) { $storeFailedIds.Add($storeId) }
+                continue
+            }
             try {
                 $removed = Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy ([pscustomobject]@{ ExtensionId = $storeId })
-                # $false also means "id not present"; the direct fallback below is a no-op then.
-                if (-not $removed) { $storeFailedIds.Add($storeId) }
+                # $false also means "id not present", which is only a failure when the id was there.
+                if (-not $removed -and $storeIdPresent) { $storeFailedIds.Add($storeId) }
             }
             catch {
                 Write-Warning "Could not remove Firefox policy entry ${storeId} through the policy store: $_"
-                $storeFailedIds.Add($storeId)
+                if ($storeIdPresent) { $storeFailedIds.Add($storeId) }
             }
         }
 

@@ -715,6 +715,46 @@ Export-ModuleMember -Function Remove-BrowserPolicy
             $uninstallIds | Should -Contain 'renamed-id@openpath'
         }
 
+        It "Uninstall does not warn when an always-tried id is simply absent from ExtensionSettings" {
+            $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+            foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Remove-OpenPathFirefoxManagedExtension', 'Remove-OpenPathFirefoxExtensionSettingsEntries', 'Test-OpenPathUninstallFirefoxPolicyExternallyManaged') }, $true)) {
+                . ([scriptblock]::Create($fn.Extent.Text))
+            }
+            $OpenPathRoot = Join-Path $TestDrive 'OpenPath'
+            $script:OpenPathBrowserPolicyIssues = 0
+            $script:hostLines = [System.Collections.Generic.List[string]]::new()
+            function global:Write-Host { param($Object, $ForegroundColor) $script:hostLines.Add([string]$Object) }
+            # Real store behavior: $true after removing a present id, $false for an id that is not in the value.
+            function global:Remove-OpenPathFirefoxMachineExtensionPolicy {
+                param($ManagedExtensionPolicy)
+                $id = [string]$ManagedExtensionPolicy.ExtensionId
+                $script:storeRemovals.Add($id)
+                $parsed = [string]$script:extensionSettings[0] | ConvertFrom-Json
+                if (-not $parsed.PSObject.Properties[$id]) { return $false }
+                $parsed.PSObject.Properties.Remove($id)
+                $script:extensionSettings = @($parsed | ConvertTo-Json -Compress)
+                return $true
+            }
+            $script:extensionSettings = @(
+                '{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://openpath.example.invalid/api/extensions/firefox/openpath.xpi"},"other@vendor":{"installation_mode":"allowed"}}'
+            )
+            try {
+                Remove-OpenPathFirefoxManagedExtension -EntryRemovedByStore
+
+                $script:storeRemovals | Should -Contain 'monitor-bloqueos@openpath'
+                $script:storeRemovals | Should -Contain 'openpath-block-monitor@openpath'
+                $script:OpenPathBrowserPolicyIssues | Should -Be 0
+                @($script:hostLines | Where-Object { $_ -match 'WARNING' }).Count | Should -Be 0
+                @($script:registryWrites | Where-Object Name -eq 'ExtensionSettings').Count | Should -Be 0
+                $script:extensionSettings[0] | Should -Match 'other@vendor'
+            }
+            finally {
+                Remove-Item Function:\Write-Host -ErrorAction SilentlyContinue
+                Remove-Variable -Name hostLines, OpenPathBrowserPolicyIssues -Scope Script -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Uninstall falls back to the direct registry removal when the store cannot remove the Firefox entry" {
             $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
             $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
