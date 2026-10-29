@@ -83,7 +83,12 @@ Describe "Watchdog Script" {
             $global:WdLogs = New-Object System.Collections.ArrayList
 
             Mock Get-OpenPathLocalGpoPaths { [pscustomobject]@{ RegistryPol = $global:WdPaths.RegistryPol; GptIni = $global:WdPaths.GptIni } } -ModuleName PolicyStore
-            Mock Get-OpenPathPolicyStoreLedgerPath { $global:WdPaths.Ledger } -ModuleName PolicyStore
+            Mock Read-OpenPathPolicyStoreLedgerText {
+                if ([System.IO.File]::Exists($global:WdPaths.Ledger)) { return [System.IO.File]::ReadAllText($global:WdPaths.Ledger) }
+                return $null
+            } -ModuleName PolicyStore
+            Mock Write-OpenPathPolicyStoreLedgerText { param([string]$Text) [System.IO.File]::WriteAllText($global:WdPaths.Ledger, $Text) } -ModuleName PolicyStore
+            Mock Get-OpenPathPolicyStoreLegacyLedgerPath { Join-Path $script:WdRoot 'no-legacy-ledger.json' } -ModuleName PolicyStore
             Mock Write-OpenPathLog { } -ModuleName PolicyStore
             Mock Get-OpenPathPolicyValueOwner { $global:WdOwner } -ModuleName PolicyStore
             Mock Set-OpenPathPolicyRegistryValue { } -ModuleName PolicyStore

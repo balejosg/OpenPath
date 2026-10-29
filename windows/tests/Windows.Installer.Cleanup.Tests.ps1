@@ -619,6 +619,18 @@ Export-ModuleMember -Function Remove-BrowserPolicy
             @($script:reinstallTrace)[-1] | Should -Be 'wipe-install-root'
         }
 
+        It "Warns when the existing install has no Browser module to clean the local GPO with" {
+            $root = New-OpenPathReinstallRoot -Name 'reinstall-no-browser' -BrowserModuleBody 'function Remove-BrowserPolicy { }'
+            Remove-Item -LiteralPath (Join-Path $root 'lib\Browser.psm1') -Force
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+            function Write-InstallerWarning { param($Message) $script:cleanupWarnings.Add([string]$Message) }
+            function Remove-OpenPathInstallerRegistryKeyIfPresent { param($RegistryPath) }
+
+            Invoke-OpenPathInstallerBrowserArtifactsCleanupWithOldModules -OpenPathRoot $root
+
+            @($script:cleanupWarnings | Where-Object { $_ -match 'Browser module not found' }).Count | Should -Be 1
+        }
+
         It "Warns when the Firefox-only removal reports it removed nothing" {
             . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
             function global:Write-InstallerWarning { param($Message) $script:cleanupWarnings.Add([string]$Message) }
@@ -759,6 +771,40 @@ Export-ModuleMember -Function Remove-BrowserPolicy
                 Remove-Item Function:\Write-Host, Function:\Get-OpenPathPolicyValueOwner -ErrorAction SilentlyContinue
                 Remove-Variable -Name hostLines, OpenPathBrowserPolicyIssues -Scope Script -ErrorAction SilentlyContinue
             }
+        }
+
+        It "Uninstall deletes the policy store ledger only after a complete browser policy removal" {
+            $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+            foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OpenPathUninstallPolicyStoreLedger' }, $true)) {
+                . ([scriptblock]::Create($fn.Extent.Text))
+            }
+            $script:ledgerRemovals = 0
+            $script:hostLines = [System.Collections.Generic.List[string]]::new()
+            function global:Remove-OpenPathPolicyStoreLedger { $script:ledgerRemovals++; return $true }
+            function global:Write-Host { param($Object, $ForegroundColor) $script:hostLines.Add([string]$Object) }
+            try {
+                $script:OpenPathBrowserPolicyIssues = 0
+                Remove-OpenPathUninstallPolicyStoreLedger -BrowserPolicyRemoval ([pscustomobject]@{ Complete = $true; FailureCodes = @() }) | Should -BeTrue
+                $script:ledgerRemovals | Should -Be 1
+
+                Remove-OpenPathUninstallPolicyStoreLedger -BrowserPolicyRemoval ([pscustomobject]@{ Complete = $false; FailureCodes = @('policy-externally-managed') }) | Should -BeFalse
+                Remove-OpenPathUninstallPolicyStoreLedger -BrowserPolicyRemoval $null | Should -BeFalse
+                $script:OpenPathBrowserPolicyIssues = 1
+                Remove-OpenPathUninstallPolicyStoreLedger -BrowserPolicyRemoval ([pscustomobject]@{ Complete = $true; FailureCodes = @() }) | Should -BeFalse
+                $script:ledgerRemovals | Should -Be 1
+                @($script:hostLines | Where-Object { $_ -match 'ledger kept' }).Count | Should -Be 3
+            }
+            finally {
+                Remove-Item Function:\Remove-OpenPathPolicyStoreLedger, Function:\Write-Host -ErrorAction SilentlyContinue
+                Remove-Variable -Name ledgerRemovals, hostLines, OpenPathBrowserPolicyIssues -Scope Script -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Uninstall asks Remove-BrowserPolicy for its outcome and hands it to the ledger cleanup" {
+            $content = Get-Content (Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1") -Raw
+            $content | Should -Match '\$browserPolicyRemoval = Remove-BrowserPolicy -PassThru'
+            $content | Should -Match 'Remove-OpenPathUninstallPolicyStoreLedger -BrowserPolicyRemoval \$browserPolicyRemoval'
         }
 
         It "Uninstall messages do not claim a registry fallback that does not happen" {

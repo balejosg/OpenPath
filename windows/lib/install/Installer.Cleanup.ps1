@@ -569,12 +569,13 @@ function Remove-OpenPathInstallerInstallRoot {
 function Invoke-OpenPathInstallerBrowserArtifactsCleanupWithOldModules {
     <#
     .SYNOPSIS
-        Runs the browser artifact cleanup with the OLD install's Browser.psm1 so the policy store (and its ledger under data\) removes OpenPath's entries from the local GPO before the install root is wiped
+        Runs the browser artifact cleanup with the OLD install's Browser.psm1 so the policy store removes OpenPath's entries from the local GPO before the install root is wiped
     .DESCRIPTION
         Reinstall cleanup runs before the installer imports its modules. Without the old Browser
         module only the registry keys could be deleted, leaving OpenPath's entries in Registry.pol
-        and (once data\policy-store-ledger.json is wiped) unrecognisable as OpenPath's afterwards.
-        The modules imported here are removed again so the installer imports the new code fresh.
+        (the policy store ledger in HKLM:\SOFTWARE\OpenPath\PolicyStore still identifies them, but
+        builds that kept it under data\ lose it with the install root). A missing old module is
+        reported. The modules imported here are removed again so the installer imports the new code fresh.
     .PARAMETER OpenPathRoot
         Root directory of the existing installation
     #>
@@ -594,6 +595,9 @@ function Invoke-OpenPathInstallerBrowserArtifactsCleanupWithOldModules {
         catch {
             Write-InstallerWarning "  Could not load the existing Browser module to clean the local GPO policy store: $_"
         }
+    }
+    else {
+        Write-InstallerWarning "  Existing Browser module not found at ${browserModulePath}; the local GPO may still hold OpenPath browser policy entries."
     }
 
     try {

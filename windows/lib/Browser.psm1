@@ -465,14 +465,20 @@ function Remove-BrowserPolicy {
     # removes OpenPath browser policies (chromium via the local GPO store, firefox policy files)
     # foreign entries in the same policy keys are left untouched
     # when preserve flag is set, keeps the firefox managed extension policy instead of deleting it
+    # with -PassThru returns { Complete; FailureCodes } for the chromium store removals (uninstall keeps
+    # the policy store ledger unless every removal succeeded)
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [switch]$PreserveFirefoxManagedExtension
+        [switch]$PreserveFirefoxManagedExtension,
+
+        [switch]$PassThru
     )
 
     if (-not $PSCmdlet.ShouldProcess("All browsers", "Remove OpenPath browser policies")) {
         return
     }
+
+    $failureCodes = New-Object System.Collections.Generic.List[string]
 
     Write-OpenPathLog "Removing browser policies..."
 
@@ -516,9 +522,11 @@ function Remove-BrowserPolicy {
                 Clear-OpenPathLegacyChromiumListValues -ListKey $listKey
                 $result = Remove-OpenPathManagedPolicyList -Key $listKey
                 Write-OpenPathChromiumRemoveOutcome -Result $result -Key $listKey
+                if ($result -and $result.FailureCode) { $failureCodes.Add([string]$result.FailureCode) }
             }
             catch {
                 Write-OpenPathLog "Failed to remove Chromium policy ${listKey}: $_" -Level WARN
+                $failureCodes.Add('exception')
             }
         }
 
@@ -526,14 +534,19 @@ function Remove-BrowserPolicy {
             try {
                 $result = Remove-OpenPathManagedPolicyValue -Key $browser.StoreKey -ValueName $scalarName
                 Write-OpenPathChromiumRemoveOutcome -Result $result -Key $browser.StoreKey -ValueName $scalarName
+                if ($result -and $result.FailureCode) { $failureCodes.Add([string]$result.FailureCode) }
             }
             catch {
                 Write-OpenPathLog "Failed to remove Chromium policy $($browser.StoreKey)|${scalarName}: $_" -Level WARN
+                $failureCodes.Add('exception')
             }
         }
     }
 
     Write-OpenPathLog "Browser policies removed"
+    if ($PassThru) {
+        return [PSCustomObject]@{ Complete = ($failureCodes.Count -eq 0); FailureCodes = [string[]]$failureCodes.ToArray() }
+    }
 }
 
 function Set-AllBrowserPolicy {
@@ -598,6 +611,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathPolicyValueOwner',
     'Get-OpenPathPolicyStoreLastOwner',
     'Set-OpenPathPolicyStoreLastOwner',
+    'Remove-OpenPathPolicyStoreLedger',
     'Sync-OpenPathFirefoxNetworkAutoconfig',
     'Set-ChromePolicy',
     'Remove-BrowserPolicy',

@@ -312,6 +312,20 @@ function Test-OpenPathUninstallFirefoxPolicyExternallyManaged {
     }
 }
 
+function Remove-OpenPathUninstallPolicyStoreLedger {
+    # The policy store ledger (HKLM:\SOFTWARE\OpenPath\PolicyStore) tells OpenPath's own local GPO
+    # entries apart from vendor ones. Delete it only when every browser policy removal succeeded;
+    # otherwise keep it so a later install still recognises the entries left behind as OpenPath's.
+    param([AllowNull()][object]$BrowserPolicyRemoval)
+
+    if (-not $BrowserPolicyRemoval -or -not $BrowserPolicyRemoval.Complete -or $script:OpenPathBrowserPolicyIssues -gt 0) {
+        Write-Host "  Policy store ledger kept (HKLM:\SOFTWARE\OpenPath\PolicyStore) because browser policy removal was incomplete" -ForegroundColor Yellow
+        return $false
+    }
+    if (-not (Get-Command -Name Remove-OpenPathPolicyStoreLedger -ErrorAction SilentlyContinue)) { return $false }
+    return [bool](Remove-OpenPathPolicyStoreLedger)
+}
+
 function Remove-OpenPathFirefoxManagedExtension {
     # With -EntryRemovedByStore the OpenPath entries in ExtensionSettings are removed through the
     # local GPO policy store (so they also leave Registry.pol, not only the registry). For any id the
@@ -602,14 +616,21 @@ Remove-OpenPathFirefoxManagedExtension -EntryRemovedByStore:$browserPolicyStoreA
 
 $browserPolicyRemovedViaStore = $false
 if ($browserPolicyStoreAvailable) {
+    $browserPolicyRemoval = $null
     try {
-        Remove-BrowserPolicy | Out-Null
+        if ((Get-Command -Name Remove-BrowserPolicy).Parameters.ContainsKey('PassThru')) {
+            $browserPolicyRemoval = Remove-BrowserPolicy -PassThru
+        }
+        else {
+            Remove-BrowserPolicy | Out-Null
+        }
         $browserPolicyRemovedViaStore = $true
     }
     catch {
         $script:OpenPathBrowserPolicyIssues++
         Write-Host "  WARNING: Could not remove browser policies through the policy store; removing the Chromium policy keys from the registry directly (the local GPO may re-apply them): $_" -ForegroundColor Yellow
     }
+    Remove-OpenPathUninstallPolicyStoreLedger -BrowserPolicyRemoval $browserPolicyRemoval | Out-Null
 }
 
 $firefoxNativeHostRegistryPaths = @(

@@ -26,8 +26,75 @@ function Get-OpenPathLocalGpoPaths {
     }
 }
 
-function Get-OpenPathPolicyStoreLedgerPath {
+# The ledger lives in the registry, outside the install root, so a reinstall or an admin wiping
+# <OpenPathRoot>\data cannot orphan OpenPath's own local GPO entries as "foreign".
+$script:PolicyStoreRegistryPath = 'HKLM:\SOFTWARE\OpenPath\PolicyStore'
+$script:PolicyStoreLedgerValueName = 'Ledger'
+
+function Get-OpenPathPolicyStoreLegacyLedgerPath {
+    # Ledger file used by earlier builds; migrated into the registry once, then deleted.
     return (Join-Path (Join-Path $script:OpenPathRoot 'data') 'policy-store-ledger.json')
+}
+
+function Read-OpenPathPolicyStoreLedgerText {
+    # Raw ledger JSON from the registry, or $null when absent (mockable). Throws when unreadable.
+    $path = $script:PolicyStoreRegistryPath
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    $props = Get-ItemProperty -LiteralPath $path -ErrorAction Stop
+    if (-not $props -or -not $props.PSObject.Properties[$script:PolicyStoreLedgerValueName]) { return $null }
+    return [string]$props.($script:PolicyStoreLedgerValueName)
+}
+
+function Write-OpenPathPolicyStoreLedgerText {
+    # Stores the raw ledger JSON as a REG_SZ value (mockable). Throws on failure.
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $path = $script:PolicyStoreRegistryPath
+    if (-not (Test-Path -LiteralPath $path)) { New-Item -Path $path -Force -ErrorAction Stop | Out-Null }
+    New-ItemProperty -Path $path -Name $script:PolicyStoreLedgerValueName -PropertyType String -Value $Text -Force -ErrorAction Stop | Out-Null
+}
+
+function Get-OpenPathPolicyStoreLedgerSourceText {
+    # Registry ledger first; otherwise migrates the legacy data\ file once (registry write, then delete).
+    $text = Read-OpenPathPolicyStoreLedgerText
+    if ($null -ne $text) { return $text }
+
+    $legacyPath = Get-OpenPathPolicyStoreLegacyLedgerPath
+    if (-not $legacyPath -or -not (Test-Path -LiteralPath $legacyPath -PathType Leaf)) { return $null }
+    $legacyText = [System.IO.File]::ReadAllText($legacyPath)
+    try {
+        Write-OpenPathPolicyStoreLedgerText -Text $legacyText
+        Remove-Item -LiteralPath $legacyPath -Force -ErrorAction Stop
+        Write-OpenPathLog "Policy store: ledger migrated from $legacyPath into the registry" -Level INFO
+    }
+    catch {
+        Write-OpenPathLog "Policy store: could not migrate the ledger file $legacyPath into the registry; using it as is ($($_.Exception.Message))" -Level WARN
+    }
+    return $legacyText
+}
+
+function Remove-OpenPathPolicyStoreLedger {
+    <#
+    .SYNOPSIS
+    Deletes the policy store ledger (registry key and any legacy file). Uninstall only. Never throws.
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        if (Test-Path -LiteralPath $script:PolicyStoreRegistryPath) {
+            Remove-Item -LiteralPath $script:PolicyStoreRegistryPath -Recurse -Force -ErrorAction Stop
+        }
+        $legacyPath = Get-OpenPathPolicyStoreLegacyLedgerPath
+        if ($legacyPath -and (Test-Path -LiteralPath $legacyPath -PathType Leaf)) {
+            Remove-Item -LiteralPath $legacyPath -Force -ErrorAction Stop
+        }
+        return $true
+    }
+    catch {
+        Write-OpenPathLog "Policy store: could not delete the ledger ($($_.Exception.Message))" -Level WARN
+        return $false
+    }
 }
 
 function Start-OpenPathGpUpdateProcess {
@@ -154,10 +221,10 @@ function Get-OpenPathPolicyTypeName {
 function Read-OpenPathPolicyStoreLedger {
     # Missing or corrupt ledger is treated as empty; never throws.
     $ledger = [pscustomobject]@{ Lists = @{}; LastOwners = @{} }
-    $path = Get-OpenPathPolicyStoreLedgerPath
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $ledger }
     try {
-        $json = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $text = Get-OpenPathPolicyStoreLedgerSourceText
+        if ([string]::IsNullOrWhiteSpace($text)) { return $ledger }
+        $json = $text | ConvertFrom-Json -ErrorAction Stop
         if ($json -and $json.lists) {
             foreach ($p in $json.lists.PSObject.Properties) { $ledger.Lists[[string]$p.Name] = @($p.Value | ForEach-Object { [string]$_ }) }
         }
@@ -179,22 +246,8 @@ function Write-OpenPathPolicyStoreLedger {
     foreach ($k in ($Ledger.Lists.Keys | Sort-Object)) { $lists[[string]$k] = [string[]]@($Ledger.Lists[$k]) }
     $owners = [ordered]@{}
     foreach ($k in ($Ledger.LastOwners.Keys | Sort-Object)) { $owners[[string]$k] = [string]$Ledger.LastOwners[$k] }
-    $json = ([ordered]@{ lists = $lists; lastOwners = $owners } | ConvertTo-Json -Depth 5)
-
-    $path = Get-OpenPathPolicyStoreLedgerPath
-    $directory = Split-Path -Parent $path
-    if ($directory -and -not (Test-Path -LiteralPath $directory -PathType Container)) {
-        New-Item -ItemType Directory -Path $directory -Force | Out-Null
-    }
-    $tmpPath = "$path.openpath-tmp"
-    try {
-        [System.IO.File]::WriteAllText($tmpPath, $json, (New-Object System.Text.UTF8Encoding($false)))
-        Move-Item -LiteralPath $tmpPath -Destination $path -Force -ErrorAction Stop
-    }
-    catch {
-        Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
-        throw
-    }
+    $json = ([ordered]@{ lists = $lists; lastOwners = $owners } | ConvertTo-Json -Depth 5 -Compress)
+    Write-OpenPathPolicyStoreLedgerText -Text $json
 }
 
 function Get-OpenPathPolicyStoreLastOwner {
@@ -650,5 +703,6 @@ Export-ModuleMember -Function @(
     'Get-OpenPathLocalGpoPaths',
     'Get-OpenPathPolicyValueOwner',
     'Get-OpenPathPolicyStoreLastOwner',
-    'Set-OpenPathPolicyStoreLastOwner'
+    'Set-OpenPathPolicyStoreLastOwner',
+    'Remove-OpenPathPolicyStoreLedger'
 )

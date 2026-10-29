@@ -389,12 +389,19 @@ Describe 'PolicyStore module' {
             RegistryPol = Join-Path (Join-Path $case 'Machine') 'Registry.pol'
             GptIni = Join-Path $case 'gpt.ini'
             Ledger = Join-Path $case 'policy-store-ledger.json'
+            LegacyLedger = Join-Path $case 'legacy-policy-store-ledger.json'
         }
         $global:PSTReg = @{}
         $global:PSTKeys = @{}
 
         Mock Get-OpenPathLocalGpoPaths { [pscustomobject]@{ RegistryPol = $global:PSTPaths.RegistryPol; GptIni = $global:PSTPaths.GptIni } } -ModuleName PolicyStore
-        Mock Get-OpenPathPolicyStoreLedgerPath { $global:PSTPaths.Ledger } -ModuleName PolicyStore
+        # The ledger lives in the registry; these tests back its raw text with a file.
+        Mock Read-OpenPathPolicyStoreLedgerText {
+            if ([System.IO.File]::Exists($global:PSTPaths.Ledger)) { return [System.IO.File]::ReadAllText($global:PSTPaths.Ledger) }
+            return $null
+        } -ModuleName PolicyStore
+        Mock Write-OpenPathPolicyStoreLedgerText { param([string]$Text) [System.IO.File]::WriteAllText($global:PSTPaths.Ledger, $Text) } -ModuleName PolicyStore
+        Mock Get-OpenPathPolicyStoreLegacyLedgerPath { $global:PSTPaths.LegacyLedger } -ModuleName PolicyStore
         Mock Write-OpenPathLog { } -ModuleName PolicyStore
         Mock Get-OpenPathPolicyValueOwner { [pscustomobject]@{ Owner = 'None'; GpoName = ''; Evidence = @() } } -ModuleName PolicyStore
 
@@ -422,7 +429,7 @@ Describe 'PolicyStore module' {
         foreach ($n in 'Get-OpenPathManagedPolicyValue', 'Set-OpenPathManagedPolicyValue', 'Remove-OpenPathManagedPolicyValue',
             'Sync-OpenPathManagedPolicyList', 'Remove-OpenPathManagedPolicyList', 'Invoke-OpenPathPolicyRefresh',
             'Get-OpenPathLocalGpoPaths', 'Get-OpenPathPolicyValueOwner',
-            'Get-OpenPathPolicyStoreLastOwner', 'Set-OpenPathPolicyStoreLastOwner') {
+            'Get-OpenPathPolicyStoreLastOwner', 'Set-OpenPathPolicyStoreLastOwner', 'Remove-OpenPathPolicyStoreLedger') {
             $names -contains $n | Should -BeTrue -Because $n
         }
     }
@@ -798,10 +805,30 @@ Describe 'PolicyStore module' {
         $global:PSTReg.Count | Should -Be 0
     }
 
-    It 'Ledger is written atomically without leaving a tmp file' {
-        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x') | Out-Null
+    It 'Migrates a legacy data\ ledger file into the registry once and deletes the file' {
+        [System.IO.File]::WriteAllText($global:PSTPaths.LegacyLedger, '{"lists":{"Software\\Policies\\Google\\Chrome\\ExtensionInstallBlocklist":["x"]},"lastOwners":{}}')
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @(
+            (New-PolEntry $script:ChromeListKey '1' String 'vendor-a'),
+            (New-PolEntry $script:ChromeListKey '2' String 'x'))
+
+        Remove-OpenPathManagedPolicyList -Key $script:ChromeListKey | Out-Null
+
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol)
+        $read.Count | Should -Be 1
+        ConvertFrom-OpenPathRegistryPolData -Type $read[0].Type -Data $read[0].Data | Should -Be 'vendor-a'
+        Test-Path -LiteralPath $global:PSTPaths.LegacyLedger | Should -BeFalse
         Test-Path -LiteralPath $global:PSTPaths.Ledger | Should -BeTrue
-        Test-Path -LiteralPath "$($global:PSTPaths.Ledger).openpath-tmp" | Should -BeFalse
+    }
+
+    It 'Keeps the legacy ledger file and still uses it when the registry migration fails' {
+        [System.IO.File]::WriteAllText($global:PSTPaths.LegacyLedger, '{"lists":{"Software\\Policies\\Google\\Chrome\\ExtensionInstallBlocklist":["x"]},"lastOwners":{}}')
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:ChromeListKey '1' String 'x'))
+        Mock Write-OpenPathPolicyStoreLedgerText { throw 'registry denied' } -ModuleName PolicyStore
+
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x')
+        $r.Changed | Should -BeFalse
+        @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol).Count | Should -Be 1
+        Test-Path -LiteralPath $global:PSTPaths.LegacyLedger | Should -BeTrue
     }
 
     It 'gpt.ini bump failure still reports Changed with a failure code' {
@@ -851,5 +878,82 @@ Describe 'PolicyStore module' {
             $p.GptIni | Should -Be (Join-Path (Join-Path (Join-Path $env:SystemRoot 'System32') 'GroupPolicy') 'gpt.ini')
         }
         finally { $env:SystemRoot = $old }
+    }
+}
+
+Describe 'PolicyStore ledger storage' {
+    BeforeAll {
+        $script:StoreModule = Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'lib') 'PolicyStore.psm1'
+        Import-Module $script:StoreModule -Force -ErrorAction Stop
+        $script:LedgerKey = 'HKLM:\SOFTWARE\OpenPath\PolicyStore'
+    }
+
+    AfterAll {
+        Remove-Variable -Name PSLReg, PSLKeys, PSLLegacy -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    BeforeEach {
+        $global:PSLReg = @{}
+        $global:PSLKeys = @{}
+        $global:PSLLegacy = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.json')
+        Mock Write-OpenPathLog { } -ModuleName PolicyStore
+        Mock Get-OpenPathPolicyStoreLegacyLedgerPath { $global:PSLLegacy } -ModuleName PolicyStore
+        Mock Test-Path { $global:PSLKeys.ContainsKey([string]"$LiteralPath$Path") } -ModuleName PolicyStore -ParameterFilter { "$LiteralPath$Path" -like 'HKLM:*' }
+        Mock New-Item { $global:PSLKeys[[string]$Path] = $true } -ModuleName PolicyStore -ParameterFilter { "$Path" -like 'HKLM:*' }
+        Mock New-ItemProperty { $global:PSLReg[([string]$Path + '|' + $Name)] = [pscustomobject]@{ Type = [string]$PropertyType; Value = $Value } } -ModuleName PolicyStore
+        Mock Get-ItemProperty {
+            $o = [ordered]@{}
+            foreach ($k in $global:PSLReg.Keys) {
+                $parts = $k.Split('|', 2)
+                if ($parts[0] -eq "$LiteralPath$Path") { $o[$parts[1]] = $global:PSLReg[$k].Value }
+            }
+            [pscustomobject]$o
+        } -ModuleName PolicyStore
+        Mock Remove-Item { $global:PSLKeys.Remove([string]$LiteralPath); $global:PSLReg.Clear() } -ModuleName PolicyStore -ParameterFilter { "$LiteralPath" -like 'HKLM:*' }
+    }
+
+    It 'Writes the ledger as a REG_SZ value under HKLM:\SOFTWARE\OpenPath\PolicyStore' {
+        Set-OpenPathPolicyStoreLastOwner -Key 'Software\Policies\Mozilla\Firefox' -ValueName 'ExtensionSettings' -Owner 'LocalGpo' | Should -BeTrue
+        $global:PSLKeys.ContainsKey($script:LedgerKey) | Should -BeTrue
+        $global:PSLReg["$($script:LedgerKey)|Ledger"].Type | Should -Be 'String'
+        $ledger = $global:PSLReg["$($script:LedgerKey)|Ledger"].Value | ConvertFrom-Json
+        $ledger.lastOwners.'Software\Policies\Mozilla\Firefox|ExtensionSettings' | Should -Be 'LocalGpo'
+        Get-OpenPathPolicyStoreLastOwner -Key 'Software\Policies\Mozilla\Firefox' -ValueName 'ExtensionSettings' | Should -Be 'LocalGpo'
+    }
+
+    It 'Survives the loss of the install root data folder' {
+        Set-OpenPathPolicyStoreLastOwner -Key 'Software\Policies\Mozilla\Firefox' -ValueName 'ExtensionSettings' -Owner 'DomainGpo' | Out-Null
+        Test-Path -LiteralPath $global:PSLLegacy | Should -BeFalse
+        Get-OpenPathPolicyStoreLastOwner -Key 'Software\Policies\Mozilla\Firefox' -ValueName 'ExtensionSettings' | Should -Be 'DomainGpo'
+    }
+
+    It 'Migrates the legacy file into the registry and deletes it' {
+        [System.IO.File]::WriteAllText($global:PSLLegacy, '{"lists":{},"lastOwners":{"K|V":"Mdm"}}')
+        Get-OpenPathPolicyStoreLastOwner -Key 'K' -ValueName 'V' | Should -Be 'Mdm'
+        Test-Path -LiteralPath $global:PSLLegacy | Should -BeFalse
+        ($global:PSLReg["$($script:LedgerKey)|Ledger"].Value | ConvertFrom-Json).lastOwners.'K|V' | Should -Be 'Mdm'
+    }
+
+    It 'Prefers the registry ledger over a stale legacy file' {
+        $global:PSLKeys[$script:LedgerKey] = $true
+        $global:PSLReg["$($script:LedgerKey)|Ledger"] = [pscustomobject]@{ Type = 'String'; Value = '{"lists":{},"lastOwners":{"K|V":"LocalGpo"}}' }
+        [System.IO.File]::WriteAllText($global:PSLLegacy, '{"lists":{},"lastOwners":{"K|V":"Mdm"}}')
+        Get-OpenPathPolicyStoreLastOwner -Key 'K' -ValueName 'V' | Should -Be 'LocalGpo'
+    }
+
+    It 'Remove-OpenPathPolicyStoreLedger deletes the registry key and any legacy file' {
+        Set-OpenPathPolicyStoreLastOwner -Key 'K' -ValueName 'V' -Owner 'LocalGpo' | Out-Null
+        [System.IO.File]::WriteAllText($global:PSLLegacy, '{}')
+        Remove-OpenPathPolicyStoreLedger | Should -BeTrue
+        $global:PSLKeys.ContainsKey($script:LedgerKey) | Should -BeFalse
+        Test-Path -LiteralPath $global:PSLLegacy | Should -BeFalse
+        Get-OpenPathPolicyStoreLastOwner -Key 'K' -ValueName 'V' | Should -Be ''
+    }
+
+    It 'Remove-OpenPathPolicyStoreLedger never throws' {
+        $global:PSLKeys[$script:LedgerKey] = $true
+        Mock Remove-Item { throw 'access denied' } -ModuleName PolicyStore -ParameterFilter { "$LiteralPath" -like 'HKLM:*' }
+        { Remove-OpenPathPolicyStoreLedger } | Should -Not -Throw
+        Remove-OpenPathPolicyStoreLedger | Should -BeFalse
     }
 }

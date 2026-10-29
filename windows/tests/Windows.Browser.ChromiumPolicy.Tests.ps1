@@ -348,6 +348,38 @@ Describe "Browser Module - Chromium Policy" {
                 @($script:logCalls | Where-Object { $_.Level -eq 'ERROR' }).Count | Should -Be 0
                 @($script:logCalls | Where-Object { $_.Message -eq 'Browser policies removed' }).Count | Should -Be 1
             }
+
+            It "Returns nothing without -PassThru" {
+                $output = @(Remove-BrowserPolicy)
+                $output.Count | Should -Be 0
+            }
+
+            It "-PassThru reports Complete when every store removal succeeded" {
+                $r = Remove-BrowserPolicy -PassThru
+                $r.Complete | Should -BeTrue
+                @($r.FailureCodes).Count | Should -Be 0
+            }
+
+            It "-PassThru reports incomplete when a removal reports a failure code" {
+                $script:listRemoveResult = {
+                    param($Key)
+                    if ($Key -like '*Edge\URLBlocklist') { return [PSCustomObject]@{ Removed = $false; FailureCode = 'policy-externally-managed' } }
+                    return [PSCustomObject]@{ Removed = $true; FailureCode = '' }
+                }
+                $r = Remove-BrowserPolicy -PassThru
+                $r.Complete | Should -BeFalse
+                @($r.FailureCodes) | Should -Contain 'policy-externally-managed'
+            }
+
+            It "-PassThru reports incomplete when a removal throws" {
+                Mock Remove-OpenPathManagedPolicyValue { throw 'boom' } -ModuleName Browser
+                $r = Remove-BrowserPolicy -PassThru
+                $r.Complete | Should -BeFalse
+            }
+
+            It "Browser.psm1 re-exports the ledger removal used by the uninstaller" {
+                Get-Command -Name Remove-OpenPathPolicyStoreLedger -Module Browser -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+            }
         }
     }
 }
