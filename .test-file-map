@@ -363,3 +363,4 @@ windows/lib/install/Installer.Offline.ps1|windows/tests/Windows.OfflineInstaller
 windows/offline-installer/scripts/Read-Trailer.ps1|windows/tests/Windows.OfflineInstaller.Tests.ps1,tests/repo-config/windows-offline-installer-contracts.test.mjs,windows/offline-installer/tests/trailer-roundtrip.test.mjs
 windows/offline-installer/scripts/verify-nsis.ps1|tests/repo-config/windows-offline-installer-contracts.test.mjs
 windows/lib/internal/PolicyStore.RegistryPol.ps1|windows/tests/Windows.PolicyStore.Tests.ps1
+windows/lib/internal/PolicyStore.Owner.ps1|windows/tests/Windows.PolicyStore.Tests.ps1

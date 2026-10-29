@@ -169,3 +169,106 @@ Describe 'PolicyStore.RegistryPol' {
         $text.Contains("Foo=bar`r`n") | Should -BeTrue
     }
 }
+
+Describe 'PolicyStore.Owner' {
+    BeforeAll {
+        $internalLib = Join-Path (Join-Path $PSScriptRoot '..') (Join-Path 'lib' 'internal')
+        . (Join-Path $internalLib 'PolicyStore.RegistryPol.ps1')
+        . (Join-Path $internalLib 'PolicyStore.Owner.ps1')
+
+        $script:TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-policyowner-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:TempRoot -Force | Out-Null
+        $script:FfKey = 'Software\Policies\Mozilla\Firefox'
+        $script:DomainGuid = '{31B2F340-016D-11D2-945F-00C04FB984F9}'
+
+        function script:New-PolFile {
+            param([object[]]$Entries)
+            $path = Join-Path $script:Case 'Registry.pol'
+            Write-OpenPathRegistryPolFile -Path $path -Entries $Entries
+            return $path
+        }
+        function script:New-Rsop {
+            param([string]$Key, [string]$ValueName, [string]$GpoId, [int]$Precedence)
+            [pscustomobject]@{ registryKey = $Key; valueName = $ValueName; GPOID = $GpoId; precedence = $Precedence }
+        }
+    }
+
+    AfterAll {
+        Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    BeforeEach {
+        $script:Case = Join-Path $script:TempRoot ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:Case -Force | Out-Null
+        $script:Missing = Join-Path $script:Case 'absent.pol'
+        Mock Get-OpenPathRsopRegistryPolicySetting { @() }
+        Mock Get-OpenPathRsopGpo { @() }
+        Mock Get-ChildItem { @() } -ParameterFilter { $Path -like '*PolicyManager*' }
+        Mock Test-Path { $false } -ParameterFilter { "$LiteralPath$Path" -like "HKLM:*" }
+        Mock Get-ItemProperty { $null }
+    }
+
+    It 'LocalGPO rsop record -> LocalGpo' {
+        Mock Get-OpenPathRsopRegistryPolicySetting { @(New-Rsop 'software\policies\mozilla\firefox' 'ExtensionSettings' 'LocalGPO' 1) }
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
+        $r.Owner | Should -Be 'LocalGpo'
+    }
+
+    It 'Domain GPO wins over local by precedence' {
+        Mock Get-OpenPathRsopRegistryPolicySetting {
+            @((New-Rsop $script:FfKey 'ExtensionSettings' 'LocalGPO' 2), (New-Rsop $script:FfKey 'ExtensionSettings' $script:DomainGuid 1))
+        }
+        Mock Get-OpenPathRsopGpo { @([pscustomobject]@{ id = $script:DomainGuid; name = 'Default Domain Policy' }) }
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
+        $r.Owner | Should -Be 'DomainGpo'
+        $r.GpoName | Should -Be 'Default Domain Policy'
+    }
+
+    It 'No rsop but present in Registry.pol -> LocalGpo' {
+        $sz = ConvertTo-OpenPathRegistryPolData -Type String -Value '{}'
+        $pol = New-PolFile @([pscustomobject]@{ Key = $script:FfKey; ValueName = 'ExtensionSettings'; Type = $sz.Type; Data = $sz.Data })
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'extensionsettings' -LocalPolPath $pol
+        $r.Owner | Should -Be 'LocalGpo'
+    }
+
+    It 'Chromium list key matches **delvals. record' {
+        $key = 'Software\Policies\Google\Chrome\ExtensionInstallBlocklist'
+        $pol = New-PolFile @([pscustomobject]@{ Key = $key; ValueName = '**delvals.'; Type = [uint32]1; Data = [byte[]]@() })
+        $r = Get-OpenPathPolicyValueOwner -Key $key -ValueName '' -LocalPolPath $pol
+        $r.Owner | Should -Be 'LocalGpo'
+    }
+
+    It 'MDM area Firefox~Policy~firefox~Extensions -> Mdm' {
+        Mock Get-ChildItem { @([pscustomobject]@{ PSChildName = 'Firefox~Policy~firefox~Extensions'; Name = 'HKEY_LOCAL_MACHINE\x\Firefox~Policy~firefox~Extensions' }) } -ParameterFilter { $Path -like '*PolicyManager*' }
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
+        $r.Owner | Should -Be 'Mdm'
+    }
+
+    It 'Registry-only value -> Unknown' {
+        Mock Test-Path { $true } -ParameterFilter { "$LiteralPath$Path" -like "HKLM:*" }
+        Mock Get-ItemProperty { [pscustomobject]@{ ExtensionSettings = '{}' } }
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
+        $r.Owner | Should -Be 'Unknown'
+    }
+
+    It 'Nothing anywhere -> None' {
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $script:Missing
+        $r.Owner | Should -Be 'None'
+        @($r.Evidence).Count | Should -Be 0
+    }
+
+    It 'RSoP throws -> falls back, Evidence contains rsop-unavailable' {
+        Mock Get-OpenPathRsopRegistryPolicySetting { throw 'cim down' }
+        $sz = ConvertTo-OpenPathRegistryPolData -Type String -Value '{}'
+        $pol = New-PolFile @([pscustomobject]@{ Key = $script:FfKey; ValueName = 'ExtensionSettings'; Type = $sz.Type; Data = $sz.Data })
+        $r = Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -LocalPolPath $pol
+        $r.Owner | Should -Be 'LocalGpo'
+        @($r.Evidence) -contains 'rsop-unavailable' | Should -BeTrue
+    }
+
+    It 'Unreadable local Registry.pol propagates local-gpo-unreadable' {
+        $bad = Join-Path $script:Case 'Registry.pol'
+        [System.IO.File]::WriteAllBytes($bad, [byte[]](1,2,3,4,5,6,7,8,9))
+        { Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'X' -LocalPolPath $bad } | Should -Throw 'local-gpo-unreadable*'
+    }
+}
