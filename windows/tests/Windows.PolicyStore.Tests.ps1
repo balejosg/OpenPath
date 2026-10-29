@@ -831,6 +831,69 @@ Describe 'PolicyStore module' {
         Test-Path -LiteralPath $global:PSTPaths.LegacyLedger | Should -BeTrue
     }
 
+    It 'Every mutator returns local-gpo-busy and writes nothing when the store lock is not acquired' {
+        Mock Enter-OpenPathLocalGpoLock { $null } -ModuleName PolicyStore
+        (Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson).FailureCode | Should -Be 'local-gpo-busy'
+        (Remove-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings').FailureCode | Should -Be 'local-gpo-busy'
+        (Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x')).FailureCode | Should -Be 'local-gpo-busy'
+        (Remove-OpenPathManagedPolicyList -Key $script:ChromeListKey).FailureCode | Should -Be 'local-gpo-busy'
+        Set-OpenPathPolicyStoreLastOwner -Key $script:FfKey -ValueName 'ExtensionSettings' -Owner 'LocalGpo' | Should -BeFalse
+        Test-Path -LiteralPath $global:PSTPaths.RegistryPol | Should -BeFalse
+        Test-Path -LiteralPath $global:PSTPaths.Ledger | Should -BeFalse
+        $global:PSTReg.Count | Should -Be 0
+        Should -Invoke Get-OpenPathPolicyValueOwner -ModuleName PolicyStore -Times 0 -Exactly
+    }
+
+    It 'Releases the store lock after each call, also on failure' {
+        Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson | Out-Null
+        Mock Get-OpenPathPolicyValueOwner { throw 'unexpected owner failure' } -ModuleName PolicyStore
+        { Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'Other' -Type String -Value 'x' } | Should -Throw
+        $ps = [powershell]::Create()
+        try {
+            [void]$ps.AddScript('$m = New-Object System.Threading.Mutex($false, ''Global\OpenPath-LocalGpo-v1''); $ok = $m.WaitOne(0); if ($ok) { $m.ReleaseMutex() }; $m.Dispose(); $ok')
+            # BeginInvoke runs on another thread; the same thread would re-enter a leaked mutex.
+            @($ps.EndInvoke($ps.BeginInvoke()))[0] | Should -BeTrue
+        }
+        finally { $ps.Dispose() }
+    }
+
+    It 'Recomputes the merge from fresh bytes when Registry.pol changed before the replace' {
+        $global:PSTConflicts = 1
+        Mock Read-OpenPathPolicyStoreBytes {
+            if ($global:PSTConflicts -gt 0) {
+                $global:PSTConflicts--
+                $d = ConvertTo-OpenPathRegistryPolData -Type DWord -Value 1
+                Write-OpenPathRegistryPolFile -Path $PolPath -Entries @([pscustomobject]@{ Key = 'Software\Policies\Microsoft\Windows\SrpV2\Exe'; ValueName = 'EnforcementMode'; Type = $d.Type; Data = $d.Data })
+            }
+            if (-not [System.IO.File]::Exists($PolPath)) { return $null }
+            return ,([System.IO.File]::ReadAllBytes($PolPath))
+        } -ModuleName PolicyStore -ParameterFilter { $BeforeReplace }
+
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.Applied | Should -BeTrue
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol)
+        @($read | ForEach-Object { $_.ValueName }) -join ',' | Should -Be 'EnforcementMode,ExtensionSettings'
+        Remove-Variable -Name PSTConflicts -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'Gives up with local-gpo-busy after three conflicting attempts' {
+        $global:PSTConflicts = 0
+        Mock Read-OpenPathPolicyStoreBytes {
+            $global:PSTConflicts++
+            $d = ConvertTo-OpenPathRegistryPolData -Type DWord -Value $global:PSTConflicts
+            Write-OpenPathRegistryPolFile -Path $PolPath -Entries @([pscustomobject]@{ Key = 'Software\Policies\Other'; ValueName = 'Counter'; Type = $d.Type; Data = $d.Data })
+            return ,([System.IO.File]::ReadAllBytes($PolPath))
+        } -ModuleName PolicyStore -ParameterFilter { $BeforeReplace }
+
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x')
+        $r.FailureCode | Should -Be 'local-gpo-busy'
+        $r.Applied | Should -BeFalse
+        $global:PSTConflicts | Should -Be 3
+        @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol | Where-Object { $_.Key -eq $script:ChromeListKey }).Count | Should -Be 0
+        Test-Path -LiteralPath $global:PSTPaths.GptIni | Should -BeFalse
+        Remove-Variable -Name PSTConflicts -Scope Global -ErrorAction SilentlyContinue
+    }
+
     It 'gpt.ini bump failure still reports Changed with a failure code' {
         Mock Step-OpenPathLocalGpoMachineVersion { throw 'gpt locked' } -ModuleName PolicyStore
         $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
@@ -955,5 +1018,42 @@ Describe 'PolicyStore ledger storage' {
         Mock Remove-Item { throw 'access denied' } -ModuleName PolicyStore -ParameterFilter { "$LiteralPath" -like 'HKLM:*' }
         { Remove-OpenPathPolicyStoreLedger } | Should -Not -Throw
         Remove-OpenPathPolicyStoreLedger | Should -BeFalse
+    }
+}
+
+Describe 'PolicyStore local GPO lock' {
+    BeforeAll {
+        $script:StoreModule = Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'lib') 'PolicyStore.psm1'
+        Import-Module $script:StoreModule -Force -ErrorAction Stop
+    }
+
+    It 'Times out while another thread holds the mutex and acquires it once released' {
+        $release = New-Object System.Threading.ManualResetEvent($false)
+        $held = New-Object System.Threading.ManualResetEvent($false)
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({
+                param($Held, $Release)
+                $m = New-Object System.Threading.Mutex($false, 'Global\OpenPath-LocalGpo-v1')
+                [void]$m.WaitOne()
+                [void]$Held.Set()
+                [void]$Release.WaitOne(10000)
+                $m.ReleaseMutex()
+                $m.Dispose()
+            }).AddArgument($held).AddArgument($release)
+        $async = $ps.BeginInvoke()
+        try {
+            $held.WaitOne(10000) | Should -BeTrue
+            $busy = & (Get-Module PolicyStore) { Enter-OpenPathLocalGpoLock -TimeoutMs 200 }
+            $busy | Should -BeNullOrEmpty
+            [void]$release.Set()
+            [void]$ps.EndInvoke($async)
+            $lock = & (Get-Module PolicyStore) { Enter-OpenPathLocalGpoLock -TimeoutMs 2000 }
+            $lock | Should -Not -BeNullOrEmpty
+            & (Get-Module PolicyStore) { param($l) Exit-OpenPathLocalGpoLock -Lock $l } $lock
+        }
+        finally {
+            [void]$release.Set()
+            $ps.Dispose()
+        }
     }
 }

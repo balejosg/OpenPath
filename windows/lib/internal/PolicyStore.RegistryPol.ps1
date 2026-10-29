@@ -52,6 +52,18 @@ function Read-OpenPathRegistryPolFile {
     catch {
         throw "local-gpo-unreadable: cannot read ${Path}: $($_.Exception.Message)"
     }
+    return (ConvertFrom-OpenPathRegistryPolBytes -Bytes $bytes -Path $Path)
+}
+
+# Note: like Read-OpenPathRegistryPolFile, wrap call sites in @().
+function ConvertFrom-OpenPathRegistryPolBytes {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes,
+        [string]$Path = 'Registry.pol'
+    )
+
+    $bytes = $Bytes
     if ($bytes.Length -lt 8 -or
         [System.Text.Encoding]::ASCII.GetString($bytes, 0, 4) -ne 'PReg' -or
         [BitConverter]::ToUInt32($bytes, 4) -ne 1) {
