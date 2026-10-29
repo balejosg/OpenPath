@@ -62,7 +62,7 @@ Describe "Installer" {
             $plan.Parameters.WhitelistUrl | Should -Be 'https://allow.example.test'
             $plan.Parameters.BrowserCleanupMode | Should -Be 'ReportOnly'
             ($plan.Phases | Where-Object Name -eq 'firefox-managed-extension-ready').RecoveryHint |
-                Should -Be 'Check Firefox Release installation and executable discovery; inspect managed extension policy only after executable discovery succeeds.'
+                Should -Be 'Check Firefox Release installation and executable discovery; if ExtensionSettings is owned by a domain GPO or MDM, add the OpenPath entry printed above to that policy.'
         }
 
         It "Returns structured success and failure results for installer phases" {
@@ -2715,6 +2715,105 @@ exit `$installerExitCode
 
             $content | Should -Match '(?s)Invoke-OpenPathInstallerEnrollment.*Invoke-OpenPathInstallerFirstUpdate.*Register-OpenPathTask -OpenPathRoot \$OpenPathRoot -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1.*Start-OpenPathInstallerRealtimeUpdates'
             $content | Should -Not -Match '(?s)Register-OpenPathTask -OpenPathRoot \$OpenPathRoot -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1.*Start-OpenPathTask -TaskType SSE.*Invoke-OpenPathInstallerEnrollment'
+        }
+    }
+
+    Context "Firefox readiness phase after a forced policy refresh" {
+        BeforeAll {
+            function Get-OpenPathReadinessPhaseAction {
+                $installerPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($installerPath, [ref]$null, [ref]$null)
+                $call = $ast.Find({
+                        param($node)
+                        $node -is [System.Management.Automation.Language.CommandAst] -and
+                        $node.GetCommandName() -eq 'Invoke-OpenPathPlannedPhase' -and
+                        $node.Extent.Text -match "-Name 'firefox-managed-extension-ready'"
+                    }, $true)
+                $scriptBlockAst = $call.Find({ param($node) $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }, $true)
+                return [scriptblock]::Create($scriptBlockAst.Extent.Text.Trim().TrimStart('{').TrimEnd('}'))
+            }
+        }
+
+        BeforeEach {
+            $script:readinessCalls = [System.Collections.Generic.List[string]]::new()
+            $script:readinessErrors = [System.Collections.Generic.List[string]]::new()
+            $script:readinessWarnings = [System.Collections.Generic.List[string]]::new()
+            $script:readinessRefreshArgs = $null
+            $script:readinessResult = [pscustomobject]@{ Ready = $true; FailureCode = ''; Message = '' }
+            $script:readinessRefreshExitCode = 0
+            $script:classroomModeRequested = $true
+            $script:pendingEnrollment = $false
+
+            function global:Start-OpenPathInstallTimedStep { param($Name) }
+            function global:Complete-OpenPathInstallTimedStep { param($Name, $Status, $ErrorMessage) }
+            function global:Get-OpenPathConfig { [pscustomobject]@{ apiUrl = 'https://openpath.example.invalid' } }
+            function global:Write-InstallerVerbose { param($Message) }
+            function global:Write-InstallerWarning { param($Message) $script:readinessWarnings.Add([string]$Message) }
+            function global:Write-InstallerError { param($Message) $script:readinessErrors.Add([string]$Message) }
+            function global:Invoke-OpenPathPolicyRefresh {
+                param([switch]$Force, [int]$TimeoutSeconds = 0)
+                $script:readinessCalls.Add('refresh')
+                $script:readinessRefreshArgs = [pscustomobject]@{ Force = $Force.IsPresent; TimeoutSeconds = $TimeoutSeconds }
+                return [pscustomobject]@{ ExitCode = $script:readinessRefreshExitCode; DurationMs = 12 }
+            }
+            function global:Test-OpenPathFirefoxManagedExtensionReady {
+                param($Config)
+                $script:readinessCalls.Add('ready')
+                return $script:readinessResult
+            }
+        }
+
+        AfterEach {
+            foreach ($name in 'Start-OpenPathInstallTimedStep', 'Complete-OpenPathInstallTimedStep', 'Get-OpenPathConfig', 'Write-InstallerVerbose', 'Write-InstallerWarning', 'Write-InstallerError', 'Invoke-OpenPathPolicyRefresh', 'Test-OpenPathFirefoxManagedExtensionReady') {
+                Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Refreshes policy with -Force before testing readiness" {
+            $action = Get-OpenPathReadinessPhaseAction
+            & $action
+
+            @($script:readinessCalls) | Should -Be @('refresh', 'ready')
+            $script:readinessRefreshArgs.Force | Should -BeTrue
+            $script:readinessRefreshArgs.TimeoutSeconds | Should -Be 120
+        }
+
+        It "Treats a failed refresh as a warning and lets readiness decide" {
+            $script:readinessRefreshExitCode = 1
+            $action = Get-OpenPathReadinessPhaseAction
+            { & $action } | Should -Not -Throw
+
+            @($script:readinessCalls) | Should -Be @('refresh', 'ready')
+            @($script:readinessWarnings | Where-Object { $_ -match 'ExitCode' }).Count | Should -BeGreaterThan 0
+        }
+
+        It "Does not refresh or test readiness outside registered classroom mode" {
+            $script:pendingEnrollment = $true
+            $action = Get-OpenPathReadinessPhaseAction
+            & $action
+
+            @($script:readinessCalls).Count | Should -Be 0
+        }
+
+        It "Externally managed failure prints the full admin entry" {
+            $adminEntry = '{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://openpath.example.invalid/api/extensions/firefox/openpath.xpi"}}'
+            $script:readinessResult = [pscustomobject]@{
+                Ready = $false
+                FailureCode = 'firefox-machine-policy-externally-managed'
+                Message = "Firefox ExtensionSettings is managed by GPO 'School Firefox' (owner=domain-gpo).`nAdd this entry to that policy:`n$adminEntry"
+            }
+            $action = Get-OpenPathReadinessPhaseAction
+            { & $action } | Should -Throw '*readiness validation failed*'
+
+            $printed = @($script:readinessErrors) -join "`n"
+            $printed | Should -Match 'firefox-machine-policy-externally-managed'
+            $printed | Should -Match 'School Firefox'
+            $printed.Contains($adminEntry) | Should -BeTrue
+        }
+
+        It "Wires the refresh immediately before the readiness check in the installer source" {
+            $content = Get-Content (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1") -Raw
+            $content | Should -Match '(?s)Invoke-OpenPathPolicyRefresh -Force -TimeoutSeconds 120.*Test-OpenPathFirefoxManagedExtensionReady -Config \$firefoxReadyConfig'
         }
     }
 

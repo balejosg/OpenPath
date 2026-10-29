@@ -441,6 +441,12 @@ function Remove-OpenPathInstallerBrowserArtifacts {
     <#
     .SYNOPSIS
         Removes Firefox distribution policy files and all OpenPath-related browser registry keys
+    .DESCRIPTION
+        Browser policy values live in the registry AND in the local GPO (Registry.pol), so deleting
+        only the registry keys lets the next Group Policy refresh restore them. When Browser.psm1 is
+        loaded, Remove-BrowserPolicy removes OpenPath's Firefox ExtensionSettings entry and the
+        Chromium lists/scalars through the policy store. Before that module is imported (for example
+        reinstall cleanup) the previous direct key removal is the fallback.
     #>
     $firefoxPolicies = @(
         "$env:ProgramFiles\Mozilla Firefox\distribution\policies.json",
@@ -452,14 +458,41 @@ function Remove-OpenPathInstallerBrowserArtifacts {
         }
     }
 
+    $storeRemovalDone = $false
+    if (Get-Command -Name Remove-BrowserPolicy -ErrorAction SilentlyContinue) {
+        # Covers the Firefox ExtensionSettings entry (it calls the Firefox removal itself) and the
+        # Chromium lists/scalars; one failure must not abort the rest of the cleanup.
+        try {
+            Remove-BrowserPolicy | Out-Null
+            $storeRemovalDone = $true
+        }
+        catch {
+            Write-InstallerWarning "  Could not remove browser policies through the policy store: $_"
+        }
+    }
+    elseif (Get-Command -Name Remove-OpenPathFirefoxMachineExtensionPolicy -ErrorAction SilentlyContinue) {
+        try {
+            Remove-OpenPathFirefoxMachineExtensionPolicy | Out-Null
+        }
+        catch {
+            Write-InstallerWarning "  Could not remove the Firefox machine extension policy: $_"
+        }
+    }
+
     $registryPaths = @(
         'HKLM\SOFTWARE\Mozilla\NativeMessagingHosts\whitelist_native_host',
-        'HKLM\SOFTWARE\WOW6432Node\Mozilla\NativeMessagingHosts\whitelist_native_host',
-        'HKLM:\SOFTWARE\Policies\Google\Chrome\URLBlocklist',
-        'HKLM:\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist',
-        'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist',
-        'HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist'
+        'HKLM\SOFTWARE\WOW6432Node\Mozilla\NativeMessagingHosts\whitelist_native_host'
     )
+    if (-not $storeRemovalDone) {
+        # Fallback: direct key removal does not touch the local GPO, so say so.
+        Write-InstallerWarning '  Browser policy store unavailable; removing Chromium policy keys directly. The local GPO may still hold OpenPath entries.'
+        $registryPaths += @(
+            'HKLM:\SOFTWARE\Policies\Google\Chrome\URLBlocklist',
+            'HKLM:\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist',
+            'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist',
+            'HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist'
+        )
+    }
     foreach ($registryPath in $registryPaths) {
         Remove-OpenPathInstallerRegistryKeyIfPresent -RegistryPath $registryPath
     }

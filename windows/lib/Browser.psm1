@@ -590,6 +590,11 @@ Export-ModuleMember -Function @(
     'Unregister-OpenPathFirefoxNativeHost',
     'Sync-OpenPathFirefoxManagedExtensionPolicy',
     'Test-OpenPathFirefoxManagedExtensionReady',
+    # Local GPO policy store: the installer forces a Group Policy refresh before
+    # the readiness check, and uninstall removes legacy-id Firefox entries
+    # through the store; both consume Browser.psm1 only.
+    'Invoke-OpenPathPolicyRefresh',
+    'Remove-OpenPathFirefoxMachineExtensionPolicy',
     'Sync-OpenPathFirefoxNetworkAutoconfig',
     'Set-ChromePolicy',
     'Remove-BrowserPolicy',

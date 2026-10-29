@@ -466,4 +466,161 @@ Describe "Installer cleanup helper" {
             Remove-Variable -Name registryWrites, registryRemoved, extensionSettings -Scope Script -ErrorAction SilentlyContinue
         }
     }
+
+    Context "Browser policy cleanup through the local GPO store" {
+        BeforeEach {
+            $script:removedRegistryKeys = [System.Collections.Generic.List[string]]::new()
+            $script:storeCalls = [System.Collections.Generic.List[string]]::new()
+            $script:cleanupWarnings = [System.Collections.Generic.List[string]]::new()
+            $script:removeItemTargets = [System.Collections.Generic.List[string]]::new()
+        }
+
+        AfterEach {
+            foreach ($name in 'Remove-BrowserPolicy', 'Remove-OpenPathFirefoxMachineExtensionPolicy', 'Write-InstallerWarning', 'Remove-OpenPathInstallerRegistryKeyIfPresent') {
+                Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+            }
+            Remove-Variable -Name removedRegistryKeys, storeCalls, cleanupWarnings, removeItemTargets -Scope Script -ErrorAction SilentlyContinue
+        }
+
+        It "Rollback removes Firefox machine policy when browser module loaded" {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+            function global:Write-InstallerWarning { param($Message) $script:cleanupWarnings.Add([string]$Message) }
+            function global:Remove-BrowserPolicy { $script:storeCalls.Add('Remove-BrowserPolicy') }
+            function global:Remove-OpenPathFirefoxMachineExtensionPolicy { $script:storeCalls.Add('Remove-OpenPathFirefoxMachineExtensionPolicy') }
+            function Remove-OpenPathInstallerRegistryKeyIfPresent { param([string]$RegistryPath) $script:removedRegistryKeys.Add($RegistryPath) }
+
+            { Remove-OpenPathInstallerBrowserArtifacts } | Should -Not -Throw
+
+            # Remove-BrowserPolicy owns the Firefox entry; the Firefox removal is not repeated.
+            @($script:storeCalls) | Should -Be @('Remove-BrowserPolicy')
+            # The Chromium policy keys are no longer deleted behind the store's back.
+            @($script:removedRegistryKeys | Where-Object { $_ -like '*Policies*' }).Count | Should -Be 0
+            # Native messaging host keys are still removed directly.
+            @($script:removedRegistryKeys | Where-Object { $_ -like '*whitelist_native_host' }).Count | Should -Be 2
+            @($script:cleanupWarnings | Where-Object { $_ -match 'local GPO' }).Count | Should -Be 0
+        }
+
+        It "Rollback tolerates missing browser module" {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+            function global:Write-InstallerWarning { param($Message) $script:cleanupWarnings.Add([string]$Message) }
+            function Remove-OpenPathInstallerRegistryKeyIfPresent { param([string]$RegistryPath) $script:removedRegistryKeys.Add($RegistryPath) }
+            Get-Command -Name Remove-BrowserPolicy -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+
+            { Remove-OpenPathInstallerBrowserArtifacts } | Should -Not -Throw
+
+            # Fallback keeps the direct key removal for the Chromium lists...
+            foreach ($key in @(
+                    'HKLM:\SOFTWARE\Policies\Google\Chrome\URLBlocklist',
+                    'HKLM:\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist',
+                    'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist',
+                    'HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist'
+                )) {
+                $script:removedRegistryKeys | Should -Contain $key
+            }
+            # ...and says the local GPO may still hold OpenPath entries.
+            @($script:cleanupWarnings | Where-Object { $_ -match 'local GPO' }).Count | Should -BeGreaterThan 0
+        }
+
+        It "Rollback falls back to the Firefox policy removal when only that command is available" {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+            function global:Write-InstallerWarning { param($Message) $script:cleanupWarnings.Add([string]$Message) }
+            function global:Remove-OpenPathFirefoxMachineExtensionPolicy { $script:storeCalls.Add('Remove-OpenPathFirefoxMachineExtensionPolicy') }
+            function Remove-OpenPathInstallerRegistryKeyIfPresent { param([string]$RegistryPath) $script:removedRegistryKeys.Add($RegistryPath) }
+
+            { Remove-OpenPathInstallerBrowserArtifacts } | Should -Not -Throw
+
+            @($script:storeCalls) | Should -Be @('Remove-OpenPathFirefoxMachineExtensionPolicy')
+            $script:removedRegistryKeys | Should -Contain 'HKLM:\SOFTWARE\Policies\Google\Chrome\URLBlocklist'
+        }
+
+        It "A failing store removal does not abort the remaining browser cleanup" {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+            function global:Write-InstallerWarning { param($Message) $script:cleanupWarnings.Add([string]$Message) }
+            function global:Remove-BrowserPolicy { throw 'store unavailable' }
+            function Remove-OpenPathInstallerRegistryKeyIfPresent { param([string]$RegistryPath) $script:removedRegistryKeys.Add($RegistryPath) }
+
+            { Remove-OpenPathInstallerBrowserArtifacts } | Should -Not -Throw
+
+            @($script:removedRegistryKeys | Where-Object { $_ -like '*whitelist_native_host' }).Count | Should -Be 2
+            @($script:cleanupWarnings | Where-Object { $_ -match 'store unavailable' }).Count | Should -BeGreaterThan 0
+        }
+    }
+
+    Context "Standalone uninstall through the local GPO store" {
+        BeforeEach {
+            $script:storeRemovals = [System.Collections.Generic.List[string]]::new()
+            $script:registryWrites = @()
+            $script:registryRemoved = @()
+            $script:extensionSettings = @()
+
+            function global:Remove-OpenPathFirefoxMachineExtensionPolicy {
+                param($ManagedExtensionPolicy)
+                $script:storeRemovals.Add([string]$ManagedExtensionPolicy.ExtensionId)
+                return $true
+            }
+            function global:Remove-BrowserPolicy { [CmdletBinding()] param() }
+            function global:Test-Path {
+                param([string]$Path, [string]$LiteralPath)
+                $target = [string]$Path + [string]$LiteralPath
+                return ($target -like '*firefox.exe')
+            }
+            function global:Get-ItemProperty {
+                [CmdletBinding()] param([string]$Path, [string]$Name)
+                if ($Name -eq 'ExtensionSettings' -and $script:extensionSettings.Count -gt 0) { return [pscustomobject]@{ ExtensionSettings = $script:extensionSettings } }
+                throw 'not found'
+            }
+            function global:Get-Item { [CmdletBinding()] param([string]$Path) throw 'not found' }
+            function global:New-Item { [CmdletBinding()] param([string]$Path, [switch]$Force) }
+            function global:Remove-ItemProperty { [CmdletBinding()] param([string]$Path, [string]$Name) $script:registryRemoved += $Name }
+            function global:New-ItemProperty {
+                [CmdletBinding()] param([string]$Path, [string]$Name, $Value, [string]$PropertyType, [switch]$Force)
+                $script:registryWrites += [pscustomobject]@{ Path = $Path; Name = $Name; Value = $Value }
+            }
+        }
+
+        AfterEach {
+            foreach ($name in 'Remove-OpenPathFirefoxMachineExtensionPolicy', 'Remove-BrowserPolicy', 'Test-Path', 'Get-ItemProperty', 'Get-Item', 'New-Item', 'Remove-ItemProperty', 'New-ItemProperty') {
+                Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+            }
+            Remove-Variable -Name storeRemovals, registryWrites, registryRemoved, extensionSettings -Scope Script -ErrorAction SilentlyContinue
+        }
+
+        It "Uninstall removes only OpenPath entry and is a no-op when value is gone" {
+            $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+            foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OpenPathFirefoxManagedExtension' }, $true)) {
+                . ([scriptblock]::Create($fn.Extent.Text))
+            }
+            $OpenPathRoot = Join-Path $TestDrive 'OpenPath'
+
+            # Value gone (vendor already removed it): no error, nothing resurrected or rewritten directly.
+            $script:extensionSettings = @()
+            { Remove-OpenPathFirefoxManagedExtension -EntryRemovedByStore } | Should -Not -Throw
+            @($script:registryWrites | Where-Object Name -eq 'ExtensionSettings').Count | Should -Be 0
+            @($script:registryRemoved | Where-Object { $_ -eq 'ExtensionSettings' }).Count | Should -Be 0
+
+            # Value present with a foreign entry: only OpenPath ids are handed to the store, never other@vendor.
+            $script:storeRemovals.Clear()
+            $script:extensionSettings = @(
+                '{"renamed-id@openpath":{"installation_mode":"force_installed","install_url":"https://openpath.example.invalid/api/extensions/firefox/openpath.xpi?openpath_version=1"},"other@vendor":{"installation_mode":"allowed"}}'
+            )
+            { Remove-OpenPathFirefoxManagedExtension -EntryRemovedByStore } | Should -Not -Throw
+            $script:storeRemovals | Should -Contain 'renamed-id@openpath'
+            $script:storeRemovals | Should -Contain 'openpath-block-monitor@openpath'
+            $script:storeRemovals | Should -Not -Contain 'other@vendor'
+            # No direct write to the policy value: the store owns it.
+            @($script:registryWrites | Where-Object Name -eq 'ExtensionSettings').Count | Should -Be 0
+            # The add-on uninstall list is still scheduled.
+            $uninstallIds = @($script:registryWrites | Where-Object { $_.Path -like '*Extensions\Uninstall' } | ForEach-Object { $_.Value })
+            $uninstallIds | Should -Contain 'renamed-id@openpath'
+        }
+
+        It "Uninstall calls Remove-BrowserPolicy once and skips the direct Chromium key removal when the store is available" {
+            $content = Get-Content (Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1") -Raw
+            $content | Should -Match "Get-Command -Name Remove-BrowserPolicy -ErrorAction SilentlyContinue"
+            $content | Should -Match 'Remove-OpenPathFirefoxManagedExtension -EntryRemovedByStore:\$browserPolicyStoreAvailable'
+            $content | Should -Match '(?s)\$browserPolicyRemovedViaStore = \$true'
+            $content | Should -Match 'if \(-not \$browserPolicyRemovedViaStore\)'
+        }
+    }
 }

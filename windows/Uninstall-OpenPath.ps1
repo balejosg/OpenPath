@@ -262,6 +262,11 @@ function Restore-OpenPathOriginalDns {
 }
 
 function Remove-OpenPathFirefoxManagedExtension {
+    # With -EntryRemovedByStore the OpenPath entry in ExtensionSettings is removed through the
+    # local GPO policy store (so it also leaves Registry.pol, not only the registry); the direct
+    # registry write below is then skipped and kept only as the fallback when the store is unavailable.
+    param([switch]$EntryRemovedByStore)
+
     # Install force-installs the extension through the machine registry policy
     # (HKLM\SOFTWARE\Policies\Mozilla\Firefox\ExtensionSettings). Deleting only
     # distribution\policies.json leaves that registry policy in place, and dropping a
@@ -304,7 +309,22 @@ function Remove-OpenPathFirefoxManagedExtension {
         }
     }
 
-    if ($hadManagedEntry) {
+    if ($EntryRemovedByStore) {
+        # Legacy and renamed ids (matched by install_url above) are not covered by
+        # Remove-BrowserPolicy, which only knows the current id. Each call is a no-op when the
+        # id is absent and never touches entries it does not own.
+        if (Get-Command -Name Remove-OpenPathFirefoxMachineExtensionPolicy -ErrorAction SilentlyContinue) {
+            foreach ($storeId in @($extensionIds | Select-Object -Unique)) {
+                try {
+                    Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy ([pscustomobject]@{ ExtensionId = $storeId }) | Out-Null
+                }
+                catch {
+                    Write-Warning "Could not remove Firefox policy entry ${storeId} through the policy store: $_"
+                }
+            }
+        }
+    }
+    elseif ($hadManagedEntry) {
         if ($remaining.Count -eq 0) {
             Remove-ItemProperty -Path $policyKey -Name 'ExtensionSettings' -ErrorAction SilentlyContinue
         }
@@ -514,7 +534,22 @@ foreach ($path in $firefoxPolicies) {
     }
 }
 
-Remove-OpenPathFirefoxManagedExtension
+# Browser policies live in the registry and in the local GPO (Registry.pol): remove them through
+# the policy store when Browser.psm1 loaded, otherwise fall back to the direct registry logic.
+# The Firefox function runs first so it can still read the entries it has to hand to the store.
+$browserPolicyStoreAvailable = [bool](Get-Command -Name Remove-BrowserPolicy -ErrorAction SilentlyContinue)
+Remove-OpenPathFirefoxManagedExtension -EntryRemovedByStore:$browserPolicyStoreAvailable
+
+$browserPolicyRemovedViaStore = $false
+if ($browserPolicyStoreAvailable) {
+    try {
+        Remove-BrowserPolicy | Out-Null
+        $browserPolicyRemovedViaStore = $true
+    }
+    catch {
+        Write-Warning "Could not remove browser policies through the policy store; using direct registry removal: $_"
+    }
+}
 
 $firefoxNativeHostRegistryPaths = @(
     'HKLM\SOFTWARE\Mozilla\NativeMessagingHosts\whitelist_native_host',
@@ -568,9 +603,11 @@ $regPaths = @(
     "HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist",
     "HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist"
 )
-foreach ($path in $regPaths) {
-    if (Test-Path $path) {
-        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+if (-not $browserPolicyRemovedViaStore) {
+    foreach ($path in $regPaths) {
+        if (Test-Path $path) {
+            Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 Write-Host "  Browser policies removed" -ForegroundColor Green

@@ -850,6 +850,15 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
         Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
         $firefoxReadyConfig = Get-OpenPathConfig
         if ($classroomModeRequested -and -not $pendingEnrollment) {
+            # A forced Group Policy refresh first, so the readiness check sees the effective
+            # policy (local GPO plus any domain GPO or MDM) rather than a stale snapshot.
+            if (Get-Command -Name Invoke-OpenPathPolicyRefresh -ErrorAction SilentlyContinue) {
+                $policyRefresh = Invoke-OpenPathPolicyRefresh -Force -TimeoutSeconds 120
+                Write-InstallerVerbose "  Group Policy refresh: ExitCode=$($policyRefresh.ExitCode) DurationMs=$($policyRefresh.DurationMs)"
+                if ($policyRefresh.ExitCode -ne 0) {
+                    Write-InstallerWarning "  WARNING: Group Policy refresh did not complete cleanly (ExitCode=$($policyRefresh.ExitCode)); readiness will decide"
+                }
+            }
             $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig
             if (-not $firefoxReady.Ready) {
                 Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$firefoxReady.FailureCode)
