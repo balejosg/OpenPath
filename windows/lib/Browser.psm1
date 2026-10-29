@@ -4,6 +4,7 @@
 . (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
 $script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
+Import-Module "$PSScriptRoot\PolicyStore.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxPolicy.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxConfig.psm1" -Force -ErrorAction Stop
@@ -243,9 +244,107 @@ function Sync-OpenPathFirefoxNetworkAutoconfig {
     Browser.FirefoxConfig\Sync-OpenPathFirefoxNetworkAutoconfig
 }
 
+function Get-OpenPathChromiumPolicyBrowsers {
+    # returns the policy-store key (no HKLM prefix) and display registry path for each chromium browser
+    return @(
+        [PSCustomObject]@{ StoreKey = 'Software\Policies\Google\Chrome'; RegPath = 'HKLM:\SOFTWARE\Policies\Google\Chrome' },
+        [PSCustomObject]@{ StoreKey = 'Software\Policies\Microsoft\Edge'; RegPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' }
+    )
+}
+
+function Clear-OpenPathLegacyChromiumListValues {
+    # pre-store versions rewrote list keys directly in the registry on every run, so their numbered
+    # values are neither in the ledger nor in Registry.pol and the diff-based mirror would never
+    # delete them. When the list key is registry-only (owner Unknown) remove those numbered values
+    # once; after the first sync the values live in Registry.pol and this never repeats.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ListKey
+    )
+
+    try {
+        $owner = Get-OpenPathPolicyValueOwner -Key $ListKey -ValueName ''
+        if (-not $owner -or [string]$owner.Owner -ne 'Unknown') {
+            return
+        }
+
+        $regPath = "HKLM:\$ListKey"
+        if (-not (Test-Path -LiteralPath $regPath)) {
+            return
+        }
+
+        $props = Get-ItemProperty -LiteralPath $regPath -ErrorAction SilentlyContinue
+        if (-not $props) {
+            return
+        }
+
+        $numberedNames = @($props.PSObject.Properties |
+            Where-Object { $_.Name -match '^\d+$' } |
+            ForEach-Object { $_.Name })
+        foreach ($name in $numberedNames) {
+            Remove-ItemProperty -LiteralPath $regPath -Name $name -Force -ErrorAction Stop
+        }
+        if ($numberedNames.Count -gt 0) {
+            Write-OpenPathLog "Removed $($numberedNames.Count) legacy registry-only policy value(s) from $regPath before syncing through the local GPO store" -Level INFO
+        }
+    }
+    catch {
+        Write-OpenPathLog "Could not clear legacy Chromium policy values for ${ListKey}: $_" -Level WARN
+    }
+}
+
+function Test-OpenPathChromiumStoreResult {
+    # logs a WARN and returns $false when a policy store result reports a failure
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Result,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Key,
+
+        [AllowEmptyString()]
+        [string]$ValueName = ''
+    )
+
+    $target = $Key
+    if ($ValueName) {
+        $target = "$Key|$ValueName"
+    }
+
+    if (-not $Result) {
+        Write-OpenPathLog "Chromium policy store returned no result for $target" -Level WARN
+        return $false
+    }
+
+    $failureCode = ''
+    if ($Result.PSObject.Properties['FailureCode']) {
+        $failureCode = [string]$Result.FailureCode
+    }
+
+    if ($failureCode -eq 'policy-externally-managed') {
+        Write-OpenPathLog "Chromium policy $target is managed by $($Result.Owner) ($($Result.GpoName)); OpenPath cannot write it" -Level WARN
+        return $false
+    }
+
+    if ($failureCode) {
+        Write-OpenPathLog "Failed to write Chromium policy ${target}: $failureCode" -Level WARN
+        return $false
+    }
+
+    if ($Result.PSObject.Properties['Applied'] -and -not $Result.Applied) {
+        Write-OpenPathLog "Chromium policy $target was not applied" -Level WARN
+        return $false
+    }
+
+    return $true
+}
+
 function Set-ChromePolicy {
-    # writes chromium url blocklist and search provider policy registry keys for chrome and edge
+    # writes chromium url blocklist and search provider policies for chrome and edge through the local GPO store
     # also installs the managed extension force-list entry when metadata is present
+    # returns $false when any policy could not be written (for example a domain GPO or MDM owns it)
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string[]]$BlockedPaths = @(),
@@ -254,7 +353,7 @@ function Set-ChromePolicy {
         [object]$Config = $null
     )
 
-    if (-not $PSCmdlet.ShouldProcess("Chrome/Edge", "Configure browser policies via Registry")) {
+    if (-not $PSCmdlet.ShouldProcess("Chrome/Edge", "Configure browser policies via local GPO store")) {
         return $false
     }
 
@@ -268,65 +367,103 @@ function Set-ChromePolicy {
     $policySpec = Get-OpenPathBrowserPolicySpec
     $chromiumSpec = $policySpec.chromium
 
-    $regPaths = @(
-        "HKLM:\SOFTWARE\Policies\Google\Chrome",
-        "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
-    )
-
-    foreach ($regPath in $regPaths) {
-        try {
-            if (-not (Test-Path $regPath)) {
-                New-Item -Path $regPath -Force | Out-Null
-            }
-
-            $blocklistPath = "$regPath\URLBlocklist"
-            if (Test-Path $blocklistPath) {
-                Remove-Item $blocklistPath -Recurse -Force
-            }
-            New-Item -Path $blocklistPath -Force | Out-Null
-
-            $i = 1
-            foreach ($path in $BlockedPaths) {
-                if ($path) {
-                    Set-ItemProperty -Path $blocklistPath -Name $i -Value $path
-                    $i++
-                }
-            }
-
-            Set-ItemProperty -Path $blocklistPath -Name $i -Value ([string]$chromiumSpec.googleSearchBlock)
-            $i++
-            foreach ($googleGameBlock in @($chromiumSpec.googleGameBlocks)) {
-                if ($googleGameBlock) {
-                    Set-ItemProperty -Path $blocklistPath -Name $i -Value ([string]$googleGameBlock)
-                    $i++
-                }
-            }
-            Set-ItemProperty -Path $regPath -Name "DefaultSearchProviderEnabled" -Value ([int]$chromiumSpec.defaultSearchProviderEnabled) -Type DWord
-            Set-ItemProperty -Path $regPath -Name "DefaultSearchProviderName" -Value ([string]$chromiumSpec.defaultSearchProviderName)
-            Set-ItemProperty -Path $regPath -Name "DefaultSearchProviderSearchURL" -Value ([string]$chromiumSpec.defaultSearchProviderSearchURL)
-            Set-ItemProperty -Path $regPath -Name "DnsOverHttpsMode" -Value ([string]$chromiumSpec.dnsOverHttpsMode) -Type String
-
-            if ($managedExtensionPolicy) {
-                $forcelistPath = "$regPath\ExtensionInstallForcelist"
-                if (Test-Path $forcelistPath) {
-                    Remove-Item $forcelistPath -Recurse -Force
-                }
-                New-Item -Path $forcelistPath -Force | Out-Null
-                Set-ItemProperty -Path $forcelistPath -Name 1 -Value "$($managedExtensionPolicy.ExtensionId);$($managedExtensionPolicy.UpdateUrl)"
-            }
-
-            Write-OpenPathLog "Policies written to: $regPath"
+    $blocklistValues = New-Object System.Collections.Generic.List[string]
+    foreach ($path in $BlockedPaths) {
+        if ($path) {
+            $blocklistValues.Add([string]$path)
         }
-        catch {
-            Write-OpenPathLog "Failed to set policies for $regPath : $_" -Level WARN
+    }
+    $blocklistValues.Add([string]$chromiumSpec.googleSearchBlock)
+    foreach ($googleGameBlock in @($chromiumSpec.googleGameBlocks)) {
+        if ($googleGameBlock) {
+            $blocklistValues.Add([string]$googleGameBlock)
         }
     }
 
-    return $true
+    $scalarValues = @(
+        [PSCustomObject]@{ Name = 'DefaultSearchProviderEnabled'; Type = 'DWord'; Value = ([int]$chromiumSpec.defaultSearchProviderEnabled) },
+        [PSCustomObject]@{ Name = 'DefaultSearchProviderName'; Type = 'String'; Value = ([string]$chromiumSpec.defaultSearchProviderName) },
+        [PSCustomObject]@{ Name = 'DefaultSearchProviderSearchURL'; Type = 'String'; Value = ([string]$chromiumSpec.defaultSearchProviderSearchURL) },
+        [PSCustomObject]@{ Name = 'DnsOverHttpsMode'; Type = 'String'; Value = ([string]$chromiumSpec.dnsOverHttpsMode) }
+    )
+
+    $allApplied = $true
+    foreach ($browser in @(Get-OpenPathChromiumPolicyBrowsers)) {
+        $browserApplied = $true
+        try {
+            $blocklistKey = "$($browser.StoreKey)\URLBlocklist"
+            Clear-OpenPathLegacyChromiumListValues -ListKey $blocklistKey
+            $result = Sync-OpenPathManagedPolicyList -Key $blocklistKey -Values @($blocklistValues.ToArray())
+            if (-not (Test-OpenPathChromiumStoreResult -Result $result -Key $blocklistKey)) {
+                $browserApplied = $false
+            }
+
+            foreach ($scalar in $scalarValues) {
+                $result = Set-OpenPathManagedPolicyValue `
+                    -Key $browser.StoreKey `
+                    -ValueName $scalar.Name `
+                    -Type $scalar.Type `
+                    -Value $scalar.Value
+                if (-not (Test-OpenPathChromiumStoreResult -Result $result -Key $browser.StoreKey -ValueName $scalar.Name)) {
+                    $browserApplied = $false
+                }
+            }
+
+            if ($managedExtensionPolicy) {
+                $forcelistKey = "$($browser.StoreKey)\ExtensionInstallForcelist"
+                Clear-OpenPathLegacyChromiumListValues -ListKey $forcelistKey
+                $forcelistValue = "$($managedExtensionPolicy.ExtensionId);$($managedExtensionPolicy.UpdateUrl)"
+                $result = Sync-OpenPathManagedPolicyList -Key $forcelistKey -Values @($forcelistValue)
+                if (-not (Test-OpenPathChromiumStoreResult -Result $result -Key $forcelistKey)) {
+                    $browserApplied = $false
+                }
+            }
+
+            if ($browserApplied) {
+                Write-OpenPathLog "Policies written to: $($browser.RegPath)"
+            }
+        }
+        catch {
+            Write-OpenPathLog "Failed to set policies for $($browser.RegPath) : $_" -Level WARN
+            $browserApplied = $false
+        }
+
+        if (-not $browserApplied) {
+            $allApplied = $false
+        }
+    }
+
+    return $allApplied
+}
+
+function Write-OpenPathChromiumRemoveOutcome {
+    # logs a WARN (never an error) when the policy store could not remove an OpenPath-owned entry
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Result,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Key,
+
+        [AllowEmptyString()]
+        [string]$ValueName = ''
+    )
+
+    if (-not $Result -or -not $Result.PSObject.Properties['FailureCode'] -or -not $Result.FailureCode) {
+        return
+    }
+
+    $target = $Key
+    if ($ValueName) {
+        $target = "$Key|$ValueName"
+    }
+    Write-OpenPathLog "Could not remove Chromium policy ${target}: $($Result.FailureCode)" -Level WARN
 }
 
 function Remove-BrowserPolicy {
-    # removes all browser policy registry keys and policy files
+    # removes OpenPath browser policies (chromium via the local GPO store, firefox policy files)
+    # foreign entries in the same policy keys are left untouched
     # when preserve flag is set, keeps the firefox managed extension policy instead of deleting it
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -364,16 +501,35 @@ function Remove-BrowserPolicy {
     }
     Browser.FirefoxConfig\Remove-OpenPathFirefoxNetworkAutoconfig | Out-Null
 
-    $regPaths = @(
-        "HKLM:\SOFTWARE\Policies\Google\Chrome\URLBlocklist",
-        "HKLM:\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist",
-        "HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist",
-        "HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist"
+    $scalarNames = @(
+        'DefaultSearchProviderEnabled',
+        'DefaultSearchProviderName',
+        'DefaultSearchProviderSearchURL',
+        'DnsOverHttpsMode'
     )
 
-    foreach ($path in $regPaths) {
-        if (Test-Path $path) {
-            Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($browser in @(Get-OpenPathChromiumPolicyBrowsers)) {
+        foreach ($listName in @('URLBlocklist', 'ExtensionInstallForcelist')) {
+            $listKey = "$($browser.StoreKey)\$listName"
+            try {
+                # an upgrade that never re-synced leaves registry-only legacy values the ledger does not know
+                Clear-OpenPathLegacyChromiumListValues -ListKey $listKey
+                $result = Remove-OpenPathManagedPolicyList -Key $listKey
+                Write-OpenPathChromiumRemoveOutcome -Result $result -Key $listKey
+            }
+            catch {
+                Write-OpenPathLog "Failed to remove Chromium policy ${listKey}: $_" -Level WARN
+            }
+        }
+
+        foreach ($scalarName in $scalarNames) {
+            try {
+                $result = Remove-OpenPathManagedPolicyValue -Key $browser.StoreKey -ValueName $scalarName
+                Write-OpenPathChromiumRemoveOutcome -Result $result -Key $browser.StoreKey -ValueName $scalarName
+            }
+            catch {
+                Write-OpenPathLog "Failed to remove Chromium policy $($browser.StoreKey)|${scalarName}: $_" -Level WARN
+            }
         }
     }
 
