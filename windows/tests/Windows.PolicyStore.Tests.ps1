@@ -351,3 +351,401 @@ Describe 'PolicyStore.Owner' {
         { Get-OpenPathPolicyValueOwner -Key $script:FfKey -ValueName 'X' -LocalPolPath $bad } | Should -Throw 'local-gpo-unreadable*'
     }
 }
+
+Describe 'PolicyStore module' {
+    BeforeAll {
+        $script:StoreModule = Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'lib') 'PolicyStore.psm1'
+        . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'lib') 'internal') 'PolicyStore.RegistryPol.ps1')
+        Import-Module $script:StoreModule -Force -ErrorAction Stop
+
+        $script:TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-policystore-mod-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:TempRoot -Force | Out-Null
+        $script:FfKey = 'Software\Policies\Mozilla\Firefox'
+        $script:ChromeListKey = 'Software\Policies\Google\Chrome\ExtensionInstallBlocklist'
+        $script:SrpKey = 'Software\Policies\Microsoft\Windows\SrpV2\Exe'
+        $script:HpJson = '{"firefoxhpsureclicksecurebrowsing@bromium.com":{"installation_mode":"blocked"}}'
+        $script:OpenPathJson = '{"*":{"installation_mode":"blocked"}}'
+
+        function script:New-PolEntry {
+            param([string]$Key, [string]$ValueName, [string]$Type, $Value)
+            $d = ConvertTo-OpenPathRegistryPolData -Type $Type -Value $Value
+            [pscustomobject]@{ Key = $Key; ValueName = $ValueName; Type = $d.Type; Data = $d.Data }
+        }
+        function script:Get-GptVersion {
+            $text = [System.IO.File]::ReadAllText($global:PSTPaths.GptIni)
+            [int][regex]::Match($text, 'Version=(\d+)').Groups[1].Value
+        }
+    }
+
+    AfterAll {
+        Remove-Variable -Name PSTPaths, PSTReg, PSTKeys, PSTLedger -Scope Global -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    BeforeEach {
+        $case = Join-Path $script:TempRoot ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $case 'Machine') -Force | Out-Null
+        $global:PSTPaths = [pscustomobject]@{
+            RegistryPol = Join-Path (Join-Path $case 'Machine') 'Registry.pol'
+            GptIni = Join-Path $case 'gpt.ini'
+            Ledger = Join-Path $case 'policy-store-ledger.json'
+        }
+        $global:PSTReg = @{}
+        $global:PSTKeys = @{}
+
+        Mock Get-OpenPathLocalGpoPaths { [pscustomobject]@{ RegistryPol = $global:PSTPaths.RegistryPol; GptIni = $global:PSTPaths.GptIni } } -ModuleName PolicyStore
+        Mock Get-OpenPathPolicyStoreLedgerPath { $global:PSTPaths.Ledger } -ModuleName PolicyStore
+        Mock Write-OpenPathLog { } -ModuleName PolicyStore
+        Mock Get-OpenPathPolicyValueOwner { [pscustomobject]@{ Owner = 'None'; GpoName = ''; Evidence = @() } } -ModuleName PolicyStore
+
+        Mock Test-Path { $global:PSTKeys.ContainsKey(("$LiteralPath$Path").ToLowerInvariant()) } -ModuleName PolicyStore -ParameterFilter { "$LiteralPath$Path" -like 'HKLM:*' }
+        Mock New-Item { $global:PSTKeys[([string]$Path).ToLowerInvariant()] = $true } -ModuleName PolicyStore -ParameterFilter { "$Path" -like 'HKLM:*' }
+        Mock New-ItemProperty {
+            $global:PSTReg[(([string]$Path).ToLowerInvariant() + '|' + $Name)] = [pscustomobject]@{ Type = [string]$PropertyType; Value = $Value }
+        } -ModuleName PolicyStore
+        Mock Remove-ItemProperty {
+            $global:PSTReg.Remove((([string]$Path).ToLowerInvariant() + '|' + $Name))
+        } -ModuleName PolicyStore
+        Mock Get-ItemProperty {
+            $p = ("$LiteralPath$Path").ToLowerInvariant()
+            $o = [ordered]@{}
+            foreach ($k in $global:PSTReg.Keys) {
+                $parts = $k.Split('|', 2)
+                if ($parts[0] -eq $p) { $o[$parts[1]] = $global:PSTReg[$k].Value }
+            }
+            [pscustomobject]$o
+        } -ModuleName PolicyStore
+    }
+
+    It 'Exports the public surface' {
+        $names = @((Get-Module PolicyStore).ExportedFunctions.Keys)
+        foreach ($n in 'Get-OpenPathManagedPolicyValue', 'Set-OpenPathManagedPolicyValue', 'Remove-OpenPathManagedPolicyValue',
+            'Sync-OpenPathManagedPolicyList', 'Remove-OpenPathManagedPolicyList', 'Invoke-OpenPathPolicyRefresh',
+            'Get-OpenPathLocalGpoPaths', 'Get-OpenPathPolicyValueOwner') {
+            $names -contains $n | Should -BeTrue -Because $n
+        }
+    }
+
+    It 'Unchanged value does not touch Registry.pol or gpt.ini' {
+        $first = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $first.Applied | Should -BeTrue
+        $first.Changed | Should -BeTrue
+        $version = Get-GptVersion
+        $bytes = [System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)
+        $old = (Get-Item -LiteralPath $global:PSTPaths.RegistryPol).LastWriteTimeUtc.AddHours(-2)
+        (Get-Item -LiteralPath $global:PSTPaths.RegistryPol).LastWriteTimeUtc = $old
+        (Get-Item -LiteralPath $global:PSTPaths.GptIni).LastWriteTimeUtc = $old
+
+        $second = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $second.Applied | Should -BeTrue
+        $second.Changed | Should -BeFalse
+        Get-GptVersion | Should -Be $version
+        (Get-Item -LiteralPath $global:PSTPaths.RegistryPol).LastWriteTimeUtc | Should -Be $old
+        (Get-Item -LiteralPath $global:PSTPaths.GptIni).LastWriteTimeUtc | Should -Be $old
+        (([System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)) -join ',') | Should -Be ($bytes -join ',')
+        $version | Should -Be 1
+    }
+
+    It 'Still mirrors the registry when Registry.pol is unchanged' {
+        Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson | Out-Null
+        $global:PSTReg.Clear()
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.Changed | Should -BeFalse
+        $global:PSTReg["hklm:\$($script:FfKey.ToLowerInvariant())|ExtensionSettings"].Value | Should -Be $script:OpenPathJson
+        $global:PSTReg["hklm:\$($script:FfKey.ToLowerInvariant())|ExtensionSettings"].Type | Should -Be 'String'
+    }
+
+    It 'Mirrors DWord and MultiString with matching registry types' {
+        Set-OpenPathManagedPolicyValue -Key 'Software\Policies\Test' -ValueName 'Flag' -Type DWord -Value 1 | Out-Null
+        Set-OpenPathManagedPolicyValue -Key 'Software\Policies\Test' -ValueName 'Multi' -Type MultiString -Value @('a', 'b') | Out-Null
+        $global:PSTReg['hklm:\software\policies\test|Flag'].Type | Should -Be 'DWord'
+        $global:PSTReg['hklm:\software\policies\test|Multi'].Type | Should -Be 'MultiString'
+        @($global:PSTReg['hklm:\software\policies\test|Multi'].Value).Count | Should -Be 2
+        $global:PSTKeys.ContainsKey('hklm:\software\policies\test') | Should -BeTrue
+    }
+
+    It 'HP local GPO value is replaced with caller value keeping other entries' {
+        $srp = @(
+            (New-PolEntry $script:SrpKey 'Enabled' DWord 1),
+            (New-PolEntry "$($script:SrpKey)\0\Paths\{a}" 'ItemData' String 'C:\Windows\*'),
+            (New-PolEntry "$($script:SrpKey)\0\Paths\{b}" 'SaferFlags' DWord 0)
+        )
+        $hp = New-PolEntry $script:FfKey 'ExtensionSettings' String $script:HpJson
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries (@($hp) + $srp)
+        Mock Get-OpenPathPolicyValueOwner { [pscustomobject]@{ Owner = 'LocalGpo'; GpoName = ''; Evidence = @('registry-pol') } } -ModuleName PolicyStore
+
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.Applied | Should -BeTrue
+        $r.Changed | Should -BeTrue
+        $r.Owner | Should -Be 'LocalGpo'
+
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol)
+        $read.Count | Should -Be 4
+        $ff = @($read | Where-Object { $_.Key -eq $script:FfKey })
+        $ff.Count | Should -Be 1
+        ConvertFrom-OpenPathRegistryPolData -Type $ff[0].Type -Data $ff[0].Data | Should -Be $script:OpenPathJson
+        $others = @($read | Where-Object { $_.Key -ne $script:FfKey })
+        $others.Count | Should -Be 3
+        for ($i = 0; $i -lt 3; $i++) {
+            $others[$i].Key | Should -Be $srp[$i].Key
+            $others[$i].ValueName | Should -Be $srp[$i].ValueName
+            ($others[$i].Data -join ',') | Should -Be ($srp[$i].Data -join ',')
+        }
+        Get-GptVersion | Should -Be 1
+    }
+
+    It 'DomainGpo owner blocks all writes' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:SrpKey 'Enabled' DWord 1))
+        $before = [System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)
+        Mock Get-OpenPathPolicyValueOwner { [pscustomobject]@{ Owner = 'DomainGpo'; GpoName = 'School Policy'; Evidence = @('rsop:{x}') } } -ModuleName PolicyStore
+
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.Applied | Should -BeFalse
+        $r.Changed | Should -BeFalse
+        $r.FailureCode | Should -Be 'policy-externally-managed'
+        $r.Owner | Should -Be 'DomainGpo'
+        $r.GpoName | Should -Be 'School Policy'
+        (([System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)) -join ',') | Should -Be ($before -join ',')
+        Test-Path -LiteralPath $global:PSTPaths.GptIni | Should -BeFalse
+        $global:PSTReg.Count | Should -Be 0
+        Should -Invoke New-ItemProperty -ModuleName PolicyStore -Times 0 -Exactly
+    }
+
+    It 'Mdm owner blocks all writes' {
+        Mock Get-OpenPathPolicyValueOwner { [pscustomobject]@{ Owner = 'Mdm'; GpoName = ''; Evidence = @('mdm:x') } } -ModuleName PolicyStore
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.FailureCode | Should -Be 'policy-externally-managed'
+        $r.Owner | Should -Be 'Mdm'
+        Test-Path -LiteralPath $global:PSTPaths.RegistryPol | Should -BeFalse
+        $global:PSTReg.Count | Should -Be 0
+    }
+
+    It 'Unreadable Registry.pol returns local-gpo-unreadable and leaves bytes intact' {
+        $junk = [byte[]](1, 2, 3, 4, 5, 6, 7, 8, 9)
+        [System.IO.File]::WriteAllBytes($global:PSTPaths.RegistryPol, $junk)
+        Mock Get-OpenPathPolicyValueOwner { throw 'local-gpo-unreadable: bad header' } -ModuleName PolicyStore
+
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.Applied | Should -BeFalse
+        $r.FailureCode | Should -Be 'local-gpo-unreadable'
+        (([System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)) -join ',') | Should -Be ($junk -join ',')
+        Test-Path -LiteralPath $global:PSTPaths.GptIni | Should -BeFalse
+        $global:PSTReg.Count | Should -Be 0
+    }
+
+    It 'Unreadable Registry.pol is also caught when the owner probe does not read it' {
+        $junk = [byte[]](1, 2, 3, 4, 5, 6, 7, 8, 9)
+        [System.IO.File]::WriteAllBytes($global:PSTPaths.RegistryPol, $junk)
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson
+        $r.FailureCode | Should -Be 'local-gpo-unreadable'
+        (([System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)) -join ',') | Should -Be ($junk -join ',')
+        $global:PSTReg.Count | Should -Be 0
+    }
+
+    It 'WhatIf performs no writes' {
+        $r = Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson -WhatIf
+        $r.Applied | Should -BeFalse
+        Test-Path -LiteralPath $global:PSTPaths.RegistryPol | Should -BeFalse
+        $global:PSTReg.Count | Should -Be 0
+    }
+
+    It 'Get reads Registry.pol first, then the registry, then reports None' {
+        (Get-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings').Source | Should -Be 'None'
+
+        $global:PSTKeys["hklm:\$($script:FfKey.ToLowerInvariant())"] = $true
+        $global:PSTReg["hklm:\$($script:FfKey.ToLowerInvariant())|ExtensionSettings"] = [pscustomobject]@{ Type = 'String'; Value = 'from-registry' }
+        $reg = Get-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings'
+        $reg.Source | Should -Be 'Registry'
+        $reg.Type | Should -Be 'String'
+        $reg.Value | Should -Be 'from-registry'
+
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:FfKey 'ExtensionSettings' String 'from-pol'))
+        $pol = Get-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings'
+        $pol.Source | Should -Be 'LocalGpo'
+        $pol.Value | Should -Be 'from-pol'
+
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:FfKey 'Flag' DWord 1))
+        $dw = Get-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'Flag'
+        $dw.Type | Should -Be 'DWord'
+        $dw.Value | Should -Be 1
+    }
+
+    It 'Remove deletes the Registry.pol entry, bumps the version and keeps other entries' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @(
+            (New-PolEntry $script:SrpKey 'Enabled' DWord 1),
+            (New-PolEntry $script:FfKey 'ExtensionSettings' String $script:OpenPathJson))
+        Set-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings' -Type String -Value $script:OpenPathJson | Out-Null
+        $r = Remove-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings'
+        $r.Removed | Should -BeTrue
+        @($r.FailureCode) -join '' | Should -Be ''
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol)
+        $read.Count | Should -Be 1
+        $read[0].Key | Should -Be $script:SrpKey
+        $global:PSTReg.ContainsKey("hklm:\$($script:FfKey.ToLowerInvariant())|ExtensionSettings") | Should -BeFalse
+    }
+
+    It 'Remove of a missing value is a silent no-op' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:SrpKey 'Enabled' DWord 1))
+        $before = [System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)
+        $r = Remove-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings'
+        $r.Removed | Should -BeFalse
+        @($r.FailureCode) -join '' | Should -Be ''
+        (([System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)) -join ',') | Should -Be ($before -join ',')
+        Test-Path -LiteralPath $global:PSTPaths.GptIni | Should -BeFalse
+    }
+
+    It 'Remove on an externally managed value writes nothing' {
+        Mock Get-OpenPathPolicyValueOwner { [pscustomobject]@{ Owner = 'DomainGpo'; GpoName = 'School Policy'; Evidence = @() } } -ModuleName PolicyStore
+        $r = Remove-OpenPathManagedPolicyValue -Key $script:FfKey -ValueName 'ExtensionSettings'
+        $r.Removed | Should -BeFalse
+        $r.FailureCode | Should -Be 'policy-externally-managed'
+        Should -Invoke Remove-ItemProperty -ModuleName PolicyStore -Times 0 -Exactly
+    }
+
+    It 'List merge keeps foreign numbered entries' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @(
+            (New-PolEntry $script:ChromeListKey '**delvals.' String ''),
+            (New-PolEntry $script:ChromeListKey '1' String 'vendor-a'),
+            (New-PolEntry $script:ChromeListKey '2' String 'vendor-b'))
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x', 'y')
+        $r.Applied | Should -BeTrue
+        $r.Changed | Should -BeTrue
+
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol | Where-Object { $_.Key -eq $script:ChromeListKey })
+        $byName = @{}
+        foreach ($e in $read) { $byName[$e.ValueName] = ConvertFrom-OpenPathRegistryPolData -Type $e.Type -Data $e.Data }
+        $byName.ContainsKey('**delvals.') | Should -BeTrue
+        $byName['1'] | Should -Be 'vendor-a'
+        $byName['2'] | Should -Be 'vendor-b'
+        $byName['3'] | Should -Be 'x'
+        $byName['4'] | Should -Be 'y'
+        $read.Count | Should -Be 5
+
+        $ledger = Get-Content -LiteralPath $global:PSTPaths.Ledger -Raw | ConvertFrom-Json
+        @($ledger.lists.$($script:ChromeListKey)) -join ',' | Should -Be 'x,y'
+        $global:PSTReg["hklm:\$($script:ChromeListKey.ToLowerInvariant())|3"].Value | Should -Be 'x'
+        $global:PSTReg["hklm:\$($script:ChromeListKey.ToLowerInvariant())|1"].Value | Should -Be 'vendor-a'
+    }
+
+    It 'Identical list sync does not touch Registry.pol or gpt.ini' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @(
+            (New-PolEntry $script:ChromeListKey '1' String 'vendor-a'),
+            (New-PolEntry $script:ChromeListKey '**delvals.' String ''),
+            (New-PolEntry $script:ChromeListKey '2' String 'vendor-b'))
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x', 'y') | Out-Null
+        $version = Get-GptVersion
+        $old = (Get-Item -LiteralPath $global:PSTPaths.RegistryPol).LastWriteTimeUtc.AddHours(-2)
+        (Get-Item -LiteralPath $global:PSTPaths.RegistryPol).LastWriteTimeUtc = $old
+
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x', 'y')
+        $r.Applied | Should -BeTrue
+        $r.Changed | Should -BeFalse
+        Get-GptVersion | Should -Be $version
+        (Get-Item -LiteralPath $global:PSTPaths.RegistryPol).LastWriteTimeUtc | Should -Be $old
+    }
+
+    It 'List resync replaces only owned entries' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @(
+            (New-PolEntry $script:ChromeListKey '**delvals.' String ''),
+            (New-PolEntry $script:ChromeListKey '1' String 'vendor-a'),
+            (New-PolEntry $script:ChromeListKey '2' String 'vendor-b'))
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x', 'y') | Out-Null
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('z')
+        $r.Changed | Should -BeTrue
+
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol | Where-Object { $_.Key -eq $script:ChromeListKey })
+        $values = @($read | Where-Object { $_.ValueName -match '^\d+$' } | ForEach-Object { '{0}={1}' -f $_.ValueName, (ConvertFrom-OpenPathRegistryPolData -Type $_.Type -Data $_.Data) })
+        ($values | Sort-Object) -join ',' | Should -Be '1=vendor-a,2=vendor-b,3=z'
+        @($read | Where-Object { $_.ValueName -eq '**delvals.' }).Count | Should -Be 1
+        $ledger = Get-Content -LiteralPath $global:PSTPaths.Ledger -Raw | ConvertFrom-Json
+        @($ledger.lists.$($script:ChromeListKey)) -join ',' | Should -Be 'z'
+        $global:PSTReg.ContainsKey("hklm:\$($script:ChromeListKey.ToLowerInvariant())|4") | Should -BeFalse
+        $global:PSTReg["hklm:\$($script:ChromeListKey.ToLowerInvariant())|3"].Value | Should -Be 'z'
+    }
+
+    It 'List sync preserves lastOwners in the ledger' {
+        $json = '{"lists":{},"lastOwners":{"Software\\Policies\\Mozilla\\Firefox|ExtensionSettings":"LocalGpo"}}'
+        [System.IO.File]::WriteAllText($global:PSTPaths.Ledger, $json)
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('only-one') | Out-Null
+        $ledger = Get-Content -LiteralPath $global:PSTPaths.Ledger -Raw | ConvertFrom-Json
+        @($ledger.lists.$($script:ChromeListKey)) -join ',' | Should -Be 'only-one'
+        $ledger.lastOwners.'Software\Policies\Mozilla\Firefox|ExtensionSettings' | Should -Be 'LocalGpo'
+    }
+
+    It 'Corrupt ledger is treated as empty without throwing' {
+        [System.IO.File]::WriteAllText($global:PSTPaths.Ledger, '{not json')
+        { Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('a') } | Should -Not -Throw
+        $ledger = Get-Content -LiteralPath $global:PSTPaths.Ledger -Raw | ConvertFrom-Json
+        @($ledger.lists.$($script:ChromeListKey)) -join ',' | Should -Be 'a'
+    }
+
+    It 'List sync honors DomainGpo ownership' {
+        Mock Get-OpenPathPolicyValueOwner { [pscustomobject]@{ Owner = 'DomainGpo'; GpoName = 'School Policy'; Evidence = @() } } -ModuleName PolicyStore
+        $r = Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('a')
+        $r.FailureCode | Should -Be 'policy-externally-managed'
+        Test-Path -LiteralPath $global:PSTPaths.RegistryPol | Should -BeFalse
+        Test-Path -LiteralPath $global:PSTPaths.Ledger | Should -BeFalse
+    }
+
+    It 'Remove list removes only ledger entries' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @(
+            (New-PolEntry $script:SrpKey 'Enabled' DWord 1),
+            (New-PolEntry $script:ChromeListKey '**delvals.' String ''),
+            (New-PolEntry $script:ChromeListKey '1' String 'vendor-a'))
+        Sync-OpenPathManagedPolicyList -Key $script:ChromeListKey -Values @('x', 'y') | Out-Null
+        $version = Get-GptVersion
+
+        $r = Remove-OpenPathManagedPolicyList -Key $script:ChromeListKey
+        $r.Removed | Should -BeTrue
+        @($r.FailureCode) -join '' | Should -Be ''
+        Get-GptVersion | Should -Be ($version + 1)
+
+        $read = @(Read-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol)
+        $read.Count | Should -Be 3
+        $names = @($read | Where-Object { $_.Key -eq $script:ChromeListKey } | ForEach-Object { $_.ValueName })
+        ($names | Sort-Object) -join ',' | Should -Be '**delvals.,1'
+        @($read | Where-Object { $_.Key -eq $script:SrpKey }).Count | Should -Be 1
+        $ledger = Get-Content -LiteralPath $global:PSTPaths.Ledger -Raw | ConvertFrom-Json
+        @($ledger.lists.PSObject.Properties | Where-Object { $_.Name -eq $script:ChromeListKey }).Count | Should -Be 0
+        $global:PSTReg.ContainsKey("hklm:\$($script:ChromeListKey.ToLowerInvariant())|3") | Should -BeFalse
+        $global:PSTReg.ContainsKey("hklm:\$($script:ChromeListKey.ToLowerInvariant())|4") | Should -BeFalse
+    }
+
+    It 'Remove list with no ledger entries is a no-op' {
+        Write-OpenPathRegistryPolFile -Path $global:PSTPaths.RegistryPol -Entries @((New-PolEntry $script:ChromeListKey '1' String 'vendor-a'))
+        $before = [System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)
+        $r = Remove-OpenPathManagedPolicyList -Key $script:ChromeListKey
+        $r.Removed | Should -BeFalse
+        (([System.IO.File]::ReadAllBytes($global:PSTPaths.RegistryPol)) -join ',') | Should -Be ($before -join ',')
+        Test-Path -LiteralPath $global:PSTPaths.GptIni | Should -BeFalse
+    }
+
+    It 'Refresh builds gpupdate arguments' {
+        Mock Start-OpenPathGpUpdateProcess { 0 } -ModuleName PolicyStore
+        $r = Invoke-OpenPathPolicyRefresh -Force -TimeoutSeconds 60
+        $r.ExitCode | Should -Be 0
+        Should -Invoke Start-OpenPathGpUpdateProcess -ModuleName PolicyStore -Times 1 -Exactly -ParameterFilter { $Arguments -eq '/target:computer /force /wait:60' }
+        Invoke-OpenPathPolicyRefresh | Out-Null
+        Should -Invoke Start-OpenPathGpUpdateProcess -ModuleName PolicyStore -Times 1 -Exactly -ParameterFilter { $Arguments -eq '/target:computer /wait:120' }
+    }
+
+    It 'Refresh never throws when gpupdate cannot start' {
+        Mock Start-OpenPathGpUpdateProcess { throw 'cannot start' } -ModuleName PolicyStore
+        { $script:r = Invoke-OpenPathPolicyRefresh -Force } | Should -Not -Throw
+        $script:r.ExitCode | Should -Be -1
+        Should -Invoke Write-OpenPathLog -ModuleName PolicyStore -ParameterFilter { $Level -eq 'WARN' }
+    }
+
+    It 'Default local GPO paths point at System32\GroupPolicy' {
+        Remove-Module PolicyStore -Force
+        Import-Module $script:StoreModule -Force -ErrorAction Stop
+        $old = $env:SystemRoot
+        try {
+            $env:SystemRoot = (Join-Path $script:TempRoot 'win')
+            $p = Get-OpenPathLocalGpoPaths
+            $p.RegistryPol | Should -Be (Join-Path (Join-Path (Join-Path (Join-Path $env:SystemRoot 'System32') 'GroupPolicy') 'Machine') 'Registry.pol')
+            $p.GptIni | Should -Be (Join-Path (Join-Path (Join-Path $env:SystemRoot 'System32') 'GroupPolicy') 'gpt.ini')
+        }
+        finally { $env:SystemRoot = $old }
+    }
+}
