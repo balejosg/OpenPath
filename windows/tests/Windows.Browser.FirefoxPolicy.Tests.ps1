@@ -694,8 +694,8 @@ Describe "Browser Module - Firefox Policy" {
                 InstallUrl = $contract.configuredInstallUrl
             }
             $script:machineEntryJson = $null
-            Mock Get-OpenPathManagedPolicyValue {
-                [PSCustomObject]@{ Type = 'MultiString'; Value = [string[]]@($script:machineEntryJson); Source = 'LocalGpo' }
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ ExtensionSettings = @($script:machineEntryJson) }
             } -ModuleName Browser.FirefoxPolicy
 
             $script:machineEntryJson = (@{ $contract.extensionId = @{ installation_mode = 'force_installed'; install_url = $contract.configuredInstallUrl } } | ConvertTo-Json -Compress)
@@ -1268,6 +1268,135 @@ Describe "Browser Module - Firefox Policy" {
             Set-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
         }
 
+        It "Leaves a partially unparseable REG_SZ value untouched" {
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = '{"a":1,'; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Set-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+
+            $script:storeSetCalls.Count | Should -Be 0
+            Should -Invoke Write-OpenPathLog -ModuleName Browser.FirefoxPolicy -ParameterFilter {
+                $Level -eq 'WARN' -and $Message -match 'left untouched' -and $Message -match 'LocalGpo'
+            }
+        }
+
+        It "Leaves a MultiString value with an unparseable line untouched" {
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{
+                    Type = 'MultiString'
+                    Value = [string[]]@('{"a@x":{"installation_mode":"blocked"}}', 'not json')
+                    Source = 'LocalGpo'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Set-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+
+            $script:storeSetCalls.Count | Should -Be 0
+        }
+
+        It "Leaves a fully unparseable MultiString value untouched" {
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'MultiString'; Value = [string[]]@('{"a":1,', '"b":'); Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Set-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+
+            $script:storeSetCalls.Count | Should -Be 0
+        }
+
+        It "Does not write when the store read throws" {
+            Mock Get-OpenPathManagedPolicyValue { throw 'local-gpo-unreadable' } -ModuleName Browser.FirefoxPolicy
+
+            Set-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+
+            $script:storeSetCalls.Count | Should -Be 0
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+            $script:storeSetCalls.Count | Should -Be 0
+            $script:storeRemoveCalls.Count | Should -Be 0
+        }
+
+        It "Remove leaves an unparseable value untouched" {
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = '{"a":1,'; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+
+            $script:storeSetCalls.Count | Should -Be 0
+            $script:storeRemoveCalls.Count | Should -Be 0
+        }
+
+        It "Remove returns false when the GPO version bump fails" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"a@x`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = $stored; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Set-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Applied = $true; Changed = $true; Owner = 'LocalGpo'; GpoName = $null; FailureCode = 'gpt-ini-bump-failed' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+        }
+
+        It "Checks the effective HKLM value, not the local GPO value" {
+            $id = $script:storeContract.extensionId
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{
+                    Type = 'String'
+                    Value = "{`"$id`":{`"installation_mode`":`"force_installed`",`"install_url`":`"https://openpath.example.invalid/firefox/openpath.xpi`",`"private_browsing`":true}}"
+                    Source = 'LocalGpo'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ ExtensionSettings = '{"https://a.bromium.com/*":{"installation_mode":"blocked"}}' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Test-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeFalse
+        }
+
+        It "Readiness goes to the owner branch when HKLM lacks our entry although the local GPO has it" {
+            $id = $script:storeContract.extensionId
+            $url = $script:storePolicy.InstallUrl
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{
+                    Type = 'String'
+                    Value = "{`"$id`":{`"installation_mode`":`"force_installed`",`"install_url`":`"$url`",`"private_browsing`":true}}"
+                    Source = 'LocalGpo'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ ExtensionSettings = '{"https://a.bromium.com/*":{"installation_mode":"blocked"}}' }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathFirefoxManagedExtensionPolicy { $script:storePolicy } -ModuleName Browser.FirefoxPolicy
+            Mock Resolve-OpenPathFirefoxReleaseExecutable { 'C:\Program Files\Mozilla Firefox\firefox.exe' } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathPolicyValueOwner {
+                [PSCustomObject]@{ Owner = 'DomainGpo'; GpoName = 'Default Domain Policy'; Evidence = @() }
+            } -ModuleName Browser.FirefoxPolicy
+
+            $result = Test-OpenPathFirefoxManagedExtensionReady -Config ([PSCustomObject]@{})
+
+            $result.Ready | Should -BeFalse
+            $result.FailureCode | Should -Be 'firefox-machine-policy-externally-managed'
+        }
+
+        It "Builds valid JSON for the required entry when the install URL needs escaping" {
+            $id = $script:storeContract.extensionId
+            $script:storePolicy.InstallUrl = 'https://openpath.example.invalid/x?a="b"&c=\d'
+            Mock Get-OpenPathFirefoxManagedExtensionPolicy { $script:storePolicy } -ModuleName Browser.FirefoxPolicy
+            Mock Resolve-OpenPathFirefoxReleaseExecutable { 'C:\Program Files\Mozilla Firefox\firefox.exe' } -ModuleName Browser.FirefoxPolicy
+            Mock Test-OpenPathFirefoxMachineExtensionPolicy { $false } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathPolicyValueOwner {
+                [PSCustomObject]@{ Owner = 'Mdm'; GpoName = $null; Evidence = @() }
+            } -ModuleName Browser.FirefoxPolicy
+
+            $result = Test-OpenPathFirefoxManagedExtensionReady -Config ([PSCustomObject]@{})
+
+            $json = '{' + $result.Message.Substring($result.Message.IndexOf('"' + $id + '":')) + '}'
+            ($json | ConvertFrom-Json).$id.install_url | Should -Be $script:storePolicy.InstallUrl
+        }
+
         It "Remove keeps vendor entries" {
             $id = $script:storeContract.extensionId
             $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"https://a.bromium.com/*`":{`"installation_mode`":`"blocked`"}}"
@@ -1417,8 +1546,11 @@ Describe "Browser Module - Firefox Policy" {
             $result.Message | Should -Match 'Default Domain Policy'
             $result.Message | Should -Match ([regex]::Escape($contract.extensionId))
             $result.Message | Should -Match ([regex]::Escape($contract.managedApiInstallUrl))
-            $result.Message | Should -Match '"installation_mode": "force_installed"'
-            $result.Message | Should -Match '"private_browsing": true'
+            $entryText = $result.Message.Substring($result.Message.IndexOf('"' + $contract.extensionId + '":'))
+            $entryText = $entryText.Substring($contract.extensionId.Length + 4)
+            ($entryText | ConvertFrom-Json).install_url | Should -Be $contract.managedApiInstallUrl
+            $result.Message | Should -Match '"installation_mode":"force_installed"'
+            $result.Message | Should -Match '"private_browsing":true'
             $result.ExtensionId | Should -Be $contract.extensionId
             $result.InstallUrl | Should -Be $contract.managedApiInstallUrl
         }

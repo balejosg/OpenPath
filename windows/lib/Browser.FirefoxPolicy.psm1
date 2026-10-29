@@ -46,14 +46,15 @@ function Get-OpenPathFirefoxMachinePolicyRegistryPath {
     return 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
 }
 
-function ConvertFrom-OpenPathFirefoxMachineExtensionSettings {
+function Resolve-OpenPathFirefoxMachineExtensionSettings {
     <#
     .SYNOPSIS
-    Parses the Firefox machine ExtensionSettings policy value (REG_SZ or MULTI_SZ) into an ordered dictionary.
+    Parses a Firefox ExtensionSettings policy value and reports whether every line of it was understood.
     .DESCRIPTION
     A REG_SZ value is a single JSON document. A MULTI_SZ value written by an ADMX multiText policy can
     split one JSON document across several lines, so all lines are first joined and parsed as one object.
-    Only when that fails does it fall back to parsing every line as its own JSON object.
+    Only when that fails does it fall back to parsing every line as its own JSON object. Complete is false
+    when any non-empty content could not be turned into entries, so callers can refuse to rewrite the value.
     #>
     param(
         [AllowNull()]
@@ -61,9 +62,10 @@ function ConvertFrom-OpenPathFirefoxMachineExtensionSettings {
     )
 
     $settings = [ordered]@{}
-    $lines = @(@($Value) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $complete = $true
+    $lines = @(@($Value) | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
     if ($lines.Count -eq 0) {
-        return $settings
+        return [PSCustomObject]@{ Settings = $settings; Complete = $true }
     }
 
     if ($lines.Count -gt 1) {
@@ -74,7 +76,7 @@ function ConvertFrom-OpenPathFirefoxMachineExtensionSettings {
                     foreach ($property in @($parsed.PSObject.Properties)) {
                         $settings[$property.Name] = $property.Value
                     }
-                    return $settings
+                    return [PSCustomObject]@{ Settings = $settings; Complete = $true }
                 }
             }
             catch {
@@ -86,16 +88,34 @@ function ConvertFrom-OpenPathFirefoxMachineExtensionSettings {
     foreach ($entry in $lines) {
         try {
             $parsed = $entry | ConvertFrom-Json -ErrorAction Stop
+            if ($parsed -isnot [PSCustomObject]) {
+                throw 'ExtensionSettings line is not a JSON object'
+            }
+
             foreach ($property in @($parsed.PSObject.Properties)) {
                 $settings[$property.Name] = $property.Value
             }
         }
         catch {
+            $complete = $false
             Write-OpenPathLog "Failed to parse Firefox machine ExtensionSettings registry value: $_" -Level WARN
         }
     }
 
-    return $settings
+    return [PSCustomObject]@{ Settings = $settings; Complete = $complete }
+}
+
+function ConvertFrom-OpenPathFirefoxMachineExtensionSettings {
+    <#
+    .SYNOPSIS
+    Parses the Firefox machine ExtensionSettings policy value (REG_SZ or MULTI_SZ) into an ordered dictionary.
+    #>
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    return (Resolve-OpenPathFirefoxMachineExtensionSettings -Value $Value).Settings
 }
 
 function Get-OpenPathFirefoxMachinePolicyStoreKey {
@@ -109,26 +129,39 @@ function Get-OpenPathFirefoxMachinePolicyStoreKey {
 function Get-OpenPathFirefoxMachineExtensionSettingsState {
     <#
     .SYNOPSIS
-    Reads the ExtensionSettings policy through the policy store, returning its stored type and parsed entries.
+    Reads the ExtensionSettings policy through the policy store as the merge base for a write.
+    .DESCRIPTION
+    Writable is false when the stored value could not be read or contains content that cannot be parsed;
+    callers must then leave the value untouched instead of overwriting it with a partial rebuild.
     #>
-    $stored = $null
+    $type = $null
+    $source = 'None'
+    $value = $null
     try {
         $stored = Get-OpenPathManagedPolicyValue -Key (Get-OpenPathFirefoxMachinePolicyStoreKey) -ValueName 'ExtensionSettings'
+        if ($stored) {
+            $type = $stored.Type
+            $value = $stored.Value
+            if ($stored.Source) { $source = [string]$stored.Source }
+        }
     }
     catch {
-        Write-OpenPathLog "Failed to read Firefox machine ExtensionSettings policy: $_" -Level WARN
+        return [PSCustomObject]@{
+            Type = $null
+            Source = $source
+            Settings = [ordered]@{}
+            Writable = $false
+            Reason = "the existing value could not be read: $_"
+        }
     }
 
-    $type = $null
-    $value = $null
-    if ($stored) {
-        $type = $stored.Type
-        $value = $stored.Value
-    }
-
+    $parsed = Resolve-OpenPathFirefoxMachineExtensionSettings -Value $value
     return [PSCustomObject]@{
         Type = $type
-        Settings = (ConvertFrom-OpenPathFirefoxMachineExtensionSettings -Value $value)
+        Source = $source
+        Settings = $parsed.Settings
+        Writable = [bool]$parsed.Complete
+        Reason = if ($parsed.Complete) { '' } else { 'the existing value contains content that is not valid ExtensionSettings JSON' }
     }
 }
 
@@ -156,9 +189,16 @@ function ConvertTo-OpenPathFirefoxMachineExtensionSettingsPolicyValue {
 function Get-OpenPathFirefoxMachineExtensionSettings {
     <#
     .SYNOPSIS
-    Reads and parses the Firefox machine ExtensionSettings policy value through the policy store, returning an empty dictionary when absent.
+    Reads and parses the effective HKLM Firefox ExtensionSettings value (what Firefox uses), returning an empty dictionary when absent.
     #>
-    return (Get-OpenPathFirefoxMachineExtensionSettingsState).Settings
+    $registryPath = Get-OpenPathFirefoxMachinePolicyRegistryPath
+    try {
+        $registryValue = Get-ItemProperty -Path $registryPath -Name 'ExtensionSettings' -ErrorAction Stop
+        return ConvertFrom-OpenPathFirefoxMachineExtensionSettings -Value $registryValue.ExtensionSettings
+    }
+    catch {
+        return [ordered]@{}
+    }
 }
 
 function ConvertTo-OpenPathFirefoxMachineExtensionSettingsValue {
@@ -425,6 +465,11 @@ function Set-OpenPathFirefoxMachineExtensionPolicy {
     try {
         $registryPath = Get-OpenPathFirefoxMachinePolicyRegistryPath
         $state = Get-OpenPathFirefoxMachineExtensionSettingsState
+        if (-not $state.Writable) {
+            Write-OpenPathLog "Firefox machine ExtensionSettings policy left untouched (source: $($state.Source)): $($state.Reason)" -Level WARN
+            return $false
+        }
+
         $settings = $state.Settings
         $settings[[string]$ManagedExtensionPolicy.ExtensionId] = [ordered]@{
             installation_mode = 'force_installed'
@@ -1207,7 +1252,12 @@ function Test-OpenPathFirefoxManagedExtensionReady {
 
         if ($ownerName -eq 'DomainGpo' -or $ownerName -eq 'Mdm') {
             $ownerLabel = if ($gpoName) { "$ownerName ($gpoName)" } else { $ownerName }
-            $requiredEntry = "`"$extensionId`": { `"installation_mode`": `"force_installed`", `"install_url`": `"$installUrl`", `"private_browsing`": true }"
+            $entryJson = [ordered]@{
+                installation_mode = 'force_installed'
+                install_url = $installUrl
+                private_browsing = $true
+            } | ConvertTo-Json -Compress
+            $requiredEntry = (ConvertTo-Json -InputObject $extensionId -Compress) + ': ' + $entryJson
             return New-OpenPathFirefoxManagedExtensionReadyResult `
                 -Ready $false `
                 -FailureCode 'firefox-machine-policy-externally-managed' `
@@ -1316,6 +1366,11 @@ function Remove-OpenPathFirefoxMachineExtensionPolicy {
     try {
         $registryPath = Get-OpenPathFirefoxMachinePolicyRegistryPath
         $state = Get-OpenPathFirefoxMachineExtensionSettingsState
+        if (-not $state.Writable) {
+            Write-OpenPathLog "Firefox machine ExtensionSettings policy left untouched (source: $($state.Source)): $($state.Reason)" -Level WARN
+            return $false
+        }
+
         $settings = $state.Settings
         $extensionId = if ($ManagedExtensionPolicy -and $ManagedExtensionPolicy.ExtensionId) {
             [string]$ManagedExtensionPolicy.ExtensionId
@@ -1340,7 +1395,7 @@ function Remove-OpenPathFirefoxMachineExtensionPolicy {
         else {
             $policyValue = ConvertTo-OpenPathFirefoxMachineExtensionSettingsPolicyValue -Settings $settings -ExistingType $state.Type
             $setResult = Set-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -Type $policyValue.Type -Value $policyValue.Value
-            if (-not $setResult.Applied) {
+            if (-not $setResult.Applied -or $setResult.FailureCode -eq 'gpt-ini-bump-failed') {
                 Write-OpenPathLog "Failed to remove OpenPath from Firefox machine ExtensionSettings policy: $($setResult.FailureCode) (owner: $($setResult.Owner))" -Level WARN
                 return $false
             }
