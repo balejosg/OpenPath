@@ -1412,18 +1412,36 @@ function Remove-OpenPathFirefoxMachineExtensionPolicy {
             }
 
             $refreshExitCode = $null
+            $refreshDurationMs = $null
             if (Get-Command -Name 'Invoke-OpenPathPolicyRefresh' -ErrorAction SilentlyContinue) {
                 $refresh = Invoke-OpenPathPolicyRefresh -TimeoutSeconds 60
-                if ($refresh) { $refreshExitCode = $refresh.ExitCode }
+                if ($refresh) {
+                    $refreshExitCode = $refresh.ExitCode
+                    $refreshDurationMs = $refresh.DurationMs
+                }
             }
 
+            $handedBack = $false
+            $keepReason = "Group Policy refresh before the hand-back did not complete (ExitCode=$refreshExitCode)"
             if ($null -ne $refreshExitCode -and [int]$refreshExitCode -eq 0) {
-                New-ItemProperty -Path $registryPath -Name 'ExtensionSettings' -PropertyType $policyValue.Type -Value $policyValue.Value -Force -ErrorAction Stop | Out-Null
+                Write-OpenPathLog "Group Policy refresh before the Firefox ExtensionSettings hand-back: ExitCode=$refreshExitCode DurationMs=$refreshDurationMs" -Level INFO
+                try {
+                    # The CSE deletes the whole policy key when nothing else is left in it.
+                    if (-not (Test-Path -Path $registryPath)) {
+                        New-Item -Path $registryPath -Force -ErrorAction Stop | Out-Null
+                    }
+                    New-ItemProperty -Path $registryPath -Name 'ExtensionSettings' -PropertyType $policyValue.Type -Value $policyValue.Value -Force -ErrorAction Stop | Out-Null
+                    $handedBack = $true
+                }
+                catch {
+                    $keepReason = "writing the remainder to the registry failed ($_)"
+                }
             }
-            else {
-                # Without a completed refresh the CSE would delete a registry-only remainder later, so keep
-                # the remaining entries in the local GPO instead.
-                Write-OpenPathLog "Group Policy refresh before handing the Firefox ExtensionSettings remainder back to the registry did not complete (ExitCode=$refreshExitCode); keeping the remaining entries in the local GPO" -Level WARN
+
+            if (-not $handedBack) {
+                # The remaining entries must never be lost: without a completed refresh the CSE would delete a
+                # registry-only remainder later, and a failed write left nothing, so keep them in the local GPO.
+                Write-OpenPathLog "Firefox ExtensionSettings hand-back to the registry: $keepReason; keeping the remaining entries in the local GPO" -Level WARN
                 $setResult = Set-OpenPathManagedPolicyValue -Key $storeKey -ValueName 'ExtensionSettings' -Type $policyValue.Type -Value $policyValue.Value -ReleaseOriginal
                 if (-not $setResult.Applied -or $setResult.FailureCode -eq 'gpt-ini-bump-failed') {
                     Write-OpenPathLog "Failed to keep the remaining Firefox ExtensionSettings entries in the local GPO: $($setResult.FailureCode) (owner: $($setResult.Owner))" -Level WARN

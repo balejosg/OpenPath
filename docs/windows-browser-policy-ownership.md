@@ -185,9 +185,11 @@ OpenPath's own entries are not mistaken for vendor entries afterwards.
   extension deletes a value it applied from `Registry.pol` once that entry is gone,
   so OpenPath first runs a normal Group Policy refresh (60-second wait) and only then
   writes the remaining entries to the registry, overwriting the value in place with
-  the same type. If the refresh does not complete (non-zero exit or command not
-  available), the remaining entries are kept in `Registry.pol` instead and a WARN is
-  logged. A value that held only OpenPath's entry is deleted.
+  the same type. The refresh may delete the whole `Mozilla\Firefox` policy key when
+  nothing else is left in it; the key is recreated before the write. If the refresh
+  does not complete (non-zero exit or command not available) or the registry write
+  fails, the remaining entries are kept in `Registry.pol` instead and a WARN is
+  logged, so they are never lost. A value that held only OpenPath's entry is deleted.
 - Fail-open (`EndpointStateReconciler` calling
   `Remove-BrowserPolicy -PreserveFirefoxManagedExtension`) keeps the Firefox
   extension policy but removes the Chromium lists and scalars too, restoring

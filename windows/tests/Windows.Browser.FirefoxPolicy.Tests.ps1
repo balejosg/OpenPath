@@ -1179,6 +1179,12 @@ Describe "Browser Module - Firefox Policy" {
                 $script:storeSequence.Add('registry-write')
                 $script:registryOnlyWrites += [PSCustomObject]@{ Path = $Path; Name = $Name; Value = $Value; PropertyType = $PropertyType }
             } -ModuleName Browser.FirefoxPolicy
+            $script:firefoxKeyExists = $true
+            Mock Test-Path { $script:firefoxKeyExists } -ModuleName Browser.FirefoxPolicy -ParameterFilter { "$Path$LiteralPath" -eq 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox' }
+            Mock New-Item {
+                $script:storeSequence.Add('create-key')
+                $script:firefoxKeyExists = $true
+            } -ModuleName Browser.FirefoxPolicy -ParameterFilter { "$Path" -eq 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox' }
         }
 
         It "Merges into HP REG_SZ GPO value keeping vendor entries and type" {
@@ -1457,6 +1463,50 @@ Describe "Browser Module - Firefox Policy" {
             $script:registryOnlyWrites[0].PropertyType | Should -Be 'MultiString'
             $remaining = @($script:registryOnlyWrites[0].Value)[0] | ConvertFrom-Json
             @($remaining.PSObject.Properties.Name) | Should -Be @('third@party')
+        }
+
+        It "Recreates the Firefox policy key the refresh deleted before handing the remainder back" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"third@party`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'MultiString'; Value = [string[]]@($stored); Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+            $script:storeOriginal = [PSCustomObject]@{ InPol = $false; Type = [uint32]0; Data = [byte[]]@() }
+            Mock Invoke-OpenPathPolicyRefresh {
+                $script:storeSequence.Add('refresh')
+                # The CSE deleted the whole key because nothing else was left in it.
+                $script:firefoxKeyExists = $false
+                [PSCustomObject]@{ ExitCode = 0; DurationMs = 1234 }
+            } -ModuleName Browser.FirefoxPolicy
+            $script:ffLogs = New-Object System.Collections.Generic.List[string]
+            Mock Write-OpenPathLog { param($Message, $Level) $script:ffLogs.Add("$Level|$Message") } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            @($script:storeSequence) | Should -Be @('remove', 'refresh', 'create-key', 'registry-write')
+            $script:storeSetCalls.Count | Should -Be 0
+            (@($script:registryOnlyWrites[0].Value)[0] | ConvertFrom-Json).PSObject.Properties.Name | Should -Be @('third@party')
+            @($script:ffLogs | Where-Object { $_ -like 'INFO|*ExitCode=0*DurationMs=1234*' }).Count | Should -Be 1
+        }
+
+        It "Keeps the remainder in the local GPO when the registry hand-back write fails" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"third@party`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = $stored; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+            $script:storeOriginal = [PSCustomObject]@{ InPol = $false; Type = [uint32]0; Data = [byte[]]@() }
+            Mock New-ItemProperty { throw "Cannot find path 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox' because it does not exist." } -ModuleName Browser.FirefoxPolicy
+            $script:ffLogs = New-Object System.Collections.Generic.List[string]
+            Mock Write-OpenPathLog { param($Message, $Level) $script:ffLogs.Add("$Level|$Message") } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $script:storeSetCalls.Count | Should -Be 1
+            $script:storeSetCalls[0].ReleaseOriginal | Should -BeTrue
+            $script:storeSetCalls[0].Type | Should -Be 'String'
+            ($script:storeSetCalls[0].Value | ConvertFrom-Json).PSObject.Properties.Name | Should -Be @('third@party')
+            @($script:ffLogs | Where-Object { $_ -like 'WARN|*keeping the remaining entries in the local GPO*' }).Count | Should -Be 1
         }
 
         It "Remove keeps the remainder in the local GPO and warns when the policy refresh before the hand-back fails" {
