@@ -285,9 +285,17 @@ test('offline installer build helpers enforce trailer format, payload inventory,
   );
   assert.match(
     nsiSource,
-    /SetOutPath "\$INSTDIR\\chromium-managed"[\s\S]*chromium-managed\\\*\.\*/,
+    /SetOutPath "\$INSTDIR\\chromium-managed"\s*(?:;[^\n]*\n\s*)*File \/a "\$\{EXTENSION_BUILD_DIR\}\\chromium-managed\\metadata\.json"/,
     'Chromium metadata must retain its package directory'
   );
+  // The Chromium build directory also holds the CRX signing key; a wildcard
+  // copy would ship that private key inside every downloadable installer.
+  assert.doesNotMatch(
+    nsiSource,
+    /chromium-managed\\\*/,
+    'the Chromium build directory must not be copied wholesale'
+  );
+  assert.doesNotMatch(nsiSource, /\.pem\b/i, 'the installer must not reference private keys');
   const manifestBuilderSource = readText(
     'windows/offline-installer/scripts/build-payload-manifest.mjs'
   );

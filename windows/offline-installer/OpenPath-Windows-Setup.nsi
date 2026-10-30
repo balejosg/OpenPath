@@ -322,7 +322,10 @@ Section "ExtractAndVerify" SEC01
     SetOutPath "$INSTDIR\firefox-release"
     File /nonfatal /a /r "${EXTENSION_BUILD_DIR}\firefox-release\*.*"
     SetOutPath "$INSTDIR\chromium-managed"
-    File /nonfatal /a /r "${EXTENSION_BUILD_DIR}\chromium-managed\*.*"
+    ; Only the rollout metadata is staged (see build-payload-manifest.mjs).
+    ; The build directory also holds the CRX signing key, which must never
+    ; ship inside a downloadable installer.
+    File /a "${EXTENSION_BUILD_DIR}\chromium-managed\metadata.json"
     SetOutPath "$INSTDIR"
     Push "${OFFLINE_STAGE_EXTRACT_OK}"
     Push "0"
