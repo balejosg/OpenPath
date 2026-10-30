@@ -431,6 +431,28 @@ Describe "AppControl Module" {
             $spec.UnapprovedBrowserDenyPaths | Should -Contain 'D:\ManagedApps\Brave\*\brave.exe'
         }
     }
+    Context 'applockerfltr state detection' -Tag 'AppControlShardB1' {
+        BeforeAll {
+            if (-not (Get-Command Get-Service -ErrorAction SilentlyContinue)) { function global:Get-Service { param($Name, $ErrorAction) } }
+            if (-not (Get-Command sc.exe -ErrorAction SilentlyContinue)) { function global:sc.exe { param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments) } }
+        }
+
+        It 'reads the driver state from the service status enum, not localized sc.exe text' {
+            Mock Get-Service { [pscustomobject]@{ Name = 'applockerfltr'; Status = 'Running' } } -ModuleName AppControl
+            Mock sc.exe { throw 'sc.exe query output is localized and must not be parsed' } -ModuleName AppControl
+            InModuleScope AppControl { Test-OpenPathAppLockerFilterDriverRunning } | Should -BeTrue
+        }
+
+        It 'reports a stopped driver' {
+            Mock Get-Service { [pscustomobject]@{ Name = 'applockerfltr'; Status = 'Stopped' } } -ModuleName AppControl
+            InModuleScope AppControl { Test-OpenPathAppLockerFilterDriverRunning } | Should -BeFalse
+        }
+
+        It 'reports a missing driver as not running' {
+            Mock Get-Service { throw 'Cannot find any service with service name applockerfltr' } -ModuleName AppControl
+            InModuleScope AppControl { Test-OpenPathAppLockerFilterDriverRunning } | Should -BeFalse
+        }
+    }
     Context 'PolicyConverter activation boundary' -Tag 'AppControlShardB1' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl

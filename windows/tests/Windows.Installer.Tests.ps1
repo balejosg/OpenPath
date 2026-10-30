@@ -1324,9 +1324,6 @@ function global:sc.exe {
     param([Parameter(ValueFromRemainingArguments = `$true)][string[]]`$Arguments)
     Add-OpenPathInstallerTestTrace "fixture:sc.exe:`$(`$Arguments -join ' ')"
     `$global:LASTEXITCODE = 0
-    if (`$Arguments.Count -ge 2 -and `$Arguments[0] -eq 'query' -and `$Arguments[1] -eq 'applockerfltr') {
-        return 'STATE              : 4  RUNNING'
-    }
 }
 function global:Test-AppLockerPolicy {
     [CmdletBinding()]
@@ -1619,14 +1616,15 @@ exit `$installerExitCode
                 )) {
                 $path = if ($relativePath) { Join-Path $root $relativePath } else { $root }
                 $acl = Get-Acl -LiteralPath $path
+                $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
 
-                @($acl.Access | Where-Object {
-                        ([string]$_.IdentityReference) -eq 'NT AUTHORITY\SYSTEM' -and
+                @($rules | Where-Object {
+                        ([string]$_.IdentityReference.Value) -eq 'S-1-5-18' -and
                         ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl
                     }).Count | Should -BeGreaterThan 0 -Because "SYSTEM must retain full control at $relativePath"
 
-                @($acl.Access | Where-Object {
-                        ([string]$_.IdentityReference) -eq 'BUILTIN\Administrators' -and
+                @($rules | Where-Object {
+                        ([string]$_.IdentityReference.Value) -eq 'S-1-5-32-544' -and
                         ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl
                     }).Count | Should -BeGreaterThan 0 -Because "Administrators must retain full control at $relativePath"
             }

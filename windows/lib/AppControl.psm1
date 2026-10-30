@@ -1530,18 +1530,20 @@ function Test-OpenPathAppLockerFilterDriverRunning {
     AppLocker only blocks launches while applockerfltr is running. Its start type is
     DEMAND_START and AppIDSvc does not reliably load it after a reboot, so a loaded
     policy plus a running AppIDSvc can still enforce nothing.
+
+    The state comes from Get-Service (which also resolves kernel drivers) because
+    sc.exe query text is localized and OpenPath runs on any Windows display language.
     #>
     [CmdletBinding()]
     param()
 
-    $scCommand = Get-Command -Name 'sc.exe' -ErrorAction SilentlyContinue
-    if (-not $scCommand) {
+    if (-not (Get-Command -Name Get-Service -ErrorAction SilentlyContinue)) {
         return $false
     }
 
     try {
-        $scOutput = @(& $scCommand.Name query applockerfltr 2>&1 | ForEach-Object { [string]$_ })
-        return [bool]($scOutput -match 'STATE\s*:\s*4\s+RUNNING')
+        $driver = Get-Service -Name applockerfltr -ErrorAction Stop
+        return ([string]$driver.Status -eq 'Running')
     }
     catch {
         return $false
