@@ -165,18 +165,20 @@ function Set-OpenPathCapabilityStorageAcl {
         return
     }
 
+    # Principals are SIDs: account names such as BUILTIN\Users are localized
+    # (BUILTIN\Usuarios on Spanish Windows) and do not resolve elsewhere.
     $acl = Get-Acl $Path
     if ($Profile -eq 'RuntimeDependencyQueue') {
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify' -InheritanceFlags $inheritanceFlags))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'S-1-5-32-545' -Rights 'Modify' -InheritanceFlags $inheritanceFlags))
     }
     elseif ($Profile -eq 'CaptivePortalRecoveryQueue') {
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify' -InheritanceFlags $inheritanceFlags))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'S-1-5-32-545' -Rights 'Modify' -InheritanceFlags $inheritanceFlags))
     }
     elseif ($Profile -eq 'CaptivePortalRecoveryResultRead') {
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute' -InheritanceFlags $inheritanceFlags))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'S-1-5-32-545' -Rights 'ReadAndExecute' -InheritanceFlags $inheritanceFlags))
     }
     elseif ($Profile -eq 'BrowserExtensionRead' -or $Profile -eq 'RuntimeDependencyRead') {
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute' -InheritanceFlags $inheritanceFlags))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'S-1-5-32-545' -Rights 'ReadAndExecute' -InheritanceFlags $inheritanceFlags))
     }
 
     Set-Acl $Path $acl
@@ -193,14 +195,14 @@ function Test-OpenPathCapabilityStorageAcl {
     if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) { return $false }
 
     $acl = Get-Acl $Path
-    $rules = @($acl.Access)
+    $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
     if ($Profile -eq 'RestrictedRoot') {
         $hasSystem = @($rules | Where-Object {
-                ([string]$_.IdentityReference) -eq 'NT AUTHORITY\SYSTEM' -and
+                ([string]$_.IdentityReference.Value) -eq 'S-1-5-18' -and
                 ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl)
             }).Count -gt 0
         $hasAdmins = @($rules | Where-Object {
-                ([string]$_.IdentityReference) -eq 'BUILTIN\Administrators' -and
+                ([string]$_.IdentityReference.Value) -eq 'S-1-5-32-544' -and
                 ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl)
             }).Count -gt 0
         return ($hasSystem -and $hasAdmins)
@@ -214,7 +216,7 @@ function Test-OpenPathCapabilityStorageAcl {
     }
 
     return (@($rules | Where-Object {
-                ([string]$_.IdentityReference) -eq 'BUILTIN\Users' -and
+                ([string]$_.IdentityReference.Value) -eq 'S-1-5-32-545' -and
                 ($_.FileSystemRights -band $expectedRight)
             }).Count -gt 0)
 }

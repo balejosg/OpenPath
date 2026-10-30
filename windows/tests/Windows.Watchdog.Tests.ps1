@@ -50,6 +50,31 @@ Describe "Watchdog Script" {
         }
     }
 
+    Context "Watchdog task principal on localized Windows" {
+        BeforeAll {
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'lib') 'internal') 'Watchdog.Runtime.ps1')
+        }
+
+        It "Accepts the invariant LocalSystem spellings without account lookup" {
+            Mock ConvertTo-OpenPathWatchdogPrincipalSid { throw 'lookup not expected' }
+            foreach ($userId in @('SYSTEM', 'NT AUTHORITY\SYSTEM', 'S-1-5-18', ' system ')) {
+                Test-OpenPathWatchdogLocalSystemPrincipal -UserId $userId | Should -BeTrue
+            }
+        }
+
+        It "Accepts a localized LocalSystem display name that resolves to S-1-5-18" {
+            $script:LocalizedSystemName = 'AUTORITE NT\Syst{0}me' -f [char]0x00E8
+            Mock ConvertTo-OpenPathWatchdogPrincipalSid { if ($UserId -eq $script:LocalizedSystemName) { 'S-1-5-18' } else { '' } }
+            Test-OpenPathWatchdogLocalSystemPrincipal -UserId $script:LocalizedSystemName | Should -BeTrue
+        }
+
+        It "Rejects other principals" {
+            Mock ConvertTo-OpenPathWatchdogPrincipalSid { 'S-1-5-21-1-2-3-1001' }
+            Test-OpenPathWatchdogLocalSystemPrincipal -UserId 'alumno' | Should -BeFalse
+            Test-OpenPathWatchdogLocalSystemPrincipal -UserId '' | Should -BeFalse
+        }
+    }
+
     Context "Firefox policy sync idempotence against the local GPO" {
         BeforeAll {
             $script:LibRoot = Join-Path (Join-Path $PSScriptRoot '..') 'lib'

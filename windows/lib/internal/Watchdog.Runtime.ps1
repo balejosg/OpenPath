@@ -108,6 +108,34 @@ function ConvertTo-OpenPathWatchdogCanonicalPath {
     return $normalized.TrimEnd('\').ToLowerInvariant()
 }
 
+function ConvertTo-OpenPathWatchdogPrincipalSid {
+    # Resolves a task principal account name to its SID string, or '' when it cannot be resolved.
+    param([string]$UserId)
+
+    try {
+        return ([System.Security.Principal.NTAccount]$UserId).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    }
+    catch {
+        return ''
+    }
+}
+
+function Test-OpenPathWatchdogLocalSystemPrincipal {
+    # Task Scheduler reports the LocalSystem principal by its display name, which is
+    # localized on some Windows languages, so fall back to resolving it to S-1-5-18.
+    param([string]$UserId)
+
+    $normalizedUserId = ([string]$UserId).Trim().ToUpperInvariant()
+    if ($normalizedUserId -in @('SYSTEM', 'NT AUTHORITY\SYSTEM', 'S-1-5-18')) {
+        return $true
+    }
+    if ([string]::IsNullOrWhiteSpace($normalizedUserId)) {
+        return $false
+    }
+
+    return ((ConvertTo-OpenPathWatchdogPrincipalSid -UserId ([string]$UserId).Trim()) -eq 'S-1-5-18')
+}
+
 function Get-OpenPathWatchdogTaskHealth {
     <#
     .SYNOPSIS
@@ -315,8 +343,7 @@ function Get-OpenPathWatchdogTaskHealth {
     if ($task.PSObject.Properties['Principal'] -and $task.Principal) {
         $userId = if ($task.Principal.PSObject.Properties['UserId']) { [string]$task.Principal.UserId } else { '' }
         $runLevel = if ($task.Principal.PSObject.Properties['RunLevel']) { [string]$task.Principal.RunLevel } else { '' }
-        $normalizedUserId = $userId.Trim().ToUpperInvariant()
-        $principalValid = ($normalizedUserId -in @('SYSTEM', 'NT AUTHORITY\SYSTEM', 'S-1-5-18')) -and
+        $principalValid = (Test-OpenPathWatchdogLocalSystemPrincipal -UserId $userId) -and
             $runLevel.Trim().ToLowerInvariant() -eq 'highest'
     }
     if (-not $principalValid) {

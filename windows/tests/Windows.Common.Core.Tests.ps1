@@ -51,8 +51,8 @@ Describe "Common Module" {
                 'function Set-OpenPathRuntimeDependencyReadAccess',
                 "elseif (`$Profile -eq 'CaptivePortalRecoveryQueue')",
                 "elseif (`$Profile -eq 'CaptivePortalRecoveryResultRead')",
-                "'BUILTIN\Users' -Rights 'Modify'",
-                "'BUILTIN\Users' -Rights 'ReadAndExecute'"
+                "'S-1-5-32-545' -Rights 'Modify'",
+                "'S-1-5-32-545' -Rights 'ReadAndExecute'"
             )) {
                 $content.Contains($needle) | Should -BeTrue -Because "Expected content to include '$needle'"
             }
@@ -137,6 +137,82 @@ Describe "Common Module" {
 
             { Ensure-OpenPathCapabilityStorageDirectory -Path $path -AclProfile BrowserExtensionRead -ValidateAcl } |
                 Should -Throw "Capability storage ACL validation failed*"
+        }
+
+        Context "Locale-independent principals" {
+            BeforeAll {
+                if (-not (Get-Command Get-Acl -ErrorAction SilentlyContinue)) { function global:Get-Acl { param($Path) } }
+                if (-not (Get-Command Set-Acl -ErrorAction SilentlyContinue)) { function global:Set-Acl { param($Path, $AclObject) } }
+
+                function global:New-OpenPathTestCapabilityAcl {
+                    param([object[]]$Rules = @())
+                    $acl = [pscustomobject]@{ Added = [System.Collections.ArrayList]::new(); Rules = $Rules }
+                    $acl | Add-Member -MemberType ScriptMethod -Name AddAccessRule -Value { param($Rule) [void]$this.Added.Add($Rule) }
+                    $acl | Add-Member -MemberType ScriptMethod -Name GetAccessRules -Value {
+                        param($IncludeExplicit, $IncludeInherited, $TargetType)
+                        if ($TargetType -ne [System.Security.Principal.SecurityIdentifier]) {
+                            throw 'ACL rules must be read as SIDs; account names are localized'
+                        }
+                        return $this.Rules
+                    }
+                    $acl | Add-Member -NotePropertyName Access -NotePropertyValue @(
+                        $Rules | ForEach-Object { [pscustomobject]@{ IdentityReference = 'BUILTIN\Usuarios'; FileSystemRights = $_.FileSystemRights } }
+                    )
+                    return $acl
+                }
+
+                function global:New-OpenPathTestCapabilityRule {
+                    param([string]$Sid, [System.Security.AccessControl.FileSystemRights]$Rights)
+                    [pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = $Sid }; FileSystemRights = $Rights }
+                }
+            }
+            AfterAll {
+                Remove-Item Function:\global:New-OpenPathTestCapabilityAcl, Function:\global:New-OpenPathTestCapabilityRule -ErrorAction SilentlyContinue
+            }
+
+            It "Grants browser users by the BUILTIN\Users SID, not its localized account name" {
+                $path = Join-Path $TestDrive "queue-sid"
+                New-Item -ItemType Directory -Path $path -Force | Out-Null
+                $acl = New-OpenPathTestCapabilityAcl
+                Mock Get-Acl { $acl }
+                Mock Set-Acl {}
+                Mock New-OpenPathCapabilityStorageAccessRule { [pscustomobject]@{ Identity = $Identity; Rights = $Rights } }
+
+                foreach ($profileName in @('RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead', 'RuntimeDependencyRead')) {
+                    Set-OpenPathCapabilityStorageAcl -Path $path -Profile $profileName
+                }
+
+                @($acl.Added).Count | Should -Be 5
+                @($acl.Added | Where-Object { $_.Identity -ne 'S-1-5-32-545' }).Count | Should -Be 0
+            }
+
+            It "Validates browser-user grants by SID on a localized system" {
+                $path = Join-Path $TestDrive "result-sid"
+                New-Item -ItemType Directory -Path $path -Force | Out-Null
+                $acl = New-OpenPathTestCapabilityAcl -Rules @(
+                    New-OpenPathTestCapabilityRule -Sid 'S-1-5-32-545' -Rights ReadAndExecute
+                )
+                Mock Get-Acl { $acl }
+
+                Test-OpenPathCapabilityStorageAcl -Path $path -Profile CaptivePortalRecoveryResultRead | Should -BeTrue
+
+                $acl = New-OpenPathTestCapabilityAcl -Rules @(
+                    New-OpenPathTestCapabilityRule -Sid 'S-1-5-11' -Rights ReadAndExecute
+                )
+                Test-OpenPathCapabilityStorageAcl -Path $path -Profile CaptivePortalRecoveryResultRead | Should -BeFalse
+            }
+
+            It "Validates the restricted root by SYSTEM and Administrators SIDs on a localized system" {
+                $path = Join-Path $TestDrive "root-sid"
+                New-Item -ItemType Directory -Path $path -Force | Out-Null
+                $acl = New-OpenPathTestCapabilityAcl -Rules @(
+                    (New-OpenPathTestCapabilityRule -Sid 'S-1-5-18' -Rights FullControl),
+                    (New-OpenPathTestCapabilityRule -Sid 'S-1-5-32-544' -Rights FullControl)
+                )
+                Mock Get-Acl { $acl }
+
+                Test-OpenPathCapabilityStorageAcl -Path $path -Profile RestrictedRoot | Should -BeTrue
+            }
         }
     }
 
