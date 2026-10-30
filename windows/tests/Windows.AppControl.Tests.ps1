@@ -948,6 +948,57 @@ Describe "AppControl Module" {
 
             @($spec.AllowPaths) | Should -Contain 'D:\OpenPathLab\*'
             @($spec.AllowPaths) | Should -Not -Contain 'C:\OpenPath\*'
+            # data\ holds user-writable queues inside the allowed runtime root.
+            @($spec.UserWritableDenyPaths) | Should -Contain 'D:\OpenPathLab\data\*'
+            @($spec.UserWritableDenyPaths) | Should -Not -Contain 'C:\OpenPath\data\*'
+        }
+
+        It "Denies the user-writable %WINDIR% subtrees that the runtime base would otherwise allow" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+
+            foreach ($path in @(
+                    '%WINDIR%\Temp\*',
+                    '%WINDIR%\Tasks\*',
+                    '%WINDIR%\tracing\*',
+                    '%WINDIR%\Registration\CRMLog\*',
+                    '%WINDIR%\System32\Tasks\*',
+                    '%WINDIR%\System32\Tasks_Migrated\*',
+                    '%WINDIR%\System32\Com\dmp\*',
+                    '%WINDIR%\System32\FxsTmp\*',
+                    '%WINDIR%\System32\Microsoft\Crypto\RSA\MachineKeys\*',
+                    '%WINDIR%\System32\spool\drivers\color\*',
+                    '%WINDIR%\System32\spool\PRINTERS\*',
+                    '%WINDIR%\System32\spool\SERVERS\*',
+                    '%WINDIR%\SysWOW64\Tasks\*',
+                    '%WINDIR%\SysWOW64\Com\dmp\*',
+                    '%WINDIR%\SysWOW64\FxsTmp\*',
+                    'C:\OpenPath\data\*'
+                )) {
+                @($spec.UserWritableDenyPaths) | Should -Contain $path
+            }
+        }
+
+        It "Rejects an installed policy that lacks any user-writable deny rule" {
+            InModuleScope AppControl {
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                [xml]$completePolicy = New-OpenPathAppLockerPolicyXml -Spec $spec
+                Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $completePolicy -Mode 'Enforced' -OpenPathRoot 'C:\OpenPath' | Should -BeTrue
+
+                foreach ($collectionType in @('Exe', 'Script')) {
+                    foreach ($path in @('%WINDIR%\Tasks\*', 'C:\OpenPath\data\*')) {
+                        [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+                        $collection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq $collectionType })[0]
+                        $denyRule = @($collection.FilePathRule | Where-Object {
+                                $_.GetAttribute('Action') -eq 'Deny' -and
+                                $_.GetAttribute('UserOrGroupSid') -eq $spec.RestrictedSid -and
+                                $_.Conditions.FilePathCondition.GetAttribute('Path') -eq $path
+                            })[0]
+                        $denyRule | Should -Not -BeNullOrEmpty
+                        [void]$collection.RemoveChild($denyRule)
+                        Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' -OpenPathRoot 'C:\OpenPath' | Should -BeFalse
+                    }
+                }
+            }
         }
 
         It "Allows protected Microsoft WindowsApps launchers and admin-managed Program Files without approving unmanaged browsers" {

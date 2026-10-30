@@ -934,6 +934,26 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             # keep the broad system-root baseline from turning it into an
             # execution escape hatch.
             '%WINDIR%\Temp\*',
+            # Default Windows images also let standard users create files in
+            # these %WINDIR% subtrees, which the %WINDIR%\* runtime allow would
+            # otherwise make executable (the classic AppLocker bypass set).
+            '%WINDIR%\Tasks\*',
+            '%WINDIR%\tracing\*',
+            '%WINDIR%\Registration\CRMLog\*',
+            '%WINDIR%\System32\Tasks\*',
+            '%WINDIR%\System32\Tasks_Migrated\*',
+            '%WINDIR%\System32\Com\dmp\*',
+            '%WINDIR%\System32\FxsTmp\*',
+            '%WINDIR%\System32\Microsoft\Crypto\RSA\MachineKeys\*',
+            '%WINDIR%\System32\spool\drivers\color\*',
+            '%WINDIR%\System32\spool\PRINTERS\*',
+            '%WINDIR%\System32\spool\SERVERS\*',
+            '%WINDIR%\SysWOW64\Tasks\*',
+            '%WINDIR%\SysWOW64\Com\dmp\*',
+            '%WINDIR%\SysWOW64\FxsTmp\*',
+            # The OpenPath root is allowed for its runtime, but data\ holds the
+            # queues that standard users must be able to write.
+            "$($OpenPathRoot.TrimEnd('\'))\data\*",
             '%REMOVABLE%\*',
             '%HOT%\*'
         )
@@ -2145,6 +2165,21 @@ function Test-OpenPathAppLockerBoundaryPolicy {
     foreach ($productName in @($spec.AlwaysDeniedAppxProducts)) {
         if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Deny' -Sid $spec.RestrictedSid -ProductName $productName)) {
             return $false
+        }
+    }
+
+    # A policy written before a user-writable location joined the deny set must
+    # read as invalid so the watchdog re-applies it; otherwise the location stays
+    # executable on already-installed machines.
+    $userWritableDenyCollections = @($exeCollection, $scriptCollection)
+    if ($spec.PSObject.Properties['Profile'] -and $spec.Profile -eq 'StrictApplicationAllowlist') {
+        $userWritableDenyCollections += @($msiCollection, $dllCollection)
+    }
+    foreach ($collection in $userWritableDenyCollections) {
+        foreach ($path in @($spec.UserWritableDenyPaths)) {
+            if (-not (Test-OpenPathFilePathRulePresent -Collection $collection -Action 'Deny' -Sid $spec.RestrictedSid -Path $path)) {
+                return $false
+            }
         }
     }
 
