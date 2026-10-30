@@ -51,6 +51,30 @@ Describe "Operational Command Script" {
         }
     }
 
+    Context "Module import order" {
+        It "Keeps Test-FirewallActive available after the CLI imports every module" {
+            # Browser's enforcement-status module force-imports Firewall into its
+            # own scope, unloading an earlier session import; status then always
+            # reported "Firewall active: False". Replay the CLI's real import
+            # sequence in a child session so this module state cannot leak.
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $openPathRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+            $importLines = @(Select-String -Path $scriptPath -Pattern '^\s*Import-Module "\$openPathRoot\\lib\\' | ForEach-Object { $_.Line.Trim() })
+            $importLines.Count | Should -BeGreaterThan 0
+            ($importLines -join "`n") | Should -Match 'Firewall\.psm1'
+
+            $replay = @(
+                "`$openPathRoot = '$($openPathRoot.Replace("'", "''"))'"
+                foreach ($line in $importLines) { "$line 3>`$null 2>`$null" }
+                "[bool](Get-Command -Name Test-FirewallActive -ErrorAction SilentlyContinue)"
+            ) -join "`n"
+            $shell = (Get-Process -Id $PID).Path
+            $output = @(& $shell -NoProfile -NonInteractive -Command $replay 2>$null)
+
+            [string]$output[-1] | Should -Be 'True'
+        }
+    }
+
     Context "Status redaction" {
         It "Redacts tokenized whitelist URLs in status output" {
             $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"

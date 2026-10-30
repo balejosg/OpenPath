@@ -371,12 +371,15 @@ try {
     # Import dependent modules first, then re-import Common globally so its
     # exported helpers remain visible across standalone CLI command execution.
     Import-Module "$openPathRoot\lib\DNS.psm1" -Force
-    Import-Module "$openPathRoot\lib\Firewall.psm1" -Force
     Import-Module "$openPathRoot\lib\Services.psm1" -Force
     Import-Module "$openPathRoot\lib\Browser.psm1" -Force -Global
     Import-Module "$openPathRoot\lib\Common.psm1" -Force -Global
     . "$openPathRoot\lib\internal\Common.Redaction.ps1"
     Import-Module "$openPathRoot\lib\AppControl.psm1" -Force -Global -ErrorAction Stop
+    # Browser's enforcement-status module force-imports Firewall into its own
+    # scope, which unloads an earlier session import (status then reports the
+    # firewall inactive). Import it last, as ScriptBootstrap does.
+    Import-Module "$openPathRoot\lib\Firewall.psm1" -Force
     . "$openPathRoot\lib\internal\Watchdog.Runtime.ps1"
 
     $requiredCommonCommands = @(
