@@ -1,6 +1,7 @@
 function Get-OpenPathInstallerAgentVersion {
     # returns the agent version string from OPENPATH_VERSION env var, the VERSION file
-    # adjacent to scriptdir, or '0.0.0' as a fallback.
+    # beside scriptdir (offline package layout) or in its parent (repository layout),
+    # or '0.0.0' as a fallback.
     param(
         [Parameter(Mandatory = $true)]
         [string]$ScriptDir
@@ -10,10 +11,12 @@ function Get-OpenPathInstallerAgentVersion {
         return [string]$env:OPENPATH_VERSION
     }
 
-    $versionFilePath = Join-Path (Split-Path $ScriptDir -Parent) 'VERSION'
-    if (Test-Path $versionFilePath) {
+    foreach ($versionDir in @($ScriptDir, (Split-Path $ScriptDir -Parent))) {
+        if ([string]::IsNullOrWhiteSpace($versionDir)) { continue }
+        $versionFilePath = Join-Path $versionDir 'VERSION'
+        if (-not (Test-Path -LiteralPath $versionFilePath -PathType Leaf)) { continue }
         try {
-            $versionFromFile = (Get-Content $versionFilePath -Raw).Trim()
+            $versionFromFile = (Get-Content -LiteralPath $versionFilePath -Raw).Trim()
             if ($versionFromFile) {
                 return $versionFromFile
             }

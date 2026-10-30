@@ -83,4 +83,42 @@ function New-DuplicateConfig {
         [System.Management.Automation.Language.Parser]::ParseFile($fixture, [ref]$tokens, [ref]$parseErrors) | Out-Null
         @($parseErrors).Count | Should -BeGreaterThan 0
     }
+
+    Context 'agent version resolution' {
+        BeforeEach {
+            $savedVersionEnv = $env:OPENPATH_VERSION
+            $env:OPENPATH_VERSION = $null
+        }
+
+        AfterEach {
+            $env:OPENPATH_VERSION = $savedVersionEnv
+        }
+
+        It 'reads VERSION beside the installer in the offline package layout' {
+            # The offline setup extracts VERSION next to Install-OpenPath.ps1.
+            $packageDir = Join-Path $TestDrive 'OpenPathOfflineSetup'
+            New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $packageDir 'VERSION') -Value "4.1.0`r`n" -NoNewline
+
+            Get-OpenPathInstallerAgentVersion -ScriptDir $packageDir | Should -Be '4.1.0'
+        }
+
+        It 'reads VERSION from the parent in the repository layout' {
+            $repoRoot = Join-Path $TestDrive 'repo'
+            $windowsDir = Join-Path $repoRoot 'windows'
+            New-Item -ItemType Directory -Path $windowsDir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $repoRoot 'VERSION') -Value '4.2.0'
+
+            Get-OpenPathInstallerAgentVersion -ScriptDir $windowsDir | Should -Be '4.2.0'
+        }
+
+        It 'prefers OPENPATH_VERSION and falls back to 0.0.0 without a VERSION file' {
+            $emptyDir = Join-Path $TestDrive 'empty\windows'
+            New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+
+            Get-OpenPathInstallerAgentVersion -ScriptDir $emptyDir | Should -Be '0.0.0'
+            $env:OPENPATH_VERSION = '9.9.9'
+            Get-OpenPathInstallerAgentVersion -ScriptDir $emptyDir | Should -Be '9.9.9'
+        }
+    }
 }
