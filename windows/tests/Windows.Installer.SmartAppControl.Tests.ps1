@@ -205,7 +205,7 @@ Describe 'Installer Smart App Control phase (Phase 8e E1)' {
                 $script:SacLogLines[1] | Should -Match 'result=not-requested'
             }
             finally {
-                Remove-Item function:global:Write-OpenPathLog -ErrorAction SilentlyContinue
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
             }
         }
         It 'Keeps the post-install SAC notice truthful, with evaluation and enforcement covered (Phase 8e E3)' {

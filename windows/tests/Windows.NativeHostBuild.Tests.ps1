@@ -1004,7 +1004,7 @@ public static class OpenPathPingNoisyFixture {
                 ($script:PingLogLines -join "`n") | Should -Match "stdinPreambleBytes='efbbbf'"
             }
             finally {
-                Remove-Item function:global:Write-OpenPathLog -ErrorAction SilentlyContinue
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
             }
         }
 
