@@ -877,6 +877,39 @@ void describe('background listeners blocked-screen routing', () => {
     ]);
   });
 
+  void test('redirects main-frame navigations to public IP literals before auto-allow', () => {
+    const ip = `${String(11 + Math.floor(Math.random() * 89))}.${String(Math.floor(Math.random() * 256))}.0.1`;
+    const harness = createListenerHarness({});
+    assert.ok(harness.webRequestBefore);
+
+    const result = harness.webRequestBefore({
+      type: 'main_frame',
+      tabId: 4,
+      url: `http://${ip}/`,
+    } as WebRequest.OnBeforeRequestDetailsType) as { redirectUrl?: string } | undefined;
+
+    assert.match(
+      result?.redirectUrl ?? '',
+      /^moz-extension:\/\/unit-test\/+blocked\/blocked\.html/
+    );
+    assert.deepEqual(harness.autoAllowCalls, []);
+    assert.equal(harness.addedBlocks[0]?.error, `PUBLIC_IP_LITERAL_POLICY:${ip}`);
+  });
+
+  void test('leaves private IP literal navigations (captive portals, gateways) alone', () => {
+    const harness = createListenerHarness({});
+    assert.ok(harness.webRequestBefore);
+
+    const result = harness.webRequestBefore({
+      type: 'main_frame',
+      tabId: 4,
+      url: `http://192.168.${String(Math.floor(Math.random() * 256))}.1/login`,
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.equal(result, undefined);
+    assert.deepEqual(harness.addedBlocks, []);
+  });
+
   void test('redirects a main-frame timeout when native policy confirms the hostname is blocked', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.resolve(true),

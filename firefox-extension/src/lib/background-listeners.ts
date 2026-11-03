@@ -18,6 +18,7 @@ import {
   type NativeBlockedScreenConfirmation,
 } from './blocked-screen-navigation-controller.js';
 import { evaluateGoogleGameBlocking, isGoogleGamePolicyOutcome } from './google-game-blocking.js';
+import { evaluatePublicIpLiteral } from './background-ip-literal-rules.js';
 import type { OpenPathDependencyObservationEventInput } from './dependency-observation-diagnostics.js';
 import type { NavigationState } from './navigation-state.js';
 
@@ -524,6 +525,9 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       });
       const result =
         options.evaluateBlockedPath(details) ??
+        evaluatePublicIpLiteral(details, {
+          extensionOrigin: options.browser.runtime.getURL('/'),
+        }) ??
         options.evaluateBlockedSubdomain(details) ??
         options.evaluateAllowedPath(details) ??
         evaluateGoogleGameBlocking(details, {
