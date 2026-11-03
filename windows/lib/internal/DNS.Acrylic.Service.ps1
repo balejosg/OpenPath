@@ -401,6 +401,40 @@ function Wait-AcrylicServiceStatus {
     return (Get-Service -Name $Name -ErrorAction SilentlyContinue)
 }
 
+function Set-AcrylicServiceAutoStart {
+    <#
+    .SYNOPSIS
+    Makes the Acrylic service start automatically at boot.
+    .DESCRIPTION
+    The installer registers Acrylic as Automatic, but a pre-existing service or a
+    later change can leave it Manual or Disabled; with the adapters pointed at
+    127.0.0.1 that means no DNS after a real boot until a task starts it. Uses the
+    ServiceController StartType enum, which does not depend on the Windows language.
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        $service = Get-AcrylicService
+        if (-not $service) {
+            return $false
+        }
+
+        if (([string]$service.StartType) -eq 'Automatic') {
+            return $true
+        }
+
+        $previousStartType = [string]$service.StartType
+        Set-Service -Name $service.Name -StartupType Automatic -ErrorAction Stop
+        Write-OpenPathLog "Acrylic service start type changed from $previousStartType to Automatic"
+        return $true
+    }
+    catch {
+        Write-OpenPathLog "Failed to set Acrylic service to start automatically: $_" -Level WARN
+        return $false
+    }
+}
+
 function Ensure-AcrylicService {
     <#
     .SYNOPSIS

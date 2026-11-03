@@ -51,6 +51,8 @@ function New-OpenPathWatchdogProtectedModeRepairPlan {
 
         [bool]$AcrylicServiceRunning = $true,
 
+        [bool]$AcrylicServiceAutoStart = $true,
+
         [bool]$DnsResolutionHealthy = $true,
 
         [bool]$DnsSinkholeHealthy = $true,
@@ -82,6 +84,13 @@ function New-OpenPathWatchdogProtectedModeRepairPlan {
         $issues += 'Acrylic service not running'
         $recoveryEligibleIssues += 'Acrylic service not running'
         $actions += 'StartAcrylicService'
+    }
+
+    # Not a health issue on its own (Acrylic is running now), but a manual or
+    # disabled start type leaves the next real boot without DNS until a task
+    # starts it, so repair it quietly.
+    if (-not $AcrylicServiceAutoStart) {
+        $actions += 'SetAcrylicServiceAutoStart'
     }
 
     if (-not $DnsResolutionHealthy) {
@@ -183,6 +192,10 @@ function Invoke-OpenPathEndpointStateRepairPlan {
             'StartAcrylicService' {
                 Write-OpenPathLog "Watchdog: Acrylic service not running, attempting restart..." -Level WARN
                 $acrylicRunning = [bool](Start-AcrylicService)
+            }
+            'SetAcrylicServiceAutoStart' {
+                Write-OpenPathLog "Watchdog: Acrylic service is not set to start automatically, fixing..." -Level WARN
+                $null = Set-AcrylicServiceAutoStart
             }
             'RestartAcrylicService' {
                 Write-OpenPathLog "Watchdog: DNS resolution failed, restarting Acrylic..." -Level WARN

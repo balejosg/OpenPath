@@ -62,6 +62,7 @@ Initialize-OpenPathScriptSession `
     'Set-LocalDNS',
     'Start-AcrylicService',
     'Restart-AcrylicService',
+    'Set-AcrylicServiceAutoStart',
     'Restore-OpenPathCaptivePortalDNS',
     'Enable-OpenPathCaptivePortalMode',
     'Disable-OpenPathCaptivePortalMode'

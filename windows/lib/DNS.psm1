@@ -26,6 +26,7 @@ Export-ModuleMember -Function @(
     'Register-AcrylicServiceFromPath',
     'Install-AcrylicDNS',
     'Ensure-AcrylicService',
+    'Set-AcrylicServiceAutoStart',
     'Update-AcrylicHost',
     'Set-AcrylicConfiguration',
     'Test-OpenPathSplitDnsActive',

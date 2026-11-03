@@ -11,6 +11,9 @@ Describe "Acrylic restart serialization (Phase 8f F1-F4)" {
         if (-not (Get-Command -Name Start-Service -ErrorAction SilentlyContinue)) {
             function global:Start-Service { }
         }
+        if (-not (Get-Command -Name Set-Service -ErrorAction SilentlyContinue)) {
+            function global:Set-Service { param([string]$Name, [string]$StartupType) }
+        }
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
         Import-Module "$modulePath\DNS.psm1" -Force -Global -ErrorAction Stop
         $script:RestartModulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Restart.ps1"
@@ -220,6 +223,36 @@ Describe "Acrylic restart serialization (Phase 8f F1-F4)" {
             }
         }
 
+    }
+
+    Context "Acrylic start type" {
+        It "<Name>" -ForEach @(
+            @{ Name = 'Sets a Manual Acrylic service back to Automatic'; StartType = 'Manual'; ExpectedSets = 1 }
+            @{ Name = 'Sets a Disabled Acrylic service back to Automatic'; StartType = 'Disabled'; ExpectedSets = 1 }
+            @{ Name = 'Leaves an Automatic Acrylic service alone'; StartType = 'Automatic'; ExpectedSets = 0 }
+        ) {
+            InModuleScope DNS -Parameters @{ StartType = $StartType; ExpectedSets = $ExpectedSets } {
+                param($StartType, $ExpectedSets)
+                Mock Write-OpenPathLog { } -ModuleName DNS
+                Mock Get-AcrylicService { [pscustomobject]@{ Name = 'AcrylicDNSProxySvc'; Status = 'Running'; StartType = $StartType } } -ModuleName DNS
+                Mock Set-Service { } -ModuleName DNS
+
+                Set-AcrylicServiceAutoStart | Should -BeTrue
+                Should -Invoke Set-Service -ModuleName DNS -Times $ExpectedSets -Exactly -ParameterFilter {
+                    $Name -eq 'AcrylicDNSProxySvc' -and $StartupType -eq 'Automatic'
+                }
+            }
+        }
+
+        It "Reports failure without throwing when the start type cannot be changed" {
+            InModuleScope DNS {
+                Mock Write-OpenPathLog { } -ModuleName DNS
+                Mock Get-AcrylicService { [pscustomobject]@{ Name = 'AcrylicDNSProxySvc'; Status = 'Running'; StartType = 'Manual' } } -ModuleName DNS
+                Mock Set-Service { throw 'Access denied' } -ModuleName DNS
+
+                Set-AcrylicServiceAutoStart | Should -BeFalse
+            }
+        }
     }
 
     Context "F3/F4 real processes" {

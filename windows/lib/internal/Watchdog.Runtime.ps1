@@ -1185,7 +1185,8 @@ function Invoke-OpenPathWatchdogChecks {
         $acrylicService = if ($shouldRunProtectedModeChecks) { Get-Service -DisplayName "*Acrylic*" -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
         $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
             -PolicyState $policyState `
-            -AcrylicServiceRunning:(-not $shouldRunProtectedModeChecks -or ($acrylicService -and $acrylicService.Status -eq 'Running'))
+            -AcrylicServiceRunning:(-not $shouldRunProtectedModeChecks -or ($acrylicService -and $acrylicService.Status -eq 'Running')) `
+            -AcrylicServiceAutoStart:(-not $acrylicService -or -not $acrylicService.PSObject.Properties['StartType'] -or ([string]$acrylicService.StartType) -eq 'Automatic')
         if ($repairPlan.Actions.Count -gt 0) {
             $issues += @($repairPlan.Issues)
             $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)

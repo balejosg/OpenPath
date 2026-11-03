@@ -2773,6 +2773,32 @@ Describe "Watchdog Script" {
         }
     }
 
+    Context "Acrylic service start type" {
+        It "Repairs a non-automatic Acrylic start type without reporting a health issue" {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1")
+            $policyState = [pscustomobject]@{ ProtectedModeEligible = $true }
+
+            $plan = New-OpenPathWatchdogProtectedModeRepairPlan -PolicyState $policyState -AcrylicServiceAutoStart:$false
+            @($plan.Actions) | Should -Be @('SetAcrylicServiceAutoStart')
+            @($plan.Issues).Count | Should -Be 0
+
+            (New-OpenPathWatchdogProtectedModeRepairPlan -PolicyState $policyState).Actions.Count | Should -Be 0
+            (New-OpenPathWatchdogProtectedModeRepairPlan -PolicyState ([pscustomobject]@{ ProtectedModeEligible = $false }) -AcrylicServiceAutoStart:$false).Actions.Count | Should -Be 0
+
+            $script:autoStartCalls = 0
+            function Set-AcrylicServiceAutoStart { $script:autoStartCalls++; return $true }
+            function Write-OpenPathLog { param($Message, $Level) }
+            $result = Invoke-OpenPathEndpointStateRepairPlan -Plan $plan -Config $null
+            $script:autoStartCalls | Should -Be 1
+            @($result.AppliedActions) | Should -Be @('SetAcrylicServiceAutoStart')
+        }
+
+        It "Feeds the Acrylic start type from the service into the watchdog plan" {
+            $content = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1") -Raw
+            $content | Should -Match "-AcrylicServiceAutoStart:\(-not \`$acrylicService -or -not \`$acrylicService\.PSObject\.Properties\['StartType'\] -or \(\[string\]\`$acrylicService\.StartType\) -eq 'Automatic'\)"
+        }
+    }
+
     Context "Watchdog health states" {
         It "Uses the shared endpoint reconciler for protected DNS and firewall repair ordering" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
