@@ -940,6 +940,11 @@ Describe "AppControl Module" {
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\ftp.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\tftp.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\tftp.exe'
+            # Installed FTP/SFTP/SSH clients reach arbitrary IP literals; the default
+            # profile allows %PROGRAMFILES%\*, so their directories need explicit denies.
+            @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES%\FileZilla FTP Client\*'
+            @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES%\WinSCP\*'
+            @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES%\PuTTY\*'
             foreach ($path in $expectedDenyPaths) {
                 @($spec.UserWritableDenyPaths) | Should -Contain $path
             }
@@ -1008,7 +1013,7 @@ Describe "AppControl Module" {
             # must read as invalid so the watchdog re-applies the policy.
             InModuleScope AppControl {
                 $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
-                foreach ($path in @('%WINDIR%\System32\WindowsPowerShell\v1.0\powershell_ise.exe', '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe')) {
+                foreach ($path in @('%WINDIR%\System32\WindowsPowerShell\v1.0\powershell_ise.exe', '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe', '%PROGRAMFILES%\FileZilla FTP Client\*')) {
                     [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
                     $collection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Exe' })[0]
                     $denyRule = @($collection.FilePathRule | Where-Object {

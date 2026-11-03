@@ -927,7 +927,14 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             '%WINDIR%\System32\ftp.exe',
             '%WINDIR%\SysWOW64\ftp.exe',
             '%WINDIR%\System32\tftp.exe',
-            '%WINDIR%\SysWOW64\tftp.exe'
+            '%WINDIR%\SysWOW64\tftp.exe',
+            # Installed file-transfer / remote-shell clients open sockets to arbitrary
+            # IP literals (FTP/SFTP/SSH), bypassing the name-based whitelist. The
+            # default profile allows everything under %PROGRAMFILES% (both Program
+            # Files roots), so deny their whole install directories explicitly.
+            '%PROGRAMFILES%\FileZilla FTP Client\*',
+            '%PROGRAMFILES%\WinSCP\*',
+            '%PROGRAMFILES%\PuTTY\*'
         ) | ForEach-Object { ([string]$_).Replace('%PROGRAMFILES%', '%PROGRAMFILES%').Replace('%OSDRIVE%\Users\*\AppData\Local', '%OSDRIVE%\Users\*\AppData\Local') } | Sort-Object -Unique)
         UserWritableDenyPaths = @(
             '%OSDRIVE%\Users\*\Downloads\*',
