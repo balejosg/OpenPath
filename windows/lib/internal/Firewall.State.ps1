@@ -91,14 +91,17 @@ function New-OpenPathFirewallRule {
         [string]$Action,
         [string]$Profile,
         [string]$Description,
-        [string]$Program
+        [string]$Program,
+        [string]$LocalUser,
+        [string]$Package,
+        [string]$Service
     )
 
     $ruleParameters = @{
         DisplayName = $DisplayName
         Group = 'OpenPath'
     }
-    foreach ($key in @('Direction', 'Protocol', 'RemoteAddress', 'RemotePort', 'LocalAddress', 'LocalPort', 'Action', 'Profile', 'Description', 'Program')) {
+    foreach ($key in @('Direction', 'Protocol', 'RemoteAddress', 'RemotePort', 'LocalAddress', 'LocalPort', 'Action', 'Profile', 'Description', 'Program', 'LocalUser', 'Package', 'Service')) {
         if ($PSBoundParameters.ContainsKey($key) -and $null -ne $PSBoundParameters[$key] -and [string]$PSBoundParameters[$key] -ne '') {
             $ruleParameters[$key] = $PSBoundParameters[$key]
         }

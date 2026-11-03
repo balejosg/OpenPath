@@ -1202,4 +1202,160 @@ Describe "Firewall Module" {
             $programs | Should -Be @($script:snNativeHost)
         }
     }
+
+    Context "Student egress floor apply, fail-open and drift" {
+        BeforeAll {
+            foreach ($name in @('Set-NetFirewallProfile', 'Get-NetFirewallProfile', 'Get-NetFirewallRule', 'Get-NetFirewallSecurityFilter')) {
+                if (-not (Get-Command -Name $name -ErrorAction SilentlyContinue)) {
+                    New-Item -Path "Function:\global:$name" -Value { param([Parameter(ValueFromPipeline = $true)]$InputObject, $Profile, $DefaultOutboundAction, $DisplayName, $ErrorAction) } -Force | Out-Null
+                }
+            }
+            $script:sfaSid = 'S-1-5-21-1-2-3-1005'
+            $script:sfaPrograms = @('C:\Program Files\Mozilla Firefox\firefox.exe')
+        }
+
+        It "fails open when the restricted group cannot be resolved" {
+            $outcome = InModuleScope Firewall -Parameters @{ Programs = $script:sfaPrograms } {
+                param($Programs)
+                $events = New-Object System.Collections.Generic.List[string]
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { throw 'OpenPath-Restricted group could not be resolved' }
+                Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $events.Add("profile:$DefaultOutboundAction") }
+                Mock Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound) $events.Add("remove:$RestoreDefaultOutbound") }
+                Mock New-OpenPathFirewallRule { $events.Add('create') }
+                $count = Set-OpenPathStudentEgressFloor -StudentPrograms $Programs
+                [pscustomobject]@{ Count = $count; Events = @($events) }
+            }
+            $outcome.Count | Should -Be 0
+            @($outcome.Events) | Should -Not -Contain 'profile:Block'
+            @($outcome.Events) | Should -Not -Contain 'create'
+            @($outcome.Events) | Should -Contain 'remove:True'
+        }
+
+        It "saves the previous outbound default before creating rules and setting Block" {
+            $outcome = InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                $events = New-Object System.Collections.Generic.List[string]
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Save-OpenPathEgressFloorPreviousOutbound { $events.Add('save') }
+                Mock Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound) $events.Add("remove:$RestoreDefaultOutbound") }
+                Mock New-OpenPathFirewallRule { $events.Add('create') }
+                Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $events.Add("profile:$DefaultOutboundAction") }
+                $count = Set-OpenPathStudentEgressFloor -StudentPrograms $Programs
+                [pscustomobject]@{ Count = $count; Events = @($events) }
+            }
+            $outcome.Count | Should -Be 9
+            $events = @($outcome.Events)
+            $events[0] | Should -Be 'save'
+            $events[1] | Should -Be 'remove:False'
+            @($events | Where-Object { $_ -eq 'create' }).Count | Should -Be 9
+            $events[-1] | Should -Be 'profile:Block'
+        }
+
+        It "passes LocalUser, Package and Service through to New-NetFirewallRule" {
+            Initialize-FirewallRuleCaptureMocks
+            InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Save-OpenPathEgressFloorPreviousOutbound { }
+                Mock Remove-OpenPathEgressFloorRules { }
+                Mock Add-OpenPathFirewallManifestRule { }
+                Mock Set-NetFirewallProfile { }
+                Set-OpenPathStudentEgressFloor -StudentPrograms $Programs | Out-Null
+            }
+            $captured = @(Get-CapturedFirewallRules)
+            @($captured | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-NonStudent' })[0].LocalUser | Should -Be "D:(D;;CC;;;$($script:sfaSid))(A;;CC;;;WD)"
+            @($captured | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Block-EgressFloor-StudentAppContainers' })[0].Package | Should -Be '*'
+            @($captured | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Block-EgressFloor-WebClient-Internet' })[0].Service | Should -Be 'WebClient'
+        }
+
+        It "tears down with restore when a rule creation throws" {
+            $outcome = InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                $events = New-Object System.Collections.Generic.List[string]
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Save-OpenPathEgressFloorPreviousOutbound { }
+                Mock Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound) $events.Add("remove:$RestoreDefaultOutbound") }
+                Mock New-OpenPathFirewallRule { throw 'The parameter is incorrect.' }
+                Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $events.Add("profile:$DefaultOutboundAction") }
+                $count = Set-OpenPathStudentEgressFloor -StudentPrograms $Programs
+                [pscustomobject]@{ Count = $count; Events = @($events) }
+            }
+            $outcome.Count | Should -Be 0
+            @($outcome.Events) | Should -Not -Contain 'profile:Block'
+            @($outcome.Events)[-1] | Should -Be 'remove:True'
+        }
+
+        It "does not overwrite an existing pre-floor state file on upgrade" {
+            $written = InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                $writes = New-Object System.Collections.Generic.List[string]
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Test-Path { $true }
+                Mock Set-Content { param($Path) $writes.Add([string]$Path) }
+                Mock Remove-OpenPathEgressFloorRules { }
+                Mock New-OpenPathFirewallRule { }
+                Mock Set-NetFirewallProfile { }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
+                Set-OpenPathStudentEgressFloor -StudentPrograms $Programs | Out-Null
+                @($writes)
+            }
+            @($written | Where-Object { $_ -like '*egress-floor-prev-outbound.json' }).Count | Should -Be 0
+        }
+
+        It "reports drift when a profile default is Allow" {
+            $drift = InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                $expected = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $Sid -StudentPrograms $Programs)
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Allow' } }
+                Mock Get-NetFirewallRule { $expected | ForEach-Object { [pscustomobject]@{ DisplayName = $_.DisplayName } } }
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } }
+                Test-OpenPathStudentEgressFloorDrift -StudentPrograms $Programs
+            }
+            $drift.Drifted | Should -BeTrue
+            $drift.Reason | Should -Be 'default-outbound-not-block'
+        }
+
+        It "reports drift when a student program rule is missing" {
+            $drift = InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                $expected = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $Sid -StudentPrograms $Programs)
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
+                Mock Get-NetFirewallRule { $expected | Where-Object { $_.DisplayName -notlike '*-Student-*' } | ForEach-Object { [pscustomobject]@{ DisplayName = $_.DisplayName } } }
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } }
+                Test-OpenPathStudentEgressFloorDrift -StudentPrograms $Programs
+            }
+            $drift.Drifted | Should -BeTrue
+            $drift.Reason | Should -Be 'rule-set-mismatch'
+        }
+
+        It "reports no drift when the installed set equals the expected set" {
+            $drift = InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                $expected = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $Sid -StudentPrograms $Programs)
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
+                Mock Get-NetFirewallRule { $expected | ForEach-Object { [pscustomobject]@{ DisplayName = $_.DisplayName } } }
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } }
+                Test-OpenPathStudentEgressFloorDrift -StudentPrograms $Programs
+            }
+            $drift.Drifted | Should -BeFalse
+        }
+
+        It "reports no drift when the group is unresolvable and no floor is installed" {
+            $drift = InModuleScope Firewall {
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { throw 'missing' }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Allow' } }
+                Mock Get-NetFirewallRule { @() }
+                Test-OpenPathStudentEgressFloorDrift -StudentPrograms @()
+            }
+            $drift.Drifted | Should -BeFalse
+            $drift.Reason | Should -Be 'restricted-group-unresolved'
+        }
+    }
 }

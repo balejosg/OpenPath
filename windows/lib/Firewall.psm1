@@ -22,6 +22,8 @@ Export-ModuleMember -Function @(
     'Get-OpenPathOutboundEgressFloorRules',
     'Get-OpenPathStudentEgressFloorRules',
     'Get-OpenPathStudentNetworkPrograms',
+    'Set-OpenPathStudentEgressFloor',
+    'Test-OpenPathStudentEgressFloorDrift',
     'Get-OpenPathEgressFloorSystemServicePrograms',
     'Get-OpenPathEgressFloorAllowIps',
     'Get-OpenPathEgressFloorProfileNames',

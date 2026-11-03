@@ -671,6 +671,141 @@ function Get-OpenPathStudentNetworkPrograms {
     return @($programs | Select-Object -Unique)
 }
 
+function Resolve-OpenPathEgressFloorRestrictedSid {
+    <#
+    .SYNOPSIS
+        SID of the OpenPath-Restricted local group; throws when it cannot be resolved.
+    .DESCRIPTION
+        Uses the AppControl resolver when it is loaded, otherwise looks the group up by
+        name. Never falls back to BUILTIN\Users: the floor must not restrict accounts
+        outside the configured OpenPath boundary.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if (Get-Command -Name 'Get-OpenPathRestrictedGroupSid' -ErrorAction SilentlyContinue) {
+        return [string](Get-OpenPathRestrictedGroupSid)
+    }
+    if (-not (Get-Command -Name 'Get-LocalGroup' -ErrorAction SilentlyContinue)) {
+        throw 'OpenPath-Restricted group lookup capability is unavailable'
+    }
+    $group = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+    return [string]$group.SID.Value
+}
+
+function Set-OpenPathStudentEgressFloor {
+    <#
+    .SYNOPSIS
+        Applies the user-scoped egress floor: rules from
+        Get-OpenPathStudentEgressFloorRules plus DefaultOutboundAction Block.
+    .DESCRIPTION
+        FAIL-OPEN: when the restricted group SID cannot be resolved, or any rule or the
+        profile change fails, the floor is torn down and the persisted pre-floor outbound
+        default restored, so the device is never left at Block without the non-student
+        Allow. The pre-floor default is captured once (Save-... never overwrites an
+        existing state file, which also covers upgrades from the IP-set floor), and the
+        previous floor rules -- including legacy -EgressFloor-Whitelist-*/-System-* rules
+        -- are swapped out without touching the profile default.
+    .OUTPUTS
+        int -- rules created (0 == not applied / fail-open).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [AllowNull()]
+        [string[]]$StudentPrograms = @(),
+
+        [string]$RulePrefix = $script:RulePrefix
+    )
+
+    if (-not $PSCmdlet.ShouldProcess('Windows Firewall', 'Apply OpenPath user-scoped egress floor')) {
+        return 0
+    }
+
+    try {
+        $restrictedSid = Resolve-OpenPathEgressFloorRestrictedSid
+        $rules = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $restrictedSid -StudentPrograms $StudentPrograms -RulePrefix $RulePrefix)
+    }
+    catch {
+        Write-OpenPathLog "Egress floor: restricted group unavailable ($_); NOT applying the floor (fail-open) and restoring the pre-floor outbound default" -Level WARN
+        Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $true
+        return 0
+    }
+
+    Save-OpenPathEgressFloorPreviousOutbound
+    Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $false
+
+    try {
+        foreach ($rule in $rules) {
+            $parameters = @{}
+            foreach ($property in $rule.PSObject.Properties) {
+                if ($null -ne $property.Value -and [string]$property.Value -ne '') { $parameters[$property.Name] = $property.Value }
+            }
+            New-OpenPathFirewallRule @parameters -ErrorAction Stop | Out-Null
+        }
+        if (Get-Command -Name 'Set-NetFirewallProfile' -ErrorAction SilentlyContinue) {
+            Set-NetFirewallProfile -Profile @(Get-OpenPathEgressFloorProfileNames) -DefaultOutboundAction Block -ErrorAction Stop
+        }
+    }
+    catch {
+        Write-OpenPathLog "Egress floor: apply failed ($_); tearing down and restoring the pre-floor outbound default" -Level ERROR
+        Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $true
+        return 0
+    }
+
+    Write-OpenPathLog "Egress floor active: $($rules.Count) rules, $(@($StudentPrograms).Count) student network program(s), default outbound = Block" -Level WARN
+    return $rules.Count
+}
+
+function Test-OpenPathStudentEgressFloorDrift {
+    <#
+    .SYNOPSIS
+        Reports whether the installed user-scoped egress floor differs from the expected
+        one (profile default, rule names, non-student scope).
+    .OUTPUTS
+        PSCustomObject -- Drifted (bool), Reason (string).
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string[]]$StudentPrograms = @(),
+
+        [string]$RulePrefix = $script:RulePrefix
+    )
+
+    $installedNames = @(Get-NetFirewallRule -DisplayName "$RulePrefix-*-EgressFloor-*" -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.DisplayName } | Sort-Object -Unique)
+    $defaultsBlocked = @(foreach ($profileName in @(Get-OpenPathEgressFloorProfileNames)) {
+            $profileObject = Get-NetFirewallProfile -Profile $profileName -ErrorAction SilentlyContinue
+            [bool]($profileObject -and [string]$profileObject.DefaultOutboundAction -eq 'Block')
+        })
+
+    try {
+        $restrictedSid = Resolve-OpenPathEgressFloorRestrictedSid
+    }
+    catch {
+        $floorPresent = ($installedNames.Count -gt 0) -or ($defaultsBlocked -contains $true)
+        return [PSCustomObject]@{ Drifted = $floorPresent; Reason = 'restricted-group-unresolved' }
+    }
+
+    if ($defaultsBlocked -contains $false) {
+        return [PSCustomObject]@{ Drifted = $true; Reason = 'default-outbound-not-block' }
+    }
+
+    $expected = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $restrictedSid -StudentPrograms $StudentPrograms -RulePrefix $RulePrefix)
+    $expectedNames = @($expected | ForEach-Object { [string]$_.DisplayName } | Sort-Object -Unique)
+    if (($expectedNames -join '|') -ne ($installedNames -join '|')) {
+        return [PSCustomObject]@{ Drifted = $true; Reason = 'rule-set-mismatch' }
+    }
+
+    $nonStudent = @($expected | Where-Object { $_.DisplayName -eq "$RulePrefix-Allow-EgressFloor-NonStudent" })[0]
+    $installedRule = @(Get-NetFirewallRule -DisplayName $nonStudent.DisplayName -ErrorAction SilentlyContinue)[0]
+    $installedScope = if ($installedRule) { @($installedRule | Get-NetFirewallSecurityFilter -ErrorAction SilentlyContinue)[0] } else { $null }
+    if (-not $installedScope -or [string]$installedScope.LocalUser -ne [string]$nonStudent.LocalUser) {
+        return [PSCustomObject]@{ Drifted = $true; Reason = 'nonstudent-scope-mismatch' }
+    }
+
+    return [PSCustomObject]@{ Drifted = $false; Reason = 'in-sync' }
+}
+
 function Get-OpenPathEgressFloorProfileNames {
     <#
     .SYNOPSIS

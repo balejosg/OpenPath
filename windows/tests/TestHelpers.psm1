@@ -72,7 +72,10 @@ function Initialize-FirewallRuleCaptureMocks {
             [string]$Action,
             [string]$Profile,
             [string]$Description,
-            [string]$Program
+            [string]$Program,
+            [string]$LocalUser,
+            [string]$Package,
+            [string]$Service
         )
 
         # Mirror the real New-NetFirewallRule: it rejects a /0 (prefix length 0)
@@ -95,6 +98,9 @@ function Initialize-FirewallRuleCaptureMocks {
             LocalPort = [string]$LocalPort
             Action = $Action
             Program = $Program
+            LocalUser = $LocalUser
+            Package = $Package
+            Service = $Service
         }
 
         return [PSCustomObject]@{ DisplayName = $DisplayName }
