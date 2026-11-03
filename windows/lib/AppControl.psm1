@@ -320,6 +320,9 @@ function Test-OpenPathApplicationApprovalCatalog {
                 return $false
             }
             $ids[[string]$application.id] = $true
+            if ($application.PSObject.Properties['network'] -and $application.network -isnot [bool]) {
+                return $false
+            }
             $identity = $application.identity
             $type = if ($identity.PSObject.Properties['type']) { [string]$identity.type } else { '' }
             switch ($type) {
@@ -345,9 +348,7 @@ function Test-OpenPathApplicationApprovalCatalog {
                 }
                 'Path' {
                     $path = if ($identity.PSObject.Properties['path']) { ([string]$identity.path).Trim() } else { '' }
-                    $pathPattern = '^(?i)(?:[A-Z]:\\Program Files(?: \(x86\))?|%PROGRAMFILES%)\\[^*?\\/:<>|]+(?:\\[^*?\\/:<>|]+)*$'
-                    if ($path -notmatch $pathPattern -or $path -match '(?i)\\Users\\|AppData|\.\.' -or
-                        $knownExtensions -notcontains ([IO.Path]::GetExtension($path).ToLowerInvariant())) {
+                    if (-not (Test-OpenPathProgramFilesCatalogPath -Path $path)) {
                         return $false
                     }
                 }

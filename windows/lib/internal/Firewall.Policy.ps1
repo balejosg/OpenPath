@@ -594,6 +594,83 @@ function Get-OpenPathStudentEgressFloorRules {
     return $rules.ToArray()
 }
 
+function Get-OpenPathStudentNetworkPrograms {
+    <#
+    .SYNOPSIS
+        Absolute program paths from which restricted (student) users may reach the
+        network under the user-scoped egress floor.
+    .DESCRIPTION
+        Approved browser executables (inventory identities marked IsApproved whose family
+        is in ApprovedBrowsers), the OpenPath Firefox native host, and approval-catalog
+        entries with network = $true. Only catalog Path identities under Program Files
+        are honored; network = $true on any other identity is ignored with a WARN, never
+        granted.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string[]]$ApprovedBrowsers = @(),
+
+        [AllowNull()]
+        [object]$BrowserInventory = $null,
+
+        [AllowNull()]
+        [object]$ApplicationCatalog = $null,
+
+        [AllowNull()]
+        [string]$OpenPathRoot
+    )
+
+    $resolvedRoot = $OpenPathRoot
+    if ([string]::IsNullOrWhiteSpace($resolvedRoot)) {
+        $resolvedRoot = if (Get-Command -Name 'Resolve-OpenPathWindowsRoot' -ErrorAction SilentlyContinue) { Resolve-OpenPathWindowsRoot } else { 'C:\OpenPath' }
+    }
+    $resolvedRoot = ([string]$resolvedRoot).TrimEnd('\')
+    $programFiles = if ($env:ProgramFiles) { [string]$env:ProgramFiles } else { 'C:\Program Files' }
+
+    $programs = New-Object 'System.Collections.Generic.List[string]'
+    $approvedFamilies = @($ApprovedBrowsers | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+
+    if ($null -eq $BrowserInventory -and (Get-Command -Name 'Get-OpenPathBrowserInventory' -ErrorAction SilentlyContinue)) {
+        try { $BrowserInventory = Get-OpenPathBrowserInventory } catch { Write-OpenPathLog "Egress floor: browser inventory failed: $_" -Level WARN }
+    }
+    $browserCount = 0
+    if ($null -ne $BrowserInventory -and $BrowserInventory.PSObject.Properties['ExecutableIdentities']) {
+        foreach ($identity in @($BrowserInventory.ExecutableIdentities)) {
+            if (-not $identity -or -not $identity.ExecutablePath -or -not $identity.IsApproved) { continue }
+            if ($approvedFamilies -notcontains [string]$identity.Family) { continue }
+            $programs.Add([string]$identity.ExecutablePath)
+            $browserCount++
+        }
+    }
+    if ($browserCount -eq 0) {
+        Write-OpenPathLog "Egress floor: no approved student browser executable found ($($approvedFamilies -join ',')); students will have no browser egress until one is installed" -Level WARN
+    }
+
+    $programs.Add("$resolvedRoot\browser-extension\firefox\native\OpenPath-NativeHost.exe")
+
+    if ($null -ne $ApplicationCatalog -and $ApplicationCatalog.PSObject.Properties['applications']) {
+        foreach ($application in @($ApplicationCatalog.applications)) {
+            if (-not $application -or -not $application.PSObject.Properties['network'] -or $application.network -ne $true) { continue }
+            $applicationId = [string]$application.id
+            $identity = $application.identity
+            $type = if ($identity -and $identity.PSObject.Properties['type']) { [string]$identity.type } else { '' }
+            $path = if ($identity -and $identity.PSObject.Properties['path']) { ([string]$identity.path).Trim() } else { '' }
+            if ($type -ne 'Path') {
+                Write-OpenPathLog "Egress floor: catalog entry '$applicationId' has network=true on a $type identity; only Path identities can be granted network (ignored)" -Level WARN
+                continue
+            }
+            if (-not (Test-OpenPathProgramFilesCatalogPath -Path $path)) {
+                Write-OpenPathLog "Egress floor: catalog entry '$applicationId' path is not an exact Program Files path; network not granted" -Level WARN
+                continue
+            }
+            $programs.Add(($path -ireplace '^%PROGRAMFILES%', $programFiles))
+        }
+    }
+
+    return @($programs | Select-Object -Unique)
+}
+
 function Get-OpenPathEgressFloorProfileNames {
     <#
     .SYNOPSIS

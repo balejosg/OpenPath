@@ -306,3 +306,29 @@ function Resolve-OpenPathMachineRegistration {
         MachineName = $resolvedMachineName
     }
 }
+
+function Test-OpenPathProgramFilesCatalogPath {
+    <#
+    .SYNOPSIS
+        True when a catalog path is an exact, administrator-owned Program Files
+        executable path (no wildcard, traversal, user profile or AppData segment).
+    .DESCRIPTION
+        Shared by the AppLocker approval catalog validation and the egress floor, so a
+        path that may be granted execution and a path that may be granted network
+        access are judged by the same rule.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Path
+    )
+
+    $candidate = ([string]$Path).Trim()
+    $pathPattern = '^(?i)(?:[A-Z]:\\Program Files(?: \(x86\))?|%PROGRAMFILES%)\\[^*?\\/:<>|]+(?:\\[^*?\\/:<>|]+)*$'
+    $knownExtensions = @('.exe', '.com', '.dll', '.ps1', '.bat', '.cmd', '.vbs', '.js', '.wsf', '.msi', '.msp', '.mst')
+    $extension = if ($candidate -match '(\.[^.\\]+)$') { $Matches[1].ToLowerInvariant() } else { '' }
+    return [bool]($candidate -match $pathPattern -and
+        $candidate -notmatch '(?i)\\Users\\|AppData|\.\.' -and
+        $knownExtensions -contains $extension)
+}

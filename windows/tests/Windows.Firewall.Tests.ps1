@@ -1142,4 +1142,64 @@ Describe "Firewall Module" {
             { Get-OpenPathStudentEgressFloorRules -RestrictedSid '' -StudentPrograms @() } | Should -Throw
         }
     }
+
+    Context "Student network programs" {
+        BeforeAll {
+            $script:snInventory = [pscustomobject]@{
+                ExecutableIdentities = @(
+                    [pscustomobject]@{ Family = 'Firefox'; ExecutablePath = 'C:\Program Files\Mozilla Firefox\firefox.exe'; IsApproved = $true },
+                    [pscustomobject]@{ Family = 'Chrome'; ExecutablePath = 'C:\Program Files\Google\Chrome\Application\chrome.exe'; IsApproved = $true },
+                    [pscustomobject]@{ Family = 'Firefox'; ExecutablePath = 'C:\Users\s\AppData\Local\Firefox\firefox.exe'; IsApproved = $false }
+                )
+            }
+            $script:snNativeHost = 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.exe'
+            function script:New-SnCatalog([object[]]$Applications) { [pscustomobject]@{ schemaVersion = 1; applications = @($Applications) } }
+        }
+
+        It "returns approved browser paths and the native host" {
+            $programs = @(Get-OpenPathStudentNetworkPrograms -ApprovedBrowsers @('Firefox') -BrowserInventory $script:snInventory -OpenPathRoot 'C:\OpenPath')
+            $programs | Should -Contain 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            $programs | Should -Contain $script:snNativeHost
+            $programs | Should -Not -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+            $programs | Should -Not -Contain 'C:\Users\s\AppData\Local\Firefox\firefox.exe'
+        }
+
+        It "adds catalog Path entries marked network true" {
+            $catalog = New-SnCatalog @(
+                [pscustomobject]@{ id = 'net'; network = $true; identity = [pscustomobject]@{ type = 'Path'; path = '%PROGRAMFILES%\Vendor\app.exe' } },
+                [pscustomobject]@{ id = 'offline'; identity = [pscustomobject]@{ type = 'Path'; path = 'C:\Program Files\Other\tool.exe' } }
+            )
+            $programs = @(Get-OpenPathStudentNetworkPrograms -ApprovedBrowsers @('Firefox') -BrowserInventory $script:snInventory -ApplicationCatalog $catalog -OpenPathRoot 'C:\OpenPath')
+            $programs | Should -Contain 'C:\Program Files\Vendor\app.exe'
+            $programs | Should -Not -Contain 'C:\Program Files\Other\tool.exe'
+        }
+
+        It "ignores network true on Publisher and Hash identities with a WARN" {
+            $catalog = New-SnCatalog @(
+                [pscustomobject]@{ id = 'pub'; network = $true; identity = [pscustomobject]@{ type = 'Publisher'; publisherName = 'O=VENDOR'; productName = 'App'; binaryName = 'app.exe' } },
+                [pscustomobject]@{ id = 'hash'; network = $true; identity = [pscustomobject]@{ type = 'Hash'; sha256 = ('ab' * 32); fileName = 'h.exe' } }
+            )
+            $result = InModuleScope Firewall -Parameters @{ Catalog = $catalog; Inventory = $script:snInventory } {
+                param($Catalog, $Inventory)
+                $warnings = New-Object System.Collections.Generic.List[string]
+                Mock Write-OpenPathLog { param($Message, $Level) if ($Level -eq 'WARN') { $warnings.Add([string]$Message) } }
+                $programs = @(Get-OpenPathStudentNetworkPrograms -ApprovedBrowsers @('Firefox') -BrowserInventory $Inventory -ApplicationCatalog $Catalog -OpenPathRoot 'C:\OpenPath')
+                [pscustomobject]@{ Programs = $programs; Warnings = @($warnings) }
+            }
+            @($result.Programs).Count | Should -Be 2
+            @($result.Warnings | Where-Object { $_ -match 'pub' }).Count | Should -Be 1
+            @($result.Warnings | Where-Object { $_ -match 'hash' }).Count | Should -Be 1
+        }
+
+        It "ignores network true on a path outside Program Files" {
+            $catalog = New-SnCatalog @([pscustomobject]@{ id = 'userpath'; network = $true; identity = [pscustomobject]@{ type = 'Path'; path = 'C:\Users\x\a.exe' } })
+            $programs = @(Get-OpenPathStudentNetworkPrograms -ApprovedBrowsers @('Firefox') -BrowserInventory $script:snInventory -ApplicationCatalog $catalog -OpenPathRoot 'C:\OpenPath')
+            $programs | Should -Not -Contain 'C:\Users\x\a.exe'
+        }
+
+        It "still returns the native host when no approved browser is installed" {
+            $programs = @(Get-OpenPathStudentNetworkPrograms -ApprovedBrowsers @('Firefox') -BrowserInventory ([pscustomobject]@{ ExecutableIdentities = @() }) -OpenPathRoot 'C:\OpenPath')
+            $programs | Should -Be @($script:snNativeHost)
+        }
+    }
 }

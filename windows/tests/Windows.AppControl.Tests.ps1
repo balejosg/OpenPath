@@ -98,6 +98,20 @@ Describe "AppControl Module" {
             }
         }
 
+        It 'rejects a catalog whose network property is not a boolean' {
+            $catalog = [pscustomobject]@{
+                schemaVersion = 1
+                applications = @([pscustomobject]@{
+                    id = 'net-app'
+                    network = 'yes'
+                    identity = [pscustomobject]@{ type = 'Path'; path = 'C:\Program Files\Vendor\app.exe' }
+                })
+            }
+            Test-OpenPathApplicationApprovalCatalog -Profile StrictApplicationAllowlist -Catalog $catalog | Should -BeFalse
+            $catalog.applications[0].network = $true
+            Test-OpenPathApplicationApprovalCatalog -Profile StrictApplicationAllowlist -Catalog $catalog | Should -BeTrue
+        }
+
         It 'accepts a product-scoped Appx publisher with a wildcard binary' {
             $catalog = [pscustomobject]@{
                 schemaVersion = 1

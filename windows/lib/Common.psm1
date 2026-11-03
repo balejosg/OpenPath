@@ -37,6 +37,7 @@ Export-ModuleMember -Function @(
     'Test-OpenPathCapabilityStorageAcl',
     'Ensure-OpenPathCapabilityStorageDirectory',
     'Get-OpenPathConfig',
+    'Test-OpenPathProgramFilesCatalogPath',
     'Set-OpenPathConfig',
     'Write-OpenPathAtomicJsonFile',
     'Set-OpenPathConfigValue',
