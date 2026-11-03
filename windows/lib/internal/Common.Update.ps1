@@ -1,3 +1,71 @@
+$script:OpenPathAgentUpdateLockName = 'Global\OpenPathAgentUpdateLock'
+
+function Enter-OpenPathAgentUpdateLock {
+    <#
+    .SYNOPSIS
+        Tries to take the machine-wide agent update lock
+    .DESCRIPTION
+        The self-update holds this lock while it replaces agent files and
+        refreshes the integrity backup and baseline. The watchdog takes it
+        around its integrity check so it never restores files from a backup
+        that is about to be replaced.
+    .PARAMETER TimeoutMilliseconds
+        How long to wait for the lock; 0 returns immediately
+    #>
+    [CmdletBinding()]
+    param(
+        [int]$TimeoutMilliseconds = 0
+    )
+
+    $mutex = [System.Threading.Mutex]::new($false, $script:OpenPathAgentUpdateLockName)
+    $acquired = $false
+    $abandoned = $false
+    try {
+        $acquired = $mutex.WaitOne($TimeoutMilliseconds)
+    }
+    catch [System.Threading.AbandonedMutexException] {
+        $acquired = $true
+        $abandoned = $true
+    }
+
+    if (-not $acquired) {
+        $mutex.Dispose()
+        $mutex = $null
+    }
+
+    return [PSCustomObject]@{
+        Acquired = [bool]$acquired
+        Abandoned = [bool]$abandoned
+        Mutex = $mutex
+    }
+}
+
+function Exit-OpenPathAgentUpdateLock {
+    <#
+    .SYNOPSIS
+        Releases a lock taken with Enter-OpenPathAgentUpdateLock
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [PSCustomObject]$Lock
+    )
+
+    if (-not $Lock -or -not $Lock.Mutex) {
+        return
+    }
+
+    if ($Lock.Acquired) {
+        try {
+            $Lock.Mutex.ReleaseMutex()
+        }
+        catch [System.ApplicationException] {
+            # Ignore if mutex ownership changed unexpectedly
+        }
+    }
+    $Lock.Mutex.Dispose()
+}
+
 function Invoke-OpenPathAgentSelfUpdate {
     <#
     .SYNOPSIS
@@ -141,21 +209,18 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
     }
 
-    $mutex = $null
-    $lockAcquired = $false
+    $updateLock = $null
     $replacementBackups = @()
 
     try {
-        $mutex = [System.Threading.Mutex]::new($false, 'Global\OpenPathAgentUpdateLock')
-        try {
-            $lockAcquired = $mutex.WaitOne(0)
-        }
-        catch [System.Threading.AbandonedMutexException] {
-            $lockAcquired = $true
+        # Wait briefly: the watchdog holds this lock for the few seconds its
+        # integrity check takes, and a concurrent self-update holds it longer.
+        $updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 120000
+        if ($updateLock.Abandoned) {
             Write-SelfUpdateMessage -Message 'Update lock was abandoned by previous process, continuing' -Level WARN
         }
 
-        if (-not $lockAcquired) {
+        if (-not $updateLock.Acquired) {
             $message = 'Another self-update process is already running'
             Write-SelfUpdateMessage -Message $message -Level WARN
             return [PSCustomObject]@{
@@ -229,8 +294,6 @@ function Invoke-OpenPathAgentSelfUpdate {
                 BackupPath = $backupPath
             }
         }
-
-        Save-OpenPathIntegrityBackup | Out-Null
 
         foreach ($download in $downloadedFiles) {
             $destinationDir = Split-Path $download.DestinationPath -Parent
@@ -343,6 +406,10 @@ function Invoke-OpenPathAgentSelfUpdate {
             Start-OpenPathTask -TaskType SSE | Out-Null
         }
 
+        # Refresh the integrity backup and baseline only now, still under the
+        # update lock: a backup taken before the replacement holds the old
+        # files, and the watchdog would restore them over the new version.
+        Save-OpenPathIntegrityBackup | Out-Null
         New-OpenPathIntegrityBaseline | Out-Null
 
         $message = "Agent self-update applied successfully: $currentVersion -> $targetVersion"
@@ -378,16 +445,6 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
     }
     finally {
-        if ($lockAcquired -and $mutex) {
-            try {
-                $mutex.ReleaseMutex()
-            }
-            catch [System.ApplicationException] {
-                # Ignore if mutex ownership changed unexpectedly
-            }
-        }
-        if ($mutex) {
-            $mutex.Dispose()
-        }
+        Exit-OpenPathAgentUpdateLock -Lock $updateLock
     }
 }

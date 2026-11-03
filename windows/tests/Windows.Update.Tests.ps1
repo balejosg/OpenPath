@@ -557,15 +557,79 @@ Describe "Update Script" {
             $content | Should -Not -Match 'if \(\$expectedHash\) \{'
 
             $downloadLoopStart = $content.IndexOf('foreach ($file in $manifestFiles)')
-            $applyLoopStart = $content.IndexOf('Save-OpenPathIntegrityBackup')
+            $applyLoopStart = $content.IndexOf('foreach ($download in $downloadedFiles)')
             $downloadLoopBody = $content.Substring($downloadLoopStart, $applyLoopStart - $downloadLoopStart)
             $downloadLoopBody | Should -Match '(?s)Invoke-WebRequest -Uri \$fileUrl.*?\$actualHash = \(Get-FileHash -Path \$stagedPath -Algorithm SHA256 -ErrorAction Stop\)\.Hash\.ToLowerInvariant\(\)\s+if \(\$actualHash -ne \$expectedHash\.ToLowerInvariant\(\)\) \{\s+throw "Checksum mismatch for \$manifestPath"'
 
-            $postReplacementStart = $content.IndexOf('foreach ($download in $downloadedFiles)', $applyLoopStart)
-            $postReplacementStart = $content.IndexOf('foreach ($download in $downloadedFiles)', $postReplacementStart + 1)
+            $postReplacementStart = $content.IndexOf('foreach ($download in $downloadedFiles)', $applyLoopStart + 1)
             $configUpdateStart = $content.IndexOf('if ($config.PSObject.Properties[''version''])')
             $postReplacementBody = $content.Substring($postReplacementStart, $configUpdateStart - $postReplacementStart)
             $postReplacementBody | Should -Match '(?s)\$actualHash = \(Get-FileHash -Path \$download\.DestinationPath -Algorithm SHA256 -ErrorAction Stop\)\.Hash\.ToLowerInvariant\(\)\s+if \(\$actualHash -ne \$expectedHash\.ToLowerInvariant\(\)\) \{\s+throw "Post-replacement checksum mismatch for \$\(\$download\.RelativePath\)"'
+        }
+
+        It "Refreshes the integrity backup only after the new files are verified, under the update lock" {
+            # Saving the backup before the replacement left the old files in it, and a
+            # watchdog cycle during the update restored them over the new version.
+            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $content = Get-Content $updateHelperPath -Raw
+
+            $lockStart = $content.IndexOf('$updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds')
+            $replaceStart = $content.IndexOf('Move-Item -Path $tempDestinationPath')
+            $verifyStart = $content.IndexOf('Post-replacement checksum mismatch')
+            $backupStart = $content.IndexOf('Save-OpenPathIntegrityBackup | Out-Null')
+            $baselineStart = $content.IndexOf('New-OpenPathIntegrityBaseline | Out-Null')
+            $releaseStart = $content.IndexOf('Exit-OpenPathAgentUpdateLock -Lock $updateLock')
+
+            $lockStart | Should -BeGreaterThan 0
+            $lockStart | Should -BeLessThan $replaceStart
+            ([regex]::Matches($content, 'Save-OpenPathIntegrityBackup')).Count | Should -Be 1
+            $backupStart | Should -BeGreaterThan $verifyStart
+            $backupStart | Should -BeLessThan $baselineStart
+            $releaseStart | Should -BeGreaterThan $baselineStart
+        }
+
+        It "Lets only one holder take the agent update lock at a time" {
+            $commonPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1")).Path
+            . $commonPath
+            $script:OpenPathAgentUpdateLockName = "OpenPathTestLock-$([guid]::NewGuid().ToString('N'))"
+            $holderScript = @"
+`$m = [System.Threading.Mutex]::new(`$false, '$($script:OpenPathAgentUpdateLockName)')
+`$null = `$m.WaitOne()
+[Console]::Out.WriteLine('held'); [Console]::Out.Flush()
+`$null = [Console]::In.ReadLine()
+`$m.ReleaseMutex()
+"@
+            $psi = [System.Diagnostics.ProcessStartInfo]::new((Get-Process -Id $PID).Path)
+            $psi.ArgumentList.Add('-NoProfile')
+            $psi.ArgumentList.Add('-Command')
+            $psi.ArgumentList.Add($holderScript)
+            $psi.RedirectStandardInput = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.UseShellExecute = $false
+            $holder = [System.Diagnostics.Process]::Start($psi)
+            try {
+                $holder.StandardOutput.ReadLine() | Should -Be 'held'
+
+                $busy = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 0
+                $busy.Acquired | Should -BeFalse
+                $busy.Mutex | Should -BeNullOrEmpty
+                Exit-OpenPathAgentUpdateLock -Lock $busy
+
+                $holder.StandardInput.WriteLine('release')
+                $holder.WaitForExit(30000) | Should -BeTrue
+
+                $free = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 5000
+                try {
+                    $free.Acquired | Should -BeTrue
+                }
+                finally {
+                    Exit-OpenPathAgentUpdateLock -Lock $free
+                }
+            }
+            finally {
+                if (-not $holder.HasExited) { $holder.Kill() }
+                $holder.Dispose()
+            }
         }
 
         It "Gates staged .ps1/.psm1 artifacts behind an opt-in Authenticode signature check" {

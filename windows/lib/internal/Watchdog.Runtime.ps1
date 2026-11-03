@@ -1408,10 +1408,24 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     $integrityTampered = $false
+    $integrityUpdateLock = $null
     try {
         $integrityChecksEnabled = $true
         if ($Config -and $Config.PSObject.Properties['enableIntegrityChecks']) {
             $integrityChecksEnabled = [bool]$Config.enableIntegrityChecks
+        }
+
+        # A self-update rewrites agent files and only then refreshes the
+        # integrity backup and baseline, all under the agent update lock.
+        # Checking in that window would "restore" the old files over the new
+        # version, so skip this cycle while the lock is held and hold it
+        # ourselves while checking and restoring.
+        if ($integrityChecksEnabled -and (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
+            $integrityUpdateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 0
+            if (-not $integrityUpdateLock.Acquired) {
+                $integrityChecksEnabled = $false
+                Write-OpenPathLog "Watchdog: agent self-update in progress, integrity check deferred to the next cycle"
+            }
         }
 
         if ($integrityChecksEnabled) {
@@ -1439,6 +1453,11 @@ function Invoke-OpenPathWatchdogChecks {
     catch {
         $issues += "Integrity check error"
         Write-OpenPathLog "Watchdog: Error during integrity checks: $_" -Level ERROR
+    }
+    finally {
+        if ($integrityUpdateLock -and (Get-Command -Name 'Exit-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
+            Exit-OpenPathAgentUpdateLock -Lock $integrityUpdateLock
+        }
     }
 
     Invoke-OpenPathWatchdogFirefoxPolicySync

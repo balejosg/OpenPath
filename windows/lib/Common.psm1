@@ -71,6 +71,8 @@ Export-ModuleMember -Function @(
     'New-OpenPathIntegrityBaseline',
     'Test-OpenPathIntegrity',
     'Restore-OpenPathIntegrity',
+    'Enter-OpenPathAgentUpdateLock',
+    'Exit-OpenPathAgentUpdateLock',
     'Get-PrimaryDNS',
     'Get-OpenPathCaptivePortalUpstreamDns',
     'Get-OpenPathSplitDnsPortalUpstreams',

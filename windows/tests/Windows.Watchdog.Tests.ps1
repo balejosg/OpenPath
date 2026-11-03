@@ -2704,6 +2704,73 @@ Describe "Watchdog Script" {
                 '$script:OpenPathRoot\lib\install'
             )
         }
+
+        It "<Name>" -ForEach @(
+            @{ Name = 'Defers the integrity check while a self-update holds the agent update lock'; LockAcquired = $false; ExpectedChecks = 0 }
+            @{ Name = 'Checks integrity under the agent update lock and releases it afterwards'; LockAcquired = $true; ExpectedChecks = 1 }
+        ) {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            . $helperPath
+
+            $global:OpenPathTestLockAcquired = $LockAcquired
+            $global:OpenPathTestIntegrityChecks = 0
+            $global:OpenPathTestIntegrityRestores = 0
+            $global:OpenPathTestLockReleases = 0
+            $mockNames = @(
+                'Enter-OpenPathAgentUpdateLock', 'Exit-OpenPathAgentUpdateLock', 'Test-OpenPathIntegrity',
+                'Restore-OpenPathIntegrity', 'Test-OpenPathCaptivePortalModeActive', 'Test-OpenPathCaptivePortalState',
+                'Get-OpenPathConfiguredCaptivePortalDomains', 'Test-OpenPathEgressFloorDrift',
+                'Test-OpenPathRuntimeDependencyQueue', 'Test-FirewallActive', 'Test-DNSResolution', 'Test-DNSSinkhole',
+                'Test-OpenPathDnsFailsafeState', 'Test-OpenPathPolicyFailOpenMarker', 'Increment-WatchdogFailCount',
+                'Reset-WatchdogFailCount', 'Write-OpenPathLog'
+            )
+            function global:Enter-OpenPathAgentUpdateLock {
+                param([int]$TimeoutMilliseconds)
+                [pscustomobject]@{ Acquired = $global:OpenPathTestLockAcquired; Abandoned = $false; Mutex = $null }
+            }
+            function global:Exit-OpenPathAgentUpdateLock { param($Lock) $global:OpenPathTestLockReleases++ }
+            function global:Test-OpenPathIntegrity {
+                $global:OpenPathTestIntegrityChecks++
+                [pscustomobject]@{ BaselinePresent = $true; Healthy = $false; TamperedFiles = @('C:\OpenPath\lib\DNS.psm1'); MissingFiles = @() }
+            }
+            function global:Restore-OpenPathIntegrity {
+                param($IntegrityResult)
+                $global:OpenPathTestIntegrityRestores++
+                [pscustomobject]@{ Healthy = $true }
+            }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $true }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+            function global:Increment-WatchdogFailCount { return 1 }
+            function global:Reset-WatchdogFailCount { return 0 }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $null = Invoke-OpenPathWatchdogChecks `
+                    -Config ([pscustomobject]@{ enableNonAdminAppControl = $false }) `
+                    -PortalModeActive $false `
+                    -CaptiveState 'Direct' `
+                    -OpenPathRoot 'C:\OpenPath' `
+                    -StaleFailsafeStatePath (Join-Path $TestDrive 'stale-failsafe-state.json')
+
+                $global:OpenPathTestIntegrityChecks | Should -Be $ExpectedChecks
+                $global:OpenPathTestIntegrityRestores | Should -Be $ExpectedChecks
+                $global:OpenPathTestLockReleases | Should -Be 1
+            }
+            finally {
+                foreach ($name in $mockNames) {
+                    Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+                }
+                Remove-Variable -Scope Global -Name OpenPathTestLockAcquired, OpenPathTestIntegrityChecks, OpenPathTestIntegrityRestores, OpenPathTestLockReleases -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     Context "Watchdog health states" {
