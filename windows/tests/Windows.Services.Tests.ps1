@@ -147,6 +147,46 @@ Describe "Services Module" {
             $definition.Settings.MultipleInstances | Should -Be 'Queue'
         }
 
+        It "<Name>" -ForEach @(
+            @{ Name = 'Runs the startup reconcile on resume as well as at boot'; CimAvailable = $true; ExpectedTriggers = 2 }
+            @{ Name = 'Keeps the boot trigger when the resume trigger cannot be built'; CimAvailable = $false; ExpectedTriggers = 1 }
+        ) {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1")
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1")
+            $script:cimAvailable = $CimAvailable
+
+            function New-ScheduledTaskAction { param([string]$Execute, [string]$Argument) [PSCustomObject]@{ Execute = $Execute; Argument = $Argument } }
+            function New-ScheduledTaskTrigger { param([switch]$AtStartup) [PSCustomObject]@{ AtStartup = [bool]$AtStartup } }
+            function Get-CimClass {
+                param([string]$ClassName, [string]$Namespace)
+                if (-not $script:cimAvailable) { throw 'Task Scheduler CIM classes unavailable' }
+                [PSCustomObject]@{ CimClassName = $ClassName; Namespace = $Namespace }
+            }
+            function New-CimInstance {
+                param($CimClass, [switch]$ClientOnly)
+                [PSCustomObject]@{ ClassName = $CimClass.CimClassName; Enabled = $false; Subscription = $null; Delay = $null }
+            }
+
+            $definition = New-OpenPathStartupTaskDefinition `
+                -OpenPathRoot 'C:\OpenPath' `
+                -Principal ([PSCustomObject]@{ UserId = 'SYSTEM' }) `
+                -DefaultSettings ([PSCustomObject]@{})
+
+            $triggers = @($definition.Trigger)
+            $definition.TaskName | Should -Be 'OpenPath-Startup'
+            $triggers.Count | Should -Be $ExpectedTriggers
+            $triggers[0].AtStartup | Should -BeTrue
+            if ($ExpectedTriggers -eq 2) {
+                $resume = $triggers[1]
+                $resume.ClassName | Should -Be 'MSFT_TaskEventTrigger'
+                $resume.Enabled | Should -BeTrue
+                $resume.Delay | Should -Be 'PT30S'
+                $resume.Subscription | Should -Match "Provider\[@Name='Microsoft-Windows-Power-Troubleshooter'\] and EventID=1\]"
+                $resume.Subscription | Should -Match "Provider\[@Name='Microsoft-Windows-Kernel-Power'\] and EventID=107\]"
+                ([xml]$resume.Subscription).QueryList.Query.Path | Should -Be 'System'
+            }
+        }
+
         # Register-OpenPathTask is always defined by Services.psm1, and -WhatIf short-circuits
         # via $PSCmdlet.ShouldProcess() before any privileged Task Scheduler cmdlet runs, so
         # neither a Test-FunctionExists nor a Test-IsAdmin gate is needed (verified: runs clean,

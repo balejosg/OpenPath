@@ -223,10 +223,42 @@ function New-OpenPathWatchdogTaskDefinition {
         -Settings $DefaultSettings
 }
 
+$script:OpenPathResumeEventSubscription = @'
+<QueryList><Query Id="0" Path="System"><Select Path="System">*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1]]</Select><Select Path="System">*[System[Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=107]]</Select></Query></QueryList>
+'@
+
+function New-OpenPathResumeTaskTrigger {
+    <#
+    .SYNOPSIS
+    Builds an event trigger that fires when Windows resumes from sleep, hibernation or Fast Startup.
+    .DESCRIPTION
+    Laptops with Fast Startup or a lid that sleeps rarely boot for real, so a boot
+    trigger alone can go days without firing. Power-Troubleshooter event 1 marks a
+    resume from hibernation (including Fast Startup power-on) and Kernel-Power
+    event 107 a resume from sleep. Returns $null when the Task Scheduler CIM
+    classes are unavailable, so callers keep their boot trigger.
+    #>
+    try {
+        $triggerClass = Get-CimClass -ClassName 'MSFT_TaskEventTrigger' -Namespace 'Root/Microsoft/Windows/TaskScheduler' -ErrorAction Stop
+        $trigger = New-CimInstance -CimClass $triggerClass -ClientOnly -ErrorAction Stop
+        $trigger.Enabled = $true
+        $trigger.Subscription = $script:OpenPathResumeEventSubscription.Trim()
+        # Give the network a moment to come back before the reconcile cycle runs.
+        $trigger.Delay = 'PT30S'
+        return $trigger
+    }
+    catch {
+        if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
+            Write-OpenPathLog "Could not build the resume trigger; the task keeps its boot trigger only: $_" -Level WARN
+        }
+        return $null
+    }
+}
+
 function New-OpenPathStartupTaskDefinition {
     <#
     .SYNOPSIS
-    Builds the at-startup task definition that runs the startup reconcile script.
+    Builds the startup task definition that runs the reconcile script at boot and on resume.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -242,12 +274,16 @@ function New-OpenPathStartupTaskDefinition {
     )
 
     $taskSpec = Get-OpenPathScheduledTaskSpec -TaskType Startup
-    $startupTrigger = New-ScheduledTaskTrigger -AtStartup
+    $startupTriggers = @(New-ScheduledTaskTrigger -AtStartup)
+    $resumeTrigger = New-OpenPathResumeTaskTrigger
+    if ($null -ne $resumeTrigger) {
+        $startupTriggers += $resumeTrigger
+    }
 
     New-OpenPathTaskDefinition `
         -TaskName $taskSpec.Name `
         -Action (New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $taskSpec.Script)) `
-        -Trigger $startupTrigger `
+        -Trigger $startupTriggers `
         -Principal $Principal `
         -Settings $DefaultSettings
 }
