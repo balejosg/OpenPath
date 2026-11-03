@@ -373,6 +373,7 @@ function Set-OpenPathStudentEgressFloor {
         return 0
     }
 
+    try { Enable-OpenPathEgressFloorAudit } catch { Write-OpenPathLog "Egress floor: blocked-connection auditing not enabled: $_" -Level WARN }
     Write-OpenPathLog "Egress floor active: $($rules.Count) rules, $(@($StudentPrograms).Count) student network program(s), default outbound = Block" -Level WARN
     return $rules.Count
 }
@@ -454,6 +455,140 @@ function Get-OpenPathEgressFloorStudentProgramsFromConfig {
     }
 
     return @(Get-OpenPathStudentNetworkPrograms -ApprovedBrowsers $approvedBrowsers -ApplicationCatalog $catalog -OpenPathRoot $OpenPathRoot)
+}
+
+$script:OpenPathFilteringPlatformConnectionAuditGuid = '{0CCE9226-69AE-11D9-BED3-505054503030}'
+
+function Invoke-OpenPathAuditPol {
+    <# Runs auditpol.exe; returns its output lines, or $null where auditpol is unavailable. #>
+    param([string[]]$Arguments)
+
+    if (-not (Get-Command -Name 'auditpol.exe' -ErrorAction SilentlyContinue)) { return $null }
+    return @(& auditpol.exe @Arguments 2>$null)
+}
+
+function ConvertFrom-OpenPathAuditPolCsv {
+    <#
+    .SYNOPSIS
+        Numeric "Setting Value" (0 none, 1 success, 2 failure, 3 both) from
+        `auditpol /get /subcategory:{GUID} /r` output.
+    .DESCRIPTION
+        Reads the column by POSITION (7th), never by header text: auditpol localizes
+        headers and setting names (es-ES fleet).
+    #>
+    param([AllowNull()][string[]]$Lines)
+
+    foreach ($line in @($Lines | Select-Object -Skip 1)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $fields = @(([string]$line).Split(','))
+        if ($fields.Count -lt 7) { continue }
+        $value = 0
+        if ([int]::TryParse($fields[6].Trim(), [ref]$value)) { return $value }
+    }
+    return $null
+}
+
+function Get-OpenPathEgressFloorAuditStatePath {
+    param()
+    $root = if ($script:OpenPathRoot) { [string]$script:OpenPathRoot } elseif (Get-Command -Name 'Resolve-OpenPathWindowsRoot' -ErrorAction SilentlyContinue) { Resolve-OpenPathWindowsRoot } else { 'C:\OpenPath' }
+    return "$(([string]$root).TrimEnd('\'))\data\egress-floor-audit-prev.json"
+}
+
+function Set-OpenPathFilteringPlatformConnectionAudit {
+    param([int]$SettingValue)
+    $success = if ($SettingValue -band 1) { 'enable' } else { 'disable' }
+    $failure = if ($SettingValue -band 2) { 'enable' } else { 'disable' }
+    Invoke-OpenPathAuditPol -Arguments @('/set', "/subcategory:$script:OpenPathFilteringPlatformConnectionAuditGuid", "/success:$success", "/failure:$failure") | Out-Null
+}
+
+function Enable-OpenPathEgressFloorAudit {
+    <#
+    .SYNOPSIS
+        Turns on failure auditing for "Filtering Platform Connection" (Security 5157 =
+        blocked connection) so blocked student egress can be reported, recording the
+        previous setting once so Disable-OpenPathEgressFloorAudit can restore it.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $statePath = Get-OpenPathEgressFloorAuditStatePath
+    $previous = $null
+    if (Test-Path -LiteralPath $statePath) {
+        try { $previous = [int]((Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).settingValue) } catch { $previous = $null }
+    }
+    if ($null -eq $previous) {
+        $previous = ConvertFrom-OpenPathAuditPolCsv -Lines (Invoke-OpenPathAuditPol -Arguments @('/get', "/subcategory:$script:OpenPathFilteringPlatformConnectionAuditGuid", '/r'))
+        if ($null -eq $previous) {
+            Write-OpenPathLog 'Egress floor: could not read the Filtering Platform Connection audit setting; blocked-connection reporting unavailable' -Level WARN
+            return
+        }
+        $directory = Split-Path -Parent $statePath
+        if ($directory -and -not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
+        Set-Content -LiteralPath $statePath -Value (ConvertTo-Json -InputObject ([ordered]@{ settingValue = $previous })) -Encoding UTF8 -Force
+    }
+    Set-OpenPathFilteringPlatformConnectionAudit -SettingValue ([int]$previous -bor 2)
+}
+
+function Disable-OpenPathEgressFloorAudit {
+    <# Restores the audit setting recorded by Enable-OpenPathEgressFloorAudit (no-op when none). #>
+    [CmdletBinding()]
+    param()
+
+    $statePath = Get-OpenPathEgressFloorAuditStatePath
+    if (-not (Test-Path -LiteralPath $statePath)) { return }
+    try {
+        $previous = [int]((Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).settingValue)
+        Set-OpenPathFilteringPlatformConnectionAudit -SettingValue $previous
+    }
+    catch {
+        Write-OpenPathLog "Egress floor: could not restore the Filtering Platform Connection audit setting: $_" -Level WARN
+    }
+    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+}
+
+function Get-OpenPathEgressFloorBlockedConnections {
+    <#
+    .SYNOPSIS
+        Blocked outbound connections (Security event 5157) since a point in time,
+        grouped by application and destination; loopback excluded.
+    .DESCRIPTION
+        5157 carries no user SID. Under the floor, non-students are allowed everything,
+        so an outbound block is student (or kernel) traffic.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][datetime]$Since)
+
+    $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5157; StartTime = $Since } -ErrorAction SilentlyContinue)
+    $groups = @{}
+    foreach ($event in $events) {
+        $data = @{}
+        foreach ($item in @(([xml]$event.ToXml()).Event.EventData.Data)) { $data[[string]$item.Name] = [string]$item.'#text' }
+        if ($data['Direction'] -ne '%%14593') { continue }
+        $destination = [string]$data['DestAddress']
+        if ($destination -match '^(127\.|::1$)') { continue }
+        $key = '{0}|{1}|{2}|{3}' -f $data['Application'], $destination, $data['DestPort'], $data['Protocol']
+        if (-not $groups.ContainsKey($key)) {
+            $groups[$key] = [pscustomobject]@{ Application = $data['Application']; DestAddress = $destination; DestPort = $data['DestPort']; Protocol = $data['Protocol']; Count = 0; LastSeen = $event.TimeCreated }
+        }
+        $groups[$key].Count++
+        if ($event.TimeCreated -gt $groups[$key].LastSeen) { $groups[$key].LastSeen = $event.TimeCreated }
+    }
+    return @($groups.Values | Sort-Object -Property Count -Descending)
+}
+
+function Format-OpenPathEgressFloorReport {
+    <# One line per application: "<app>: <n> blocked (dest:port, ...)", busiest first. #>
+    param([AllowNull()][object[]]$Connections = @())
+
+    $byApplication = @($Connections | Where-Object { $_ } | Group-Object -Property Application)
+    if ($byApplication.Count -eq 0) { return @('No blocked outbound connections recorded.') }
+    $lines = foreach ($group in $byApplication) {
+        $total = ($group.Group | Measure-Object -Property Count -Sum).Sum
+        $destinations = @($group.Group | Sort-Object -Property @{ Expression = 'Count'; Descending = $true }, @{ Expression = 'DestAddress'; Descending = $false } |
+                Select-Object -First 5 | ForEach-Object { "$($_.DestAddress):$($_.DestPort)" })
+        [pscustomobject]@{ Total = $total; Line = "$($group.Name): $total blocked ($($destinations -join ', '))" }
+    }
+    return @($lines | Sort-Object -Property Total -Descending | ForEach-Object Line)
 }
 
 function Get-OpenPathEgressFloorProfileNames {
@@ -680,6 +815,7 @@ function Remove-OpenPathEgressFloorRules {
 
     if ($RestoreDefaultOutbound) {
         Restore-OpenPathEgressFloorPreviousOutbound
+        Disable-OpenPathEgressFloorAudit
     }
 
     if (-not (Get-Command -Name 'Get-NetFirewallRule' -ErrorAction SilentlyContinue)) {

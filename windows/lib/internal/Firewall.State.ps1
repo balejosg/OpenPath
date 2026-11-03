@@ -145,6 +145,9 @@ function Remove-OpenPathFirewall {
         if (Get-Command -Name 'Restore-OpenPathEgressFloorPreviousOutbound' -ErrorAction SilentlyContinue) {
             Restore-OpenPathEgressFloorPreviousOutbound
         }
+        if (Get-Command -Name 'Disable-OpenPathEgressFloorAudit' -ErrorAction SilentlyContinue) {
+            Disable-OpenPathEgressFloorAudit
+        }
 
         $manifestPath = Get-OpenPathFirewallManifestPath
         foreach ($ruleName in @(Get-OpenPathFirewallManifestRuleNames -Path $manifestPath)) {

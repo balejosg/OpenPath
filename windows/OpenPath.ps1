@@ -67,6 +67,7 @@ function Show-OpenPathHelp {
     Write-Host '  enroll           Register machine in classroom mode'
     Write-Host '  rotate-token     Rotate tokenized whitelist URL'
     Write-Host '  restart          Restart Acrylic + trigger update'
+    Write-Host '  egress-report [hours]  Blocked student connections under the egress floor (default 24h)'
     Write-Host '  help             Show this help'
     Write-Host ''
     Write-Host 'Examples:'
@@ -423,6 +424,13 @@ try {
                     throw "Unknown doctor target: $doctorTarget. Supported targets: browser"
                 }
             }
+        }
+        'egress-report' {
+            $hours = 24
+            if ($Arguments.Count -gt 0) { [void][int]::TryParse(([string]$Arguments[0]).TrimStart('-'), [ref]$hours) }
+            if ($hours -le 0) { $hours = 24 }
+            $connections = @(Get-OpenPathEgressFloorBlockedConnections -Since (Get-Date).AddHours(-$hours))
+            foreach ($line in @(Format-OpenPathEgressFloorReport -Connections $connections)) { Write-Host $line }
         }
         'self-update' {
             $checkOnly = $Arguments -contains '--check' -or $Arguments -contains '-check'

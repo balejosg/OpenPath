@@ -1059,4 +1059,92 @@ Describe "Firewall Module" {
             $drift.Reason | Should -Be 'restricted-group-unresolved'
         }
     }
+
+    Context "Egress floor blocked-connection diagnostics" {
+        BeforeAll {
+            if (-not (Get-Command -Name Get-WinEvent -ErrorAction SilentlyContinue)) {
+                New-Item -Path 'Function:\global:Get-WinEvent' -Value { param($FilterHashtable, $ErrorAction) } -Force | Out-Null
+            }
+            function script:New-WfpEvent([string]$App, [string]$Dest, [string]$Port, [string]$Direction = '%%14593', [datetime]$Time = (Get-Date)) {
+                $xml = "<Event><EventData><Data Name='ProcessID'>42</Data><Data Name='Application'>$App</Data><Data Name='Direction'>$Direction</Data><Data Name='DestAddress'>$Dest</Data><Data Name='DestPort'>$Port</Data><Data Name='Protocol'>6</Data></EventData></Event>"
+                $event = [pscustomobject]@{ Id = 5157; TimeCreated = $Time }
+                $event | Add-Member -MemberType ScriptMethod -Name ToXml -Value ([scriptblock]::Create("'$($xml.Replace("'", "''"))'"))
+                return $event
+            }
+        }
+
+        It "parses auditpol /r numeric setting without localized text" {
+            $value = InModuleScope Firewall {
+                ConvertFrom-OpenPathAuditPolCsv -Lines @(
+                    'Nombre de equipo,Destino de directiva,Subcategoria,GUID de subcategoria,Configuracion de inclusion,Configuracion de exclusion,Valor de configuracion',
+                    'PC-AULA,Sistema,Conexion de Plataforma de filtrado,{0CCE9226-69AE-11D9-BED3-505054503030},Aciertos y errores,,3'
+                )
+            }
+            $value | Should -Be 3
+        }
+
+        It "records and restores the previous audit setting" {
+            $calls = InModuleScope Firewall -Parameters @{ StatePath = (Join-Path $TestDrive 'egress-floor-audit-prev.json') } {
+                param($StatePath)
+                $seen = New-Object System.Collections.Generic.List[string]
+                Mock Write-OpenPathLog { }
+                Mock Get-OpenPathEgressFloorAuditStatePath { $StatePath }
+                Mock Invoke-OpenPathAuditPol {
+                    param([string[]]$Arguments)
+                    $seen.Add(($Arguments -join ' '))
+                    if ($Arguments[0] -eq '/get') { return @('h1,h2,h3,h4,h5,h6,h7', 'PC,System,FPC,{0CCE9226-69AE-11D9-BED3-505054503030},Success,,1') }
+                    return @()
+                }
+                Enable-OpenPathEgressFloorAudit
+                Enable-OpenPathEgressFloorAudit
+                $recorded = Test-Path $StatePath
+                Disable-OpenPathEgressFloorAudit
+                [pscustomobject]@{ Calls = $seen.ToArray(); Recorded = $recorded; Remaining = (Test-Path $StatePath) }
+            }
+            $calls.Recorded | Should -BeTrue
+            $calls.Remaining | Should -BeFalse
+            @($calls.Calls | Where-Object { $_ -like '/get *' }).Count | Should -Be 1
+            @($calls.Calls | Where-Object { $_ -like '/set */success:enable /failure:enable' }).Count | Should -Be 2
+            @($calls.Calls)[-1] | Should -BeLike '/set /subcategory:{0CCE9226-69AE-11D9-BED3-505054503030} /success:enable /failure:disable'
+        }
+
+        It "groups 5157 outbound events by application and destination" {
+            $result = InModuleScope Firewall -Parameters @{ Events = @(
+                    (New-WfpEvent '\device\harddiskvolume3\windows\system32\curl.exe' '1.1.1.1' '443'),
+                    (New-WfpEvent '\device\harddiskvolume3\windows\system32\curl.exe' '1.1.1.1' '443'),
+                    (New-WfpEvent '\device\harddiskvolume3\program files\filezilla ftp client\filezilla.exe' '203.0.113.7' '21'),
+                    (New-WfpEvent '\device\harddiskvolume3\windows\system32\curl.exe' '127.0.0.1' '80'),
+                    (New-WfpEvent '\device\harddiskvolume3\windows\system32\svchost.exe' '203.0.113.9' '80' '%%14592')
+                ) } {
+                param($Events)
+                Mock Get-WinEvent { $Events }
+                @(Get-OpenPathEgressFloorBlockedConnections -Since (Get-Date).AddHours(-1))
+            }
+            $result.Count | Should -Be 2
+            $curl = @($result | Where-Object { $_.Application -like '*curl.exe' })[0]
+            $curl.Count | Should -Be 2
+            $curl.DestAddress | Should -Be '1.1.1.1'
+            @($result | Where-Object { $_.DestAddress -eq '127.0.0.1' }).Count | Should -Be 0
+            @($result | Where-Object { $_.Application -like '*svchost.exe' }).Count | Should -Be 0
+        }
+
+        It "egress-report prints one line per application" {
+            $lines = InModuleScope Firewall {
+                $connections = @(
+                    [pscustomobject]@{ Application = 'C:\a\curl.exe'; DestAddress = '1.1.1.1'; DestPort = '443'; Protocol = '6'; Count = 2; LastSeen = (Get-Date) },
+                    [pscustomobject]@{ Application = 'C:\a\curl.exe'; DestAddress = '8.8.8.8'; DestPort = '443'; Protocol = '6'; Count = 1; LastSeen = (Get-Date) },
+                    [pscustomobject]@{ Application = 'C:\b\filezilla.exe'; DestAddress = '203.0.113.7'; DestPort = '21'; Protocol = '6'; Count = 4; LastSeen = (Get-Date) }
+                )
+                @(Format-OpenPathEgressFloorReport -Connections $connections)
+            }
+            $lines.Count | Should -Be 2
+            $lines[0] | Should -Match '^C:\\b\\filezilla\.exe: 4 blocked'
+            $lines[1] | Should -Match '^C:\\a\\curl\.exe: 3 blocked .*1\.1\.1\.1:443.*8\.8\.8\.8:443'
+        }
+
+        It "reports no blocked connections in one line" {
+            $lines = InModuleScope Firewall { @(Format-OpenPathEgressFloorReport -Connections @()) }
+            $lines | Should -Be @('No blocked outbound connections recorded.')
+        }
+    }
 }

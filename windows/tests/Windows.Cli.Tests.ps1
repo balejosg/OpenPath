@@ -27,6 +27,19 @@ Describe "Operational Command Script" {
         }
     }
 
+    Context "Egress floor report command" {
+        It "Routes egress-report to the blocked-connection report and documents it in help" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+            Assert-ContentContainsAll -Content $content -Needles @(
+                "'egress-report' {",
+                'Get-OpenPathEgressFloorBlockedConnections -Since (Get-Date).AddHours(-$hours)',
+                'Format-OpenPathEgressFloorReport -Connections $connections',
+                "Write-Host '  egress-report [hours]"
+            )
+        }
+    }
+
     Context "Argument forwarding" {
         It "Normalizes named arguments before invoking child scripts" {
             $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
