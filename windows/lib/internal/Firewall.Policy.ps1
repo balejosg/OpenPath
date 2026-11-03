@@ -107,385 +107,6 @@ function Get-OpenPathDnsEgressBlockRanges {
     return @($ranges)
 }
 
-function Get-OpenPathEgressFloorSystemServicePrograms {
-    <#
-    .SYNOPSIS
-        W-1(b): returns the absolute program paths that MUST keep full outbound egress
-        (any protocol, any remote, any port) regardless of the resolved whitelist-IP
-        allow-list, so the DefaultOutboundAction-Block egress floor never bricks the
-        device's update / time-sync / agent control plane.
-    .DESCRIPTION
-        Under the DefaultOutboundAction-Block model the profile default denies every
-        outbound connection that no Allow rule matches. These programs reach update,
-        time-sync, control-plane, and DNS-upstream endpoints on a range of ports (not
-        only 443: Windows Update can use 80, w32tm uses NTP/123, Acrylic uses DNS/53),
-        so they each get a program-scoped Allow with no protocol/port/remote
-        restriction. A program-scoped Allow overrides the profile default block (the
-        parent validated allow_overrides_default_block=true on the real runner); it
-        only loses to a competing explicit Block rule, and this floor creates none.
-        Several OS and OpenPath subsystems connect to endpoints that are NOT in the
-        classroom whitelist and/or whose IPs we cannot resolve through Acrylic in
-        advance:
-
-          * Windows Update / delivery optimization (svchost-hosted wuauserv, BITS, DoSvc).
-            These run inside generic svchost.exe instances, so the only stable program
-            path is svchost.exe itself. We allow it conservatively -- a service-host
-            allow is broad, but losing OS security updates on a locked-down fleet is the
-            worse failure, and DNS-name enforcement still constrains *browser* egress.
-          * Time sync (w32tm.exe + the svchost-hosted W32Time service). A device whose
-            clock drifts fails TLS to its own control plane; never risk it.
-          * The OpenPath agent itself: it runs as scheduled tasks under powershell.exe /
-            pwsh.exe and must reach the API control plane, the whitelist URL, and the
-            self-update artifact host -- whose CDN IPs rotate and may not be in the
-            classroom whitelist file.
-          * Acrylic (AcrylicService.exe): its upstream is DNS/53; full egress also covers
-            any future DoH-to-trusted-upstream or update path so it is never collateral.
-
-        This is deliberately CONSERVATIVE: we over-allow a known, signed system binary by
-        absolute path rather than risk bricking a managed device. Allowing a service host
-        (svchost.exe) full egress is a known residual-surface trade-off and is documented
-        as such; it is NOT a substitute for the name-based enforcement that still governs
-        the managed browsers (those run under firefox.exe/chrome.exe, which are NOT on this
-        list, so the profile default still denies their off-whitelist egress). Callers may
-        extend this list via -ExtraPrograms (e.g. the config
-        outboundEgressFloorSystemPrograms key) when a site ships an additional agent.
-
-        Paths that do not exist on disk are still emitted: Windows Firewall program-scoped
-        Allow rules with a non-existent path are simply never matched, so an over-broad
-        list cannot itself open a hole, while a path that appears after first apply (e.g.
-        pwsh 7 installed later) is already covered.
-    .PARAMETER OpenPathRoot
-        OpenPath install root used to locate the agent's own scripts/CLI. Defaults to the
-        module-resolved root.
-    .PARAMETER AcrylicPath
-        Directory containing AcrylicService.exe.
-    .PARAMETER ExtraPrograms
-        Additional absolute program paths to merge in (operator/config supplied).
-    .OUTPUTS
-        string[] -- de-duplicated absolute program paths.
-    #>
-    [CmdletBinding()]
-    param(
-        [AllowNull()]
-        [string]$OpenPathRoot,
-        [AllowNull()]
-        [string]$AcrylicPath,
-        [AllowNull()]
-        [string[]]$ExtraPrograms = @()
-    )
-
-    $windowsRoot = if ($env:SystemRoot) { [string]$env:SystemRoot } elseif ($env:WINDIR) { [string]$env:WINDIR } else { 'C:\Windows' }
-    $programFiles = if ($env:ProgramFiles) { [string]$env:ProgramFiles } else { 'C:\Program Files' }
-    $programFilesX86 = if (${env:ProgramFiles(x86)}) { [string]${env:ProgramFiles(x86)} } else { 'C:\Program Files (x86)' }
-
-    $resolvedRoot = $OpenPathRoot
-    if ([string]::IsNullOrWhiteSpace($resolvedRoot)) {
-        if (Get-Command -Name 'Resolve-OpenPathWindowsRoot' -ErrorAction SilentlyContinue) {
-            $resolvedRoot = Resolve-OpenPathWindowsRoot
-        }
-        elseif ($script:OpenPathRoot) {
-            $resolvedRoot = [string]$script:OpenPathRoot
-        }
-        else {
-            $resolvedRoot = 'C:\OpenPath'
-        }
-    }
-    $resolvedRoot = ([string]$resolvedRoot).TrimEnd('\')
-
-    $programs = New-Object 'System.Collections.Generic.List[string]'
-
-    # --- OS update / delivery / time sync (run inside generic svchost.exe) ---
-    # svchost hosts wuauserv (Windows Update), BITS, DoSvc (delivery optimization),
-    # and W32Time. There is no per-service exe, so svchost.exe is the stable handle.
-    $programs.Add("$windowsRoot\System32\svchost.exe")
-    $programs.Add("$windowsRoot\System32\w32tm.exe")
-    # Update-orchestrator / TrustedInstaller side of servicing.
-    $programs.Add("$windowsRoot\System32\UsoClient.exe")
-    $programs.Add("$windowsRoot\System32\MoUsoCoreWorker.exe")
-    $programs.Add("$windowsRoot\servicing\TrustedInstaller.exe")
-    # BITS transfer host occasionally runs as a standalone helper.
-    $programs.Add("$windowsRoot\System32\svchost.exe")
-
-    # --- The OpenPath agent itself (its tasks run under Windows PowerShell / pwsh 7) ---
-    $programs.Add("$windowsRoot\System32\WindowsPowerShell\v1.0\powershell.exe")
-    $programs.Add("$windowsRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe")
-    $programs.Add("$programFiles\PowerShell\7\pwsh.exe")
-    $programs.Add("$programFilesX86\PowerShell\7\pwsh.exe")
-
-    # --- Acrylic (DNS/53 normally, but never make it collateral on 443) ---
-    if (-not [string]::IsNullOrWhiteSpace($AcrylicPath)) {
-        $programs.Add(("$([string]$AcrylicPath)".TrimEnd('\') + '\AcrylicService.exe'))
-    }
-    else {
-        $programs.Add("$programFilesX86\Acrylic DNS Proxy\AcrylicService.exe")
-        $programs.Add("$programFiles\Acrylic DNS Proxy\AcrylicService.exe")
-    }
-
-    foreach ($extra in @($ExtraPrograms)) {
-        $trimmed = ([string]$extra).Trim()
-        if ($trimmed) { $programs.Add($trimmed) }
-    }
-
-    return @($programs | Where-Object { $_ } | Select-Object -Unique)
-}
-
-function Get-OpenPathEgressFloorAllowIps {
-    <#
-    .SYNOPSIS
-        W-1(b): resolves the active whitelist domains (plus the always-allowed system
-        domains) through the local Acrylic proxy (127.0.0.1) into the set of A/AAAA IP
-        literals the outbound 443 floor must permit. PULL-based equivalent of the Linux
-        dnsmasq->ipset feed (Acrylic has no ipset to read from).
-    .DESCRIPTION
-        Reads the persisted whitelist file, takes every valid whitelist domain AND the
-        OpenPath always-allowed domains (control plane, MS/Firefox update, NTP, captive
-        portal probes), and resolves each through the local Acrylic listener -- the same
-        resolver path enforcement uses -- collecting their A (and AAAA) records. The
-        result is what the floor's per-IP Allow rules are built from.
-
-        CRITICAL FAIL-OPEN CONTRACT: this function only ADDS IPs. If resolution yields
-        zero IPs (Acrylic down, all lookups timing out, empty whitelist), it returns an
-        empty array and the caller MUST treat that as "do not build the floor" rather
-        than "block everything". An empty allow-set with a default-deny block would brick
-        all HTTPS; never let that happen. The apply path (Set-OpenPathFirewall /
-        Update-OpenPathEgressFloor) enforces this guard.
-
-        Both A and AAAA are collected, but note the floor only builds IPv4 per-IP Allow
-        rules today (IPv6 443 is blocked wholesale by Get-OpenPathOutboundEgressFloorRules);
-        AAAA results are returned for completeness/diagnostics and ignored by the IPv4
-        range math. IPv6 whitelist reachability over the floor is a documented follow-up.
-    .PARAMETER WhitelistPath
-        Path to the persisted whitelist file. Defaults to <root>\data\whitelist.txt.
-    .PARAMETER Server
-        DNS server to resolve through. Defaults to the local Acrylic proxy 127.0.0.1.
-    .PARAMETER IncludeAlwaysAllowed
-        When set (default), also resolves the OpenPath always-allowed system domains so
-        update/control-plane hosts whose names (not just programs) we trust stay reachable.
-    .PARAMETER MaxAttempts
-        Per-domain resolve attempts (passed through to Resolve-OpenPathDnsWithRetry).
-    .OUTPUTS
-        string[] -- de-duplicated, validated IP literals (may be empty == fail-open signal).
-    #>
-    [CmdletBinding()]
-    param(
-        [AllowNull()]
-        [string]$WhitelistPath,
-        [string]$Server = '127.0.0.1',
-        [switch]$IncludeAlwaysAllowed = $true,
-        [int]$MaxAttempts = 2
-    )
-
-    $resolvedRoot = if ($script:OpenPathRoot) { [string]$script:OpenPathRoot } elseif (Get-Command -Name 'Resolve-OpenPathWindowsRoot' -ErrorAction SilentlyContinue) { Resolve-OpenPathWindowsRoot } else { 'C:\OpenPath' }
-    if ([string]::IsNullOrWhiteSpace($WhitelistPath)) {
-        $WhitelistPath = Join-Path ($resolvedRoot.TrimEnd('\')) 'data\whitelist.txt'
-    }
-
-    $domains = New-Object 'System.Collections.Generic.List[string]'
-
-    if (Get-Command -Name 'Get-ValidWhitelistDomainsFromFile' -ErrorAction SilentlyContinue) {
-        try {
-            foreach ($domain in @(Get-ValidWhitelistDomainsFromFile -Path $WhitelistPath)) {
-                $trimmed = ([string]$domain).Trim()
-                if ($trimmed) { $domains.Add($trimmed) }
-            }
-        }
-        catch {
-            Write-OpenPathLog "Egress floor: failed reading whitelist domains from '$WhitelistPath': $_" -Level WARN
-        }
-    }
-
-    if ($IncludeAlwaysAllowed -and (Get-Command -Name 'Get-OpenPathAlwaysAllowedDomains' -ErrorAction SilentlyContinue)) {
-        try {
-            foreach ($domain in @(Get-OpenPathAlwaysAllowedDomains)) {
-                $trimmed = ([string]$domain).Trim()
-                if ($trimmed) { $domains.Add($trimmed) }
-            }
-        }
-        catch {
-            Write-OpenPathLog "Egress floor: failed reading always-allowed domains: $_" -Level WARN
-        }
-    }
-
-    $uniqueDomains = @($domains | Where-Object { $_ } | Sort-Object -Unique)
-    if ($uniqueDomains.Count -eq 0) {
-        Write-OpenPathLog 'Egress floor: no whitelist/always-allowed domains to resolve; returning empty allow-IP set (fail-open)' -Level WARN
-        return @()
-    }
-
-    $ipSet = New-Object 'System.Collections.Generic.List[string]'
-    $resolvedCount = 0
-    foreach ($domain in $uniqueDomains) {
-        $records = $null
-        try {
-            if (Get-Command -Name 'Resolve-OpenPathDnsWithRetry' -ErrorAction SilentlyContinue) {
-                $records = Resolve-OpenPathDnsWithRetry -Domain $domain -Server $Server -MaxAttempts $MaxAttempts -DelayMilliseconds 250 -AttemptTimeoutSeconds 3
-            }
-            elseif (Get-Command -Name 'Resolve-DnsName' -ErrorAction SilentlyContinue) {
-                $records = Resolve-DnsName -Name $domain -Server $Server -DnsOnly -ErrorAction Stop
-            }
-        }
-        catch {
-            $records = $null
-        }
-
-        if (-not $records) { continue }
-        $resolvedCount++
-        foreach ($record in @($records)) {
-            $ip = $null
-            if ($record.PSObject.Properties['IPAddress'] -and $record.IPAddress) {
-                $ip = [string]$record.IPAddress
-            }
-            elseif ($record.PSObject.Properties['IP4Address'] -and $record.IP4Address) {
-                $ip = [string]$record.IP4Address
-            }
-            if ($ip -and (Test-OpenPathFirewallIpAddress -Address $ip)) {
-                $ipSet.Add($ip.Trim())
-            }
-        }
-    }
-
-    $uniqueIps = @($ipSet | Where-Object { $_ } | Sort-Object -Unique)
-    Write-OpenPathLog "Egress floor: resolved $($uniqueDomains.Count) domain(s) -> $($uniqueIps.Count) allow IP(s) ($resolvedCount domain(s) answered)"
-    return @($uniqueIps)
-}
-
-function Get-OpenPathOutboundEgressFloorRules {
-    <#
-    .SYNOPSIS
-        W-1(b): builds the ALLOW rule shapes for the DefaultOutboundAction-Block egress
-        floor -- system-service full egress, whitelist-IP HTTP/HTTPS, loopback, and DHCP.
-    .DESCRIPTION
-        OpenPath enforcement is name-based (Acrylic + DNS firewall). With no transport
-        floor, any process that can open a socket (powershell, ftp, an Appx with its own
-        resolver, etc.) can connect to an arbitrary IP literal and spoof the Host header
-        to bypass the whitelist. The Linux agent already has a name-aware egress floor;
-        this is the Windows twin.
-
-        DESIGN (validated on the real runner 2026-06-14): default-deny is expressed by
-        Set-NetFirewallProfile -DefaultOutboundAction Block (set by the apply path
-        Set-OpenPathEgressFloorRules), NOT by explicit Block rules. On Windows Filtering
-        Platform an explicit Block rule WINS over a program-scoped Allow, so the previous
-        "Block over non-allow ranges + program Allow" scaffold bricked svchost/w32tm/the
-        agent. By contrast a program- or address-scoped Allow rule OVERRIDES the profile
-        DEFAULT block (allow_overrides_default_block=true) -- it only loses to a competing
-        explicit Block rule, and this floor emits NONE. So this helper returns ONLY Allow
-        descriptors; the caller turns the default to Block and these Allows carve the
-        permitted egress out of it.
-
-        This helper is PURE: it returns rule descriptor objects (it does NOT call
-        New-NetFirewallRule and does NOT call Set-NetFirewallProfile), so the rule SHAPE
-        is unit-testable here without a live Windows firewall.
-
-        Allow descriptors emitted:
-          a. System-service programs (-SystemServicePrograms): full outbound egress (any
-             protocol, any remote, any port) so OS update/time-sync/control-plane and the
-             DNS-upstream (AcrylicService.exe) and NTP (w32tm.exe) paths survive on
-             whatever ports they need -- not just 443.
-          b. Whitelist-resolved IPs (-AllowIps): Allow outbound TCP to RemotePort 80,443
-             (HTTP redirects + HTTPS) for each resolved /32.
-          c. Loopback: Allow outbound to 127.0.0.1 and ::1 so the local Acrylic listener
-             and other loopback IPC keep working.
-          d. DHCP: Allow outbound UDP RemotePort 67,68 so the lease keeps renewing.
-
-        ENABLING THIS BY DEFAULT REQUIRES WEDU-LAB VALIDATION: the allow-IP set must be
-        kept in lock-step with the live Acrylic-resolved whitelist IPs, and the system
-        service allow-list must be proven complete, or the device loses its ability to
-        reach whitelisted sites and its own update/API/time-sync. Until that validation
-        exists, callers gate this behind the default-$false OutboundEgressFloorEnabled flag.
-    .PARAMETER AllowIps
-        IPv4 literals (each a /32) that outbound HTTP/HTTPS is permitted to reach -- the
-        Acrylic-resolved whitelist IP set. IPv6 and non-IPv4 entries are ignored.
-    .PARAMETER SystemServicePrograms
-        Absolute program paths (e.g. the OpenPath agent, Windows Update, w32tm, Acrylic)
-        that must always be allowed full outbound egress regardless of the IP allow-list.
-    .PARAMETER RulePrefix
-        Display-name prefix for emitted rules; defaults to the module rule prefix.
-    .OUTPUTS
-        PSCustomObject[] -- Allow-only rule descriptors with fields:
-        DisplayName, Direction, Protocol, RemoteAddress, RemotePort, Action, Profile,
-        Program (system-service rules only), Description.
-    #>
-    [CmdletBinding()]
-    param(
-        [AllowNull()]
-        [string[]]$AllowIps = @(),
-        [AllowNull()]
-        [string[]]$SystemServicePrograms = @(),
-        [string]$RulePrefix = $script:RulePrefix
-    )
-
-    $rules = @()
-
-    # (a) Trusted system/agent programs: FULL outbound egress (any protocol / port /
-    # remote) so update, API, time-sync, and DNS-upstream egress survive the default
-    # block on whatever ports they use. These Allows override the profile DEFAULT block.
-    foreach ($program in @($SystemServicePrograms | Where-Object { $_ })) {
-        $programId = ([System.IO.Path]::GetFileNameWithoutExtension([string]$program)) -replace '[^0-9A-Za-z]', '-'
-        $rules += [PSCustomObject]@{
-            DisplayName   = "$RulePrefix-Allow-EgressFloor-System-$programId"
-            Direction     = 'Outbound'
-            Protocol      = 'Any'
-            RemoteAddress = 'Any'
-            RemotePort    = 'Any'
-            Action        = 'Allow'
-            Profile       = 'Any'
-            Program       = [string]$program
-            Description   = "Outbound egress floor: allow system/agent program $program full egress for update/API/time-sync/DNS"
-        }
-    }
-
-    # (b) Allow HTTP/HTTPS to each resolved whitelist IP (the name-aware allow-list).
-    $normalizedAllowIps = @(
-        $AllowIps |
-            ForEach-Object { ([string]$_).Trim() } |
-            Where-Object { (ConvertTo-OpenPathIPv4UInt32 -Address $_) -ne $null } |
-            Sort-Object -Unique
-    )
-    foreach ($allowIp in $normalizedAllowIps) {
-        $allowId = $allowIp -replace '[^0-9A-Za-z]', '-'
-        $rules += [PSCustomObject]@{
-            DisplayName   = "$RulePrefix-Allow-EgressFloor-Whitelist-$allowId-TCP"
-            Direction     = 'Outbound'
-            Protocol      = 'TCP'
-            RemoteAddress = $allowIp
-            RemotePort    = @('80', '443')
-            Action        = 'Allow'
-            Profile       = 'Any'
-            Description   = "Outbound egress floor: allow HTTP/HTTPS to resolved whitelist IP $allowIp"
-        }
-    }
-
-    # (c) Loopback: keep the local Acrylic listener and loopback IPC reachable.
-    # Only IPv4 127.0.0.1 is expressed as a rule: New-NetFirewallRule REJECTS '::1' as
-    # a RemoteAddress ("loopback IPv6 address" error -- confirmed on the real Windows
-    # runner), and WFP exempts loopback (127.0.0.0/8 and ::1) from filtering anyway, so
-    # an explicit IPv6 loopback rule is both invalid and unnecessary.
-    $rules += [PSCustomObject]@{
-        DisplayName   = "$RulePrefix-Allow-EgressFloor-Loopback4"
-        Direction     = 'Outbound'
-        Protocol      = 'Any'
-        RemoteAddress = '127.0.0.1'
-        RemotePort    = 'Any'
-        Action        = 'Allow'
-        Profile       = 'Any'
-        Description   = 'Outbound egress floor: allow IPv4 loopback (local Acrylic and IPC)'
-    }
-
-    # (d) DHCP: keep the lease renewing (client 68 -> server 67) under the default block.
-    $rules += [PSCustomObject]@{
-        DisplayName   = "$RulePrefix-Allow-EgressFloor-DHCP"
-        Direction     = 'Outbound'
-        Protocol      = 'UDP'
-        RemoteAddress = 'Any'
-        RemotePort    = @('67', '68')
-        Action        = 'Allow'
-        Profile       = 'Any'
-        Description   = 'Outbound egress floor: allow DHCP (UDP 67/68) so the lease keeps renewing'
-    }
-
-    return @($rules)
-}
-
 function Get-OpenPathStudentEgressFloorRules {
     <#
     .SYNOPSIS
@@ -577,8 +198,8 @@ function Get-OpenPathStudentEgressFloorRules {
         $sha.Dispose()
     }
 
-    & $newRule @{ DisplayName = "$RulePrefix-Allow-EgressFloor-Loopback"; Action = 'Allow'; RemoteAddress = @('127.0.0.0/8', '::1')
-        Description = 'Egress floor: loopback traffic stays allowed' }
+    & $newRule @{ DisplayName = "$RulePrefix-Allow-EgressFloor-Loopback"; Action = 'Allow'; RemoteAddress = '127.0.0.0/8'
+        Description = 'Egress floor: IPv4 loopback stays allowed (IPv6 ::1 is WFP-exempt and rejected as a rule)' }
     & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-StudentAppContainers"; Action = 'Block'; Package = '*'
         LocalUser = "$studentSddl(A;;CC;;;AC)"
         Description = 'Egress floor: AppContainer apps of restricted users have no network' }
@@ -806,6 +427,35 @@ function Test-OpenPathStudentEgressFloorDrift {
     return [PSCustomObject]@{ Drifted = $false; Reason = 'in-sync' }
 }
 
+function Get-OpenPathEgressFloorStudentProgramsFromConfig {
+    <#
+    .SYNOPSIS
+        Student network programs for the egress floor, from an OpenPath config object
+        (approvedStudentBrowsers, default Firefox; approvedApplicationCatalog).
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Config,
+
+        [AllowNull()]
+        [string]$OpenPathRoot
+    )
+
+    $approvedBrowsers = @('Firefox')
+    $catalog = $null
+    if ($null -ne $Config) {
+        if ($Config.PSObject.Properties['approvedStudentBrowsers'] -and @($Config.approvedStudentBrowsers).Count -gt 0) {
+            $approvedBrowsers = @($Config.approvedStudentBrowsers | ForEach-Object { [string]$_ })
+        }
+        if ($Config.PSObject.Properties['approvedApplicationCatalog']) {
+            $catalog = $Config.approvedApplicationCatalog
+        }
+    }
+
+    return @(Get-OpenPathStudentNetworkPrograms -ApprovedBrowsers $approvedBrowsers -ApplicationCatalog $catalog -OpenPathRoot $OpenPathRoot)
+}
+
 function Get-OpenPathEgressFloorProfileNames {
     <#
     .SYNOPSIS
@@ -847,39 +497,6 @@ function Get-OpenPathEgressFloorPreviousOutboundStatePath {
     }
     $resolvedRoot = ([string]$resolvedRoot).TrimEnd('\')
     return "$resolvedRoot\data\egress-floor-prev-outbound.json"
-}
-
-function ConvertTo-OpenPathEgressFloorCanonicalIp {
-    <#
-    .SYNOPSIS
-        W-1(b): normalizes a firewall RemoteAddress / resolved IP literal to its bare
-        canonical form so drift comparison does not churn on netmask notation.
-    .DESCRIPTION
-        Windows stores a /32 RemoteAddress in NETMASK form (x.x.x.x/255.255.255.255) and
-        a /24 as x.x.x.x/255.255.255.0, NOT the bare literal we resolve. To compare the
-        installed allow rules against a fresh resolution we strip a trailing host mask
-        (/255.255.255.255 or /32) and return the bare dotted IPv4. Any other suffix
-        (a real subnet such as /24 or /255.255.255.0) is preserved verbatim, and a
-        non-IPv4 value is returned trimmed and unchanged. Returns $null for blank input.
-    #>
-    [CmdletBinding()]
-    param(
-        [AllowNull()]
-        [string]$Address
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Address)) { return $null }
-    $candidate = ([string]$Address).Trim()
-
-    # Strip only a host (/32) mask in either notation; leave real subnets intact.
-    if ($candidate -match '^(.+?)/(?:255\.255\.255\.255|32)$') {
-        $candidate = $Matches[1].Trim()
-    }
-
-    if ((ConvertTo-OpenPathIPv4UInt32 -Address $candidate) -ne $null) {
-        return $candidate
-    }
-    return $candidate
 }
 
 function Save-OpenPathEgressFloorPreviousOutbound {
@@ -1046,7 +663,7 @@ function Remove-OpenPathEgressFloorRules {
         "$RulePrefix-*-EgressFloor-*" display-name shape, so we target exactly those.
 
         -RestoreDefaultOutbound (default $true) restores the profile default. The
-        idempotent rule-swap inside Set-OpenPathEgressFloorRules (which is about to set
+        idempotent rule-swap inside Set-OpenPathStudentEgressFloor (which is about to set
         the default to Block and re-create the Allow rules) calls this with
         -RestoreDefaultOutbound:$false so it does NOT churn the profile default or delete
         the still-valid pre-floor baseline mid-apply.
@@ -1070,266 +687,6 @@ function Remove-OpenPathEgressFloorRules {
     }
 
     Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -DisplayName "$RulePrefix-*-EgressFloor-*" -ErrorAction SilentlyContinue)
-}
-
-function Set-OpenPathEgressFloorRules {
-    <#
-    .SYNOPSIS
-        W-1(b): applies the DefaultOutboundAction-Block egress floor from a resolved
-        allow-IP set and the system-service program list, with a strict FAIL-OPEN guard.
-    .DESCRIPTION
-        This is the single apply path shared by Set-OpenPathFirewall and the watchdog
-        refresh (Update-OpenPathEgressFloor). It implements the working
-        DefaultOutboundAction-Block model (validated on the real runner): the profile
-        default denies all outbound, and Allow rules carve the permitted egress out of it
-        (a program/address-scoped Allow OVERRIDES the default block; it only loses to a
-        competing explicit Block rule, of which this floor emits none).
-
-          1. FAIL-OPEN GUARD (the core anti-brick invariant): if the resolved allow-IP
-             set is empty (Acrylic down / empty whitelist) it does NOT set
-             DefaultOutboundAction Block. Instead it RESTORES the default to the persisted
-             pre-floor value (fallback Allow) and removes all floor rules, leaving the
-             device on its DNS-name-based behavior. Setting the default to Block with an
-             EMPTY allow set would brick every outbound connection, including the agent's
-             own control plane; we never do that.
-          2. APPLY (allow set non-empty):
-             a. Persist the current per-profile DefaultOutboundAction (so disable restores
-                it exactly) via Save-OpenPathEgressFloorPreviousOutbound -- idempotent, it
-                will not overwrite a genuine pre-floor baseline on re-apply.
-             b. Swap the floor Allow rules (idempotent): remove the stale
-                "$RulePrefix-*-EgressFloor-*" rules WITHOUT touching the profile default,
-                then re-create the fresh Allow set from Get-OpenPathOutboundEgressFloorRules.
-             c. Set-NetFirewallProfile -Profile Domain,Private,Public
-                -DefaultOutboundAction Block. (Inbound default is intentionally left
-                alone so management/RDP/guest-agent keep working.)
-
-        This is the ONLY place that flips DefaultOutboundAction to Block, and it is
-        unreachable when $normalizedAllowIps.Count -eq 0 (the guard returns first).
-    .OUTPUTS
-        int -- the number of floor Allow rules created (0 == fail-open / no-op).
-    #>
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [AllowNull()]
-        [string[]]$AllowIps = @(),
-        [AllowNull()]
-        [string[]]$SystemServicePrograms = @(),
-        [string]$RulePrefix = $script:RulePrefix
-    )
-
-    $normalizedAllowIps = @(
-        $AllowIps |
-            ForEach-Object { ([string]$_).Trim() } |
-            Where-Object { (ConvertTo-OpenPathIPv4UInt32 -Address $_) -ne $null } |
-            Sort-Object -Unique
-    )
-
-    # FAIL-OPEN: zero resolvable IPv4 allow IPs means we must NOT set the default to
-    # Block (that would brick all egress). Restore the persisted pre-floor default
-    # (fallback Allow) and tear down any stale floor rules, then stop.
-    if ($normalizedAllowIps.Count -eq 0) {
-        Write-OpenPathLog 'Outbound egress floor: resolved allow-IP set is empty; NOT setting DefaultOutboundAction Block (fail-open). Restoring pre-floor outbound default and clearing stale floor rules' -Level WARN
-        if ($PSCmdlet.ShouldProcess('Windows Firewall', 'Restore pre-floor outbound default and clear stale egress-floor rules (fail-open)')) {
-            Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $true
-        }
-        return 0
-    }
-
-    if (-not $PSCmdlet.ShouldProcess('Windows Firewall', 'Apply OpenPath DefaultOutboundAction-Block egress floor')) {
-        return 0
-    }
-
-    # (a) Capture the genuine pre-floor DefaultOutboundAction once, before we flip it.
-    Save-OpenPathEgressFloorPreviousOutbound
-
-    # (b) Idempotent Allow-rule swap: clear the previous floor rules WITHOUT restoring the
-    # default (we are about to set it to Block) and WITHOUT deleting the saved baseline.
-    Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $false
-
-    $egressFloorRules = @(Get-OpenPathOutboundEgressFloorRules `
-            -AllowIps $normalizedAllowIps `
-            -SystemServicePrograms $SystemServicePrograms `
-            -RulePrefix $RulePrefix)
-
-    foreach ($egressRule in $egressFloorRules) {
-        $egressRuleParameters = @{
-            DisplayName   = $egressRule.DisplayName
-            Direction     = $egressRule.Direction
-            Protocol      = $egressRule.Protocol
-            RemoteAddress = $egressRule.RemoteAddress
-            RemotePort    = $egressRule.RemotePort
-            Action        = $egressRule.Action
-            Profile       = $egressRule.Profile
-            Description   = $egressRule.Description
-        }
-        if ($egressRule.PSObject.Properties['Program'] -and $egressRule.Program) {
-            $egressRuleParameters['Program'] = $egressRule.Program
-        }
-        New-OpenPathFirewallRule @egressRuleParameters | Out-Null
-    }
-
-    # (c) Flip the profile default to Block. This is the ONLY place we do so, and the
-    # empty-allow-set guard above has already returned, so we never reach here with an
-    # empty allow set.
-    if (Get-Command -Name 'Set-NetFirewallProfile' -ErrorAction SilentlyContinue) {
-        $egressFloorProfiles = @(Get-OpenPathEgressFloorProfileNames)
-        try {
-            Set-NetFirewallProfile -Profile $egressFloorProfiles -DefaultOutboundAction Block -ErrorAction Stop
-            Write-OpenPathLog "Outbound egress floor: DefaultOutboundAction set to Block on $($egressFloorProfiles -join ',')" -Level WARN
-        }
-        catch {
-            Write-OpenPathLog "Outbound egress floor: failed to set DefaultOutboundAction Block ($_); restoring pre-floor default and tearing down floor to avoid a partial/bricking state" -Level ERROR
-            Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $true
-            return 0
-        }
-    }
-
-    Write-OpenPathLog "Outbound egress floor active ($($egressFloorRules.Count) allow rules; $($normalizedAllowIps.Count) allow IPs; default outbound = Block)" -Level WARN
-    return $egressFloorRules.Count
-}
-
-function Update-OpenPathEgressFloor {
-    <#
-    .SYNOPSIS
-        W-1(b): re-resolves the whitelist + always-allowed domains through Acrylic and
-        re-applies the DefaultOutboundAction-Block egress floor. The refresh entrypoint
-        for CDN IP rotation and whitelist changes; safe to call repeatedly (idempotent).
-    .DESCRIPTION
-        CDN IPs rotate, so a static allow-set goes stale and would start blocking
-        legitimately-whitelisted sites. This re-runs the live resolver
-        (Get-OpenPathEgressFloorAllowIps) and re-applies the floor via the shared
-        fail-open apply path (Set-OpenPathEgressFloorRules), which updates only the
-        whitelist-IP Allow rules while keeping DefaultOutboundAction Block and the
-        system/loopback/DHCP Allow rules. Called by:
-          * Set-OpenPathFirewall, when the floor is enabled and no static allow-IP set
-            is configured.
-          * The watchdog (per-minute) when Test-OpenPathEgressFloorDrift reports drift.
-          * The whitelist-apply path on a whitelist change.
-
-        Honors an explicit static allow-IP set when one is supplied (operator override);
-        otherwise resolves live. Always fail-open on an empty resolution: if a refresh
-        resolves to empty, the apply path restores the pre-floor default (does NOT keep
-        Block) and removes the floor rather than bricking egress.
-    .PARAMETER StaticAllowIps
-        Operator/config supplied allow IPs that bypass live resolution when non-empty.
-    .PARAMETER SystemServicePrograms
-        Extra operator/config supplied system-service program paths (merged with the
-        built-in conservative list).
-    .PARAMETER AcrylicPath
-        Acrylic install directory, used to locate AcrylicService.exe for the allow-list.
-    .PARAMETER WhitelistPath
-        Override path to the persisted whitelist file (defaults to <root>\data\whitelist.txt).
-    .OUTPUTS
-        int -- number of floor rules applied (0 == fail-open / no-op).
-    #>
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [AllowNull()]
-        [string[]]$StaticAllowIps = @(),
-        [AllowNull()]
-        [string[]]$SystemServicePrograms = @(),
-        [AllowNull()]
-        [string]$AcrylicPath,
-        [AllowNull()]
-        [string]$WhitelistPath
-    )
-
-    if (-not $PSCmdlet.ShouldProcess('Windows Firewall', 'Refresh OpenPath outbound egress floor')) {
-        return 0
-    }
-
-    $allowIps = @($StaticAllowIps | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
-    if ($allowIps.Count -eq 0) {
-        $allowIps = @(Get-OpenPathEgressFloorAllowIps -WhitelistPath $WhitelistPath)
-    }
-
-    $programs = @(Get-OpenPathEgressFloorSystemServicePrograms -AcrylicPath $AcrylicPath -ExtraPrograms $SystemServicePrograms)
-
-    return (Set-OpenPathEgressFloorRules -AllowIps $allowIps -SystemServicePrograms $programs)
-}
-
-function Test-OpenPathEgressFloorDrift {
-    <#
-    .SYNOPSIS
-        W-1(b): reports whether the currently-installed egress-floor per-IP Allow rules
-        differ from the freshly-resolved whitelist IP set (CDN rotation detector for the
-        watchdog).
-    .DESCRIPTION
-        Compares the set of IPs in the installed "$RulePrefix-Allow-EgressFloor-Whitelist-*"
-        rules against a fresh resolution. Returns Drifted=$true when they differ, so the
-        watchdog can call Update-OpenPathEgressFloor only when needed (avoiding a firewall
-        rewrite every minute). FAIL-CLOSED on the *detector*, fail-open on the *apply*:
-        if fresh resolution is empty we report no drift (the apply path would no-op
-        anyway), so we never trigger a churn that tears down a working floor.
-
-        NORMALIZATION: Windows stores a /32 RemoteAddress in NETMASK form
-        (x.x.x.x/255.255.255.255), NOT the bare literal we resolve, so a naive string
-        compare would report drift on EVERY cycle and churn the floor. Both the installed
-        RemoteAddress values and the freshly-resolved IPs are normalized to the same bare
-        canonical form via ConvertTo-OpenPathEgressFloorCanonicalIp (which strips a
-        trailing /255.255.255.255 or /32 host mask) before the set diff.
-    .OUTPUTS
-        PSCustomObject -- Drifted (bool), CurrentIps (string[]), ResolvedIps (string[]), Reason (string).
-    #>
-    [CmdletBinding()]
-    param(
-        [AllowNull()]
-        [string[]]$StaticAllowIps = @(),
-        [AllowNull()]
-        [string]$WhitelistPath,
-        [string]$RulePrefix = $script:RulePrefix
-    )
-
-    $resolvedIps = @($StaticAllowIps | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
-    if ($resolvedIps.Count -eq 0) {
-        $resolvedIps = @(Get-OpenPathEgressFloorAllowIps -WhitelistPath $WhitelistPath)
-    }
-    # Normalize the resolved set to the same bare canonical form as the installed rules
-    # (strip any host mask) so the diff compares like-for-like and does not churn.
-    $resolvedIps = @(
-        $resolvedIps |
-            ForEach-Object { ConvertTo-OpenPathEgressFloorCanonicalIp -Address $_ } |
-            Where-Object { $_ -and (ConvertTo-OpenPathIPv4UInt32 -Address $_) -ne $null } |
-            Sort-Object -Unique
-    )
-
-    if ($resolvedIps.Count -eq 0) {
-        # Fresh resolution is empty -> the apply path would fail-open / no-op. Never
-        # report drift here, or the watchdog would tear down a still-valid floor.
-        return [PSCustomObject]@{ Drifted = $false; CurrentIps = @(); ResolvedIps = @(); Reason = 'empty-resolution-fail-open' }
-    }
-
-    $currentIps = @()
-    try {
-        $installed = @(Get-NetFirewallRule -DisplayName "$RulePrefix-Allow-EgressFloor-Whitelist-*" -ErrorAction SilentlyContinue)
-        foreach ($rule in $installed) {
-            $addressFilter = $null
-            if (Get-Command -Name 'Get-NetFirewallAddressFilter' -ErrorAction SilentlyContinue) {
-                $addressFilter = $rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue
-            }
-            foreach ($remote in @($addressFilter.RemoteAddress)) {
-                # Windows reports a /32 as x.x.x.x/255.255.255.255; normalize to bare IPv4.
-                $candidate = ConvertTo-OpenPathEgressFloorCanonicalIp -Address ([string]$remote)
-                if ($candidate -and (ConvertTo-OpenPathIPv4UInt32 -Address $candidate) -ne $null) {
-                    $currentIps += $candidate
-                }
-            }
-        }
-    }
-    catch {
-        $currentIps = @()
-    }
-    $currentIps = @($currentIps | Sort-Object -Unique)
-
-    $drifted = @(Compare-Object -ReferenceObject $currentIps -DifferenceObject $resolvedIps).Count -gt 0
-    $reason = if ($drifted) { "allow-IP set changed (installed=$($currentIps.Count), resolved=$($resolvedIps.Count))" } else { 'in-sync' }
-
-    return [PSCustomObject]@{
-        Drifted     = $drifted
-        CurrentIps  = $currentIps
-        ResolvedIps = $resolvedIps
-        Reason      = $reason
-    }
 }
 
 function Add-OpenPathCaptivePortalUpstreamFirewallAllow {
@@ -1418,13 +775,9 @@ function Set-OpenPathFirewall {
         $enableDohIpBlocking = $true
         $dnsEgressDefaultDeny = $true
         $blockInboundDns = $true
-        # W-1(b): transport-level outbound egress floor (DefaultOutboundAction-Block
-        # model). DEFAULT OFF. Enabling by default requires the parent's real-runner
-        # (WEDU-lab) validation of dynamic whitelist-IP sync and a proven-complete
-        # system-service allow-list; see Get-OpenPathOutboundEgressFloorRules.
+        # User-scoped outbound egress floor (docs/windows-egress-floor.md). DEFAULT OFF.
         $outboundEgressFloorEnabled = $false
-        $outboundEgressFloorAllowIps = @()
-        $outboundEgressFloorSystemPrograms = @()
+        $egressFloorConfig = $null
         $dohResolvers = Get-DefaultDohResolverIps
         $resolverBypassClients = Get-DefaultResolverBypassClientPrograms
         $vpnPorts = Get-DefaultVpnBlockRules
@@ -1447,11 +800,11 @@ function Set-OpenPathFirewall {
             if ($config.PSObject.Properties['outboundEgressFloorEnabled']) {
                 $outboundEgressFloorEnabled = [bool]$config.outboundEgressFloorEnabled
             }
-            if ($config.PSObject.Properties['outboundEgressFloorAllowIps'] -and $config.outboundEgressFloorAllowIps) {
-                $outboundEgressFloorAllowIps = @($config.outboundEgressFloorAllowIps | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
-            }
-            if ($config.PSObject.Properties['outboundEgressFloorSystemPrograms'] -and $config.outboundEgressFloorSystemPrograms) {
-                $outboundEgressFloorSystemPrograms = @($config.outboundEgressFloorSystemPrograms | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
+            $egressFloorConfig = $config
+            foreach ($obsoleteKey in @('outboundEgressFloorAllowIps', 'outboundEgressFloorSystemPrograms')) {
+                if ($config.PSObject.Properties[$obsoleteKey]) {
+                    Write-OpenPathLog "obsolete egress floor key $obsoleteKey ignored (the egress floor is user-scoped and no longer uses IP or system-program lists)" -Level WARN
+                }
             }
             if ($config.PSObject.Properties['dohResolverIps'] -and $config.dohResolverIps) {
                 $configuredResolvers = @($config.dohResolverIps | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
@@ -1654,54 +1007,17 @@ function Set-OpenPathFirewall {
         }
 
         if ($outboundEgressFloorEnabled) {
-            # W-1(b): transport floor. DEFAULT OFF (outboundEgressFloorEnabled = $false
-            # above). This branch is only reached when an operator has explicitly opted in.
-            #
-            # DESIGN (DefaultOutboundAction-Block model, validated on the real runner
-            # 2026-06-14): default-deny is expressed by
-            # Set-NetFirewallProfile -Profile Domain,Private,Public
-            # -DefaultOutboundAction Block, with program/address-scoped ALLOW rules that
-            # carve the permitted egress back out. The parent validated on the self-hosted
-            # runner that a program-scoped Allow OVERRIDES the profile DEFAULT block
-            # (allow_overrides_default_block=true); an Allow only loses to a *competing
-            # explicit Block rule*, and this floor creates NONE. This replaces the earlier
-            # scaffold that expressed default-deny as explicit Block rules over the
-            # non-allow IPv4 ranges -- that was VALIDATED NON-FUNCTIONAL because on Windows
-            # Filtering Platform an explicit Block WINS over a program-scoped Allow, so the
-            # system-service Allows were overridden and svchost/w32tm/the agent got blocked
-            # (OS update / time-sync / control plane down == bricked device).
-            #
-            # Allows created (all override the default block): system-service programs get
-            # FULL egress (any protocol/port/remote) for update/time-sync/control-plane/DNS;
-            # each resolved whitelist IP gets TCP 80/443; IPv4 loopback (127.0.0.1) and DHCP
-            # (UDP 67/68) are allowed (IPv6 ::1 is WFP-exempt and rejected as a rule, so it
-            # is not created). Inbound is intentionally untouched (DefaultInboundAction is
-            # NOT set), so management/RDP/guest-agent keep working.
-            #
-            # The end-to-end rule MODEL was validated on the real runner (VM103,
-            # 2026-06-14): a non-system program reached a whitelisted IP, was blocked from a
-            # non-whitelisted IP (P0 closed), and a system program still reached any IP
-            # (no brick); runner restored clean. What ENABLING BY DEFAULT still requires is
-            # fleet-level validation that the system-service allow-list is complete for real
-            # managed devices (MDM/Defender/OEM agents) and that live whitelist-IP
-            # resolution stays in lock-step with CDN rotation -- a canary rollout, not one
-            # runner. The default stays $false until that is done.
-            #
-            # Allow-IP source: prefer an explicit operator/config static list when one is
-            # supplied; otherwise resolve the live whitelist + always-allowed domains
-            # through the local Acrylic proxy. The shared apply path
-            # (Set-OpenPathEgressFloorRules) FAILS OPEN: if the resolved set is empty it
-            # does NOT set DefaultOutboundAction Block -- it restores the persisted
-            # pre-floor outbound default (fallback Allow) and removes the floor, leaving
-            # DNS-name enforcement in place rather than bricking all egress.
-            $egressFloorRuleCount = Update-OpenPathEgressFloor `
-                -StaticAllowIps $outboundEgressFloorAllowIps `
-                -SystemServicePrograms $outboundEgressFloorSystemPrograms `
-                -AcrylicPath $AcrylicPath
+            # Students (OpenPath-Restricted) reach the network only from approved
+            # browsers, the native host and catalog apps marked network:true; everyone
+            # else keeps full egress. Fails open when the group cannot be resolved.
+            $studentNetworkPrograms = @(Get-OpenPathEgressFloorStudentProgramsFromConfig -Config $egressFloorConfig)
+            $egressFloorRuleCount = Set-OpenPathStudentEgressFloor -StudentPrograms $studentNetworkPrograms
             Write-OpenPathLog "Outbound egress floor configured ($egressFloorRuleCount rules applied; 0 == fail-open)" -Level WARN
         }
         else {
-            Write-OpenPathLog 'Outbound egress floor disabled by configuration (default; requires WEDU-lab validation to enable)'
+            # Remove-OpenPathFirewall above already restored the pre-floor default and
+            # removed any floor rules recorded in the manifest.
+            Write-OpenPathLog 'Outbound egress floor disabled by configuration (default)'
         }
 
         New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoT" `

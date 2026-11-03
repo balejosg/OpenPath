@@ -663,60 +663,7 @@ Describe "Firewall Module" {
         }
     }
 
-    Context "Outbound egress floor (W-1(b), DefaultOutboundAction-Block model, default-OFF)" {
-        It "Builds Allow-only rule shapes: system full egress, whitelist HTTP/HTTPS, loopback, and DHCP" {
-            $rules = @(Get-OpenPathOutboundEgressFloorRules `
-                    -AllowIps @('203.0.113.10', '203.0.113.20') `
-                    -SystemServicePrograms @('C:\OpenPath\bin\OpenPathAgent.exe') `
-                    -RulePrefix 'OpenPath-DNS')
-
-            # System-program allow rule: FULL egress (any protocol/port/remote) so OS
-            # update / time-sync / DNS-upstream survive the default block on any port.
-            $systemAllow = @($rules | Where-Object {
-                    $_.Action -eq 'Allow' -and $_.Program -eq 'C:\OpenPath\bin\OpenPathAgent.exe'
-                })
-            $systemAllow.Count | Should -Be 1
-            $systemAllow[0].RemoteAddress | Should -Be 'Any'
-            $systemAllow[0].Protocol | Should -Be 'Any'
-            $systemAllow[0].RemotePort | Should -Be 'Any'
-            $systemAllow[0].DisplayName | Should -BeLike 'OpenPath-DNS-Allow-EgressFloor-System-*'
-
-            # Per-whitelist-IP allow rules over TCP 80 and 443 (HTTP redirects + HTTPS).
-            foreach ($ip in @('203.0.113.10', '203.0.113.20')) {
-                $allow = @($rules | Where-Object {
-                        $_.Action -eq 'Allow' -and $_.RemoteAddress -eq $ip -and $_.Protocol -eq 'TCP'
-                    })
-                $allow.Count | Should -Be 1
-                @($allow[0].RemotePort) | Should -Contain '80'
-                @($allow[0].RemotePort) | Should -Contain '443'
-            }
-
-            # Loopback allow (IPv4 only) keeps the local Acrylic listener reachable.
-            # No '::1' rule: New-NetFirewallRule rejects an IPv6 loopback RemoteAddress
-            # (confirmed on the real Windows runner) and WFP exempts loopback anyway.
-            (@($rules | Where-Object { $_.Action -eq 'Allow' -and $_.RemoteAddress -eq '127.0.0.1' })).Count | Should -Be 1
-            (@($rules | Where-Object { $_.Action -eq 'Allow' -and $_.RemoteAddress -eq '::1' })).Count | Should -Be 0
-
-            # DHCP allow (UDP 67/68) keeps the lease renewing under the default block.
-            $dhcp = @($rules | Where-Object { $_.Action -eq 'Allow' -and $_.Protocol -eq 'UDP' -and $_.DisplayName -like '*EgressFloor-DHCP' })
-            $dhcp.Count | Should -Be 1
-            @($dhcp[0].RemotePort) | Should -Contain '67'
-            @($dhcp[0].RemotePort) | Should -Contain '68'
-        }
-
-        It "Emits NO Block rules and no DefaultOutboundAction field (default-deny comes from the profile, not rules)" {
-            $rules = @(Get-OpenPathOutboundEgressFloorRules -AllowIps @('203.0.113.10') -SystemServicePrograms @('C:\OpenPath\bin\agent.exe'))
-            # The floor must create zero explicit Block rules (an explicit Block would WIN
-            # over the program-scoped Allows on WFP and re-brick the system services).
-            (@($rules | Where-Object { $_.Action -eq 'Block' })).Count | Should -Be 0
-            foreach ($rule in $rules) {
-                $rule.Action | Should -Be 'Allow'
-                # The descriptor never carries a machine-wide DefaultOutboundAction field;
-                # that profile-level flip is the apply path's job, not a rule shape.
-                $rule.PSObject.Properties.Name | Should -Not -Contain 'DefaultOutboundAction'
-            }
-        }
-
+    Context "User-scoped egress floor wiring" {
         It "Set-OpenPathFirewall does not emit egress-floor rules or flip the outbound default by default" {
             Initialize-FirewallRuleCaptureMocks
             $script:profileOutboundActions = @()
@@ -734,161 +681,6 @@ Describe "Firewall Module" {
             (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' })).Count | Should -Be 0
             # Default OFF: the outbound default is never flipped to Block.
             @($script:profileOutboundActions) | Should -Not -Contain 'Block'
-        }
-
-        It "Set-OpenPathFirewall emits egress-floor Allow rules and sets DefaultOutboundAction Block only when explicitly enabled" {
-            Initialize-FirewallRuleCaptureMocks
-            $script:profileOutboundActions = @()
-            if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Set-NetFirewallProfile { }
-            }
-            if (-not (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Get-NetFirewallProfile { }
-            }
-            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ DefaultOutboundAction = 'Allow' } } -ModuleName Firewall
-            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $script:profileOutboundActions += $DefaultOutboundAction } -ModuleName Firewall
-            Mock Test-Path { $false } -ModuleName Firewall -ParameterFilter { $Path -like '*egress-floor-prev-outbound.json' }
-            Mock Set-Content { } -ModuleName Firewall
-            Mock New-Item { } -ModuleName Firewall
-            Mock Get-OpenPathConfig {
-                [PSCustomObject]@{
-                    outboundEgressFloorEnabled = $true
-                    outboundEgressFloorAllowIps = @('203.0.113.10')
-                    outboundEgressFloorSystemPrograms = @('C:\OpenPath\bin\OpenPathAgent.exe')
-                }
-            } -ModuleName Firewall
-
-            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
-            $result | Should -BeTrue
-
-            (@(Get-CapturedFirewallRules | Where-Object {
-                        $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP' -and $_.Action -eq 'Allow'
-                    })).Count | Should -Be 1
-            # The default-deny is the profile flip, not an explicit Block rule.
-            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' -and $_.Action -eq 'Block' })).Count | Should -Be 0
-            @($script:profileOutboundActions) | Should -Contain 'Block'
-        }
-    }
-
-    Context "Egress floor system-service allow-list (W-1(b))" {
-        It "Includes svchost, w32tm, both PowerShell hosts, and Acrylic so OS/agent egress survives" {
-            $programs = InModuleScope Firewall {
-                Get-OpenPathEgressFloorSystemServicePrograms -OpenPathRoot 'C:\OpenPath' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
-            }
-
-            # svchost.exe hosts wuauserv / BITS / DoSvc / W32Time -- must be present.
-            ($programs | Where-Object { $_ -like '*\System32\svchost.exe' }).Count | Should -BeGreaterThan 0
-            ($programs | Where-Object { $_ -like '*\System32\w32tm.exe' }).Count | Should -BeGreaterThan 0
-            ($programs | Where-Object { $_ -like '*\WindowsPowerShell\v1.0\powershell.exe' }).Count | Should -BeGreaterThan 0
-            ($programs | Where-Object { $_ -like '*\PowerShell\7\pwsh.exe' }).Count | Should -BeGreaterThan 0
-            ($programs | Where-Object { $_ -like '*Acrylic DNS Proxy\AcrylicService.exe' }).Count | Should -Be 1
-        }
-
-        It "De-duplicates and merges operator-supplied extra programs" {
-            $programs = InModuleScope Firewall {
-                Get-OpenPathEgressFloorSystemServicePrograms -OpenPathRoot 'C:\OpenPath' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy' -ExtraPrograms @('C:\Site\agent.exe', 'C:\Site\agent.exe')
-            }
-            ($programs | Where-Object { $_ -eq 'C:\Site\agent.exe' }).Count | Should -Be 1
-            # No duplicate svchost entries despite being added twice in the builder.
-            ($programs | Where-Object { $_ -like '*\System32\svchost.exe' }).Count | Should -Be 1
-        }
-    }
-
-    Context "Egress floor live resolver (W-1(b))" {
-        It "Resolves whitelist + always-allowed domains through Acrylic and returns deduped valid IPv4 literals" {
-            $resolved = InModuleScope Firewall {
-                Mock Write-OpenPathLog { } -ModuleName Firewall
-                Mock Get-ValidWhitelistDomainsFromFile { @('example.edu') } -ModuleName Firewall
-                Mock Get-OpenPathAlwaysAllowedDomains { @('api.example.org') } -ModuleName Firewall
-                if (-not (Get-Command -Name Resolve-OpenPathDnsWithRetry -ErrorAction SilentlyContinue)) {
-                    function script:Resolve-OpenPathDnsWithRetry { }
-                }
-                Mock Resolve-OpenPathDnsWithRetry {
-                    param($Domain)
-                    if ($Domain -eq 'example.edu') {
-                        return @(
-                            [PSCustomObject]@{ IPAddress = '203.0.113.5' },
-                            [PSCustomObject]@{ IPAddress = '203.0.113.6' },
-                            [PSCustomObject]@{ IPAddress = '203.0.113.5' }
-                        )
-                    }
-                    return @([PSCustomObject]@{ IPAddress = '198.51.100.9' })
-                } -ModuleName Firewall
-
-                Get-OpenPathEgressFloorAllowIps -WhitelistPath 'C:\OpenPath\data\whitelist.txt'
-            }
-
-            @($resolved) | Should -Contain '203.0.113.5'
-            @($resolved) | Should -Contain '203.0.113.6'
-            @($resolved) | Should -Contain '198.51.100.9'
-            (@($resolved) | Where-Object { $_ -eq '203.0.113.5' }).Count | Should -Be 1
-        }
-
-        It "Returns an empty set (fail-open signal) when no domains resolve" {
-            $resolved = InModuleScope Firewall {
-                Mock Write-OpenPathLog { } -ModuleName Firewall
-                Mock Get-ValidWhitelistDomainsFromFile { @('example.edu') } -ModuleName Firewall
-                Mock Get-OpenPathAlwaysAllowedDomains { @() } -ModuleName Firewall
-                if (-not (Get-Command -Name Resolve-OpenPathDnsWithRetry -ErrorAction SilentlyContinue)) {
-                    function script:Resolve-OpenPathDnsWithRetry { }
-                }
-                Mock Resolve-OpenPathDnsWithRetry { $null } -ModuleName Firewall
-
-                Get-OpenPathEgressFloorAllowIps -WhitelistPath 'C:\OpenPath\data\whitelist.txt'
-            }
-            @($resolved).Count | Should -Be 0
-        }
-    }
-
-    Context "Egress floor apply fail-open guard (W-1(b))" {
-        It "Does NOT set DefaultOutboundAction Block when the resolved allow-IP set is empty, and restores Allow" {
-            Initialize-FirewallRuleCaptureMocks
-            if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Set-NetFirewallProfile { }
-            }
-            $outcome = InModuleScope Firewall {
-                $captured = New-Object System.Collections.Generic.List[string]
-                Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $captured.Add([string]$DefaultOutboundAction) } -ModuleName Firewall
-                Mock Test-Path { $false } -ModuleName Firewall
-                $count = Set-OpenPathEgressFloorRules -AllowIps @() -SystemServicePrograms @('C:\OpenPath\bin\agent.exe')
-                [PSCustomObject]@{ Count = $count; Actions = @($captured) }
-            }
-            $outcome.Count | Should -Be 0
-            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' })).Count | Should -Be 0
-            # Critical brick-guard: never Block with an empty allow set. The fail-open path
-            # restores the default (fallback Allow, since no state file exists) -- never Block.
-            @($outcome.Actions) | Should -Not -Contain 'Block'
-            @($outcome.Actions) | Should -Contain 'Allow'
-        }
-
-        It "Sets DefaultOutboundAction Block and creates system/whitelist/loopback/DHCP Allows when an allow IP is present" {
-            Initialize-FirewallRuleCaptureMocks
-            if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Set-NetFirewallProfile { }
-            }
-            if (-not (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Get-NetFirewallProfile { }
-            }
-            $outcome = InModuleScope Firewall {
-                $captured = New-Object System.Collections.Generic.List[string]
-                Mock Get-NetFirewallProfile { [PSCustomObject]@{ DefaultOutboundAction = 'Allow' } } -ModuleName Firewall
-                Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $captured.Add([string]$DefaultOutboundAction) } -ModuleName Firewall
-                Mock Test-Path { $false } -ModuleName Firewall
-                Mock Set-Content { } -ModuleName Firewall
-                Mock New-Item { } -ModuleName Firewall
-                $count = Set-OpenPathEgressFloorRules -AllowIps @('203.0.113.10') -SystemServicePrograms @('C:\OpenPath\bin\agent.exe')
-                [PSCustomObject]@{ Count = $count; Actions = @($captured) }
-            }
-            $outcome.Count | Should -BeGreaterThan 0
-            @($outcome.Actions) | Should -Contain 'Block'
-            # No explicit Block rule (the deny is the profile default).
-            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' -and $_.Action -eq 'Block' })).Count | Should -Be 0
-            (@(Get-CapturedFirewallRules | Where-Object {
-                        $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP' -and $_.Action -eq 'Allow'
-                    })).Count | Should -Be 1
-            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor-System-*' })).Count | Should -Be 1
-            (@(Get-CapturedFirewallRules | Where-Object { $_.RemoteAddress -eq '127.0.0.1' -and $_.DisplayName -like '*EgressFloor-Loopback*' })).Count | Should -Be 1
-            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor-DHCP' })).Count | Should -Be 1
         }
 
         It "Restores DefaultOutboundAction from persisted state and removes floor rules on Remove" {
@@ -914,148 +706,57 @@ Describe "Firewall Module" {
             @($restored) | Should -Contain 'NotConfigured'
             @($restored) | Should -Not -Contain 'Block'
         }
-    }
 
-    Context "Egress floor refresh and drift (W-1(b))" {
-        It "Update-OpenPathEgressFloor resolves live and applies a floor when no static IPs are supplied" {
-            Initialize-FirewallRuleCaptureMocks
-            if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Set-NetFirewallProfile { }
-            }
-            if (-not (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Get-NetFirewallProfile { }
-            }
-            $count = InModuleScope Firewall {
-                Mock Get-OpenPathEgressFloorAllowIps { @('203.0.113.10', '203.0.113.20') } -ModuleName Firewall
-                Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ DefaultOutboundAction = 'Allow' } } -ModuleName Firewall
-                Mock Set-NetFirewallProfile { } -ModuleName Firewall
-                Mock Test-Path { $false } -ModuleName Firewall -ParameterFilter { $Path -like '*egress-floor-prev-outbound.json' }
-                Mock Set-Content { } -ModuleName Firewall
-                Mock New-Item { } -ModuleName Firewall
-                Update-OpenPathEgressFloor -StaticAllowIps @() -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
-            }
-            $count | Should -BeGreaterThan 0
-            (@(Get-CapturedFirewallRules | Where-Object {
-                        $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-20-TCP'
-                    })).Count | Should -Be 1
-        }
-
-        It "Update-OpenPathEgressFloor fails open (0 rules) when live resolution is empty" {
-            Initialize-FirewallRuleCaptureMocks
-            if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Set-NetFirewallProfile { }
-            }
-            $count = InModuleScope Firewall {
-                Mock Get-OpenPathEgressFloorAllowIps { @() } -ModuleName Firewall
-                Mock Set-NetFirewallProfile { } -ModuleName Firewall
-                Mock Test-Path { $false } -ModuleName Firewall -ParameterFilter { $Path -like '*egress-floor-prev-outbound.json' }
-                Update-OpenPathEgressFloor -StaticAllowIps @() -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
-            }
-            $count | Should -Be 0
-            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' })).Count | Should -Be 0
-        }
-
-        It "Test-OpenPathEgressFloorDrift reports no drift when resolution is empty (never tears down a working floor)" {
-            $drift = InModuleScope Firewall {
-                Mock Get-OpenPathEgressFloorAllowIps { @() } -ModuleName Firewall
-                Test-OpenPathEgressFloorDrift -StaticAllowIps @()
-            }
-            $drift.Drifted | Should -BeFalse
-            $drift.Reason | Should -Be 'empty-resolution-fail-open'
-        }
-
-        It "Test-OpenPathEgressFloorDrift does NOT report false drift when the installed rule stores the IP in netmask form" {
-            # Windows reports a /32 RemoteAddress as x.x.x.x/255.255.255.255; the resolver
-            # returns the bare literal. Both must normalize to the same canonical form so a
-            # stable allow set is never flagged as drift every cycle.
-            $drift = InModuleScope Firewall {
-                if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
-                    function script:Get-NetFirewallRule { }
-                }
-                # Define the stub unconditionally so its permissive (no-param) signature
-                # shadows the real Windows Get-NetFirewallAddressFilter cmdlet too. Otherwise
-                # on Windows Pester mocks the real cmdlet's strict CimInstance pipeline
-                # metadata, the `$rule | Get-NetFirewallAddressFilter` call (a PSCustomObject)
-                # fails to bind, the address filter comes back empty, and drift detection
-                # falsely fires -- the test passed on Linux (cmdlet absent) but failed on Windows.
-                function script:Get-NetFirewallAddressFilter { }
-                Mock Get-NetFirewallRule { @([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP' }) } -ModuleName Firewall
-                # Installed form is netmask, resolved form is bare -- must be treated equal.
-                Mock Get-NetFirewallAddressFilter { [PSCustomObject]@{ RemoteAddress = @('203.0.113.10/255.255.255.255') } } -ModuleName Firewall
-                Test-OpenPathEgressFloorDrift -StaticAllowIps @('203.0.113.10')
-            }
-            $drift.Drifted | Should -BeFalse
-            $drift.Reason | Should -Be 'in-sync'
-            @($drift.CurrentIps) | Should -Contain '203.0.113.10'
-        }
-
-        It "Test-OpenPathEgressFloorDrift reports drift when resolved IPs differ from installed allow rules (netmask-normalized)" {
-            $drift = InModuleScope Firewall {
-                if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
-                    function script:Get-NetFirewallRule { }
-                }
-                # Define the stub unconditionally so its permissive (no-param) signature
-                # shadows the real Windows Get-NetFirewallAddressFilter cmdlet too. Otherwise
-                # on Windows Pester mocks the real cmdlet's strict CimInstance pipeline
-                # metadata, the `$rule | Get-NetFirewallAddressFilter` call (a PSCustomObject)
-                # fails to bind, the address filter comes back empty, and drift detection
-                # falsely fires -- the test passed on Linux (cmdlet absent) but failed on Windows.
-                function script:Get-NetFirewallAddressFilter { }
-                Mock Get-NetFirewallRule { @([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP' }) } -ModuleName Firewall
-                Mock Get-NetFirewallAddressFilter { [PSCustomObject]@{ RemoteAddress = @('203.0.113.10/255.255.255.255') } } -ModuleName Firewall
-                Test-OpenPathEgressFloorDrift -StaticAllowIps @('203.0.113.10', '203.0.113.99')
-            }
-            $drift.Drifted | Should -BeTrue
-            @($drift.ResolvedIps) | Should -Contain '203.0.113.99'
-        }
-    }
-
-    Context "Egress floor live resolution in Set-OpenPathFirewall (W-1(b))" {
-        It "Resolves the floor live when enabled with no static allow-IP set, and fails open (no Block default) on empty resolution" {
+        It "Set-OpenPathFirewall applies the student floor when outboundEgressFloorEnabled is true" {
             Initialize-FirewallRuleCaptureMocks
             $script:profileOutboundActions = @()
-            if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Set-NetFirewallProfile { }
-            }
-            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $script:profileOutboundActions += $DefaultOutboundAction } -ModuleName Firewall
-            Mock Test-Path { $false } -ModuleName Firewall -ParameterFilter { $Path -like '*egress-floor-prev-outbound.json' }
-            Mock Get-OpenPathConfig {
-                [PSCustomObject]@{ outboundEgressFloorEnabled = $true }
-            } -ModuleName Firewall
-            Mock Get-OpenPathEgressFloorAllowIps { @() } -ModuleName Firewall
-
-            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
-            $result | Should -BeTrue
-            # Fail-open: no EgressFloor rules emitted and the outbound default is never Block.
-            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' })).Count | Should -Be 0
-            @($script:profileOutboundActions) | Should -Not -Contain 'Block'
-        }
-
-        It "Resolves the floor live when enabled with no static allow-IP set and applies Allows + Block default when resolution yields IPs" {
-            Initialize-FirewallRuleCaptureMocks
-            $script:profileOutboundActions = @()
-            if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Set-NetFirewallProfile { }
-            }
-            if (-not (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-                function global:Get-NetFirewallProfile { }
+            foreach ($name in @('Set-NetFirewallProfile', 'Get-NetFirewallProfile', 'Get-NetFirewallRule')) {
+                if (-not (Get-Command -Name $name -ErrorAction SilentlyContinue)) { New-Item -Path "Function:\global:$name" -Value { } -Force | Out-Null }
             }
             Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ DefaultOutboundAction = 'Allow' } } -ModuleName Firewall
+            Mock Get-NetFirewallRule { @() } -ModuleName Firewall
             Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $script:profileOutboundActions += $DefaultOutboundAction } -ModuleName Firewall
             Mock Test-Path { $false } -ModuleName Firewall -ParameterFilter { $Path -like '*egress-floor-prev-outbound.json' }
             Mock Set-Content { } -ModuleName Firewall
             Mock New-Item { } -ModuleName Firewall
-            Mock Get-OpenPathConfig {
-                [PSCustomObject]@{ outboundEgressFloorEnabled = $true }
-            } -ModuleName Firewall
-            Mock Get-OpenPathEgressFloorAllowIps { @('203.0.113.10') } -ModuleName Firewall
+            Mock Add-OpenPathFirewallManifestRule { } -ModuleName Firewall
+            Mock Resolve-OpenPathEgressFloorRestrictedSid { 'S-1-5-21-1-2-3-1005' } -ModuleName Firewall
+            Mock Get-OpenPathEgressFloorStudentProgramsFromConfig { @('C:\Program Files\Mozilla Firefox\firefox.exe') } -ModuleName Firewall
+            Mock Get-OpenPathConfig { [PSCustomObject]@{ outboundEgressFloorEnabled = $true } } -ModuleName Firewall
 
             $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
             $result | Should -BeTrue
-            (@(Get-CapturedFirewallRules | Where-Object {
-                        $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP' -and $_.Action -eq 'Allow'
-                    })).Count | Should -Be 1
+            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-NonStudent' })).Count | Should -Be 1
+            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like 'OpenPath-DNS-Allow-EgressFloor-Student-firefox-*' })).Count | Should -Be 1
             @($script:profileOutboundActions) | Should -Contain 'Block'
+        }
+
+        It "Set-OpenPathFirewall logs a WARN for obsolete egress floor config keys" {
+            Initialize-FirewallRuleCaptureMocks
+            $script:floorWarnings = @()
+            Mock Write-OpenPathLog { param($Message, $Level) if ($Level -eq 'WARN') { $script:floorWarnings += [string]$Message } } -ModuleName Firewall
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{ outboundEgressFloorEnabled = $false; outboundEgressFloorAllowIps = @('203.0.113.10'); outboundEgressFloorSystemPrograms = @('C:\x.exe') }
+            } -ModuleName Firewall
+            Mock Remove-OpenPathEgressFloorRules { } -ModuleName Firewall
+
+            Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy' | Out-Null
+            @($script:floorWarnings | Where-Object { $_ -match 'obsolete egress floor key outboundEgressFloorAllowIps' }).Count | Should -Be 1
+            @($script:floorWarnings | Where-Object { $_ -match 'obsolete egress floor key outboundEgressFloorSystemPrograms' }).Count | Should -Be 1
+        }
+
+        It "derives student programs from approvedStudentBrowsers and the catalog, defaulting to Firefox" {
+            $calls = InModuleScope Firewall {
+                $seen = New-Object System.Collections.Generic.List[object]
+                Mock Get-OpenPathStudentNetworkPrograms { param($ApprovedBrowsers, $BrowserInventory, $ApplicationCatalog, $OpenPathRoot) $seen.Add([pscustomobject]@{ Browsers = @($ApprovedBrowsers); Catalog = $ApplicationCatalog }); @('x') }
+                $catalog = [pscustomobject]@{ schemaVersion = 1; applications = @() }
+                Get-OpenPathEgressFloorStudentProgramsFromConfig -Config ([pscustomobject]@{ approvedStudentBrowsers = @('Chrome'); approvedApplicationCatalog = $catalog }) -OpenPathRoot 'C:\OpenPath' | Out-Null
+                Get-OpenPathEgressFloorStudentProgramsFromConfig -Config ([pscustomobject]@{}) -OpenPathRoot 'C:\OpenPath' | Out-Null
+                $seen.ToArray()
+            }
+            @($calls[0].Browsers) | Should -Be @('Chrome')
+            $calls[0].Catalog.schemaVersion | Should -Be 1
+            @($calls[1].Browsers) | Should -Be @('Firefox')
         }
     }
 
@@ -1114,7 +815,7 @@ Describe "Firewall Module" {
             foreach ($name in @('ICMPv4', 'ICMPv6', 'SMB', 'WebClient')) {
                 $byName["OpenPath-DNS-Block-EgressFloor-$name-Internet"].RemoteAddress | Should -Be 'Internet'
             }
-            @($byName['OpenPath-DNS-Allow-EgressFloor-Loopback'].RemoteAddress) | Should -Be @('127.0.0.0/8', '::1')
+            $byName['OpenPath-DNS-Allow-EgressFloor-Loopback'].RemoteAddress | Should -Be '127.0.0.0/8'
         }
 
         It "never allows the kernel System program" {

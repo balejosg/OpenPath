@@ -1334,44 +1334,17 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
-        # W-1(b): outbound egress floor refresh. CDN IPs behind whitelisted domains
-        # rotate, so a static per-IP allow set goes stale and starts blocking legit
-        # whitelisted sites. When the floor is enabled in config, re-resolve the
-        # whitelist through Acrylic and, only when the allow-IP set drifts, re-apply.
-        # DEFAULT OFF: the config flag stays $false until WEDU-lab validation, so this
-        # block is normally a no-op. Gated on the same protected-mode/whitelist-readable
-        # conditions as the split-DNS refresh: never refresh from an unknown whitelist,
-        # and the apply path fails open on an empty resolution (never bricks HTTPS).
-        $egressFloorEnabled = $false
-        if ($Config -and $Config.PSObject.Properties['outboundEgressFloorEnabled']) {
-            $egressFloorEnabled = [bool]$Config.outboundEgressFloorEnabled
-        }
-        if ($egressFloorEnabled -and
-            $shouldRunProtectedModeChecks -and
+        # User-scoped outbound egress floor: reapply on drift, remove leftovers when the
+        # flag is off. Never touched while OpenPath enforcement is disabled or in an
+        # unknown whitelist state (the firewall itself is not enforced then).
+        if ($shouldRunProtectedModeChecks -and
             $null -ne $localWhitelistSections -and
-            -not $localWhitelistSections.IsDisabled -and
-            (Get-Command -Name 'Test-OpenPathEgressFloorDrift' -ErrorAction SilentlyContinue)) {
-            $egressStaticAllowIps = @()
-            if ($Config.PSObject.Properties['outboundEgressFloorAllowIps'] -and $Config.outboundEgressFloorAllowIps) {
-                $egressStaticAllowIps = @($Config.outboundEgressFloorAllowIps | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
-            }
-            $egressFloorDrift = Test-OpenPathEgressFloorDrift -StaticAllowIps $egressStaticAllowIps
-            if ([bool]$egressFloorDrift.Drifted) {
-                Write-OpenPathLog "Watchdog: egress-floor allow IPs drifted ($($egressFloorDrift.Reason)); refreshing floor" -Level WARN
-                $egressFloorSystemPrograms = @()
-                if ($Config.PSObject.Properties['outboundEgressFloorSystemPrograms'] -and $Config.outboundEgressFloorSystemPrograms) {
-                    $egressFloorSystemPrograms = @($Config.outboundEgressFloorSystemPrograms | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
-                }
-                $acrylicPathForEgress = Get-AcrylicPath
-                Update-OpenPathEgressFloor `
-                    -StaticAllowIps $egressStaticAllowIps `
-                    -SystemServicePrograms $egressFloorSystemPrograms `
-                    -AcrylicPath $acrylicPathForEgress | Out-Null
-            }
+            -not $localWhitelistSections.IsDisabled) {
+            Invoke-OpenPathWatchdogEgressFloorCheck -Config $Config -OpenPathRoot $OpenPathRoot | Out-Null
         }
     }
     catch {
-        Write-OpenPathLog "Watchdog: Error refreshing outbound egress floor: $_" -Level ERROR
+        Write-OpenPathLog "Watchdog: Error checking outbound egress floor: $_" -Level ERROR
     }
 
     try {
@@ -1655,4 +1628,44 @@ function Get-OpenPathWatchdogOutcome {
         Actions = $actions
         ReasonCodes = @($reasonCodesList.ToArray())
     }
+}
+
+function Invoke-OpenPathWatchdogEgressFloorCheck {
+    <#
+    .SYNOPSIS
+        One watchdog pass over the user-scoped egress floor.
+    .OUTPUTS
+        string -- 'reapplied', 'in-sync', 'removed' or 'disabled'.
+    #>
+    param(
+        [AllowNull()]
+        [object]$Config,
+
+        [string]$OpenPathRoot
+    )
+
+    $enabled = [bool]($Config -and $Config.PSObject.Properties['outboundEgressFloorEnabled'] -and [bool]$Config.outboundEgressFloorEnabled)
+    if (-not $enabled) {
+        $leftoverRules = @()
+        if (Get-Command -Name 'Get-NetFirewallRule' -ErrorAction SilentlyContinue) {
+            $leftoverRules = @(Get-NetFirewallRule -DisplayName 'OpenPath-DNS-*-EgressFloor-*' -ErrorAction SilentlyContinue)
+        }
+        $statePath = if (Get-Command -Name 'Get-OpenPathEgressFloorPreviousOutboundStatePath' -ErrorAction SilentlyContinue) { Get-OpenPathEgressFloorPreviousOutboundStatePath } else { $null }
+        $stateLeftover = [bool]($statePath -and (Test-Path -LiteralPath $statePath))
+        if ($leftoverRules.Count -gt 0 -or $stateLeftover) {
+            Write-OpenPathLog 'Watchdog: egress floor disabled but leftovers found; removing and restoring the pre-floor outbound default' -Level WARN
+            Remove-OpenPathEgressFloorRules
+            return 'removed'
+        }
+        return 'disabled'
+    }
+
+    $programs = @(Get-OpenPathEgressFloorStudentProgramsFromConfig -Config $Config -OpenPathRoot $OpenPathRoot)
+    $drift = Test-OpenPathStudentEgressFloorDrift -StudentPrograms $programs
+    if ([bool]$drift.Drifted) {
+        Write-OpenPathLog "Watchdog: egress floor drifted ($($drift.Reason)); reapplying" -Level WARN
+        Set-OpenPathStudentEgressFloor -StudentPrograms $programs | Out-Null
+        return 'reapplied'
+    }
+    return 'in-sync'
 }

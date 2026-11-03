@@ -224,7 +224,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -272,7 +272,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-DNSResolution -ErrorAction SilentlyContinue
@@ -305,7 +305,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -353,7 +353,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-DNSResolution -ErrorAction SilentlyContinue
@@ -377,7 +377,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -421,7 +421,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -439,7 +439,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -483,7 +483,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -503,7 +503,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -567,7 +567,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Get-OpenPathWatchdogTaskHealth, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Get-Service, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -597,7 +597,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -629,7 +629,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Get-OpenPathFirefoxNativeHostCompiledHealth -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -661,7 +661,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -721,7 +721,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Get-OpenPathFirefoxNativeHostCompiledHealth, Function:\Get-OpenPathSmartAppControlState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -741,7 +741,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -786,7 +786,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -805,7 +805,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -852,7 +852,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -888,7 +888,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -919,7 +919,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -937,7 +937,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -982,7 +982,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -1014,7 +1014,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -1040,7 +1040,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -1072,7 +1072,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -1114,7 +1114,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -2719,7 +2719,7 @@ Describe "Watchdog Script" {
             $mockNames = @(
                 'Enter-OpenPathAgentUpdateLock', 'Exit-OpenPathAgentUpdateLock', 'Test-OpenPathIntegrity',
                 'Restore-OpenPathIntegrity', 'Test-OpenPathCaptivePortalModeActive', 'Test-OpenPathCaptivePortalState',
-                'Get-OpenPathConfiguredCaptivePortalDomains', 'Test-OpenPathEgressFloorDrift',
+                'Get-OpenPathConfiguredCaptivePortalDomains', 'Test-OpenPathStudentEgressFloorDrift',
                 'Test-OpenPathRuntimeDependencyQueue', 'Test-FirewallActive', 'Test-DNSResolution', 'Test-DNSSinkhole',
                 'Test-OpenPathDnsFailsafeState', 'Test-OpenPathPolicyFailOpenMarker', 'Increment-WatchdogFailCount',
                 'Reset-WatchdogFailCount', 'Write-OpenPathLog'
@@ -2741,7 +2741,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathCaptivePortalModeActive { return $false }
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
             function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
-            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
             function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
             function global:Test-FirewallActive { return $true }
             function global:Test-DNSResolution { return $true }
@@ -3257,7 +3257,7 @@ Describe "AppControl and watchdog health contract" {
         function global:Test-OpenPathCaptivePortalState { return 'Direct' }
         function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
         function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-        function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+        function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
         function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
         function global:Test-FirewallActive { return $true }
         function global:Test-DNSResolution { return $true }
@@ -3288,7 +3288,7 @@ Describe "AppControl and watchdog health contract" {
             Remove-Item Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
             Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
             Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-            Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
             Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
             Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
             Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -3329,7 +3329,7 @@ Describe "AppControl and watchdog health contract" {
         function global:Test-OpenPathCaptivePortalState { return 'Direct' }
         function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
         function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-        function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+        function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
         function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
         function global:Test-FirewallActive { return $true }
         function global:Test-DNSResolution { return $true }
@@ -3359,7 +3359,7 @@ Describe "AppControl and watchdog health contract" {
             Remove-Item Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
             Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
             Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
-            Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
             Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
             Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
             Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
@@ -3462,7 +3462,7 @@ Describe "AppControl and watchdog health contract" {
         function global:Test-OpenPathCaptivePortalState { return 'Direct' }
         function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
         function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-        function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+        function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
         function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
         function global:Test-FirewallActive { return $true }
         function global:Test-DNSResolution { return $true }
@@ -3487,7 +3487,7 @@ Describe "AppControl and watchdog health contract" {
         finally {
             Remove-Item Function:\Get-OpenPathWatchdogTaskHealth, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup -ErrorAction SilentlyContinue
             Remove-Item Function:\Test-OpenPathNonAdminAppControlActive, Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
-            Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity, Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity, Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
             Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole, Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
             Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
         }
@@ -3582,3 +3582,62 @@ Describe 'AppControl transaction final findings' {
         $global:opTransactionRepairCalls | Should -Be 0
     }
 }
+
+Describe "Watchdog egress floor check" {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1")
+    }
+
+    BeforeEach {
+        $script:wfEvents = @()
+        function global:Write-OpenPathLog { }
+        function global:Get-OpenPathEgressFloorStudentProgramsFromConfig { param($Config, $OpenPathRoot) @('C:\Program Files\Mozilla Firefox\firefox.exe') }
+        function global:Set-OpenPathStudentEgressFloor { param($StudentPrograms) $script:wfEvents += 'set'; 9 }
+        function global:Remove-OpenPathEgressFloorRules { $script:wfEvents += 'remove' }
+        function global:Get-OpenPathEgressFloorPreviousOutboundStatePath { Join-Path $TestDrive 'egress-floor-prev-outbound.json' }
+    }
+
+    AfterEach {
+        foreach ($name in @('Write-OpenPathLog', 'Get-OpenPathEgressFloorStudentProgramsFromConfig', 'Set-OpenPathStudentEgressFloor',
+                'Remove-OpenPathEgressFloorRules', 'Get-OpenPathEgressFloorPreviousOutboundStatePath', 'Test-OpenPathStudentEgressFloorDrift', 'Get-NetFirewallRule')) {
+            Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "reapplies the student egress floor when drift is reported" {
+        function global:Test-OpenPathStudentEgressFloorDrift { param($StudentPrograms) [pscustomobject]@{ Drifted = $true; Reason = 'rule-set-mismatch' } }
+        $result = Invoke-OpenPathWatchdogEgressFloorCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $true }) -OpenPathRoot 'C:\OpenPath'
+        $result | Should -Be 'reapplied'
+        $script:wfEvents | Should -Be @('set')
+    }
+
+    It "leaves an in-sync floor alone" {
+        function global:Test-OpenPathStudentEgressFloorDrift { param($StudentPrograms) [pscustomobject]@{ Drifted = $false; Reason = 'in-sync' } }
+        $result = Invoke-OpenPathWatchdogEgressFloorCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $true }) -OpenPathRoot 'C:\OpenPath'
+        $result | Should -Be 'in-sync'
+        @($script:wfEvents).Count | Should -Be 0
+    }
+
+    It "removes a leftover floor when the flag is off" {
+        function global:Get-NetFirewallRule { param($DisplayName, $ErrorAction) [pscustomobject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-NonStudent' } }
+        $result = Invoke-OpenPathWatchdogEgressFloorCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $false }) -OpenPathRoot 'C:\OpenPath'
+        $result | Should -Be 'removed'
+        $script:wfEvents | Should -Be @('remove')
+    }
+
+    It "removes a leftover pre-floor state file when the flag is off" {
+        function global:Get-NetFirewallRule { param($DisplayName, $ErrorAction) @() }
+        Set-Content -Path (Join-Path $TestDrive 'egress-floor-prev-outbound.json') -Value '{}'
+        $result = Invoke-OpenPathWatchdogEgressFloorCheck -Config ([pscustomobject]@{}) -OpenPathRoot 'C:\OpenPath'
+        $result | Should -Be 'removed'
+    }
+
+    It "does nothing when the flag is off and no floor is present" {
+        function global:Get-NetFirewallRule { param($DisplayName, $ErrorAction) @() }
+        Remove-Item (Join-Path $TestDrive 'egress-floor-prev-outbound.json') -ErrorAction SilentlyContinue
+        $result = Invoke-OpenPathWatchdogEgressFloorCheck -Config ([pscustomobject]@{}) -OpenPathRoot 'C:\OpenPath'
+        $result | Should -Be 'disabled'
+        @($script:wfEvents).Count | Should -Be 0
+    }
+}
+
