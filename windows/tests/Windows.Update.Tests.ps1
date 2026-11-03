@@ -339,6 +339,67 @@ Describe "Update Script" {
             $rollbackContent | Should -Match '(?s)Falling back to backup whitelist rollback.*?Restore-OpenPathProtectedMode -Config \$Config -ErrorAction SilentlyContinue'
         }
 
+        Context "Stale whitelist fail-safe and server confirmation" {
+            BeforeEach {
+                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.System.ps1")
+                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1")
+
+                $script:dataDir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+                New-Item -ItemType Directory -Path $script:dataDir | Out-Null
+                $script:whitelistPath = Join-Path $script:dataDir 'whitelist.txt'
+                $script:stalePath = Join-Path $script:dataDir 'stale-failsafe-state.json'
+                Set-Content -Path $script:whitelistPath -Value "## WHITELIST`nexample.org"
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-93)
+                $script:mirrorFingerprint = (Get-Item $script:whitelistPath).LastWriteTimeUtc
+                $script:failsafeEntries = 0
+                $script:healthStatuses = @()
+
+                function Write-OpenPathLog { param([string]$Message, [string]$Level) }
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $false } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $false; ProtectedModeEligible = $true } }
+                function Invoke-OpenPathUpdateWritersLockScope { param([string]$Stage, [scriptblock]$Action) return $false }
+                function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) [pscustomobject]@{ Actions = @() } }
+                function Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) }
+                function Get-OpenPathRuntimeHealth { [pscustomobject]@{ DnsServiceRunning = $true; DnsResolving = $true } }
+                function Send-OpenPathHealthReport { param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions) $script:healthStatuses += $Status }
+                function Clear-StaleFailsafeState { param([string]$StaleFailsafeStatePath) Remove-Item $StaleFailsafeStatePath -Force }
+                function Enter-StaleWhitelistFailsafe { param($Config, $WhitelistAgeHours, $StaleFailsafeStatePath) $script:failsafeEntries++; Set-Content $StaleFailsafeStatePath '{}' }
+            }
+
+            It "Leaves the fail-safe when the server confirms the cached whitelist, without touching the whitelist file" {
+                Set-Content -Path $script:stalePath -Value '{}'
+
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+
+                Test-Path $script:stalePath | Should -BeFalse
+                Test-Path (Join-Path $script:dataDir 'whitelist.verified') | Should -BeTrue
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc | Should -Be $script:mirrorFingerprint
+                Get-OpenPathCachedWhitelistAgeHours -WhitelistPath $script:whitelistPath | Should -BeLessThan 1
+            }
+
+            It "Keeps using a recently confirmed whitelist when a later download fails" {
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true
+
+                $script:failsafeEntries | Should -Be 0
+                Test-Path $script:stalePath | Should -BeFalse
+                $script:healthStatuses[-1] | Should -Be 'DEGRADED'
+            }
+
+            It "Still enters the fail-safe when neither the file nor a server confirmation is recent" {
+                Set-Content -Path (Join-Path $script:dataDir 'whitelist.verified') -Value 'old'
+                (Get-Item (Join-Path $script:dataDir 'whitelist.verified')).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-30)
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true
+
+                $script:failsafeEntries | Should -Be 1
+                $script:healthStatuses[-1] | Should -Be 'STALE_FAILSAFE'
+            }
+        }
+
         It "Restarts protected DNS when runtime dependency queue changes without a new whitelist" {
             $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
             $applyContent = Get-Content $applyHelperPath -Raw

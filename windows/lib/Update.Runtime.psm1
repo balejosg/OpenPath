@@ -882,6 +882,7 @@ function Invoke-OpenPathUpdateCycle {
                 $null = Handle-OpenPathNotModified `
                     -Config $config `
                     -WhitelistPath $whitelistPath `
+                    -StaleFailsafeStatePath $staleFailsafeStatePath `
                     -HealthActionSuffix $portalActiveState.HealthAction
             }
             elseif ($downloadResult.Whitelist.IsDisabled) {

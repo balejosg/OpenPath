@@ -37,6 +37,45 @@ function Join-OpenPathUpdateHealthActions {
     return $Action
 }
 
+function Get-OpenPathWhitelistVerifiedPath {
+    # returns the marker file that records when the server last confirmed the cached whitelist is current
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WhitelistPath
+    )
+
+    return (Join-Path (Split-Path $WhitelistPath -Parent) 'whitelist.verified')
+}
+
+function Set-OpenPathWhitelistVerified {
+    # records that the server confirmed the cached whitelist (HTTP 304); the whitelist file itself is not touched
+    # because its timestamp fingerprints the native-host mirror
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WhitelistPath
+    )
+
+    try {
+        Set-Content -Path (Get-OpenPathWhitelistVerifiedPath -WhitelistPath $WhitelistPath) `
+            -Value ((Get-Date).ToUniversalTime().ToString('o')) -Encoding ASCII -ErrorAction Stop
+    }
+    catch {
+        Write-OpenPathLog "Could not record whitelist verification: $_" -Level WARN
+    }
+}
+
+function Get-OpenPathCachedWhitelistAgeHours {
+    # returns hours since the cached whitelist was last written or last confirmed current by the server, whichever is newer
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WhitelistPath
+    )
+
+    $writtenAgeHours = Get-OpenPathFileAgeHours -Path $WhitelistPath
+    $verifiedAgeHours = Get-OpenPathFileAgeHours -Path (Get-OpenPathWhitelistVerifiedPath -WhitelistPath $WhitelistPath)
+    return [Math]::Min([double]$writtenAgeHours, [double]$verifiedAgeHours)
+}
+
 function Handle-OpenPathDownloadFailure {
     # applies the cached whitelist when a download fails; triggers stale-failsafe when age exceeds the threshold; always sends a health report
     param(
@@ -77,7 +116,7 @@ function Handle-OpenPathDownloadFailure {
         -QueueChanged $runtimeDependencyQueueChanged
     Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
 
-    $cachedAgeHours = Get-OpenPathFileAgeHours -Path $WhitelistPath
+    $cachedAgeHours = Get-OpenPathCachedWhitelistAgeHours -WhitelistPath $WhitelistPath
     if ($EnableStaleFailsafe -and $StaleWhitelistMaxAgeHours -gt 0 -and $cachedAgeHours -ge $StaleWhitelistMaxAgeHours) {
         Enter-StaleWhitelistFailsafe -Config $Config -WhitelistAgeHours $cachedAgeHours -StaleFailsafeStatePath $StaleFailsafeStatePath
         $runtimeHealth = Get-OpenPathRuntimeHealth
@@ -107,6 +146,8 @@ function Handle-OpenPathNotModified {
 
         [Parameter(Mandatory = $true)]
         [string]$WhitelistPath,
+
+        [string]$StaleFailsafeStatePath = '',
 
         [string]$HealthActionSuffix = ''
     )
@@ -145,6 +186,16 @@ function Handle-OpenPathNotModified {
         -QueueChanged $runtimeDependencyQueueChanged
     Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
     Write-OpenPathLog "Whitelist not modified (ETag) - skipping apply"
+
+    # The server just confirmed the cached whitelist is current: it is no longer
+    # stale, so record that and leave the stale fail-safe. Without this a 304
+    # kept the marker forever and the next failed download re-entered the
+    # fail-safe at once, judging freshness by the last time the file changed.
+    Set-OpenPathWhitelistVerified -WhitelistPath $WhitelistPath
+    if ($StaleFailsafeStatePath -and (Test-Path $StaleFailsafeStatePath)) {
+        Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
+        Write-OpenPathLog "Server confirmed the cached whitelist is current; left stale fail-safe mode"
+    }
 
     try {
         $runtimeHealth = Get-OpenPathRuntimeHealth

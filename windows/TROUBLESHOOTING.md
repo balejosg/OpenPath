@@ -732,7 +732,7 @@ Get-Content "C:\OpenPath\data\logs\openpath.log" |
     Select-Object -Last 30
 ```
 
-A `STALE_FAILSAFE` status means the cached whitelist is stale and the agent has fallen back to a saved safe state. Run a forced update to recover:
+A `STALE_FAILSAFE` status means the cached whitelist is stale and the agent has fallen back to a saved safe state. Freshness counts from the last time the whitelist changed or the server confirmed it unchanged (HTTP 304, recorded in `whitelist.verified`), and the next successful download or 304 leaves the fail-safe. Run a forced update to recover:
 
 ```powershell
 .\OpenPath.ps1 update
@@ -759,6 +759,7 @@ The `OpenPath-AgentUpdate` scheduled task runs `self-update --silent` daily at 3
 - `C:\OpenPath\data\logs\openpath.log` - agent log
 - `C:\OpenPath\data\watchdog-fails.txt` - watchdog consecutive fail counter
 - `C:\OpenPath\data\stale-failsafe-state.json` - present when stale failsafe is active
+- `C:\OpenPath\data\whitelist.verified` - last time the server confirmed the cached whitelist is current
 - `C:\OpenPath\data\integrity-baseline.json` - integrity hashes for critical files
 - `C:\OpenPath\data\integrity-backup\` - backup copies used for integrity restoration
 - `C:\OpenPath\data\captive-portal-active.json` - present when captive portal mode is active
