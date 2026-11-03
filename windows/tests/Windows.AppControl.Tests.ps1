@@ -932,6 +932,8 @@ Describe "AppControl Module" {
             @($spec.BlockedWindowsTools) | Should -Not -Contain '%WINDIR%\System32\powershell.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell_ise.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell_ise.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES%\PowerShell\7\pwsh.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES%\PowerShell\7\pwsh.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\ftp.exe'
@@ -997,6 +999,26 @@ Describe "AppControl Module" {
                         [void]$collection.RemoveChild($denyRule)
                         Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' -OpenPathRoot 'C:\OpenPath' | Should -BeFalse
                     }
+                }
+            }
+        }
+
+        It "Rejects an installed policy that lacks a blocked inbox tool deny rule" {
+            # A machine installed before powershell_ise.exe joined BlockedWindowsTools
+            # must read as invalid so the watchdog re-applies the policy.
+            InModuleScope AppControl {
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                foreach ($path in @('%WINDIR%\System32\WindowsPowerShell\v1.0\powershell_ise.exe', '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe')) {
+                    [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+                    $collection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Exe' })[0]
+                    $denyRule = @($collection.FilePathRule | Where-Object {
+                            $_.GetAttribute('Action') -eq 'Deny' -and
+                            $_.GetAttribute('UserOrGroupSid') -eq $spec.RestrictedSid -and
+                            $_.Conditions.FilePathCondition.GetAttribute('Path') -eq $path
+                        })[0]
+                    $denyRule | Should -Not -BeNullOrEmpty
+                    [void]$collection.RemoveChild($denyRule)
+                    Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' -OpenPathRoot 'C:\OpenPath' | Should -BeFalse
                 }
             }
         }

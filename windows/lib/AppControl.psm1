@@ -919,6 +919,9 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             # AppLocker FilePathCondition exception to match.
             '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe',
             '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe',
+            # ISE hosts the same PowerShell engine; denying only powershell.exe leaves it open.
+            '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell_ise.exe',
+            '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell_ise.exe',
             '%PROGRAMFILES%\PowerShell\7\pwsh.exe',
             '%PROGRAMFILES%\PowerShell\7\pwsh.exe',
             '%WINDIR%\System32\ftp.exe',
@@ -2180,6 +2183,15 @@ function Test-OpenPathAppLockerBoundaryPolicy {
             if (-not (Test-OpenPathFilePathRulePresent -Collection $collection -Action 'Deny' -Sid $spec.RestrictedSid -Path $path)) {
                 return $false
             }
+        }
+    }
+
+    # Same for the blocked inbox tools: a policy written before a tool joined
+    # BlockedWindowsTools (for example powershell_ise.exe) must be re-applied,
+    # or the tool stays runnable for students on already-installed machines.
+    foreach ($path in @($spec.BlockedWindowsTools)) {
+        if (-not (Test-OpenPathFilePathRulePresent -Collection $exeCollection -Action 'Deny' -Sid $spec.RestrictedSid -Path $path)) {
+            return $false
         }
     }
 

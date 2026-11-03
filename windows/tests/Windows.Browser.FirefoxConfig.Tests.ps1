@@ -11,6 +11,7 @@ Describe "Firefox network autoconfig" {
             $content = Browser.FirefoxConfig\New-OpenPathFirefoxNetworkAutoconfigContent
 
             $content.AutoconfigJs | Should -Match 'general\.config\.filename'
+            $content.MozillaCfg | Should -Match 'lockPref\("network\.proxy\.type", 0\)'
             $content.MozillaCfg | Should -Match 'lockPref\("network\.trr\.mode", 5\)'
             $content.MozillaCfg | Should -Match 'lockPref\("network\.trr\.uri", ""\)'
             $content.MozillaCfg | Should -Match 'lockPref\("network\.dns\.disablePrefetch", true\)'

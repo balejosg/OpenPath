@@ -20,6 +20,8 @@ pref("general.config.obscure_value", 0);
 "@
         MozillaCfg = @"
 $script:OpenPathFirefoxConfigMarker
+// Force direct connections: a user-set manual HTTP/SOCKS proxy at an IP literal would bypass DNS filtering.
+lockPref("network.proxy.type", 0);
 lockPref("network.trr.mode", 5);
 lockPref("network.trr.uri", "");
 lockPref("network.dns.disablePrefetch", true);
