@@ -19,6 +19,7 @@ Export-ModuleMember -Function @(
     'Set-OpenPathFirewall',
     'Get-OpenPathDnsEgressBlockRanges',
     'Get-OpenPathOutboundEgressFloorRules',
+    'Get-OpenPathStudentEgressFloorRules',
     'Get-OpenPathEgressFloorSystemServicePrograms',
     'Get-OpenPathEgressFloorAllowIps',
     'Get-OpenPathEgressFloorProfileNames',

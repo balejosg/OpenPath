@@ -1058,4 +1058,88 @@ Describe "Firewall Module" {
             @($script:profileOutboundActions) | Should -Contain 'Block'
         }
     }
+
+    Context "Student egress floor rule set" {
+        BeforeAll {
+            $script:sfSid = 'S-1-5-21-1-2-3-1005'
+            $script:sfFirefox = 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            $script:sfNativeHost = 'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.exe'
+        }
+
+        It "emits exactly the fixed rules plus one student allow per program" {
+            $rules = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $script:sfSid -StudentPrograms @($script:sfFirefox, $script:sfNativeHost))
+            $rules.Count | Should -Be 10
+            foreach ($suffix in @(
+                    'Allow-EgressFloor-NonStudent',
+                    'Allow-EgressFloor-NonStudentAppContainers',
+                    'Allow-EgressFloor-Loopback',
+                    'Block-EgressFloor-StudentAppContainers',
+                    'Block-EgressFloor-ICMPv4-Internet',
+                    'Block-EgressFloor-ICMPv6-Internet',
+                    'Block-EgressFloor-SMB-Internet',
+                    'Block-EgressFloor-WebClient-Internet')) {
+                @($rules | Where-Object { $_.DisplayName -eq "OpenPath-DNS-$suffix" }).Count | Should -Be 1 -Because $suffix
+            }
+            @($rules | Where-Object { $_.DisplayName -like 'OpenPath-DNS-Allow-EgressFloor-Student-*' }).Count | Should -Be 2
+            @($rules | Where-Object { $_.Direction -ne 'Outbound' }).Count | Should -Be 0
+        }
+
+        It "scopes the non-student allow with a deny ACE for the restricted group" {
+            $rules = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $script:sfSid -StudentPrograms @($script:sfFirefox))
+            $nonStudent = @($rules | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-NonStudent' })[0]
+            $nonStudent.LocalUser | Should -Be "D:(D;;CC;;;$($script:sfSid))(A;;CC;;;WD)"
+            $nonStudent.Action | Should -Be 'Allow'
+            $student = @($rules | Where-Object { $_.DisplayName -like '*-Allow-EgressFloor-Student-*' })[0]
+            $student.LocalUser | Should -Be "D:(A;;CC;;;$($script:sfSid))"
+            $student.Program | Should -Be $script:sfFirefox
+        }
+
+        It "includes ALL APPLICATION PACKAGES in AppContainer rules" {
+            $rules = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $script:sfSid -StudentPrograms @($script:sfFirefox))
+            $containerRules = @($rules | Where-Object { $_.Package -eq '*' })
+            $containerRules.Count | Should -Be 2
+            foreach ($rule in $containerRules) { $rule.LocalUser | Should -Match '\(A;;CC;;;AC\)' }
+            @($containerRules | Where-Object { $_.Action -eq 'Block' })[0].LocalUser | Should -Be "D:(A;;CC;;;$($script:sfSid))(A;;CC;;;AC)"
+            @($containerRules | Where-Object { $_.Action -eq 'Allow' })[0].LocalUser | Should -Be "D:(D;;CC;;;$($script:sfSid))(A;;CC;;;WD)(A;;CC;;;AC)"
+        }
+
+        It "blocks ICMP, SMB and WebClient towards the Internet" {
+            $rules = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $script:sfSid -StudentPrograms @())
+            $byName = @{}; foreach ($rule in $rules) { $byName[$rule.DisplayName] = $rule }
+            $byName['OpenPath-DNS-Block-EgressFloor-ICMPv4-Internet'].Protocol | Should -Be 'ICMPv4'
+            $byName['OpenPath-DNS-Block-EgressFloor-ICMPv6-Internet'].Protocol | Should -Be 'ICMPv6'
+            $byName['OpenPath-DNS-Block-EgressFloor-SMB-Internet'].Protocol | Should -Be 'TCP'
+            @($byName['OpenPath-DNS-Block-EgressFloor-SMB-Internet'].RemotePort) | Should -Be @('139', '445')
+            $byName['OpenPath-DNS-Block-EgressFloor-WebClient-Internet'].Service | Should -Be 'WebClient'
+            foreach ($name in @('ICMPv4', 'ICMPv6', 'SMB', 'WebClient')) {
+                $byName["OpenPath-DNS-Block-EgressFloor-$name-Internet"].RemoteAddress | Should -Be 'Internet'
+            }
+            @($byName['OpenPath-DNS-Allow-EgressFloor-Loopback'].RemoteAddress) | Should -Be @('127.0.0.0/8', '::1')
+        }
+
+        It "never allows the kernel System program" {
+            $rules = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $script:sfSid -StudentPrograms @($script:sfFirefox, 'System'))
+            @($rules | Where-Object { $_.Program -eq 'System' }).Count | Should -Be 0
+        }
+
+        It "derives distinct stable ids for two programs with the same file name" {
+            $programs = @('C:\Program Files\GIMP 2\bin\python.exe', 'C:\Program Files\Inkscape\bin\python.exe')
+            $first = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $script:sfSid -StudentPrograms $programs | Where-Object { $_.DisplayName -like '*-Student-*' } | ForEach-Object DisplayName)
+            $second = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $script:sfSid -StudentPrograms $programs | Where-Object { $_.DisplayName -like '*-Student-*' } | ForEach-Object DisplayName)
+            $first.Count | Should -Be 2
+            $first[0] | Should -Not -Be $first[1]
+            ($first -join '|') | Should -Be ($second -join '|')
+            $first[0] | Should -Match '^OpenPath-DNS-Allow-EgressFloor-Student-python-[0-9a-f]{8}$'
+        }
+
+        It "deduplicates programs case-insensitively and drops blanks" {
+            $rules = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $script:sfSid -StudentPrograms @($script:sfFirefox, $script:sfFirefox.ToUpperInvariant(), '', '  '))
+            @($rules | Where-Object { $_.DisplayName -like '*-Student-*' }).Count | Should -Be 1
+        }
+
+        It "throws on a RestrictedSid that is not an S-1- SID" {
+            { Get-OpenPathStudentEgressFloorRules -RestrictedSid 'BU' -StudentPrograms @() } | Should -Throw
+            { Get-OpenPathStudentEgressFloorRules -RestrictedSid '' -StudentPrograms @() } | Should -Throw
+        }
+    }
 }

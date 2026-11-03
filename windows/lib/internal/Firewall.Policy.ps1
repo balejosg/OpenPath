@@ -486,6 +486,114 @@ function Get-OpenPathOutboundEgressFloorRules {
     return @($rules)
 }
 
+function Get-OpenPathStudentEgressFloorRules {
+    <#
+    .SYNOPSIS
+        Builds the rule descriptors of the user-scoped outbound egress floor.
+    .DESCRIPTION
+        PURE: returns descriptor objects only (no firewall cmdlets). The apply path sets
+        each profile's DefaultOutboundAction to Block; these rules carve egress back out
+        of it, scoped by the LocalUser security descriptor of the OpenPath-Restricted
+        group (validated on a Windows 11 lab VM, 2026-11-03):
+
+          * non-students (any token that is not in the group, including SYSTEM, services
+            and kernel-attributed traffic) keep full egress;
+          * students may only reach the network from the listed programs (approved
+            browsers, the OpenPath native host, catalog apps marked network:true);
+          * students' AppContainer (Store) apps are blocked explicitly, because the
+            built-in "InternetClient Default Rule" would otherwise allow them. AppContainer
+            tokens only match a LocalUser descriptor that also grants ALL APPLICATION
+            PACKAGES (AC), hence the AC ACE;
+          * ICMP, SMB and WebClient towards the Internet are blocked for everyone: that
+            traffic is attributed to the kernel / a service and cannot be told apart by
+            user, so it would otherwise tunnel student data.
+
+        No rule allows Program 'System' (it would re-open ICMP for students).
+    .OUTPUTS
+        PSCustomObject[] rule descriptors.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$RestrictedSid,
+
+        [AllowNull()]
+        [string[]]$StudentPrograms = @(),
+
+        [string]$RulePrefix = $script:RulePrefix
+    )
+
+    if ([string]$RestrictedSid -notmatch '^S-1-\d+(-\d+)+$') {
+        throw "Student egress floor requires a SID for the restricted group (got '$RestrictedSid')"
+    }
+
+    $studentSddl = "D:(A;;CC;;;$RestrictedSid)"
+    $nonStudentSddl = "D:(D;;CC;;;$RestrictedSid)(A;;CC;;;WD)"
+    $rules = New-Object 'System.Collections.Generic.List[object]'
+
+    $newRule = {
+        param([hashtable]$Fields)
+        $descriptor = [ordered]@{
+            DisplayName   = $Fields.DisplayName
+            Direction     = 'Outbound'
+            Action        = $Fields.Action
+            Protocol      = if ($Fields.Contains('Protocol')) { $Fields.Protocol } else { 'Any' }
+            RemoteAddress = if ($Fields.Contains('RemoteAddress')) { $Fields.RemoteAddress } else { 'Any' }
+            RemotePort    = if ($Fields.Contains('RemotePort')) { $Fields.RemotePort } else { 'Any' }
+            Profile       = 'Any'
+            Description   = $Fields.Description
+        }
+        foreach ($optional in @('Program', 'Package', 'Service', 'LocalUser')) {
+            if ($Fields.Contains($optional)) { $descriptor[$optional] = $Fields[$optional] }
+        }
+        $rules.Add([PSCustomObject]$descriptor)
+    }
+
+    & $newRule @{ DisplayName = "$RulePrefix-Allow-EgressFloor-NonStudent"; Action = 'Allow'; LocalUser = $nonStudentSddl
+        Description = 'Egress floor: users outside the restricted group keep full outbound access' }
+    & $newRule @{ DisplayName = "$RulePrefix-Allow-EgressFloor-NonStudentAppContainers"; Action = 'Allow'; Package = '*'
+        LocalUser = "$nonStudentSddl(A;;CC;;;AC)"
+        Description = 'Egress floor: AppContainer apps of users outside the restricted group keep outbound access' }
+
+    $seen = @{}
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        foreach ($program in @($StudentPrograms)) {
+            $path = ([string]$program).Trim()
+            if (-not $path -or $path -eq 'System') { continue }
+            $key = $path.ToLowerInvariant()
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($key))
+            $hashPrefix = (($hash[0..3] | ForEach-Object { $_.ToString('x2') }) -join '')
+            $stem = ([System.IO.Path]::GetFileNameWithoutExtension(($path -split '[\\/]')[-1])) -replace '[^0-9A-Za-z]', '-'
+            & $newRule @{ DisplayName = "$RulePrefix-Allow-EgressFloor-Student-$stem-$hashPrefix"; Action = 'Allow'
+                Program = $path; LocalUser = $studentSddl
+                Description = "Egress floor: restricted users may reach the network from $path" }
+        }
+    }
+    finally {
+        $sha.Dispose()
+    }
+
+    & $newRule @{ DisplayName = "$RulePrefix-Allow-EgressFloor-Loopback"; Action = 'Allow'; RemoteAddress = @('127.0.0.0/8', '::1')
+        Description = 'Egress floor: loopback traffic stays allowed' }
+    & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-StudentAppContainers"; Action = 'Block'; Package = '*'
+        LocalUser = "$studentSddl(A;;CC;;;AC)"
+        Description = 'Egress floor: AppContainer apps of restricted users have no network' }
+    & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-ICMPv4-Internet"; Action = 'Block'; Protocol = 'ICMPv4'; RemoteAddress = 'Internet'
+        Description = 'Egress floor: ICMPv4 to the Internet is attributed to the kernel and cannot be scoped by user' }
+    & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-ICMPv6-Internet"; Action = 'Block'; Protocol = 'ICMPv6'; RemoteAddress = 'Internet'
+        Description = 'Egress floor: ICMPv6 to the Internet is attributed to the kernel and cannot be scoped by user' }
+    & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-SMB-Internet"; Action = 'Block'; Protocol = 'TCP'; RemotePort = @('139', '445'); RemoteAddress = 'Internet'
+        Description = 'Egress floor: kernel SMB to the Internet cannot be scoped by user' }
+    & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-WebClient-Internet"; Action = 'Block'; Service = 'WebClient'; RemoteAddress = 'Internet'
+        Description = 'Egress floor: WebDAV (WebClient service) to the Internet would broker student egress' }
+
+    return $rules.ToArray()
+}
+
 function Get-OpenPathEgressFloorProfileNames {
     <#
     .SYNOPSIS
