@@ -165,6 +165,54 @@ function New-OpenPathIntegrityBaseline {
     }
 }
 
+function Update-OpenPathIntegrityEntry {
+    <#
+    .SYNOPSIS
+        Re-blesses a single tracked file in the integrity backup and baseline
+    .DESCRIPTION
+        Files that the agent legitimately regenerates outside a self-update (the
+        compiled native host) would otherwise be reverted by the watchdog to the
+        previous backup, which makes the next cycle rebuild them again. Only the
+        entry for Path is refreshed so tampering with any other file is not
+        hidden. Returns $false (never throws) when the baseline does not track
+        the path or on error.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    try {
+        if (-not (Test-Path -LiteralPath $script:IntegrityBaselinePath) -or
+            -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            return $false
+        }
+
+        $baseline = Get-Content -LiteralPath $script:IntegrityBaselinePath -Raw | ConvertFrom-Json
+        $entries = @($baseline.entries)
+        $entry = $entries | Where-Object { [string]$_.path -ieq $Path } | Select-Object -First 1
+        if (-not $entry) {
+            return $false
+        }
+
+        $backupPath = Join-Path $script:IntegrityBackupPath (Get-OpenPathRelativePath -Path ([string]$entry.path))
+        $backupDir = Split-Path $backupPath -Parent
+        if (-not (Test-Path -LiteralPath $backupDir)) {
+            New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $Path -Destination $backupPath -Force
+
+        $entry.hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash
+        $baseline | ConvertTo-Json -Depth 10 | Set-Content $script:IntegrityBaselinePath -Encoding UTF8
+        Write-OpenPathLog "Integrity entry refreshed for $Path"
+        return $true
+    }
+    catch {
+        Write-OpenPathLog "Failed to refresh integrity entry for ${Path}: $_" -Level WARN
+        return $false
+    }
+}
+
 function Test-OpenPathIntegrity {
     <#
     .SYNOPSIS

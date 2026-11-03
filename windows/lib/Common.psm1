@@ -69,6 +69,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathCriticalFiles',
     'Save-OpenPathIntegrityBackup',
     'New-OpenPathIntegrityBaseline',
+    'Update-OpenPathIntegrityEntry',
     'Test-OpenPathIntegrity',
     'Restore-OpenPathIntegrity',
     'Enter-OpenPathAgentUpdateLock',

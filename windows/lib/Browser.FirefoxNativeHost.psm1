@@ -395,15 +395,34 @@ function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
         $nativeRoot = if ($nativeRootOverride) { $nativeRootOverride } else { Get-OpenPathFirefoxNativeHostRoot }
         try { Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null } catch { }
         $result = $null
-        try {
-            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $openPathRoot -CompilerInvoker $CompilerInvoker -ProcessInvoker $ProcessInvoker -HashReader $HashReader
-        }
-        catch {
-            $result = [pscustomobject][ordered]@{
-                Status = 'Failed'; Error = [string]$_; BackoffActive = $false; NextAttemptAt = ''
-                BuiltNow = $false; ExecutablePath = ''; ManifestPath = ''; SourcePath = ''
-                SourceSha256 = ''; ExecutableSha256 = ''; Health = $null
+        # The compiled exe is integrity-protected: if the watchdog checks between the
+        # swap and the baseline refresh it restores the old exe and the next cycle
+        # rebuilds forever. Hold the agent update lock (re-entrant on the self-update
+        # thread) around both; if it cannot be taken still build, availability wins.
+        $integrityLock = $null
+        if (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue) {
+            try { $integrityLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 60000 } catch { $integrityLock = $null }
+            if (-not $integrityLock -or -not $integrityLock.Acquired) {
+                Write-OpenPathLog 'Native host ensure: agent update lock unavailable - integrity refresh may race the watchdog' -Level WARN
             }
+        }
+        try {
+            try {
+                $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $nativeRoot -OpenPathRoot $openPathRoot -CompilerInvoker $CompilerInvoker -ProcessInvoker $ProcessInvoker -HashReader $HashReader
+            }
+            catch {
+                $result = [pscustomobject][ordered]@{
+                    Status = 'Failed'; Error = [string]$_; BackoffActive = $false; NextAttemptAt = ''
+                    BuiltNow = $false; ExecutablePath = ''; ManifestPath = ''; SourcePath = ''
+                    SourceSha256 = ''; ExecutableSha256 = ''; Health = $null
+                }
+            }
+            if ($result.BuiltNow -and $result.ExecutablePath -and (Get-Command -Name 'Update-OpenPathIntegrityEntry' -ErrorAction SilentlyContinue)) {
+                try { Update-OpenPathIntegrityEntry -Path ([string]$result.ExecutablePath) | Out-Null } catch { }
+            }
+        }
+        finally {
+            if ($integrityLock) { Exit-OpenPathAgentUpdateLock -Lock $integrityLock }
         }
         # Phase 8: availability is logged once per state change with the product
         # reason code; the classroom boundary turns a Fallback into an ERROR
