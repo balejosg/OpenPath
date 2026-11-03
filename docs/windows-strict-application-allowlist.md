@@ -65,6 +65,23 @@ implicitly approve executables installed by the package, which need their own
 catalog identity (or an administrator-managed deployment outside the student
 boundary).
 
+An application entry may also carry an optional `"network": true` (it must
+be a JSON boolean; any other type fails catalog validation). It only matters
+when the Windows egress floor is on
+([`windows-egress-floor.md`](windows-egress-floor.md)): the floor then allows
+restricted students' network access from that program. It is honored for
+`Path` identities under Program Files only; on a `Publisher` or `Hash`
+identity, or a path outside Program Files, it is ignored with a WARN and never
+grants network access.
+
+```json
+{
+  "id": "classroom-sync-client",
+  "network": true,
+  "identity": { "type": "Path", "path": "%PROGRAMFILES%\\Vendor\\sync.exe" }
+}
+```
+
 `approvedStudentBrowsers` is authoritative. Firefox Release identities are
 approved only when the inventory marks the installed administrator-owned
 Release binary; Tor, portable, and user-writable Firefox/Edge/Chrome copies do

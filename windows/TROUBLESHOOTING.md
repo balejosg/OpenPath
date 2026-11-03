@@ -190,6 +190,22 @@ Firewall rules use the `OpenPath-DNS` prefix. If all rules are missing or the si
 .\OpenPath.ps1 update
 ```
 
+### Student App Has No Network
+
+With `outboundEgressFloorEnabled` on, restricted students only have network
+access from approved browsers, the OpenPath native host, and catalog apps
+marked `"network": true`. List what the floor blocked:
+
+```powershell
+.\OpenPath.ps1 egress-report        # last 24 hours
+.\OpenPath.ps1 egress-report 12     # last 12 hours
+```
+
+For a legitimate application, add a catalog `Path` entry under Program Files
+with `"network": true` and run `.\OpenPath.ps1 enable`. Ping and SMB to the
+Internet are blocked for everyone while the floor is on. See
+[`docs/windows-egress-floor.md`](../docs/windows-egress-floor.md).
+
 ### Rules Changed Upstream but Machine Did Not Update
 
 ```powershell

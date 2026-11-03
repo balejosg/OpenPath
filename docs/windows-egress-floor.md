@@ -2,68 +2,116 @@
 
 > Status: maintained
 > Applies to: OpenPath operators running the Windows agent
-> Last verified: 2026-06-14
+> Last verified: 2026-11-03 (rule model validated on a lab VM; fleet canary pending)
 > Source of truth: `docs/windows-egress-floor.md`
 
-The outbound egress floor is an OPTIONAL, DEFAULT-OFF Windows hardening layer. This
-runbook explains what it does, why it is opt-in, how to enable it on a pilot
-cohort, how to grow the allow-list, and how to roll it back.
+The outbound egress floor is an OPTIONAL, DEFAULT-OFF Windows hardening layer.
+It cuts network access for restricted students except from approved browsers,
+the OpenPath native host, and catalog applications explicitly marked
+`network: true`. Teachers, administrators, SYSTEM, and services keep full
+egress. This runbook explains the model, how to enable it on one device, how
+to read what it blocked, and how to roll it back.
 
 ## What it closes
 
-The DNS sinkhole stops name-based lookups, but a program can still open a raw
-connection to an arbitrary IP literal on 443 with a spoofed `Host:` header and
-reach a non-whitelisted site. The AppLocker tool-blocks (`powershell`, `pwsh`,
-`ftp`, `tftp`) and Appx denies (WSL, Windows Terminal, OpenSSH) -- which are ON by
-default -- stop the easy paths. The egress floor closes the residual: a
-user-supplied or custom-compiled program doing IP-literal egress. With the floor
-on, a non-system program can only reach whitelist-resolved IPs on TCP 80/443.
+The DNS sinkhole stops name-based lookups, but a program can open a raw
+connection to an IP literal and reach a non-whitelisted site. Examples are
+FTP/SFTP clients, a `python.exe` bundled with an installed application,
+MSBuild, `rundll32`, a custom-compiled executable, or a Store app. AppLocker
+blocks the obvious tools, but it cannot enumerate every program that has a
+network stack. The floor closes the residual by scoping egress by USER, not by
+destination: a restricted student's process has no network unless the program
+is one of the few allowed ones.
 
-## How it works
+The Firefox extension complements it: navigations to a public IP literal are
+redirected to the blocked screen (private, CGNAT, link-local, and loopback
+literals stay reachable for captive portals and LAN gateways).
 
-When enabled and a non-empty whitelist-IP set resolves, the floor:
+## The model
 
-- sets a machine-wide outbound default-deny:
-  `Set-NetFirewallProfile -Profile Domain,Private,Public -DefaultOutboundAction Block`;
-- adds ALLOW rules that carve back the permitted egress (an Allow overrides the
-  profile default block; the floor creates no competing explicit Block rule):
-  - system-service programs -- full egress (any protocol/port/remote);
-  - each resolved whitelist IP -- TCP 80/443;
-  - IPv4 loopback (127.0.0.1) and DHCP (UDP 67/68);
-- refreshes the whitelist-IP allows as CDN addresses rotate (watchdog, per cycle).
+- Profile `DefaultOutboundAction=Block` on Domain, Private, and Public.
+- Rules scoped by `-LocalUser` SDDL on the SID of the local group
+  `OpenPath-Restricted` (resolved by SID, never by name, never widened to
+  `BUILTIN\Users`). Students must be members of that group.
+- One "everyone except the group" Allow keeps all non-student egress working,
+  so there is no machine-wide program allow-list to maintain.
+- The rule set is static: no IP lists and no whitelist dependency. It is
+  applied by `Set-OpenPathFirewall` (`OpenPath.ps1 enable` / `update`),
+  drift-checked and reapplied by the watchdog, and removed on disable and
+  uninstall.
 
-Inbound is never touched (`DefaultInboundAction` is left as-is), so RDP / WinRM /
-remote management keep working.
+Rules (`G` = the `OpenPath-Restricted` SID; names carry the `OpenPath-DNS-`
+prefix):
 
-## Why it is OFF by default
+| Rule                                               | Action | Scope                                                          |
+| -------------------------------------------------- | ------ | -------------------------------------------------------------- |
+| `Allow-EgressFloor-NonStudent`                     | Allow  | LocalUser `D:(D;;CC;;;G)(A;;CC;;;WD)`, any protocol/remote     |
+| `Allow-EgressFloor-NonStudentAppContainers`        | Allow  | Package `*`, LocalUser `D:(D;;CC;;;G)(A;;CC;;;WD)(A;;CC;;;AC)` |
+| `Allow-EgressFloor-Student-<id>` (one per program) | Allow  | Program path, LocalUser `D:(A;;CC;;;G)`                        |
+| `Allow-EgressFloor-Loopback`                       | Allow  | RemoteAddress `127.0.0.0/8`, `::1`                             |
+| `Block-EgressFloor-StudentAppContainers`           | Block  | Package `*`, LocalUser `D:(A;;CC;;;G)(A;;CC;;;AC)`             |
+| `Block-EgressFloor-ICMPv4-Internet`                | Block  | ICMPv4 to `Internet`                                           |
+| `Block-EgressFloor-ICMPv6-Internet`                | Block  | ICMPv6 to `Internet`                                           |
+| `Block-EgressFloor-SMB-Internet`                   | Block  | TCP 139/445 to `Internet`                                      |
+| `Block-EgressFloor-WebClient-Internet`             | Block  | Service `WebClient` to `Internet`                              |
 
-- It is an ALL-PORT machine-wide default-deny, broader than the Linux agent's
-  name-aware egress (which scopes only 80/443). Windows has no working 443-only
-  scoping for this: an explicit Block rule wins over an Allow on the Windows
-  Filtering Platform, so the only mechanism that lets the system-service Allows
-  function is the profile-level default block.
-- Any legitimate NON-whitelisted egress by non-system software is blocked unless
-  that program is on the system-service allow-list. Real managed devices run
-  software a CI runner does not -- MDM/Intune agents, Defender cloud lookups, OEM
-  agents, licensing checks. Whether the allow-list is complete is per-fleet and
-  cannot be proven from one machine.
-- Validation status: the mechanism and the reachability matrix were confirmed on
-  a real Windows runner on 2026-06-14 (a non-system program was blocked from a
-  non-whitelisted IP, reached a whitelisted IP, and a system program still reached
-  any IP -- no brick). Allow-list completeness across a real fleet is NOT
-  validated. That is what the canary establishes.
+Student programs (`<id>` is the sanitized file stem plus an 8-hex SHA-256
+prefix of the lower-cased path):
 
-## Fail-open brick-guard
+- approved student browser executables reported by the browser inventory
+  (`approvedStudentBrowsers`, administrator-owned Release installs only);
+- `C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.exe`;
+- `approvedApplicationCatalog` entries with a `Path` identity under Program
+  Files and `"network": true` (see
+  [`windows-strict-application-allowlist.md`](windows-strict-application-allowlist.md)).
 
-If whitelist-IP resolution yields an EMPTY set (Acrylic down, empty whitelist),
-the floor does NOT set the default block: it restores the prior default and clears
-its rules, so a resolution outage cannot black-hole all egress. Note this does NOT
-protect a legitimate but un-listed program when resolution succeeds -- that
-program is blocked until you add it (see Grow the allow-list).
+The `(A;;CC;;;AC)` ACE is required: without it an SDDL never matches an
+AppContainer token, and the built-in "InternetClient Default Rule" would give
+every student Store app egress.
+
+### Safety behavior
+
+- Fail-open: if the `OpenPath-Restricted` SID cannot be resolved, or any rule
+  or profile change fails, the floor restores the pre-floor
+  `DefaultOutboundAction` and removes its rules. It never leaves Block without
+  the non-student Allow.
+- The pre-floor outbound default is saved once to
+  `C:\OpenPath\data\egress-floor-prev-outbound.json` and never overwritten
+  while the floor is on (this also covers upgrades from the old IP-set floor,
+  whose `-EgressFloor-Whitelist-*` / `-EgressFloor-System-*` rules are removed
+  on first apply).
+- If no approved browser is installed, the floor still applies: students have
+  no browser egress, administrators are unaffected, a WARN is logged, and the
+  watchdog reapplies once the browser path appears.
+- The old config keys `outboundEgressFloorAllowIps` and
+  `outboundEgressFloorSystemPrograms` are ignored with a WARN.
+
+## Spike-derived caveats
+
+- ICMP and SMB to the Internet are blocked for EVERYONE. Kernel-mode clients
+  (ping, SMB) are attributed to `System`, not the user, so only a protocol
+  Block can stop them for students. LAN ping and LAN SMB are unaffected.
+- The Windows captive-portal sign-in window (an OS component) has no network
+  for students. Students sign in to a captive portal from Firefox instead.
+- There is no audit-only mode: with `DefaultOutboundAction=Allow`, Windows does
+  not plumb outbound Allow rules into the filtering platform, so the rule set
+  cannot be dry-run. Use the one-PC canary below instead.
+
+## Known residuals
+
+- Service-brokered egress: a student can ask a service that runs as SYSTEM to
+  fetch something for them (BITS jobs over COM, other broker services). The
+  non-student Allow covers those services. The `WebClient` Block closes the
+  WebDAV case only.
+- Web-content tunnels: anything reachable through an approved browser on a
+  whitelisted site stays reachable. The floor does not inspect content.
+- Not a substitute for AppLocker: keep the tool blocks and Appx denies on.
 
 ## Enable on a device
 
-1. Edit `C:\OpenPath\data\config.json` and set:
+1. Make sure students are members of `OpenPath-Restricted` and teachers and
+   administrators are NOT.
+2. Edit `C:\OpenPath\data\config.json`:
 
    ```json
    {
@@ -71,102 +119,54 @@ program is blocked until you add it (see Grow the allow-list).
    }
    ```
 
-   Optionally pre-extend the allow-list for software your image ships (see Grow
-   the allow-list):
-
-   ```json
-   {
-     "outboundEgressFloorEnabled": true,
-     "outboundEgressFloorSystemPrograms": ["C:\\Program Files\\Vendor\\agent.exe"]
-   }
-   ```
-
-2. Apply (Administrator): `& C:\OpenPath\OpenPath.ps1 enable` re-applies DNS +
-   firewall enforcement and reads the flag. `& C:\OpenPath\OpenPath.ps1 update`
-   does the same as part of a full update. The watchdog also re-applies on its
-   cycle, so a device picks the change up within about a minute regardless.
-
-3. Verify:
+3. Apply (Administrator): `& C:\OpenPath\OpenPath.ps1 enable`. The watchdog
+   would also apply it on its next cycle.
+4. Verify:
 
    ```powershell
    (Get-NetFirewallProfile -All).DefaultOutboundAction   # expect Block
-   Get-NetFirewallRule -DisplayName "*EgressFloor*" | Measure-Object
-   & C:\OpenPath\OpenPath.ps1 status                     # Firewall active: True
+   Get-NetFirewallRule -DisplayName "*EgressFloor*" | Select-Object DisplayName, Action
    ```
 
-## What the default allow-list covers
+Enabling the floor also turns on failure auditing for the "Filtering Platform
+Connection" subcategory (`{0CCE9226-69AE-11D9-BED3-505054503030}`) so blocked
+connections are recorded as Security event 5157. The previous setting is saved
+to `C:\OpenPath\data\egress-floor-audit-prev.json` and restored on rollback.
 
-System-service programs granted full egress out of the box:
+## See what was blocked: `egress-report`
 
-- `svchost.exe` -- hosts Windows Update / BITS / Delivery Optimization / W32Time;
-  these have no per-service exe, so `svchost.exe` itself is allowed. This is a
-  deliberate residual-surface trade-off (a malicious svchost-hosted service would
-  be permitted); the floor is defense-in-depth on top of the sinkhole + AppLocker,
-  not a replacement.
-- `w32tm.exe` (time sync), `UsoClient.exe`, `MoUsoCoreWorker.exe`,
-  `TrustedInstaller.exe` (update workers).
-- The OpenPath agent: `powershell.exe` (System32 + SysWOW64) and `pwsh.exe`
-  (Program Files + Program Files (x86)).
-- `AcrylicService.exe` (the local DNS proxy and its upstream).
+```powershell
+& C:\OpenPath\OpenPath.ps1 egress-report        # last 24 hours
+& C:\OpenPath\OpenPath.ps1 egress-report 12     # last 12 hours
+```
 
-Managed browsers (`firefox.exe`, `chrome.exe`) are deliberately NOT on this list:
-restricting them to whitelisted IPs is the point.
+It prints one line per application with its blocked destinations, read from
+outbound Security 5157 events (loopback excluded). Event 5157 carries no user
+SID, but under the floor non-students are allowed everything, so an outbound
+block is student (or kernel ICMP/SMB) traffic.
 
-## Grow the allow-list (the canary's main job)
+For each legitimate application in the report, either add a catalog `Path`
+entry with `"network": true` (the program must live under Program Files) or
+decide it stays blocked.
 
-Add absolute program paths to `outboundEgressFloorSystemPrograms` for any
-device-management, security, or OEM agent that legitimately needs non-whitelisted
-egress, for example:
+## Canary procedure
 
-- Intune / MDM: `omadmclient.exe`, `dmclient.exe`
-- Microsoft Defender: `MsMpEng.exe`, `MpCmdRun.exe`
-- any vendor / OEM agents your image ships
-
-A path that does not exist on a given device simply never matches, so
-over-listing is safe.
-
-## Canary procedure (toward fleet-wide)
-
-1. Pick a small, REPRESENTATIVE set of real managed devices -- the actual image
-   with the same MDM, AV, and OEM agents. Do NOT use CI runners: they lack fleet
-   software and a default-deny would also cut their own CI egress.
-2. Turn on blocked-connection logging to discover gaps:
-
-   ```powershell
-   Set-NetFirewallProfile -All -LogBlocked True `
-     -LogFileName "%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log"
-   ```
-
-3. Enable the floor on the canary cohort and run normal workloads for a
-   representative window (a school day).
-4. Inspect `pfirewall.log` for dropped OUTBOUND connections by legitimate
-   processes. For each, either add the program to
-   `outboundEgressFloorSystemPrograms`, or add the destination to the whitelist if
-   it is a site the cohort should reach. Re-apply.
-5. Monitor the enforcement heartbeat in the console for the cohort -- the
-   `enforcement-down`, `enforcement-unknown`, and `whitelist-stale` alerts -- and
-   watch for support reports of broken legitimate apps.
-6. Iterate until a canary day produces no new legitimate drops. Only then widen
-   the cohort, and finally consider fleet-wide. Keep `LogBlocked` on through early
-   rollout so new gaps surface.
+1. Pick ONE real classroom PC with the normal image. Do not use CI runners.
+2. Enable the floor (above) before the school day.
+3. Run one school day of normal lessons.
+4. Read `OpenPath.ps1 egress-report 12` and triage every application.
+5. Add `network: true` catalog entries as needed, re-apply, and repeat until a
+   day produces no legitimate blocks. Only then widen the cohort.
 
 ## Roll back
 
-Set `"outboundEgressFloorEnabled": false` in `config.json` and run
-`& C:\OpenPath\OpenPath.ps1 enable` (or `update`). The floor restores the prior
-`DefaultOutboundAction` and removes its `*-EgressFloor-*` rules; the same restore
-runs on `OpenPath.ps1 disable` and on uninstall. Verify:
+Set `"outboundEgressFloorEnabled": false` and run
+`& C:\OpenPath\OpenPath.ps1 enable` (or `update`). The floor restores the
+saved `DefaultOutboundAction`, removes every `*-EgressFloor-*` rule, and
+restores the previous audit setting. `OpenPath.ps1 disable` and uninstall do
+the same. Verify:
 
 ```powershell
-(Get-NetFirewallProfile -All).DefaultOutboundAction          # back to prior value
+(Get-NetFirewallProfile -All).DefaultOutboundAction                 # pre-floor value
 Get-NetFirewallRule -DisplayName "*EgressFloor*" | Measure-Object   # Count 0
 ```
-
-## Known limitations
-
-- All-port default-deny: a non-system program can only reach whitelisted IPs on
-  80/443; anything else (other ports, non-whitelisted IPs) is blocked. This is the
-  intended lockdown but is broader than the Linux agent's 80/443 scoping.
-- IPv6-only whitelisted hosts: the per-IP allows are IPv4; an IPv6-only
-  whitelisted host is unreachable while the floor is on.
-- Not a substitute for AppLocker: keep the tool-blocks and Appx denies on.
