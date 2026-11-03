@@ -12,6 +12,78 @@ $script:ScheduledTaskCatalog = Get-OpenPathScheduledTaskCatalog
 $script:TaskPrefix = $script:ScheduledTaskCatalog.Prefix
 $script:UsersRunTaskAce = $script:ScheduledTaskCatalog.UsersRunTaskAce
 
+function Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess {
+    <#
+    .SYNOPSIS
+        Returns the task security descriptor with BUILTIN\Users read/execute added,
+        or $null when Users already have that access
+    .DESCRIPTION
+        Task Scheduler stores the generic rights it is given as a file-rights mask,
+        so the (A;;GRGX;;;BU) ACE written on install reads back as
+        (A;;0x1200a9;;;BU). The new ACE goes after the DACL flags (P, AI, AR):
+        placing it between "D:" and the flags yields an invalid ACL.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$SecurityDescriptor,
+
+        [string]$UsersRunTaskAce = '(A;;GRGX;;;BU)'
+    )
+
+    $genericAll = 0x10000000L
+    $genericRead = 0x80000000L
+    $genericExecute = 0x20000000L
+    $readExecuteMask = 0x1200a9L
+    $namedRights = @{
+        GA = $genericAll; GR = $genericRead; GX = $genericExecute
+        FA = 0x1f01ffL; FR = 0x120089L; FX = 0x1200a0L
+    }
+
+    foreach ($ace in [regex]::Matches($SecurityDescriptor, '\(A;([^;]*);([^;]*);[^;]*;[^;]*;(BU|S-1-5-32-545)\)')) {
+        $aceFlags = $ace.Groups[1].Value
+        $inheritOnly = $false
+        for ($i = 0; $i + 1 -lt $aceFlags.Length; $i += 2) {
+            if ($aceFlags.Substring($i, 2).ToUpperInvariant() -eq 'IO') {
+                $inheritOnly = $true
+            }
+        }
+        if ($inheritOnly) {
+            continue
+        }
+
+        $rightsText = $ace.Groups[2].Value
+        [long]$mask = 0
+        if ($rightsText -match '^0x[0-9a-fA-F]+$') {
+            $mask = [Convert]::ToInt64($rightsText.Substring(2), 16)
+        }
+        else {
+            for ($i = 0; $i + 1 -lt $rightsText.Length; $i += 2) {
+                $right = $rightsText.Substring($i, 2).ToUpperInvariant()
+                if ($namedRights.ContainsKey($right)) {
+                    $mask = $mask -bor $namedRights[$right]
+                }
+            }
+        }
+
+        $hasGenericReadExecute = (($mask -band $genericAll) -ne 0) -or ((($mask -band $genericRead) -ne 0) -and (($mask -band $genericExecute) -ne 0))
+        if ($hasGenericReadExecute -or (($mask -band $readExecuteMask) -eq $readExecuteMask)) {
+            return $null
+        }
+    }
+
+    if ($SecurityDescriptor -match '^(?<head>.*?D:(?:P|AI|AR|NO_ACCESS_CONTROL)*)(?<tail>.*)$') {
+        return "$($Matches['head'])$UsersRunTaskAce$($Matches['tail'])"
+    }
+
+    if ($SecurityDescriptor -match '^(?<head>.*?)(?<sacl>S:.*)$') {
+        return "$($Matches['head'])D:$UsersRunTaskAce$($Matches['sacl'])"
+    }
+
+    return "${SecurityDescriptor}D:$UsersRunTaskAce"
+}
+
 function Grant-OpenPathTaskRunAccessToUsers {
     param(
         [Parameter(Mandatory = $true)]
@@ -24,15 +96,11 @@ function Grant-OpenPathTaskRunAccessToUsers {
         $task = $schedule.GetFolder('\').GetTask($TaskName)
         $currentSecurityDescriptor = [string]$task.GetSecurityDescriptor(0xF)
 
-        if ($currentSecurityDescriptor.Contains($script:UsersRunTaskAce)) {
+        $updatedSecurityDescriptor = Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess `
+            -SecurityDescriptor $currentSecurityDescriptor `
+            -UsersRunTaskAce $script:UsersRunTaskAce
+        if ($null -eq $updatedSecurityDescriptor) {
             return $true
-        }
-
-        $updatedSecurityDescriptor = if ($currentSecurityDescriptor -match '^(.*?D:)(.*)$') {
-            "$($Matches[1])$script:UsersRunTaskAce$($Matches[2])"
-        }
-        else {
-            "D:$script:UsersRunTaskAce$currentSecurityDescriptor"
         }
 
         $task.SetSecurityDescriptor($updatedSecurityDescriptor, 0)

@@ -19,6 +19,56 @@ Describe "Services Module" {
         }
     }
 
+    Context "Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess" {
+        It "Treats the normalized read/execute mask Task Scheduler stores as already granted" {
+            InModuleScope Services {
+                $sd = 'O:BAG:S-1-5-21-1-2-3-513D:AI(A;;0x1200a9;;;BU)(A;;FR;;;SY)(A;ID;0x1f019f;;;BA)(A;ID;FA;;;BA)'
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor $sd | Should -BeNullOrEmpty
+            }
+        }
+
+        It "Treats the literal GRGX ACE and the Users SID form as already granted" {
+            InModuleScope Services {
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAD:(A;;GRGX;;;BU)' | Should -BeNullOrEmpty
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAD:(A;;GA;;;S-1-5-32-545)' | Should -BeNullOrEmpty
+            }
+        }
+
+        It "Inserts the Users ACE after the DACL flags so the ACL stays valid" {
+            InModuleScope Services {
+                $sd = 'O:BAG:S-1-5-21-1-2-3-513D:AI(A;ID;0x1f019f;;;BA)(A;ID;FA;;;SY)'
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor $sd |
+                    Should -Be 'O:BAG:S-1-5-21-1-2-3-513D:AI(A;;GRGX;;;BU)(A;ID;0x1f019f;;;BA)(A;ID;FA;;;SY)'
+
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAD:PAI(A;;FA;;;SY)' |
+                    Should -Be 'O:BAD:PAI(A;;GRGX;;;BU)(A;;FA;;;SY)'
+
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAD:(A;;FA;;;SY)' |
+                    Should -Be 'O:BAD:(A;;GRGX;;;BU)(A;;FA;;;SY)'
+            }
+        }
+
+        It "Still grants access when Users only hold partial or inherit-only rights" {
+            InModuleScope Services {
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAD:(A;;GR;;;BU)(A;;FA;;;SY)' |
+                    Should -Be 'O:BAD:(A;;GRGX;;;BU)(A;;GR;;;BU)(A;;FA;;;SY)'
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAD:(A;OICIIO;GA;;;BU)' |
+                    Should -Be 'O:BAD:(A;;GRGX;;;BU)(A;OICIIO;GA;;;BU)'
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAD:(A;CIOI;GA;;;BU)' |
+                    Should -BeNullOrEmpty
+            }
+        }
+
+        It "Adds a DACL when the descriptor has none, keeping the SACL last" {
+            InModuleScope Services {
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAG:SY' |
+                    Should -Be 'O:BAG:SYD:(A;;GRGX;;;BU)'
+                Get-OpenPathTaskSecurityDescriptorWithUsersRunAccess -SecurityDescriptor 'O:BAS:(AU;FA;FA;;;WD)' |
+                    Should -Be 'O:BAD:(A;;GRGX;;;BU)S:(AU;FA;FA;;;WD)'
+            }
+        }
+    }
+
     Context "Register-OpenPathTask" {
         It "Defines scheduled task names and user run permissions in the catalog" {
             $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1"
