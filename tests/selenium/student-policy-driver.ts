@@ -6,6 +6,7 @@ import * as firefox from 'selenium-webdriver/firefox';
 
 import { waitForFirefoxExtensionUuid } from './firefox-extension-uuid';
 import {
+  allowFirefoxExtensionPageNavigation,
   buildPopupUrl,
   buildWindowsBlockedDnsCommand,
   buildWindowsHttpProbeCommand,
@@ -200,6 +201,7 @@ export class StudentPolicyDriver implements StudentPolicyDriverState {
       options.addArguments('-headless');
     }
 
+    allowFirefoxExtensionPageNavigation();
     this.driver = await new Builder().forBrowser('firefox').setFirefoxOptions(options).build();
     await this.driver
       .manage()

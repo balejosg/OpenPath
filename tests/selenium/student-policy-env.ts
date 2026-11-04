@@ -24,6 +24,16 @@ export const DEFAULT_EXTENSION_PATH = path.resolve(
   '../../firefox-extension/openpath-firefox-extension.xpi'
 );
 
+/**
+ * Firefox Marionette refuses driver.get() to privileged URLs such as
+ * moz-extension:// ("Navigation to ... is not allowed in this context") unless
+ * MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 is set in the browser's environment. geckodriver
+ * and Firefox inherit it from this process. An explicit value is left untouched.
+ */
+export function allowFirefoxExtensionPageNavigation(env: NodeJS.ProcessEnv = process.env): void {
+  env.MOZ_REMOTE_ALLOW_SYSTEM_ACCESS ??= '1';
+}
+
 export function optionalEnv(name: string): string | undefined {
   const value = process.env[name];
   return value === undefined || value.trim() === '' ? undefined : value.trim();

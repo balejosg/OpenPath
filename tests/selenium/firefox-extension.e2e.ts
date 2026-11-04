@@ -16,6 +16,7 @@ import { Builder, By, WebDriver } from 'selenium-webdriver';
 import * as firefox from 'selenium-webdriver/firefox';
 import * as path from 'path';
 import * as assert from 'assert';
+import { allowFirefoxExtensionPageNavigation } from './student-policy-env';
 
 // Extension path (built .xpi or directory)
 const EXTENSION_PATH = path.resolve(__dirname, '../../firefox-extension/build');
@@ -41,6 +42,7 @@ async function setup(): Promise<void> {
     options.addArguments('-headless');
   }
 
+  allowFirefoxExtensionPageNavigation();
   driver = await new Builder().forBrowser('firefox').setFirefoxOptions(options).build();
 
   await driver.manage().setTimeouts({ implicit: 10000 });

@@ -15,6 +15,7 @@ import {
 import { matchesRequestDomain } from './student-policy-client';
 import { openAndExpectBlocked, submitBlockedScreenRequest } from './student-policy-driver-browser';
 import {
+  allowFirefoxExtensionPageNavigation,
   DEFAULT_TIMEOUT_MS,
   getStudentPolicyCoverageProfile,
   PLATFORM_COMMAND_MAX_BUFFER_BYTES,
@@ -1787,4 +1788,16 @@ test('Firefox setup primes extension runtime before fixture navigation', async (
   assert.equal(calls[0], 'get:moz-extension://extension-id/popup/popup.html');
   assert.equal(calls[1], 'wait:12345');
   assert.match(calls[2] ?? '', /browser\?\.runtime\?\.sendMessage/);
+});
+
+test('allows Marionette navigation to moz-extension pages without overriding an explicit choice', () => {
+  // Firefox 140+ Marionette refuses driver.get(moz-extension://...) ("not allowed in
+  // this context") unless MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 reaches the browser process.
+  const env: NodeJS.ProcessEnv = {};
+  allowFirefoxExtensionPageNavigation(env);
+  assert.equal(env.MOZ_REMOTE_ALLOW_SYSTEM_ACCESS, '1');
+
+  const explicit: NodeJS.ProcessEnv = { MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '0' };
+  allowFirefoxExtensionPageNavigation(explicit);
+  assert.equal(explicit.MOZ_REMOTE_ALLOW_SYSTEM_ACCESS, '0');
 });
