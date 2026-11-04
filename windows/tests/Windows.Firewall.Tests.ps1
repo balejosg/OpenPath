@@ -812,9 +812,12 @@ Describe "Firewall Module" {
             $byName['OpenPath-DNS-Block-EgressFloor-SMB-Internet'].Protocol | Should -Be 'TCP'
             @($byName['OpenPath-DNS-Block-EgressFloor-SMB-Internet'].RemotePort) | Should -Be @('139', '445')
             $byName['OpenPath-DNS-Block-EgressFloor-WebClient-Internet'].Service | Should -Be 'WebClient'
-            foreach ($name in @('ICMPv4', 'ICMPv6', 'SMB', 'WebClient')) {
+            foreach ($name in @('ICMPv4', 'SMB', 'WebClient')) {
                 $byName["OpenPath-DNS-Block-EgressFloor-$name-Internet"].RemoteAddress | Should -Be 'Internet'
             }
+            # The Internet keyword includes link-local multicast (ff02::/16): blocking it
+            # cuts MLD and neighbor discovery for everyone. Only global unicast is blocked.
+            $byName['OpenPath-DNS-Block-EgressFloor-ICMPv6-Internet'].RemoteAddress | Should -Be '2000::/3'
             $byName['OpenPath-DNS-Allow-EgressFloor-Loopback'].RemoteAddress | Should -Be '127.0.0.0/8'
         }
 
@@ -931,6 +934,24 @@ Describe "Firewall Module" {
             @($outcome.Events) | Should -Not -Contain 'profile:Block'
             @($outcome.Events) | Should -Not -Contain 'create'
             @($outcome.Events) | Should -Contain 'remove:True'
+        }
+
+        It "disable tears the floor down (default + audit restored) before disabling rules" {
+            # Disabling the floor's non-student Allow while the default stays Block would cut
+            # egress for every user, including administrators and SYSTEM.
+            $events = InModuleScope Firewall {
+                $events = New-Object System.Collections.Generic.List[string]
+                if (-not (Get-Command -Name Disable-NetFirewallRule -ErrorAction SilentlyContinue)) {
+                    New-Item -Path 'Function:\global:Disable-NetFirewallRule' -Value { param([Parameter(ValueFromPipeline = $true)]$InputObject, $ErrorAction) } -Force | Out-Null
+                }
+                Mock Write-OpenPathLog { }
+                Mock Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound) $events.Add("floor-removed:$RestoreDefaultOutbound") }
+                Mock Get-NetFirewallRule { [pscustomobject]@{ DisplayName = 'OpenPath-DNS-Block-DoH-x' } }
+                Mock Disable-NetFirewallRule { $events.Add('rules-disabled') }
+                Disable-OpenPathFirewall | Out-Null
+                @($events)
+            }
+            @($events) | Should -Be @('floor-removed:True', 'rules-disabled')
         }
 
         It "saves the previous outbound default before creating rules and setting Block" {
@@ -1073,14 +1094,27 @@ Describe "Firewall Module" {
             }
         }
 
-        It "parses auditpol /r numeric setting without localized text" {
+        It "reads the numeric audit setting from auditpol /backup rows by GUID, not localized text" {
             $value = InModuleScope Firewall {
-                ConvertFrom-OpenPathAuditPolCsv -Lines @(
+                ConvertFrom-OpenPathAuditPolCsv -SubcategoryGuid '{0CCE9226-69AE-11D9-BED3-505054503030}' -Lines @(
                     'Nombre de equipo,Destino de directiva,Subcategoria,GUID de subcategoria,Configuracion de inclusion,Configuracion de exclusion,Valor de configuracion',
-                    'PC-AULA,Sistema,Conexion de Plataforma de filtrado,{0CCE9226-69AE-11D9-BED3-505054503030},Aciertos y errores,,3'
+                    'PC-AULA,Sistema,Controlador IPsec,{0CCE9213-69AE-11D9-BED3-505054503030},Sin auditoria,,0',
+                    'PC-AULA,Sistema,Conexion, de Plataforma de filtrado,{0cce9226-69ae-11d9-bed3-505054503030},Aciertos y errores,,3',
+                    'PC-AULA,,Option:CrashOnAuditFail,,Deshabilitado,,0'
                 )
             }
             $value | Should -Be 3
+        }
+
+        It "returns null for auditpol /get /r output, which has no numeric setting column" {
+            $value = InModuleScope Firewall {
+                ConvertFrom-OpenPathAuditPolCsv -SubcategoryGuid '{0CCE9226-69AE-11D9-BED3-505054503030}' -Lines @(
+                    'Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting',
+                    '',
+                    'PC,System,Filtering Platform Connection,{0CCE9226-69AE-11D9-BED3-505054503030},No Auditing,'
+                )
+            }
+            $value | Should -BeNullOrEmpty
         }
 
         It "records and restores the previous audit setting" {
@@ -1089,10 +1123,13 @@ Describe "Firewall Module" {
                 $seen = New-Object System.Collections.Generic.List[string]
                 Mock Write-OpenPathLog { }
                 Mock Get-OpenPathEgressFloorAuditStatePath { $StatePath }
+                Mock Get-OpenPathAuditPolBackupLines {
+                    $seen.Add('backup')
+                    return @('h1,h2,h3,h4,h5,h6,h7', 'PC,System,FPC,{0CCE9226-69AE-11D9-BED3-505054503030},Success,,1')
+                }
                 Mock Invoke-OpenPathAuditPol {
                     param([string[]]$Arguments)
                     $seen.Add(($Arguments -join ' '))
-                    if ($Arguments[0] -eq '/get') { return @('h1,h2,h3,h4,h5,h6,h7', 'PC,System,FPC,{0CCE9226-69AE-11D9-BED3-505054503030},Success,,1') }
                     return @()
                 }
                 Enable-OpenPathEgressFloorAudit
@@ -1103,9 +1140,25 @@ Describe "Firewall Module" {
             }
             $calls.Recorded | Should -BeTrue
             $calls.Remaining | Should -BeFalse
-            @($calls.Calls | Where-Object { $_ -like '/get *' }).Count | Should -Be 1
+            @($calls.Calls | Where-Object { $_ -eq 'backup' }).Count | Should -Be 1
             @($calls.Calls | Where-Object { $_ -like '/set */success:enable /failure:enable' }).Count | Should -Be 2
             @($calls.Calls)[-1] | Should -BeLike '/set /subcategory:{0CCE9226-69AE-11D9-BED3-505054503030} /success:enable /failure:disable'
+        }
+
+        It "reads auditpol /backup output from a temporary file and removes it" {
+            $result = InModuleScope Firewall {
+                $script:backupFile = $null
+                Mock Invoke-OpenPathAuditPol {
+                    param([string[]]$Arguments)
+                    $script:backupFile = $Arguments[1].Substring('/file:'.Length)
+                    Set-Content -LiteralPath $script:backupFile -Value @('h1,h2,h3,h4,h5,h6,h7', 'PC,System,FPC,{0CCE9226-69AE-11D9-BED3-505054503030},X,,2')
+                    return @()
+                }
+                $lines = @(Get-OpenPathAuditPolBackupLines)
+                [pscustomobject]@{ Lines = $lines; FileLeft = (Test-Path -LiteralPath $script:backupFile) }
+            }
+            @($result.Lines).Count | Should -Be 2
+            $result.FileLeft | Should -BeFalse
         }
 
         It "groups 5157 outbound events by application and destination" {

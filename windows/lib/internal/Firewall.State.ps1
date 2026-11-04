@@ -204,6 +204,14 @@ function Disable-OpenPathFirewall {
     Write-OpenPathLog 'Disabling openpath firewall rules...'
 
     try {
+        # Brick-guard: disabling the egress floor's non-student Allow while each profile's
+        # DefaultOutboundAction is still Block would cut egress for every user. Tear the
+        # floor down first (restores the pre-floor default and audit setting); the next
+        # enable/update reapplies it from configuration.
+        if (Get-Command -Name 'Remove-OpenPathEgressFloorRules' -ErrorAction SilentlyContinue) {
+            Remove-OpenPathEgressFloorRules -RestoreDefaultOutbound $true
+        }
+
         Get-NetFirewallRule -DisplayName "$script:RulePrefix-*" -ErrorAction SilentlyContinue |
             Disable-NetFirewallRule -ErrorAction SilentlyContinue
 

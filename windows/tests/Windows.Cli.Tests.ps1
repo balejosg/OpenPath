@@ -277,6 +277,19 @@ Describe "Operational Command Script" {
         }
     }
 
+    Context "enable reconciles the egress floor" {
+        It "OpenPath.ps1 enable reapplies the configured egress floor after the update" {
+            # disable tears the floor down; the update apply path does not rebuild it, so
+            # enable must reconcile it explicitly instead of waiting for the watchdog.
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $start = $content.IndexOf("'enable' {")
+            $end = $content.IndexOf("'disable' {")
+            $body = $content.Substring($start, $end - $start)
+            $body | Should -Match '(?s)Update-OpenPath\.ps1.*Invoke-OpenPathWatchdogEgressFloorCheck -Config \(Get-OpenPathConfig\)'
+        }
+    }
+
     Context "New verb: disable" {
         It "OpenPath.ps1 handles 'disable' by suspending the firewall and stopping Acrylic" {
             $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"

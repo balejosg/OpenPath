@@ -205,8 +205,10 @@ function Get-OpenPathStudentEgressFloorRules {
         Description = 'Egress floor: AppContainer apps of restricted users have no network' }
     & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-ICMPv4-Internet"; Action = 'Block'; Protocol = 'ICMPv4'; RemoteAddress = 'Internet'
         Description = 'Egress floor: ICMPv4 to the Internet is attributed to the kernel and cannot be scoped by user' }
-    & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-ICMPv6-Internet"; Action = 'Block'; Protocol = 'ICMPv6'; RemoteAddress = 'Internet'
-        Description = 'Egress floor: ICMPv6 to the Internet is attributed to the kernel and cannot be scoped by user' }
+    # Global unicast only: the Internet keyword also matches link-local multicast
+    # (ff02::/16), which would cut MLD and neighbor discovery for every user.
+    & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-ICMPv6-Internet"; Action = 'Block'; Protocol = 'ICMPv6'; RemoteAddress = '2000::/3'
+        Description = 'Egress floor: ICMPv6 to global unicast is attributed to the kernel and cannot be scoped by user' }
     & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-SMB-Internet"; Action = 'Block'; Protocol = 'TCP'; RemotePort = @('139', '445'); RemoteAddress = 'Internet'
         Description = 'Egress floor: kernel SMB to the Internet cannot be scoped by user' }
     & $newRule @{ DisplayName = "$RulePrefix-Block-EgressFloor-WebClient-Internet"; Action = 'Block'; Service = 'WebClient'; RemoteAddress = 'Internet'
@@ -467,23 +469,48 @@ function Invoke-OpenPathAuditPol {
     return @(& auditpol.exe @Arguments 2>$null)
 }
 
+function Get-OpenPathAuditPolBackupLines {
+    <#
+    .SYNOPSIS
+        Lines of `auditpol /backup` CSV (read from a temporary file that is then deleted).
+    .DESCRIPTION
+        `/backup` is the only auditpol output with the numeric "Setting Value" column;
+        `/get /r` carries only the localized inclusion text.
+    #>
+    param()
+
+    $path = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-auditpol-" + [guid]::NewGuid().ToString('N') + '.csv')
+    try {
+        Invoke-OpenPathAuditPol -Arguments @('/backup', "/file:$path") | Out-Null
+        if (-not (Test-Path -LiteralPath $path)) { return $null }
+        return @(Get-Content -LiteralPath $path -ErrorAction Stop)
+    }
+    finally {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function ConvertFrom-OpenPathAuditPolCsv {
     <#
     .SYNOPSIS
-        Numeric "Setting Value" (0 none, 1 success, 2 failure, 3 both) from
-        `auditpol /get /subcategory:{GUID} /r` output.
+        Numeric "Setting Value" (0 none, 1 success, 2 failure, 3 both) of one
+        subcategory from `auditpol /backup` CSV lines.
     .DESCRIPTION
-        Reads the column by POSITION (7th), never by header text: auditpol localizes
-        headers and setting names (es-ES fleet).
+        Selects the row by subcategory GUID and reads the LAST field (Setting Value),
+        never header or setting text: auditpol localizes both (es-ES fleet), and a
+        localized subcategory name may itself contain commas.
     #>
-    param([AllowNull()][string[]]$Lines)
+    param(
+        [AllowNull()][string[]]$Lines,
+        [Parameter(Mandatory = $true)][string]$SubcategoryGuid
+    )
 
     foreach ($line in @($Lines | Select-Object -Skip 1)) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $fields = @(([string]$line).Split(','))
-        if ($fields.Count -lt 7) { continue }
+        if (@($fields | Where-Object { $_.Trim() -eq $SubcategoryGuid }).Count -eq 0) { continue }
         $value = 0
-        if ([int]::TryParse($fields[6].Trim(), [ref]$value)) { return $value }
+        if ($fields.Count -ge 7 -and [int]::TryParse($fields[-1].Trim(), [ref]$value)) { return $value }
     }
     return $null
 }
@@ -517,7 +544,7 @@ function Enable-OpenPathEgressFloorAudit {
         try { $previous = [int]((Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).settingValue) } catch { $previous = $null }
     }
     if ($null -eq $previous) {
-        $previous = ConvertFrom-OpenPathAuditPolCsv -Lines (Invoke-OpenPathAuditPol -Arguments @('/get', "/subcategory:$script:OpenPathFilteringPlatformConnectionAuditGuid", '/r'))
+        $previous = ConvertFrom-OpenPathAuditPolCsv -Lines (Get-OpenPathAuditPolBackupLines) -SubcategoryGuid $script:OpenPathFilteringPlatformConnectionAuditGuid
         if ($null -eq $previous) {
             Write-OpenPathLog 'Egress floor: could not read the Filtering Platform Connection audit setting; blocked-connection reporting unavailable' -Level WARN
             return

@@ -556,6 +556,12 @@ try {
 
             Invoke-OpenPathScript -ScriptPath "$scriptsPath\Update-OpenPath.ps1"
 
+            # disable tears the egress floor down and the update apply path does not
+            # rebuild it; reconcile it now rather than on the next watchdog cycle.
+            if (Get-Command -Name 'Invoke-OpenPathWatchdogEgressFloorCheck' -ErrorAction SilentlyContinue) {
+                Invoke-OpenPathWatchdogEgressFloorCheck -Config (Get-OpenPathConfig) -OpenPathRoot $openPathRoot | Out-Null
+            }
+
             Write-Host 'OpenPath enforcement enabled' -ForegroundColor Green
         }
         'disable' {

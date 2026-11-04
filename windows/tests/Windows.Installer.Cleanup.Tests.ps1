@@ -414,6 +414,26 @@ Describe "Installer cleanup helper" {
         )
         $content | Should -Match '(?s)function Remove-OpenPathFirewallRules \{\s+Restore-OpenPathOutboundDefault'
     }
+    It "Standalone uninstall restores the Filtering Platform Connection audit setting saved by the egress floor" {
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+        $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Restore-OpenPathEgressFloorAudit' }, $true) | Select-Object -First 1
+        $fn | Should -Not -BeNullOrEmpty
+        $OpenPathRoot = Join-Path $TestDrive 'op'
+        New-Item -ItemType Directory -Path (Join-Path $OpenPathRoot 'data') -Force | Out-Null
+        $statePath = Join-Path $OpenPathRoot 'data\egress-floor-audit-prev.json'
+        Set-Content -LiteralPath $statePath -Value '{ "settingValue": 1 }'
+        $script:auditCalls = @()
+        function Invoke-OpenPathUninstallAuditPol { param([string[]]$Arguments) $script:auditCalls += ($Arguments -join ' ') }
+        . ([scriptblock]::Create($fn.Extent.Text))
+        Restore-OpenPathEgressFloorAudit
+        $script:auditCalls | Should -Be @('/set /subcategory:{0CCE9226-69AE-11D9-BED3-505054503030} /success:enable /failure:disable')
+        Test-Path -LiteralPath $statePath | Should -BeFalse
+
+        $content = Get-Content $uninstallPath -Raw
+        $content | Should -Match '(?s)function Remove-OpenPathFirewallRules \{\s+Restore-OpenPathOutboundDefault\s+Restore-OpenPathEgressFloorAudit'
+    }
+
     It "Standalone uninstall removes the Firefox force-install policy and schedules the add-on uninstall" {
         $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)

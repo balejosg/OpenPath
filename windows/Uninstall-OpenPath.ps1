@@ -475,8 +475,32 @@ function Restore-OpenPathOutboundDefault {
     }
 }
 
+function Invoke-OpenPathUninstallAuditPol {
+    param([string[]]$Arguments)
+    if (-not (Get-Command -Name 'auditpol.exe' -ErrorAction SilentlyContinue)) { return }
+    & auditpol.exe @Arguments 2>$null | Out-Null
+}
+
+function Restore-OpenPathEgressFloorAudit {
+    # The egress floor turns on failure auditing for "Filtering Platform Connection"
+    # and saves the previous numeric setting; put it back (no-op when never enabled).
+    $statePath = Join-Path $OpenPathRoot 'data\egress-floor-audit-prev.json'
+    if (-not (Test-Path -LiteralPath $statePath)) { return }
+    try {
+        $previous = [int](((Get-Content -LiteralPath $statePath -ErrorAction Stop) -join "`n" | ConvertFrom-Json -ErrorAction Stop).settingValue)
+        $success = if ($previous -band 1) { 'enable' } else { 'disable' }
+        $failure = if ($previous -band 2) { 'enable' } else { 'disable' }
+        Invoke-OpenPathUninstallAuditPol -Arguments @('/set', '/subcategory:{0CCE9226-69AE-11D9-BED3-505054503030}', "/success:$success", "/failure:$failure")
+    }
+    catch {
+        Write-Warning "Could not restore the Filtering Platform Connection audit setting from ${statePath}: $_"
+    }
+    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+}
+
 function Remove-OpenPathFirewallRules {
     Restore-OpenPathOutboundDefault
+    Restore-OpenPathEgressFloorAudit
 
     $manifestPath = Join-Path $OpenPathRoot 'data\firewall-rules.json'
     foreach ($ruleName in @(Get-OpenPathUninstallFirewallManifestRuleNames -Path $manifestPath)) {

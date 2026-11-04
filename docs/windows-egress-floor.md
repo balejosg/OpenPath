@@ -51,7 +51,7 @@ prefix):
 | `Allow-EgressFloor-Loopback`                       | Allow  | RemoteAddress `127.0.0.0/8`, `::1`                             |
 | `Block-EgressFloor-StudentAppContainers`           | Block  | Package `*`, LocalUser `D:(A;;CC;;;G)(A;;CC;;;AC)`             |
 | `Block-EgressFloor-ICMPv4-Internet`                | Block  | ICMPv4 to `Internet`                                           |
-| `Block-EgressFloor-ICMPv6-Internet`                | Block  | ICMPv6 to `Internet`                                           |
+| `Block-EgressFloor-ICMPv6-Internet`                | Block  | ICMPv6 to global unicast `2000::/3`                            |
 | `Block-EgressFloor-SMB-Internet`                   | Block  | TCP 139/445 to `Internet`                                      |
 | `Block-EgressFloor-WebClient-Internet`             | Block  | Service `WebClient` to `Internet`                              |
 
@@ -90,7 +90,10 @@ every student Store app egress.
 
 - ICMP and SMB to the Internet are blocked for EVERYONE. Kernel-mode clients
   (ping, SMB) are attributed to `System`, not the user, so only a protocol
-  Block can stop them for students. LAN ping and LAN SMB are unaffected.
+  Block can stop them for students. LAN ping and LAN SMB are unaffected. The
+  ICMPv6 Block is limited to global unicast (`2000::/3`): the `Internet`
+  keyword also matches link-local multicast, which would cut IPv6 neighbor
+  discovery and MLD for every user.
 - The Windows captive-portal sign-in window (an OS component) has no network
   for students. Students sign in to a captive portal from Firefox instead.
 - There is no audit-only mode: with `DefaultOutboundAction=Allow`, Windows does
