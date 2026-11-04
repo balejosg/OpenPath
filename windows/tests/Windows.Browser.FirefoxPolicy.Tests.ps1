@@ -895,6 +895,9 @@ Describe "Browser Module - Firefox Policy" {
             } -ModuleName Browser.FirefoxPolicy
             Mock Remove-OpenPathManagedPolicyValue { throw 'Should not remove non-empty ExtensionSettings' } -ModuleName Browser.FirefoxPolicy
             Mock Write-OpenPathLog { } -ModuleName Browser.FirefoxPolicy
+            # Hermetic: the real policy-store ledger on a runner that ran an install may record
+            # an original (InPol=false), which takes the registry hand-back path instead.
+            Mock Get-OpenPathPolicyStoreOriginal { $null } -ModuleName Browser.FirefoxPolicy
 
             Remove-OpenPathFirefoxMachineExtensionPolicy
 
@@ -924,6 +927,8 @@ Describe "Browser Module - Firefox Policy" {
                 [PSCustomObject]@{ Removed = $true; FailureCode = $null }
             } -ModuleName Browser.FirefoxPolicy
             Mock Write-OpenPathLog { } -ModuleName Browser.FirefoxPolicy
+
+            Mock Get-OpenPathPolicyStoreOriginal { $null } -ModuleName Browser.FirefoxPolicy
 
             Remove-OpenPathFirefoxMachineExtensionPolicy | Should -BeTrue
             $script:removedMachinePolicyValue | Should -BeTrue
