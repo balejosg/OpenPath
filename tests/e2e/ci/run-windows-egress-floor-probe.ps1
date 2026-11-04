@@ -178,7 +178,12 @@ public static class OpenPathAcLaunch {
   <Target Name="Build"><EgressProbe Address="$PublicProbeIp" /></Target>
 </Project>
 "@
-    return [pscustomobject]@{ Launcher = $launcherPath; Project = $projectPath }
+    # AppLocker denies the inbox curl.exe to students by path. A copy under the
+    # administrator-owned probe folder runs, so only the egress floor can stop it:
+    # the "unlisted program with a network stack" case the floor exists for.
+    $studentCurl = Join-Path $script:ProbeBin 'probe-curl.exe'
+    Copy-Item -LiteralPath "$env:WINDIR\System32\curl.exe" -Destination $studentCurl -Force
+    return [pscustomobject]@{ Launcher = $launcherPath; Project = $projectPath; StudentCurl = $studentCurl }
 }
 
 function Grant-OpenPathEgressProbeBatchLogon {
@@ -212,8 +217,16 @@ function Remove-OpenPathEgressProbeAdmin {
 }
 
 function Get-OpenPathEgressProbeAuditSetting {
-    $lines = @(& auditpol.exe /get '/subcategory:{0CCE9226-69AE-11D9-BED3-505054503030}' /r 2>$null)
-    return ConvertFrom-OpenPathEgressProbeAuditCsv -Lines $lines
+    # Only `auditpol /backup` carries the numeric Setting Value column.
+    $path = Join-Path $env:TEMP ('openpath-egress-probe-audit-' + [guid]::NewGuid().ToString('N') + '.csv')
+    try {
+        & auditpol.exe /backup "/file:$path" 2>$null | Out-Null
+        if (-not (Test-Path -LiteralPath $path)) { return $null }
+        return ConvertFrom-OpenPathEgressProbeAuditCsv -Lines @(Get-Content -LiteralPath $path)
+    }
+    finally {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-OpenPathEgressProbeBlockedApps {
@@ -266,11 +279,13 @@ function Invoke-OpenPathEgressEnforcePhase {
 
     $start = Get-Date
     $curl = "$env:WINDIR\System32\curl.exe"
-    $curlArgs = "-s -k -o NUL -m 8 -w http=%{http_code} https://$PublicProbeIp/"
+    # Plain http: an IP-literal TLS handshake has no SNI and many CDNs reject it, which
+    # would read as "unreachable" even when the connection is allowed.
+    $curlArgs = "-s -o NUL -m 8 -w http=%{http_code} http://$PublicProbeIp/"
 
     # --- student: everything but approved programs is cut off ---
-    Add-OpenPathEgressConnectivityResult -Name 'Student inbox curl to a public IP is blocked' -Kind Http -Expectation Blocked `
-        -Output (Invoke-OpenPathEgressProbeAsUser -Name 'student-curl' -UserName $StudentUserName -Password $StudentPassword -CommandLine "$curl $curlArgs")
+    Add-OpenPathEgressConnectivityResult -Name 'Student unlisted Program Files program (curl copy) to a public IP is blocked' -Kind Http -Expectation Blocked `
+        -Output (Invoke-OpenPathEgressProbeAsUser -Name 'student-curl' -UserName $StudentUserName -Password $StudentPassword -CommandLine "`"$($fixtures.StudentCurl)`" $curlArgs")
 
     $python = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)} -Filter 'python.exe' -Recurse -Depth 5 -File -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($python) {
@@ -292,7 +307,7 @@ function Invoke-OpenPathEgressEnforcePhase {
     }
 
     Add-OpenPathEgressConnectivityResult -Name 'Student AppContainer curl (internetClient) is blocked' -Kind Http -Expectation Blocked `
-        -Output (Invoke-OpenPathEgressProbeAsUser -Name 'student-appcontainer' -UserName $StudentUserName -Password $StudentPassword -CommandLine "`"$($fixtures.Launcher)`" $curl curl.exe $curlArgs")
+        -Output (Invoke-OpenPathEgressProbeAsUser -Name 'student-appcontainer' -UserName $StudentUserName -Password $StudentPassword -CommandLine "`"$($fixtures.Launcher)`" `"$($fixtures.StudentCurl)`" curl.exe $curlArgs")
 
     Add-OpenPathEgressConnectivityResult -Name 'Student ping to the Internet fails' -Kind Ping -Expectation Blocked `
         -Output (Invoke-OpenPathEgressProbeAsUser -Name 'student-ping' -UserName $StudentUserName -Password $StudentPassword -CommandLine "ping -n 2 -w 2000 $PublicProbeIp")
@@ -343,7 +358,7 @@ function Invoke-OpenPathEgressEnforcePhase {
 
     # --- the operator report names the blocked student programs ---
     $report = (& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $OpenPathRoot 'OpenPath.ps1') egress-report 1 2>&1) -join ' | '
-    Add-OpenPathEgressProbeResult -Name 'egress-report lists the blocked student curl' -Status $(if ($report -match 'curl\.exe') { 'pass' } else { 'fail' }) -Detail $report
+    Add-OpenPathEgressProbeResult -Name 'egress-report lists the blocked student curl copy' -Status $(if ($report -match 'probe-curl\.exe') { 'pass' } else { 'fail' }) -Detail $report
     $Evidence.blockedSinceStart = @(Get-OpenPathEgressFloorBlockedConnections -Since $start)
 }
 

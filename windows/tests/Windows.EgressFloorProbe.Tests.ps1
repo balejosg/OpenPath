@@ -84,13 +84,23 @@ Describe "Egress floor acceptance probe helpers" {
     }
 
     Context "Audit setting" {
-        It "reads the numeric setting column by position, not by localized header" {
+        It "reads the auditpol /backup Setting Value of the filtering platform row by GUID" {
             $csv = @(
                 'Nombre de equipo,Destino de directiva,Subcategoria,GUID de subcategoria,Configuracion de inclusion,Configuracion de exclusion,Valor de configuracion',
-                'PC01,Sistema,Conexion de Plataforma de filtrado,{0CCE9226-69AE-11D9-BED3-505054503030},Error,,2'
+                'PC01,Sistema,Controlador IPsec,{0CCE9213-69AE-11D9-BED3-505054503030},Sin auditoria,,0',
+                'PC01,Sistema,Conexion, de Plataforma de filtrado,{0cce9226-69ae-11d9-bed3-505054503030},Error,,2'
             )
             ConvertFrom-OpenPathEgressProbeAuditCsv -Lines $csv | Should -Be 2
             ConvertFrom-OpenPathEgressProbeAuditCsv -Lines @('header only') | Should -BeNullOrEmpty
+        }
+
+        It "returns null for auditpol /get /r output, which has no numeric column" {
+            $get = @(
+                'Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting',
+                '',
+                'PC01,System,Filtering Platform Connection,{0CCE9226-69AE-11D9-BED3-505054503030},No Auditing,'
+            )
+            ConvertFrom-OpenPathEgressProbeAuditCsv -Lines $get | Should -BeNullOrEmpty
         }
     }
 

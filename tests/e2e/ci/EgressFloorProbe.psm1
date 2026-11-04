@@ -134,16 +134,21 @@ function Add-OpenPathEgressProbeBatchLogonSid {
 }
 
 function ConvertFrom-OpenPathEgressProbeAuditCsv {
-    <# Numeric "Setting Value" (7th column) from `auditpol /get ... /r`; headers are localized. #>
+    <#
+        Numeric Setting Value of "Filtering Platform Connection" from `auditpol /backup`
+        CSV: row picked by GUID, value read from the LAST field. Headers and names are
+        localized (and a name may contain commas); `/get /r` has no numeric column.
+    #>
     [CmdletBinding()]
     param([AllowNull()][string[]]$Lines)
 
+    $guid = '{0CCE9226-69AE-11D9-BED3-505054503030}'
     foreach ($line in @($Lines | Select-Object -Skip 1)) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $fields = @(([string]$line).Split(','))
-        if ($fields.Count -lt 7) { continue }
+        if (@($fields | Where-Object { $_.Trim() -eq $guid }).Count -eq 0) { continue }
         $value = 0
-        if ([int]::TryParse($fields[6].Trim(), [ref]$value)) { return $value }
+        if ($fields.Count -ge 7 -and [int]::TryParse($fields[-1].Trim(), [ref]$value)) { return $value }
     }
     return $null
 }
