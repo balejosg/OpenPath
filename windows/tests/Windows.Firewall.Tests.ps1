@@ -914,6 +914,17 @@ Describe "Firewall Module" {
                     New-Item -Path "Function:\global:$name" -Value { param([Parameter(ValueFromPipeline = $true)]$InputObject, $Profile, $DefaultOutboundAction, $DisplayName, $ErrorAction) } -Force | Out-Null
                 }
             }
+            # On Windows the real NetSecurity cmdlets type their pipeline parameter as a
+            # CimInstance, so a mock fed a pscustomobject fails binding silently (callers
+            # use -ErrorAction SilentlyContinue). Strip that type only where it exists.
+            function global:Get-OpenPathFirewallTestMockTypeRemoval([string]$Command, [string]$Parameter) {
+                $info = Get-Command -Name $Command -ErrorAction SilentlyContinue | Select-Object -First 1
+                $parameters = if ($info) { $info.Parameters } else { $null }
+                if ($parameters -and $parameters.ContainsKey($Parameter) -and $parameters[$Parameter].ParameterType -ne [object]) {
+                    return @{ RemoveParameterType = $Parameter }
+                }
+                return @{}
+            }
             $script:sfaSid = 'S-1-5-21-1-2-3-1005'
             $script:sfaPrograms = @('C:\Program Files\Mozilla Firefox\firefox.exe')
         }
@@ -947,7 +958,8 @@ Describe "Firewall Module" {
                 Mock Write-OpenPathLog { }
                 Mock Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound) $events.Add("floor-removed:$RestoreDefaultOutbound") }
                 Mock Get-NetFirewallRule { [pscustomobject]@{ DisplayName = 'OpenPath-DNS-Block-DoH-x' } }
-                Mock Disable-NetFirewallRule { $events.Add('rules-disabled') }
+                $typeRemoval = Get-OpenPathFirewallTestMockTypeRemoval -Command Disable-NetFirewallRule -Parameter InputObject
+                Mock Disable-NetFirewallRule { $events.Add('rules-disabled') } @typeRemoval
                 Disable-OpenPathFirewall | Out-Null
                 @($events)
             }
@@ -1035,7 +1047,8 @@ Describe "Firewall Module" {
                 Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
                 Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Allow' } }
                 Mock Get-NetFirewallRule { $expected | ForEach-Object { [pscustomobject]@{ DisplayName = $_.DisplayName } } }
-                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } }
+                $typeRemoval = Get-OpenPathFirewallTestMockTypeRemoval -Command Get-NetFirewallSecurityFilter -Parameter AssociatedNetFirewallRule
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } } @typeRemoval
                 Test-OpenPathStudentEgressFloorDrift -StudentPrograms $Programs
             }
             $drift.Drifted | Should -BeTrue
@@ -1049,7 +1062,8 @@ Describe "Firewall Module" {
                 Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
                 Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
                 Mock Get-NetFirewallRule { $expected | Where-Object { $_.DisplayName -notlike '*-Student-*' } | ForEach-Object { [pscustomobject]@{ DisplayName = $_.DisplayName } } }
-                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } }
+                $typeRemoval = Get-OpenPathFirewallTestMockTypeRemoval -Command Get-NetFirewallSecurityFilter -Parameter AssociatedNetFirewallRule
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } } @typeRemoval
                 Test-OpenPathStudentEgressFloorDrift -StudentPrograms $Programs
             }
             $drift.Drifted | Should -BeTrue
@@ -1063,7 +1077,8 @@ Describe "Firewall Module" {
                 Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
                 Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
                 Mock Get-NetFirewallRule { $expected | ForEach-Object { [pscustomobject]@{ DisplayName = $_.DisplayName } } }
-                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } }
+                $typeRemoval = Get-OpenPathFirewallTestMockTypeRemoval -Command Get-NetFirewallSecurityFilter -Parameter AssociatedNetFirewallRule
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } } @typeRemoval
                 Test-OpenPathStudentEgressFloorDrift -StudentPrograms $Programs
             }
             $drift.Drifted | Should -BeFalse
