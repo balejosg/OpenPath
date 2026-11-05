@@ -22,8 +22,8 @@ export function buildUsersCsvExport(
 } {
   const includeCodeColumns = options.includeCodeColumns ?? true;
 
-  const headers = ['Nombre', 'Email', 'Roles', 'Estado'];
-  if (includeCodeColumns) headers.push('Roles_codigo', 'Estado_codigo');
+  const headers = ['Name', 'Email', 'Roles', 'Status'];
+  if (includeCodeColumns) headers.push('Roles_code', 'Status_code');
 
   const rows = users.map((user) => {
     const rolesLabel = user.roles.map((role) => getUserRoleLabel(role, t)).join('|');
