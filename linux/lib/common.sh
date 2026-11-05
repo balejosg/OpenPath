@@ -30,7 +30,7 @@ if [ -f "$_VERSION_FILE" ]; then
 elif [ -f "$_SCRIPT_VERSION_FILE" ]; then
     VERSION=$(cat "$_SCRIPT_VERSION_FILE")
 else
-    VERSION="4.1.0"
+    VERSION="4.2.0"
 fi
 export VERSION
 

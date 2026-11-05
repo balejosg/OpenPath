@@ -32,9 +32,9 @@ using System.Reflection;
 [assembly: AssemblyDescription("OpenPath Windows native messaging host")]
 [assembly: AssemblyCompany("OpenPath")]
 [assembly: AssemblyCopyright("OpenPath contributors")]
-[assembly: AssemblyVersion("4.1.0.0")]
-[assembly: AssemblyFileVersion("4.1.0.0")]
-[assembly: AssemblyInformationalVersion("4.1.0")]
+[assembly: AssemblyVersion("4.2.0.0")]
+[assembly: AssemblyFileVersion("4.2.0.0")]
+[assembly: AssemblyInformationalVersion("4.2.0")]
 
 namespace OpenPathNativeHost
 {

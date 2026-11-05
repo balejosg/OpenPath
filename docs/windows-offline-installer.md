@@ -38,7 +38,7 @@ The success response contains only this metadata:
 ```json
 {
   "fileName": "OpenPath-Aula-1-Windows-Setup.exe",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "sha256": "<64 lowercase hex characters>",
   "tokenExpiresAt": "2026-08-25T12:00:00.000Z",
   "downloadUrl": "https://api.example.test/api/windows-offline-installer/download?ref=<opaque-reference>",
@@ -191,10 +191,10 @@ The supported standalone deployment runs the provisioning job before the API:
 
 ```bash
 export PUBLIC_URL=https://openpath.example.test
-export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION=4.1.0
+export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION=4.2.0
 export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT=<40-lowercase-hex-commit>
 export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256=<64-lowercase-hex-digest>
-export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG=scripts-v4.1.0-<commit-prefix>
+export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG=scripts-v4.2.0-<commit-prefix>
 export OPENPATH_WINDOWS_OFFLINE_ARTIFACT_RETENTION_HOURS=24
 docker compose -f api/docker-compose.yml up
 ```
