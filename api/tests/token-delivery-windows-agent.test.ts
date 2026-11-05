@@ -1,5 +1,6 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert';
+import { createHash } from 'node:crypto';
 
 import { createFixtureClassroom } from './fixtures.js';
 import {
@@ -82,6 +83,32 @@ void describe('Windows agent delivery', { timeout: 30000 }, async () => {
         ),
         'only .cs files may ship from native-host/'
       );
+    });
+
+    await test('should publish a stable build fingerprint of the file set', async () => {
+      const fetchManifest = async (): Promise<{
+        build: string;
+        files: { path: string; sha256: string }[];
+      }> => {
+        const response = await fetch(`${harness.apiUrl}/api/agent/windows/manifest`, {
+          headers: { Authorization: `Bearer ${machineToken}` },
+        });
+        assert.strictEqual(response.status, 200);
+        return (await response.json()) as {
+          build: string;
+          files: { path: string; sha256: string }[];
+        };
+      };
+
+      const first = await fetchManifest();
+      const second = await fetchManifest();
+      assert.match(first.build, /^[0-9a-f]{64}$/);
+      assert.strictEqual(second.build, first.build);
+
+      const expected = createHash('sha256')
+        .update(first.files.map((file) => `${file.path}\t${file.sha256}\n`).join(''))
+        .digest('hex');
+      assert.strictEqual(first.build, expected);
     });
 
     await test('should download manifest file by relative path', async () => {

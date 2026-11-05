@@ -703,6 +703,76 @@ Describe "Common Module" {
                 Compare-OpenPathVersion -CurrentVersion '4.3.0' -TargetVersion '4.2.0'
             }) | Should -BeGreaterThan 0
         }
+
+        It "Updates when the server version is newer" {
+            (InModuleScope Common {
+                Test-OpenPathAgentUpdateNeeded -CurrentVersion '4.1.0' -CurrentBuild 'aaa' -TargetVersion '4.2.0' -TargetBuild 'aaa'
+            }) | Should -BeTrue
+        }
+
+        It "Updates when the version is equal but the server build changed" {
+            (InModuleScope Common {
+                Test-OpenPathAgentUpdateNeeded -CurrentVersion '4.2.0' -CurrentBuild 'aaa' -TargetVersion '4.2.0' -TargetBuild 'bbb'
+            }) | Should -BeTrue
+        }
+
+        It "Updates an equal version that has no recorded build when the server publishes one" {
+            (InModuleScope Common {
+                Test-OpenPathAgentUpdateNeeded -CurrentVersion '4.2.0' -CurrentBuild '' -TargetVersion '4.2.0' -TargetBuild 'bbb'
+            }) | Should -BeTrue
+        }
+
+        It "Does not update an equal version with the same build" {
+            (InModuleScope Common {
+                Test-OpenPathAgentUpdateNeeded -CurrentVersion '4.2.0' -CurrentBuild 'BBB' -TargetVersion '4.2.0' -TargetBuild 'bbb'
+            }) | Should -BeFalse
+        }
+
+        It "Does not update an equal version when the server publishes no build" {
+            (InModuleScope Common {
+                Test-OpenPathAgentUpdateNeeded -CurrentVersion '4.2.0' -CurrentBuild 'aaa' -TargetVersion '4.2.0' -TargetBuild ''
+            }) | Should -BeFalse
+        }
+
+        It "Never downgrades to an older server version, whatever the build" {
+            (InModuleScope Common {
+                Test-OpenPathAgentUpdateNeeded -CurrentVersion '4.3.0' -CurrentBuild 'aaa' -TargetVersion '4.2.0' -TargetBuild 'bbb'
+            }) | Should -BeFalse
+        }
+
+        It "Self-update offers a same-version package whose build differs from the recorded one" {
+            $result = InModuleScope Common {
+                Mock Write-OpenPathLog { }
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{ apiUrl = 'https://api.example'; whitelistUrl = 'https://api.example/w/tok/whitelist.txt'; version = '4.2.0'; agentBuild = 'old' }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'tok' }
+                Mock Invoke-RestMethod {
+                    [PSCustomObject]@{ version = '4.2.0'; build = 'new'; files = @([PSCustomObject]@{ path = 'OpenPath.ps1'; sha256 = ('a' * 64) }) }
+                }
+                Invoke-OpenPathAgentSelfUpdate -CheckOnly -Silent
+            }
+            $result.Success | Should -BeTrue
+            $result.Updated | Should -BeFalse
+            $result.Message | Should -Match 'update available'
+        }
+
+        It "Self-update stays put when the recorded build matches the server build" {
+            $result = InModuleScope Common {
+                Mock Write-OpenPathLog { }
+                Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{ apiUrl = 'https://api.example'; whitelistUrl = 'https://api.example/w/tok/whitelist.txt'; version = '4.2.0'; agentBuild = 'same' }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'tok' }
+                Mock Invoke-RestMethod {
+                    [PSCustomObject]@{ version = '4.2.0'; build = 'same'; files = @([PSCustomObject]@{ path = 'OpenPath.ps1'; sha256 = ('a' * 64) }) }
+                }
+                Invoke-OpenPathAgentSelfUpdate -CheckOnly -Silent
+            }
+            $result.Success | Should -BeTrue
+            $result.Message | Should -Match 'already up to date'
+        }
     }
 
     Context "Domain catalog characterization" {

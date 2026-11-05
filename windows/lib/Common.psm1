@@ -87,5 +87,6 @@ Export-ModuleMember -Function @(
     'Resolve-OpenPathMachineRegistration',
     'Set-OpenPathMachineName',
     'Compare-OpenPathVersion',
+    'Test-OpenPathAgentUpdateNeeded',
     'Invoke-OpenPathAgentSelfUpdate'
 )

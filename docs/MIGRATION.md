@@ -17,6 +17,11 @@ This file only documents migration concerns that are still relevant to the curre
 ## Windows Agent Upgrades
 
 - the supported upgrade paths are `OpenPath.ps1 self-update` and rerunning `Install-OpenPath.ps1`
+- the `OpenPath-AgentUpdate` task applies the server package when `/api/agent/windows/manifest`
+  advertises a newer `version`, or the same `version` with a `build` (sha256 of the sorted
+  `path<TAB>sha256` file list) different from the `agentBuild` recorded in `config.json` at the
+  last update. New code therefore reaches installed machines without bumping `VERSION`; an older
+  server `version` is never applied. Agents older than 4.2.0 compare `version` only.
 - browser-extension rollout artifacts must remain compatible with the Windows paths documented in [`../windows/README.md`](../windows/README.md)
 
 ## Downstream SPA Consumers

@@ -23,3 +23,28 @@ function Compare-OpenPathVersion {
         return [string]::Compare($currentNormalized, $targetNormalized, $true)
     }
 }
+
+function Test-OpenPathAgentUpdateNeeded {
+    <#
+    .SYNOPSIS
+        Decides whether the agent must apply the server's Windows agent package
+    .DESCRIPTION
+        A newer server version always updates and an older one never does. At an
+        equal version the agent updates when the server publishes a build
+        fingerprint that differs from the one recorded at the last update, so new
+        code ships without a manual version bump. Servers that publish no build
+        keep the version-only behaviour.
+    #>
+    param(
+        [string]$CurrentVersion,
+        [string]$CurrentBuild,
+        [string]$TargetVersion,
+        [string]$TargetBuild
+    )
+
+    $comparison = Compare-OpenPathVersion -CurrentVersion $CurrentVersion -TargetVersion $TargetVersion
+    if ($comparison -lt 0) { return $true }
+    if ($comparison -gt 0) { return $false }
+    if ([string]::IsNullOrWhiteSpace($TargetBuild)) { return $false }
+    return (-not [string]::Equals([string]$CurrentBuild, $TargetBuild, [System.StringComparison]::OrdinalIgnoreCase))
+}

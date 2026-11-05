@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -45,6 +46,11 @@ export interface WindowsBootstrapManifestOutput {
 }
 
 export interface WindowsAgentManifestOutput {
+  /**
+   * Fingerprint of the published file set. Agents update when it changes even
+   * if `version` did not, so shipping new code needs no manual version bump.
+   */
+  build: string;
   files: ManifestFileDescriptor[];
   generatedAt: string;
   version: string;
@@ -83,6 +89,13 @@ function toManifestFiles(
     sha256: file.sha256,
     size: file.size,
   }));
+}
+
+/** sha256 over the sorted `path<TAB>sha256` lines of the manifest files. */
+export function computeWindowsAgentBuild(files: readonly ManifestFileDescriptor[]): string {
+  return createHash('sha256')
+    .update(files.map((file) => `${file.path}\t${file.sha256}\n`).join(''))
+    .digest('hex');
 }
 
 async function touchMachine(hostname: string): Promise<void> {
@@ -176,12 +189,14 @@ export async function getWindowsAgentManifest(
 
   await touchMachine(machineHostname);
 
+  const manifestFiles = toManifestFiles(files);
   return {
     ok: true,
     data: {
       version: readServerVersion(),
+      build: computeWindowsAgentBuild(manifestFiles),
       generatedAt: new Date().toISOString(),
-      files: toManifestFiles(files),
+      files: manifestFiles,
     },
   };
 }

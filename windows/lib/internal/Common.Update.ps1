@@ -177,8 +177,11 @@ function Invoke-OpenPathAgentSelfUpdate {
     }
 
     $targetVersion = [string]$manifest.version
-    $comparison = Compare-OpenPathVersion -CurrentVersion $currentVersion -TargetVersion $targetVersion
-    if ($comparison -ge 0) {
+    $currentBuild = if ($config.PSObject.Properties['agentBuild'] -and $config.agentBuild) { [string]$config.agentBuild } else { '' }
+    $targetBuild = if ($manifest.PSObject.Properties['build'] -and $manifest.build) { [string]$manifest.build } else { '' }
+    $updateNeeded = Test-OpenPathAgentUpdateNeeded -CurrentVersion $currentVersion -CurrentBuild $currentBuild `
+        -TargetVersion $targetVersion -TargetBuild $targetBuild
+    if (-not $updateNeeded) {
         $message = "Agent already up to date (current=$currentVersion)"
         Write-SelfUpdateMessage -Message $message
         # Phase 5.2 D2: the periodic Update task also retries the compiled
@@ -196,7 +199,12 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
     }
 
-    $updateAvailableMessage = "Agent update available: $currentVersion -> $targetVersion"
+    $updateAvailableMessage = if ((Compare-OpenPathVersion -CurrentVersion $currentVersion -TargetVersion $targetVersion) -eq 0) {
+        "Agent update available: $currentVersion build $(if ($currentBuild) { $currentBuild } else { '(none)' }) -> $targetBuild"
+    }
+    else {
+        "Agent update available: $currentVersion -> $targetVersion"
+    }
     Write-SelfUpdateMessage -Message $updateAvailableMessage
 
     if ($CheckOnly) {
@@ -344,6 +352,15 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
         else {
             $config | Add-Member -NotePropertyName version -NotePropertyValue $targetVersion
+        }
+
+        if ($targetBuild) {
+            if ($config.PSObject.Properties['agentBuild']) {
+                $config.agentBuild = $targetBuild
+            }
+            else {
+                $config | Add-Member -NotePropertyName agentBuild -NotePropertyValue $targetBuild
+            }
         }
 
         $updatedAt = Get-Date -Format 'o'

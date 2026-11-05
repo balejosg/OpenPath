@@ -130,6 +130,7 @@ export function registerMachineDeliveryRoutes(app: Express, deps: MachineRouteDe
         res.json({
           success: true,
           version: result.data.version,
+          build: result.data.build,
           generatedAt: result.data.generatedAt,
           files: result.data.files,
         });
