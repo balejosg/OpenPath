@@ -200,8 +200,112 @@ Describe "DNS Module" {
                 '$snapshot = if ($snapshotPayload.PSObject.Properties[''adapters''])',
                 'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers',
                 'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses',
+                'Reset-OpenPathDnsLoopbackResolvers',
                 'Clear-DnsClientCache'
             )
+        }
+    }
+
+    Context "Restore-OriginalDNS loopback safety" {
+        BeforeEach {
+            $global:openPathRestoreDnsCalls = @()
+
+            Mock Get-OpenPathOriginalDnsSnapshotPath { Join-Path $TestDrive 'original-dns.json' } -ModuleName DNS
+            Mock Get-NetAdapter {
+                @([PSCustomObject]@{
+                        InterfaceGuid = 'adapter-guid'
+                        Name          = 'Ethernet'
+                        ifIndex       = 7
+                        Status        = 'Up'
+                    })
+            } -ModuleName DNS
+            Mock Write-OpenPathLog { } -ModuleName DNS
+            Mock Clear-DnsClientCache { } -ModuleName DNS
+            Mock Set-DnsClientServerAddress {
+                param($InterfaceIndex, $ServerAddresses, [switch]$ResetServerAddresses)
+
+                $global:openPathRestoreDnsCalls += [PSCustomObject]@{
+                    InterfaceIndex = $InterfaceIndex
+                    ServerAddresses = @($ServerAddresses)
+                    ResetServerAddresses = [bool]$ResetServerAddresses
+                }
+            } -ModuleName DNS
+            Mock Get-DnsClientServerAddress { @() } -ModuleName DNS
+        }
+
+        AfterEach {
+            Remove-Variable -Name openPathRestoreDnsCalls -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It "Resets a snapshot that only contains the OpenPath loopback pin" {
+            $snapshot = [PSCustomObject]@{
+                version  = 2
+                adapters = @(
+                    [PSCustomObject]@{
+                        InterfaceGuid   = 'adapter-guid'
+                        InterfaceAlias  = 'Ethernet'
+                        InterfaceIndex  = 7
+                        ServerAddresses = @('127.0.0.1')
+                    }
+                )
+            }
+            $snapshotPath = Join-Path $TestDrive 'original-dns.json'
+            $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $snapshotPath -Encoding UTF8
+
+            InModuleScope DNS { Restore-OriginalDNS -Confirm:$false }
+
+            @($global:openPathRestoreDnsCalls).Count | Should -Be 1
+            $global:openPathRestoreDnsCalls[0].InterfaceIndex | Should -Be 7
+            $global:openPathRestoreDnsCalls[0].ResetServerAddresses | Should -BeTrue
+            $global:openPathRestoreDnsCalls[0].ServerAddresses | Should -BeNullOrEmpty
+        }
+
+        It "Restores only real resolvers and drops the loopback pin from a mixed snapshot" {
+            $snapshot = [PSCustomObject]@{
+                version  = 2
+                adapters = @(
+                    [PSCustomObject]@{
+                        InterfaceGuid   = 'adapter-guid'
+                        InterfaceAlias  = 'Ethernet'
+                        InterfaceIndex  = 7
+                        ServerAddresses = @('127.0.0.1', '10.0.0.53')
+                    }
+                )
+            }
+            $snapshotPath = Join-Path $TestDrive 'original-dns.json'
+            $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $snapshotPath -Encoding UTF8
+
+            InModuleScope DNS { Restore-OriginalDNS -Confirm:$false }
+
+            @($global:openPathRestoreDnsCalls).Count | Should -Be 1
+            $global:openPathRestoreDnsCalls[0].InterfaceIndex | Should -Be 7
+            $global:openPathRestoreDnsCalls[0].ResetServerAddresses | Should -BeFalse
+            (@($global:openPathRestoreDnsCalls[0].ServerAddresses) -join ',') | Should -Be '10.0.0.53'
+        }
+
+        It "Sweeps an adapter that still points at loopback after the snapshot restore" {
+            $snapshot = [PSCustomObject]@{
+                version  = 2
+                adapters = @(
+                    [PSCustomObject]@{
+                        InterfaceGuid   = 'adapter-guid'
+                        InterfaceAlias  = 'Ethernet'
+                        InterfaceIndex  = 7
+                        ServerAddresses = @('10.0.0.53')
+                    }
+                )
+            }
+            $snapshotPath = Join-Path $TestDrive 'original-dns.json'
+            $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $snapshotPath -Encoding UTF8
+            Mock Get-DnsClientServerAddress {
+                @([PSCustomObject]@{ InterfaceIndex = 7; ServerAddresses = @('127.0.0.1') })
+            } -ModuleName DNS
+
+            InModuleScope DNS { Restore-OriginalDNS -Confirm:$false }
+
+            @($global:openPathRestoreDnsCalls).Count | Should -Be 2
+            $global:openPathRestoreDnsCalls[1].InterfaceIndex | Should -Be 7
+            $global:openPathRestoreDnsCalls[1].ResetServerAddresses | Should -BeTrue
         }
     }
 

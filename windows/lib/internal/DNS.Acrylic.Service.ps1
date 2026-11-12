@@ -264,13 +264,54 @@ function Update-OpenPathOriginalDnsSnapshotForCurrentNetwork {
     }
 }
 
+function Test-OpenPathDnsLoopbackAddress {
+    <#
+    .SYNOPSIS
+    Returns true for resolver addresses that point at the local machine instead of a real DNS server.
+    .DESCRIPTION
+    OpenPath pins adapters to 127.0.0.1 while Acrylic owns the local resolver. A loopback
+    address captured in the original snapshot is therefore OpenPath's own pin, not a user
+    setting, and must never be restored after the proxy is gone.
+    #>
+    param([object]$Address)
+
+    $text = ([string]$Address).Trim()
+    return ($text -eq '::1' -or $text -eq '0.0.0.0' -or $text -match '^127\.')
+}
+
+function Reset-OpenPathDnsLoopbackResolvers {
+    <#
+    .SYNOPSIS
+    Resets every adapter that still has a loopback resolver back to DHCP-assigned DNS.
+    .DESCRIPTION
+    Final safety net for Restore-OriginalDNS: whatever the snapshot said, no adapter may keep
+    a loopback resolver once the local DNS proxy has been removed.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return }
+    if (-not (Get-Command -Name Set-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return }
+
+    foreach ($dnsEntry in @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
+        $stillLoopback = @($dnsEntry.ServerAddresses | Where-Object {
+                $_ -and (Test-OpenPathDnsLoopbackAddress -Address $_)
+            })
+        if ($stillLoopback.Count -gt 0) {
+            Set-DnsClientServerAddress -InterfaceIndex $dnsEntry.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+            Write-OpenPathLog "Reset loopback DNS for adapter index $($dnsEntry.InterfaceIndex)" -Level WARN
+        }
+    }
+}
+
 function Restore-OriginalDNS {
     <#
     .SYNOPSIS
     Restores each adapter to its pre-installation DNS addresses using the saved snapshot, falling back to a full reset.
     .DESCRIPTION
     Matches adapters by GUID first, then by index, then by alias. Adapters with an empty saved address list
-    are reset to DHCP-assigned DNS rather than set to a specific address.
+    are reset to DHCP-assigned DNS rather than set to a specific address. Loopback addresses captured while
+    Acrylic was pinned are filtered out, and a final sweep resets any adapter that still points at loopback.
     #>
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Network adapters", "Restore original DNS settings")) { return }
@@ -298,7 +339,10 @@ function Restore-OriginalDNS {
                 $adapterInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $adapter.ifIndex
                 if ($null -eq $adapterInterfaceIndex) { continue }
 
-                $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                # A loopback entry is OpenPath's own pin (Acrylic); never restore it.
+                $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
+                        $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
+                    })
                 if ($servers.Count -gt 0) {
                     Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction Stop
                     Write-OpenPathLog "Restored DNS for adapter: $($adapter.Name)"
@@ -308,6 +352,7 @@ function Restore-OriginalDNS {
                     Write-OpenPathLog "Reset DNS for adapter: $($adapter.Name)"
                 }
             }
+            Reset-OpenPathDnsLoopbackResolvers
             Clear-DnsClientCache
             return
         }
@@ -320,6 +365,7 @@ function Restore-OriginalDNS {
     foreach ($adapter in $adapters) {
         Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
     }
+    Reset-OpenPathDnsLoopbackResolvers
     Clear-DnsClientCache
 }
 
