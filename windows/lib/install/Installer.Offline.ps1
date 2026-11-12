@@ -606,52 +606,25 @@ function Install-AcrylicDNSFromLocalSource {
         throw 'Staged Acrylic archive is not a valid portable release'
     }
 
-    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("acrylic-offline-" + [Guid]::NewGuid().ToString('N'))
-
     try {
-        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-create-temp'
-        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-extract'
-        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($AcrylicZipPath, $tempDir)
-        if (-not (Test-Path $installDir)) {
-            New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-        }
-
-        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-stage'
-        # The pinned Acrylic archive is flat. Preserve the historical
-        # flattening of a single wrapper directory, while copying every root
-        # entry when the archive has a mixed or flat layout.
-        $extractedItems = @(Get-ChildItem -LiteralPath $tempDir -Force)
-        $extractedDirectories = @($extractedItems | Where-Object { $_.PSIsContainer })
-        $extractedFiles = @($extractedItems | Where-Object { -not $_.PSIsContainer })
-        if ($extractedDirectories.Count -eq 1 -and $extractedFiles.Count -eq 0) {
-            foreach ($nestedItem in @(Get-ChildItem -LiteralPath $extractedDirectories[0].FullName -Force)) {
-                Copy-Item -LiteralPath $nestedItem.FullName -Destination $installDir -Recurse -Force
-            }
-        }
-        else {
-            foreach ($extractedItem in $extractedItems) {
-                Copy-Item -LiteralPath $extractedItem.FullName -Destination $installDir -Recurse -Force
-            }
-        }
-
-        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-validate-output'
-        if (-not (Test-Path (Join-Path $installDir 'AcrylicService.exe'))) {
-            throw 'Local Acrylic install did not produce AcrylicService.exe'
-        }
-
-        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-register'
-        Register-AcrylicServiceFromPath -AcrylicPath $installDir | Out-Null
-        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-complete'
-        Write-OpenPathLog 'Acrylic DNS Proxy installed from local offline source'
-        return $true
-    }
-    finally {
-        if (Test-Path $tempDir) {
-            Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Get-Command -Name Save-OpenPathAcrylicArtifactToCache -ErrorAction SilentlyContinue) {
+            Save-OpenPathAcrylicArtifactToCache -SourcePath $AcrylicZipPath -ExpectedSha256 $ExpectedSha256 | Out-Null
         }
     }
+    catch {
+        Write-OpenPathLog "Could not cache the offline Acrylic artifact: $_" -Level WARN
+    }
+
+    $installed = Install-OpenPathAcrylicFromVerifiedArchive `
+        -AcrylicZipPath $AcrylicZipPath `
+        -InstallDir $installDir `
+        -FailureStatusPath $FailureStatusPath `
+        -WhatIf:$WhatIfPreference
+    if (-not $installed) {
+        return $false
+    }
+    Write-OpenPathLog 'Acrylic DNS Proxy installed from local offline source'
+    return $true
 }
 
 function Get-OpenPathPendingEnrollmentStatePath {

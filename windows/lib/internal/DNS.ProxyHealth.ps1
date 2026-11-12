@@ -127,6 +127,274 @@ function Get-OpenPathDnsProxyState {
         -AcrylicInstalled $true
 }
 
+function Read-OpenPathAcrylicRepairState {
+    <#
+    .SYNOPSIS
+    Reads the Acrylic repair/cache-seed throttle state, returning safe defaults when absent or malformed.
+    #>
+    [CmdletBinding()]
+    param([string]$OpenPathRoot = '')
+
+    $state = [PSCustomObject]@{
+        lastReinstallAttemptAt = ''
+        lastReinstallResult = ''
+        lastCacheSeedAttemptAt = ''
+    }
+
+    $path = Get-OpenPathAcrylicRepairStatePath -OpenPathRoot $OpenPathRoot
+    if (-not (Test-Path $path)) {
+        return $state
+    }
+
+    try {
+        $stored = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        foreach ($propertyName in @('lastReinstallAttemptAt', 'lastReinstallResult', 'lastCacheSeedAttemptAt')) {
+            if ($stored.PSObject.Properties[$propertyName]) {
+                $state.$propertyName = [string]$stored.$propertyName
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Could not read Acrylic repair state: $_" -Level WARN
+    }
+
+    return $state
+}
+
+function Write-OpenPathAcrylicRepairState {
+    <#
+    .SYNOPSIS
+    Persists the Acrylic repair/cache-seed throttle state.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$State,
+        [string]$OpenPathRoot = ''
+    )
+
+    $path = Get-OpenPathAcrylicRepairStatePath -OpenPathRoot $OpenPathRoot
+    Write-OpenPathAtomicJsonFile -Path $path -Data $State -Depth 5
+}
+
+function Test-OpenPathAcrylicRepairWindowElapsed {
+    <#
+    .SYNOPSIS
+    Returns true when the recorded timestamp is absent, malformed, or older than the window.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Timestamp,
+        [Parameter(Mandatory = $true)][int]$Minutes
+    )
+
+    if ([string]::IsNullOrWhiteSpace([string]$Timestamp)) {
+        return $true
+    }
+
+    $parsed = [DateTimeOffset]::MinValue
+    try {
+        if ([DateTimeOffset]::TryParse(
+                [string]$Timestamp,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind,
+                [ref]$parsed)) {
+            return ((([DateTimeOffset]::UtcNow) - $parsed).TotalMinutes -ge $Minutes)
+        }
+    }
+    catch {
+        return $true
+    }
+
+    return $true
+}
+
+function Invoke-OpenPathAcrylicArtifactCacheSeed {
+    <#
+    .SYNOPSIS
+    Downloads and verifies the pinned Acrylic ZIP during a healthy cycle, at most once per day.
+    .DESCRIPTION
+    The repair path must not depend on network access when DNS is already broken. This
+    seed runs only while Acrylic is listening and local resolution is healthy, so a machine
+    installed before the cache existed acquires the artifact before it is needed.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$ProxyState,
+        [AllowNull()][object]$LocalResolutionHealthy,
+        [string]$OpenPathRoot = ''
+    )
+
+    if ($null -eq $ProxyState -or [string]$ProxyState.State -ne 'listening') {
+        return $false
+    }
+    if ($null -eq $LocalResolutionHealthy -or -not [bool]$LocalResolutionHealthy) {
+        return $false
+    }
+
+    $cachePath = Get-OpenPathAcrylicCachePath -OpenPathRoot $OpenPathRoot
+    if (Test-Path $cachePath) {
+        return $true
+    }
+
+    $state = Read-OpenPathAcrylicRepairState -OpenPathRoot $OpenPathRoot
+    if (-not (Test-OpenPathAcrylicRepairWindowElapsed -Timestamp $state.lastCacheSeedAttemptAt -Minutes 1440)) {
+        return $false
+    }
+
+    $state.lastCacheSeedAttemptAt = [DateTimeOffset]::UtcNow.ToString('o')
+    Write-OpenPathAcrylicRepairState -State $state -OpenPathRoot $OpenPathRoot
+
+    $spec = Get-OpenPathAcrylicArtifactSpec
+    $tempPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-acrylic-seed-" + [Guid]::NewGuid().ToString('N') + '.zip')
+    try {
+        foreach ($url in @($spec.PortableZipUrls)) {
+            try {
+                if (Test-Path $tempPath) {
+                    Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                }
+                Invoke-AcrylicPortableDownload -Url $url -DestinationPath $tempPath
+                Assert-AcrylicDownloadHash -Path $tempPath -ExpectedSha256 $spec.PortableZipSha256 -ArtifactName 'Acrylic-Portable.zip'
+                if (-not (Test-AcrylicPortableArchive -Path $tempPath)) {
+                    throw 'Downloaded Acrylic archive was not a valid portable release'
+                }
+                Save-OpenPathAcrylicArtifactToCache `
+                    -SourcePath $tempPath `
+                    -ExpectedSha256 $spec.PortableZipSha256 `
+                    -OpenPathRoot $OpenPathRoot | Out-Null
+                Write-OpenPathLog 'Seeded the verified Acrylic repair cache'
+                return $true
+            }
+            catch {
+                Write-OpenPathLog "Acrylic cache seed failed from ${url}: $_" -Level WARN
+            }
+        }
+    }
+    finally {
+        if (Test-Path $tempPath) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    return $false
+}
+
+function Invoke-OpenPathDnsProxyRepair {
+    <#
+    .SYNOPSIS
+    Executes the bounded repair for a classified local DNS proxy failure.
+    .DESCRIPTION
+    dns_proxy_down restarts/re-registers the service. dns_proxy_missing reinstalls from the
+    verified local cache only, with a 30-minute throttle, then restores the Acrylic host
+    content and firewall. Port conflicts and upstream failures are reported by the caller
+    and never repaired by killing another process or changing upstreams.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('dns_proxy_down', 'dns_proxy_missing', 'dns_port_conflict', 'dns_upstream_unreachable')]
+        [string]$FailureClass,
+
+        [AllowNull()]
+        [object]$Config,
+
+        [string]$OpenPathRoot = ''
+    )
+
+    $result = [PSCustomObject]@{
+        Attempted = $false
+        Repaired = $false
+        ReasonCode = $null
+        Detail = ''
+    }
+
+    switch ($FailureClass) {
+        'dns_proxy_down' {
+            $result.Attempted = $true
+            $started = [bool](Ensure-AcrylicService -Start)
+            $autoStart = [bool](Set-AcrylicServiceAutoStart)
+            $result.Repaired = [bool]($started -and $autoStart)
+            if (-not $started) {
+                $result.Detail = 'Acrylic service did not start'
+            }
+            elseif (-not $autoStart) {
+                $result.Detail = 'Acrylic service auto-start could not be set'
+            }
+            return $result
+        }
+        'dns_proxy_missing' {
+            $cachePath = Get-OpenPathAcrylicCachePath -OpenPathRoot $OpenPathRoot
+            if (-not (Test-Path $cachePath)) {
+                $result.ReasonCode = 'dns_proxy_reinstall_unavailable'
+                $result.Detail = 'No verified Acrylic cache is available'
+                return $result
+            }
+
+            $state = Read-OpenPathAcrylicRepairState -OpenPathRoot $OpenPathRoot
+            if (-not (Test-OpenPathAcrylicRepairWindowElapsed -Timestamp $state.lastReinstallAttemptAt -Minutes 30)) {
+                $result.Detail = 'Reinstall throttle window has not elapsed'
+                return $result
+            }
+
+            $state.lastReinstallAttemptAt = [DateTimeOffset]::UtcNow.ToString('o')
+            $state.lastReinstallResult = 'attempted'
+            Write-OpenPathAcrylicRepairState -State $state -OpenPathRoot $OpenPathRoot
+
+            $result.Attempted = $true
+            try {
+                $spec = Get-OpenPathAcrylicArtifactSpec
+                Assert-AcrylicDownloadHash -Path $cachePath -ExpectedSha256 $spec.PortableZipSha256 -ArtifactName 'Acrylic-Portable.zip'
+                if (-not (Test-AcrylicPortableArchive -Path $cachePath)) {
+                    throw 'Cached Acrylic archive is not a valid portable release'
+                }
+
+                $installed = Install-OpenPathAcrylicFromVerifiedArchive -AcrylicZipPath $cachePath
+                if (-not $installed) {
+                    throw 'Local Acrylic install did not complete'
+                }
+
+                $dataRoot = Get-OpenPathAcrylicDataRoot -OpenPathRoot $OpenPathRoot
+                $whitelistPath = [System.IO.Path]::Combine($dataRoot, 'whitelist.txt')
+                $sections = Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath
+                Update-AcrylicHost `
+                    -WhitelistedDomains @($sections.Whitelist) `
+                    -BlockedSubdomains @($sections.BlockedSubdomains) | Out-Null
+                Restart-AcrylicService | Out-Null
+
+                $upstream = '8.8.8.8'
+                if ($Config -and $Config.PSObject.Properties['primaryDNS'] -and $Config.primaryDNS) {
+                    $upstream = [string]$Config.primaryDNS
+                }
+                if (Get-Command -Name Set-OpenPathFirewall -ErrorAction SilentlyContinue) {
+                    $acrylicPath = Get-AcrylicPath
+                    $firewallApplied = [bool](Set-OpenPathFirewall -UpstreamDNS $upstream -AcrylicPath $acrylicPath)
+                    if (-not $firewallApplied) {
+                        throw 'Firewall reapply failed after the Acrylic reinstall'
+                    }
+                }
+                else {
+                    Write-OpenPathLog 'Set-OpenPathFirewall is unavailable; the reinstall could not reapply the DNS firewall' -Level WARN
+                }
+
+                $result.Repaired = $true
+                $result.ReasonCode = 'dns_proxy_reinstalled'
+                $state.lastReinstallResult = 'success'
+            }
+            catch {
+                $result.ReasonCode = 'dns_proxy_reinstall_unavailable'
+                $result.Detail = [string]$_.Exception.Message
+                $state.lastReinstallResult = 'failed'
+                Write-OpenPathLog "Acrylic reinstall from the local cache failed: $_" -Level WARN
+            }
+
+            Write-OpenPathAcrylicRepairState -State $state -OpenPathRoot $OpenPathRoot
+            return $result
+        }
+        default {
+            return $result
+        }
+    }
+}
+
 function Get-OpenPathDnsFailureClass {
     <#
     .SYNOPSIS

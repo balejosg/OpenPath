@@ -108,6 +108,137 @@ Describe "DNS proxy health" {
         }
     }
 
+    Context "Invoke-OpenPathDnsProxyRepair" {
+        BeforeEach {
+            $global:openPathFirewallCalls = @()
+            $script:repairRoot = Join-Path $TestDrive ('repair-' + [Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path (Join-Path $script:repairRoot 'data') -Force | Out-Null
+            $script:repairCachePath = Get-OpenPathAcrylicCachePath -OpenPathRoot $script:repairRoot
+
+            Mock Write-OpenPathLog { } -ModuleName DNS
+            Mock Get-OpenPathAcrylicArtifactSpec {
+                [PSCustomObject]@{
+                    Version = '2.2.1'
+                    PortableZipSha256 = ('a' * 64)
+                    ExecutableInstallerSha256 = ('b' * 64)
+                    PortableZipUrls = @('https://openpath.example.invalid/Acrylic-Portable.zip')
+                    ExecutableInstallerUrls = @('https://openpath.example.invalid/Acrylic.exe')
+                }
+            } -ModuleName DNS
+            Mock Assert-AcrylicDownloadHash { } -ModuleName DNS
+            Mock Test-AcrylicPortableArchive { $true } -ModuleName DNS
+            Mock Install-OpenPathAcrylicFromVerifiedArchive { $true } -ModuleName DNS
+            Mock Update-AcrylicHost { $true } -ModuleName DNS
+            Mock Restart-AcrylicService { $true } -ModuleName DNS
+            Mock Get-AcrylicPath { Join-Path $script:repairRoot 'acrylic' } -ModuleName DNS
+            Mock Invoke-AcrylicPortableDownload { } -ModuleName DNS
+            Mock Save-OpenPathAcrylicArtifactToCache { $script:repairCachePath } -ModuleName DNS
+
+            if (-not (Get-Command -Name Set-OpenPathFirewall -ErrorAction SilentlyContinue)) {
+                function global:Set-OpenPathFirewall {
+                    param($UpstreamDNS, $AcrylicPath)
+                    $global:openPathFirewallCalls += [PSCustomObject]@{ UpstreamDNS = $UpstreamDNS; AcrylicPath = $AcrylicPath }
+                    return $true
+                }
+            }
+        }
+
+        AfterEach {
+            Remove-Variable -Name openPathFirewallCalls -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It "Starts and re-registers the service for dns_proxy_down" {
+            Mock Ensure-AcrylicService { param([switch]$Start) $script:ensureStartRequested = [bool]$Start; return $true } -ModuleName DNS
+            Mock Set-AcrylicServiceAutoStart { $true } -ModuleName DNS
+
+            $result = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_proxy_down' -OpenPathRoot $script:repairRoot
+
+            $result.Attempted | Should -BeTrue
+            $result.Repaired | Should -BeTrue
+            $script:ensureStartRequested | Should -BeTrue
+        }
+
+        It "Reports reinstall unavailable without downloading when no cache exists" {
+            $result = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_proxy_missing' -OpenPathRoot $script:repairRoot
+
+            $result.Attempted | Should -BeFalse
+            $result.ReasonCode | Should -Be 'dns_proxy_reinstall_unavailable'
+            Should -Invoke Invoke-AcrylicPortableDownload -ModuleName DNS -Times 0 -Exactly
+            Should -Invoke Install-OpenPathAcrylicFromVerifiedArchive -ModuleName DNS -Times 0 -Exactly
+        }
+
+        It "Does not extract or reinstall when the cached hash fails validation" {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $script:repairCachePath) -Force | Out-Null
+            Set-Content -LiteralPath $script:repairCachePath -Value 'payload' -Encoding ASCII
+            Mock Assert-AcrylicDownloadHash { throw 'Acrylic-Portable.zip SHA256 mismatch' } -ModuleName DNS
+
+            $result = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_proxy_missing' -OpenPathRoot $script:repairRoot
+
+            $result.Attempted | Should -BeTrue
+            $result.ReasonCode | Should -Be 'dns_proxy_reinstall_unavailable'
+            Should -Invoke Install-OpenPathAcrylicFromVerifiedArchive -ModuleName DNS -Times 0 -Exactly
+        }
+
+        It "Respects the 30-minute reinstall throttle" {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $script:repairCachePath) -Force | Out-Null
+            Set-Content -LiteralPath $script:repairCachePath -Value 'payload' -Encoding ASCII
+            $statePath = Get-OpenPathAcrylicRepairStatePath -OpenPathRoot $script:repairRoot
+            [PSCustomObject]@{
+                lastReinstallAttemptAt = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToString('o')
+                lastReinstallResult = 'failed'
+                lastCacheSeedAttemptAt = ''
+            } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+
+            $result = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_proxy_missing' -OpenPathRoot $script:repairRoot
+
+            $result.Attempted | Should -BeFalse
+            $result.Detail | Should -Match 'throttle'
+            Should -Invoke Install-OpenPathAcrylicFromVerifiedArchive -ModuleName DNS -Times 0 -Exactly
+        }
+
+        It "Reapplies Acrylic host content and the firewall after a successful reinstall" {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $script:repairCachePath) -Force | Out-Null
+            Set-Content -LiteralPath $script:repairCachePath -Value 'payload' -Encoding ASCII
+            $config = [PSCustomObject]@{ primaryDNS = '10.0.0.53' }
+
+            $result = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_proxy_missing' -Config $config -OpenPathRoot $script:repairRoot
+
+            $result.Repaired | Should -BeTrue
+            $result.ReasonCode | Should -Be 'dns_proxy_reinstalled'
+            Should -Invoke Install-OpenPathAcrylicFromVerifiedArchive -ModuleName DNS -Times 1 -Exactly
+            Should -Invoke Update-AcrylicHost -ModuleName DNS -Times 1 -Exactly
+            Should -Invoke Restart-AcrylicService -ModuleName DNS -Times 1 -Exactly
+            @($global:openPathFirewallCalls).Count | Should -Be 1
+            $global:openPathFirewallCalls[0].UpstreamDNS | Should -Be '10.0.0.53'
+        }
+
+        It "Does not repair port conflicts or upstream failures" {
+            $portConflict = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_port_conflict' -OpenPathRoot $script:repairRoot
+            $upstream = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_upstream_unreachable' -OpenPathRoot $script:repairRoot
+
+            $portConflict.Attempted | Should -BeFalse
+            $upstream.Attempted | Should -BeFalse
+        }
+
+        It "Seeds the artifact cache at most once per 24 hours" {
+            $proxyState = [PSCustomObject]@{ State = 'listening' }
+
+            $first = Invoke-OpenPathAcrylicArtifactCacheSeed `
+                -ProxyState $proxyState `
+                -LocalResolutionHealthy $true `
+                -OpenPathRoot $script:repairRoot
+            $second = Invoke-OpenPathAcrylicArtifactCacheSeed `
+                -ProxyState $proxyState `
+                -LocalResolutionHealthy $true `
+                -OpenPathRoot $script:repairRoot
+
+            $first | Should -BeTrue
+            $second | Should -BeFalse
+            Should -Invoke Invoke-AcrylicPortableDownload -ModuleName DNS -Times 1 -Exactly
+            Should -Invoke Save-OpenPathAcrylicArtifactToCache -ModuleName DNS -Times 1 -Exactly
+        }
+    }
+
     Context "Watchdog integration" {
         It "Returns the DNS failure class and marks it recovery-eligible" {
             $watchdogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"

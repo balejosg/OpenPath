@@ -74,11 +74,22 @@ test('offline helper module implements config validation, payload verification, 
   );
   assert.match(
     localAcrylic,
+    /Install-OpenPathAcrylicFromVerifiedArchive/,
+    'offline Acrylic install must delegate extraction to the shared verified-archive core'
+  );
+
+  const acrylicInstaller = readText('windows/lib/internal/DNS.Acrylic.Install.ps1');
+  const sharedExtract = extractFunctionBody(
+    acrylicInstaller,
+    'Install-OpenPathAcrylicFromVerifiedArchive'
+  );
+  assert.match(
+    sharedExtract,
     /\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory/,
     'offline Acrylic install must use the Windows-compatible ZIP extractor'
   );
   assert.match(
-    localAcrylic,
+    sharedExtract,
     /Copy-Item -LiteralPath \$extractedItem\.FullName/,
     'offline Acrylic install must stage root-level ZIP entries without wildcard parsing'
   );

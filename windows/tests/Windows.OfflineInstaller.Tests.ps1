@@ -259,13 +259,16 @@ Describe "Offline installer" {
         It "Never references download URLs or Chocolatey in the offline install path" {
             $content = Get-Content (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Offline.ps1") -Raw
             $functionBody = [regex]::Match($content, 'function Install-AcrylicDNSFromLocalSource\s*\{[\s\S]*?\n\}').Value
+            $installerContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1") -Raw
+            $installCoreBody = [regex]::Match($installerContent, 'function Install-OpenPathAcrylicFromVerifiedArchive\s*\{[\s\S]*?\n\}').Value
 
             $functionBody | Should -Not -Match 'https?://'
             $functionBody | Should -Not -Match 'choco'
             $functionBody | Should -Match 'Assert-AcrylicDownloadHash'
-            $functionBody | Should -Match '\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory'
-            $functionBody | Should -Match 'Copy-Item -LiteralPath \$extractedItem\.FullName'
-            $functionBody | Should -Match 'Write-OpenPathOfflineInstallPhase'
+            $functionBody | Should -Match 'Install-OpenPathAcrylicFromVerifiedArchive'
+            $installCoreBody | Should -Match '\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory'
+            $installCoreBody | Should -Match 'Copy-Item -LiteralPath \$extractedItem\.FullName'
+            $installCoreBody | Should -Match 'Write-OpenPathOfflineInstallPhase'
         }
 
         It "Throws when the staged ZIP is absent or fails the hash assertion" {

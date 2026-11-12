@@ -1129,6 +1129,7 @@ function Invoke-OpenPathWatchdogChecks {
     $recoveryEligibleIssues = @()
     $dnsFailureClass = $null
     $dnsResolutionHealthy = $null
+    $dnsProxyState = $null
     $localWhitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
     $localWhitelistSections = $null
     $policyState = Get-OpenPathEndpointPolicyState -PortalModeActive:$PortalModeActive
@@ -1227,6 +1228,24 @@ function Invoke-OpenPathWatchdogChecks {
                 $dnsFailureIssue = "DNS proxy failure: $dnsFailureClass"
                 $issues += $dnsFailureIssue
                 $recoveryEligibleIssues += $dnsFailureIssue
+
+                if (Get-Command -Name Invoke-OpenPathDnsProxyRepair -ErrorAction SilentlyContinue) {
+                    $dnsRepairResult = Invoke-OpenPathDnsProxyRepair -FailureClass $dnsFailureClass -Config $Config
+                    if ($dnsRepairResult.ReasonCode) {
+                        & $addReasonCode ([string]$dnsRepairResult.ReasonCode)
+                        if (-not $dnsRepairResult.Repaired) {
+                            $dnsRepairIssue = "DNS proxy repair: $($dnsRepairResult.ReasonCode)"
+                            $issues += $dnsRepairIssue
+                            $recoveryEligibleIssues += $dnsRepairIssue
+                        }
+                    }
+                }
+            }
+            elseif ($dnsProxyState -and $dnsProxyState.State -eq 'listening' -and $dnsResolutionHealthy -eq $true -and
+                (Get-Command -Name Invoke-OpenPathAcrylicArtifactCacheSeed -ErrorAction SilentlyContinue)) {
+                Invoke-OpenPathAcrylicArtifactCacheSeed `
+                    -ProxyState $dnsProxyState `
+                    -LocalResolutionHealthy $dnsResolutionHealthy | Out-Null
             }
         }
     }

@@ -31,12 +31,12 @@ Describe "DNS Module - Install Contracts" {
             $content = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                '$installerVersion = "2.2.1"',
-                'https://github.com/balejosg/openpath/releases/download/acrylic-mirror-v$installerVersion/Acrylic-Portable.zip',
-                'https://downloads.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip',
-                'https://sourceforge.net/projects/acrylic/files/Acrylic/$installerVersion/Acrylic-Portable.zip/download',
-                'https://master.dl.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip?viasf=1',
-                'https://sourceforge.net/projects/acrylic/files/Acrylic/$installerVersion/Acrylic.exe/download'
+                '$version = ''2.2.1''',
+                'https://github.com/balejosg/openpath/releases/download/acrylic-mirror-v$version/Acrylic-Portable.zip',
+                'https://downloads.sourceforge.net/project/acrylic/Acrylic/$version/Acrylic-Portable.zip',
+                'https://sourceforge.net/projects/acrylic/files/Acrylic/$version/Acrylic-Portable.zip/download',
+                'https://master.dl.sourceforge.net/project/acrylic/Acrylic/$version/Acrylic-Portable.zip?viasf=1',
+                'https://sourceforge.net/projects/acrylic/files/Acrylic/$version/Acrylic.exe/download'
             )
         }
 
@@ -58,8 +58,10 @@ Describe "DNS Module - Install Contracts" {
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 'function Assert-AcrylicDownloadHash',
-                '$portableZipSha256 = ''26a5601c813257c186cd69da617ee1fff254b84f3ecb542483af8f4a5cc520cd''',
-                '$executableInstallerSha256 = ''be60bde686766a889a8878c8b27446ea3584e425583070eeef85b0b31c60adbc''',
+                'PortableZipSha256 = ''26a5601c813257c186cd69da617ee1fff254b84f3ecb542483af8f4a5cc520cd''',
+                'ExecutableInstallerSha256 = ''be60bde686766a889a8878c8b27446ea3584e425583070eeef85b0b31c60adbc''',
+                '$portableZipSha256 = $artifact.PortableZipSha256',
+                '$executableInstallerSha256 = $artifact.ExecutableInstallerSha256',
                 'Assert-AcrylicDownloadHash -Path $zipPath -ExpectedSha256 $portableZipSha256 -ArtifactName ''Acrylic-Portable.zip''',
                 'Assert-AcrylicDownloadHash -Path $exePath -ExpectedSha256 $executableInstallerSha256 -ArtifactName ''Acrylic.exe'''
             )

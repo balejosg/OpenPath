@@ -56,5 +56,12 @@ Export-ModuleMember -Function @(
     'Test-DNSResolution',
     'Test-DNSSinkhole',
     'Get-OpenPathDnsProxyState',
-    'Get-OpenPathDnsFailureClass'
+    'Get-OpenPathDnsFailureClass',
+    'Get-OpenPathAcrylicArtifactSpec',
+    'Get-OpenPathAcrylicCachePath',
+    'Get-OpenPathAcrylicRepairStatePath',
+    'Save-OpenPathAcrylicArtifactToCache',
+    'Install-OpenPathAcrylicFromVerifiedArchive',
+    'Invoke-OpenPathDnsProxyRepair',
+    'Invoke-OpenPathAcrylicArtifactCacheSeed'
 )

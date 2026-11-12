@@ -1,6 +1,22 @@
 Describe "Watchdog Script" {
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
+
+        # The aggregate suite imports DNS before this file. Keep the watchdog
+        # scenarios hermetic so the local proxy probe does not read the host.
+        function global:Get-OpenPathDnsProxyState {
+            [PSCustomObject]@{
+                State = 'listening'
+                ServiceStatus = 'Running'
+                ListenerPid = 0
+                ListenerProcessName = 'AcrylicService'
+                AcrylicInstalled = $true
+            }
+        }
+        function global:Get-OpenPathDnsFailureClass {
+            param($ProxyState, $LocalResolutionHealthy)
+            return $null
+        }
     }
 
     Context "Module import resilience" {

@@ -57,6 +57,109 @@ function Test-AcrylicInstalled {
     return ($null -ne $path -and (Test-Path "$path\AcrylicService.exe"))
 }
 
+function Get-OpenPathAcrylicArtifactSpec {
+    <#
+    .SYNOPSIS
+        Returns the pinned Acrylic release version, hashes, and download URLs.
+    .DESCRIPTION
+        Single source of truth for the online installer, the offline package validator,
+        the local cache, and the watchdog repair path.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $version = '2.2.1'
+    return [PSCustomObject]@{
+        Version = $version
+        PortableZipSha256 = '26a5601c813257c186cd69da617ee1fff254b84f3ecb542483af8f4a5cc520cd'
+        ExecutableInstallerSha256 = 'be60bde686766a889a8878c8b27446ea3584e425583070eeef85b0b31c60adbc'
+        PortableZipUrls = @(
+            "https://github.com/balejosg/openpath/releases/download/acrylic-mirror-v$version/Acrylic-Portable.zip",
+            "https://downloads.sourceforge.net/project/acrylic/Acrylic/$version/Acrylic-Portable.zip",
+            "https://sourceforge.net/projects/acrylic/files/Acrylic/$version/Acrylic-Portable.zip/download",
+            "https://master.dl.sourceforge.net/project/acrylic/Acrylic/$version/Acrylic-Portable.zip?viasf=1"
+        )
+        ExecutableInstallerUrls = @(
+            "https://downloads.sourceforge.net/project/acrylic/Acrylic/$version/Acrylic.exe",
+            "https://sourceforge.net/projects/acrylic/files/Acrylic/$version/Acrylic.exe/download",
+            "https://master.dl.sourceforge.net/project/acrylic/Acrylic/$version/Acrylic.exe?viasf=1"
+        )
+    }
+}
+
+function Get-OpenPathAcrylicDataRoot {
+    <#
+    .SYNOPSIS
+        Resolves the agent data directory that holds the Acrylic cache and repair state.
+    #>
+    param([string]$OpenPathRoot = '')
+
+    if (Get-Command -Name Get-OpenPathCapabilityStorageRoot -ErrorAction SilentlyContinue) {
+        return (Get-OpenPathCapabilityStorageRoot -OpenPathRoot $OpenPathRoot)
+    }
+
+    if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {
+        $OpenPathRoot = if ($script:OpenPathRoot) { $script:OpenPathRoot } else { 'C:\OpenPath' }
+    }
+    return [System.IO.Path]::Combine($OpenPathRoot, 'data')
+}
+
+function Get-OpenPathAcrylicCachePath {
+    <#
+    .SYNOPSIS
+        Returns the verified portable ZIP cache path under the agent data directory.
+    #>
+    param([string]$OpenPathRoot = '')
+
+    $dataRoot = Get-OpenPathAcrylicDataRoot -OpenPathRoot $OpenPathRoot
+    return [System.IO.Path]::Combine($dataRoot, 'cache', 'acrylic', 'Acrylic-Portable.zip')
+}
+
+function Get-OpenPathAcrylicRepairStatePath {
+    <#
+    .SYNOPSIS
+        Returns the repair throttle/attempt state path under the agent data directory.
+    #>
+    param([string]$OpenPathRoot = '')
+
+    $dataRoot = Get-OpenPathAcrylicDataRoot -OpenPathRoot $OpenPathRoot
+    return [System.IO.Path]::Combine($dataRoot, 'acrylic-repair-state.json')
+}
+
+function Save-OpenPathAcrylicArtifactToCache {
+    <#
+    .SYNOPSIS
+        Verifies a portable Acrylic ZIP and copies it into the local repair cache.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [string]$ExpectedSha256 = '',
+        [string]$OpenPathRoot = ''
+    )
+
+    $spec = Get-OpenPathAcrylicArtifactSpec
+    if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+        $ExpectedSha256 = $spec.PortableZipSha256
+    }
+
+    Assert-AcrylicDownloadHash -Path $SourcePath -ExpectedSha256 $ExpectedSha256 -ArtifactName 'Acrylic-Portable.zip'
+    if (-not (Test-AcrylicPortableArchive -Path $SourcePath)) {
+        throw 'Acrylic artifact is not a valid portable release'
+    }
+
+    $cachePath = Get-OpenPathAcrylicCachePath -OpenPathRoot $OpenPathRoot
+    $cacheDir = Split-Path -Parent $cachePath
+    if (-not (Test-Path $cacheDir)) {
+        New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop | Out-Null
+    }
+    if ([System.IO.Path]::GetFullPath($SourcePath) -ne [System.IO.Path]::GetFullPath($cachePath)) {
+        Copy-Item -LiteralPath $SourcePath -Destination $cachePath -Force -ErrorAction Stop
+    }
+    Write-OpenPathLog "Cached verified Acrylic artifact at $cachePath"
+    return $cachePath
+}
+
 function Get-AcrylicRegisteredService {
     <#
     .SYNOPSIS
@@ -242,6 +345,87 @@ function Assert-AcrylicDownloadHash {
     }
 }
 
+function Install-OpenPathAcrylicFromVerifiedArchive {
+    <#
+    .SYNOPSIS
+        Extracts a hash-verified Acrylic portable ZIP and registers its service.
+    .DESCRIPTION
+        Shared core for the offline installer and the watchdog reinstall path. The caller
+        is responsible for hash and archive validation; this function only stages files
+        and registers the service. Offline install-phase diagnostics are emitted when the
+        offline helper is loaded.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $true)][string]$AcrylicZipPath,
+        [string]$InstallDir = "${env:ProgramFiles(x86)}\Acrylic DNS Proxy",
+        [string]$FailureStatusPath = ''
+    )
+
+    if (-not (Test-Path $AcrylicZipPath)) {
+        throw "Acrylic ZIP not found: $AcrylicZipPath"
+    }
+
+    if (-not $PSCmdlet.ShouldProcess("Acrylic DNS Proxy from $AcrylicZipPath", 'Install locally')) {
+        return $false
+    }
+
+    $writePhase = {
+        param([string]$Phase)
+
+        if ($FailureStatusPath -and (Get-Command -Name Write-OpenPathOfflineInstallPhase -ErrorAction SilentlyContinue)) {
+            Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase $Phase
+        }
+    }
+
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("acrylic-offline-" + [Guid]::NewGuid().ToString('N'))
+
+    try {
+        & $writePhase 'acrylic-local-create-temp'
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        & $writePhase 'acrylic-local-extract'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($AcrylicZipPath, $tempDir)
+        if (-not (Test-Path $InstallDir)) {
+            New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        }
+
+        & $writePhase 'acrylic-local-stage'
+        # The pinned Acrylic archive is flat. Preserve the historical
+        # flattening of a single wrapper directory, while copying every root
+        # entry when the archive has a mixed or flat layout.
+        $extractedItems = @(Get-ChildItem -LiteralPath $tempDir -Force)
+        $extractedDirectories = @($extractedItems | Where-Object { $_.PSIsContainer })
+        $extractedFiles = @($extractedItems | Where-Object { -not $_.PSIsContainer })
+        if ($extractedDirectories.Count -eq 1 -and $extractedFiles.Count -eq 0) {
+            foreach ($nestedItem in @(Get-ChildItem -LiteralPath $extractedDirectories[0].FullName -Force)) {
+                Copy-Item -LiteralPath $nestedItem.FullName -Destination $InstallDir -Recurse -Force
+            }
+        }
+        else {
+            foreach ($extractedItem in $extractedItems) {
+                Copy-Item -LiteralPath $extractedItem.FullName -Destination $InstallDir -Recurse -Force
+            }
+        }
+
+        & $writePhase 'acrylic-local-validate-output'
+        if (-not (Test-Path (Join-Path $InstallDir 'AcrylicService.exe'))) {
+            throw 'Local Acrylic install did not produce AcrylicService.exe'
+        }
+
+        & $writePhase 'acrylic-local-register'
+        Register-AcrylicServiceFromPath -AcrylicPath $InstallDir | Out-Null
+        & $writePhase 'acrylic-local-complete'
+        Write-OpenPathLog 'Acrylic DNS Proxy installed from a verified local archive'
+        return $true
+    }
+    finally {
+        if (Test-Path $tempDir) {
+            Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Install-AcrylicDNS {
     <#
     .SYNOPSIS
@@ -264,18 +448,9 @@ function Install-AcrylicDNS {
     }
 
     Write-OpenPathLog "Installing Acrylic DNS Proxy..."
-    $installerVersion = "2.2.1"
-    $portableZipSha256 = '26a5601c813257c186cd69da617ee1fff254b84f3ecb542483af8f4a5cc520cd'
-    $executableInstallerSha256 = 'be60bde686766a889a8878c8b27446ea3584e425583070eeef85b0b31c60adbc'
-    $githubMirrorUrl = "https://github.com/balejosg/openpath/releases/download/acrylic-mirror-v$installerVersion/Acrylic-Portable.zip"
-    $installerUrl = "https://downloads.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip"
-    $installerFallbackUrl = "https://sourceforge.net/projects/acrylic/files/Acrylic/$installerVersion/Acrylic-Portable.zip/download"
-    $installerMirrorUrl = "https://master.dl.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip?viasf=1"
-    $executableInstallerUrls = @(
-        "https://downloads.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic.exe",
-        "https://sourceforge.net/projects/acrylic/files/Acrylic/$installerVersion/Acrylic.exe/download",
-        "https://master.dl.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic.exe?viasf=1"
-    )
+    $artifact = Get-OpenPathAcrylicArtifactSpec
+    $portableZipSha256 = $artifact.PortableZipSha256
+    $executableInstallerSha256 = $artifact.ExecutableInstallerSha256
     $tempDir = "$env:TEMP\acrylic-install"
     $installDir = "${env:ProgramFiles(x86)}\Acrylic DNS Proxy"
 
@@ -289,7 +464,7 @@ function Install-AcrylicDNS {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
         $downloadError = $null
-        foreach ($candidateUrl in @($githubMirrorUrl, $installerUrl, $installerFallbackUrl, $installerMirrorUrl)) {
+        foreach ($candidateUrl in @($artifact.PortableZipUrls)) {
             try {
                 if (Test-Path $zipPath) {
                     Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
@@ -311,7 +486,7 @@ function Install-AcrylicDNS {
         if ($downloadError) {
             $executableInstallError = $null
             $exePath = "$tempDir\Acrylic.exe"
-            foreach ($candidateUrl in $executableInstallerUrls) {
+            foreach ($candidateUrl in @($artifact.ExecutableInstallerUrls)) {
                 try {
                     if (Test-Path $exePath) {
                         Remove-Item $exePath -Force -ErrorAction SilentlyContinue
@@ -338,6 +513,13 @@ function Install-AcrylicDNS {
             }
             if ($executableInstallError) { throw $executableInstallError }
             throw $downloadError
+        }
+
+        try {
+            Save-OpenPathAcrylicArtifactToCache -SourcePath $zipPath -ExpectedSha256 $portableZipSha256 | Out-Null
+        }
+        catch {
+            Write-OpenPathLog "Could not cache the verified Acrylic artifact: $_" -Level WARN
         }
 
         Write-OpenPathLog "Extracting..."
