@@ -1127,6 +1127,8 @@ function Invoke-OpenPathWatchdogChecks {
         }
     }
     $recoveryEligibleIssues = @()
+    $dnsFailureClass = $null
+    $dnsResolutionHealthy = $null
     $localWhitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
     $localWhitelistSections = $null
     $policyState = Get-OpenPathEndpointPolicyState -PortalModeActive:$PortalModeActive
@@ -1198,7 +1200,10 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
-        if ($shouldRunProtectedModeChecks -and -not (Test-DNSResolution)) {
+        if ($shouldRunProtectedModeChecks) {
+            $dnsResolutionHealthy = [bool](Test-DNSResolution)
+        }
+        if ($shouldRunProtectedModeChecks -and -not $dnsResolutionHealthy) {
             $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
                 -PolicyState $policyState `
                 -DnsResolutionHealthy:$false
@@ -1209,6 +1214,24 @@ function Invoke-OpenPathWatchdogChecks {
     }
     catch {
         Write-OpenPathLog "Watchdog: Error checking DNS resolution: $_" -Level ERROR
+    }
+
+    try {
+        if ($shouldRunProtectedModeChecks -and (Get-Command -Name Get-OpenPathDnsProxyState -ErrorAction SilentlyContinue)) {
+            $dnsProxyState = Get-OpenPathDnsProxyState
+            $dnsFailureClass = Get-OpenPathDnsFailureClass `
+                -ProxyState $dnsProxyState `
+                -LocalResolutionHealthy $dnsResolutionHealthy
+            if ($dnsFailureClass) {
+                & $addReasonCode $dnsFailureClass
+                $dnsFailureIssue = "DNS proxy failure: $dnsFailureClass"
+                $issues += $dnsFailureIssue
+                $recoveryEligibleIssues += $dnsFailureIssue
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Error checking DNS proxy state: $_" -Level WARN
     }
 
     try {
@@ -1496,6 +1519,7 @@ function Invoke-OpenPathWatchdogChecks {
         StaleFailsafeActive = $staleFailsafeActive
         IntegrityTampered = $integrityTampered
         FailOpenActive = [bool]$policyState.FailOpenActive
+        DnsFailureClass = $dnsFailureClass
     }
 }
 

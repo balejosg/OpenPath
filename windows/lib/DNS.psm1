@@ -17,6 +17,7 @@ $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 # service core it wraps).
 . (Join-Path $script:InternalModulePath 'DNS.Acrylic.Restart.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.Diagnostics.ps1')
+. (Join-Path $script:InternalModulePath 'DNS.ProxyHealth.ps1')
 
 Export-ModuleMember -Function @(
     'Get-AcrylicPath',
@@ -53,5 +54,7 @@ Export-ModuleMember -Function @(
     'Stop-AcrylicService',
     'Resolve-OpenPathDnsWithRetry',
     'Test-DNSResolution',
-    'Test-DNSSinkhole'
+    'Test-DNSSinkhole',
+    'Get-OpenPathDnsProxyState',
+    'Get-OpenPathDnsFailureClass'
 )
