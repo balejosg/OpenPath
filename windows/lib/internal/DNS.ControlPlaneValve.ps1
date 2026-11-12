@@ -564,8 +564,15 @@ function Enable-OpenPathDnsFailureOpenMode {
 
     try {
         Restore-OriginalDNS
-        if (Get-Command -Name Remove-OpenPathFirewall -ErrorAction SilentlyContinue) {
-            Remove-OpenPathFirewall | Out-Null
+        $firewallRemoveCommand = Get-Command -Name 'Remove-OpenPathFirewall' -ErrorAction SilentlyContinue
+        if (-not $firewallRemoveCommand) {
+            $firewallRemoveCommand = Get-Command -Name 'Firewall\Remove-OpenPathFirewall' -ErrorAction SilentlyContinue
+        }
+        if ($firewallRemoveCommand) {
+            & $firewallRemoveCommand | Out-Null
+        }
+        else {
+            Write-OpenPathLog 'Remove-OpenPathFirewall is unavailable; the DNS failure open mode could not remove the firewall' -Level WARN
         }
 
         $state = [PSCustomObject]@{
