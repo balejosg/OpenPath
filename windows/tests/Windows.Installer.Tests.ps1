@@ -2486,6 +2486,59 @@ exit `$installerExitCode
         }
     }
 
+    Context "Original DNS snapshot capture" {
+        It "Writes the v3 snapshot with per-adapter origin from the registry" {
+            $dnsHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Dns.ps1"
+            . $dnsHelperPath
+
+            $script:installerSnapshotRoot = Join-Path $TestDrive 'installer-v3'
+            function global:Get-NetAdapter {
+                [CmdletBinding()] param()
+                [pscustomobject]@{ InterfaceGuid = 'dhcp-guid'; Name = 'Ethernet'; ifIndex = 12; Status = 'Up' }
+                [pscustomobject]@{ InterfaceGuid = 'static-guid'; Name = 'Wi-Fi'; ifIndex = 7; Status = 'Up' }
+            }
+
+            function global:Get-DnsClientServerAddress {
+                [CmdletBinding()] param([int]$InterfaceIndex, [string]$AddressFamily)
+                [pscustomobject]@{ ServerAddresses = @('127.0.0.1') }
+            }
+
+            function global:Get-ItemProperty {
+                [CmdletBinding()] param([string]$Path)
+                if ([string]$Path -like '*dhcp-guid') {
+                    return [pscustomobject]@{ NameServer = '127.0.0.1'; DhcpNameServer = '10.0.0.53'; EnableDHCP = 1 }
+                }
+                return [pscustomobject]@{ NameServer = '127.0.0.1, 10.0.0.54'; DhcpNameServer = '192.168.1.1'; EnableDHCP = 0 }
+            }
+
+            try {
+                Save-OpenPathInstallerOriginalDnsSnapshot -OpenPathRoot $script:installerSnapshotRoot | Should -BeTrue
+
+                $snapshotPath = Get-OpenPathInstallerOriginalDnsSnapshotPath -OpenPathRoot $script:installerSnapshotRoot
+                $payload = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+                $payload.version | Should -Be 3
+                $payload.PSObject.Properties['adapters'] | Should -Not -BeNullOrEmpty
+                @($payload.adapters).Count | Should -Be 2
+
+                $entries = @{}
+                foreach ($entry in @($payload.adapters)) {
+                    $entries[[string]$entry.InterfaceGuid] = $entry
+                }
+
+                [string]$entries['dhcp-guid'].Origin | Should -Be 'dhcp'
+                @($entries['dhcp-guid'].ServerAddresses) | Should -Not -Contain '127.0.0.1'
+                [string]$entries['static-guid'].Origin | Should -Be 'static'
+                (@($entries['static-guid'].ServerAddresses) -join ',') | Should -Be '10.0.0.54'
+            }
+            finally {
+                Remove-Item Function:\Get-NetAdapter -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-DnsClientServerAddress -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-ItemProperty -ErrorAction SilentlyContinue
+                Remove-Variable -Name installerSnapshotRoot -Scope Script -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     Context "DNS probe guidance" {
         It "Derives the suggested nslookup domain from the shared probe list" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"

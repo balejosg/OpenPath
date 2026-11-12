@@ -316,6 +316,22 @@ Describe "Operational Command Script" {
                 'Restore-OriginalDNS'
             )
         }
+
+        It "keeps the suspend path on the restore that sweeps loopback resolvers" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $serviceContent = Get-Content $servicePath -Raw
+            $disableStart = $content.IndexOf("'disable' {")
+            $disableEnd = $content.IndexOf("'help' {")
+            $disableBody = $content.Substring($disableStart, $disableEnd - $disableStart)
+            $restoreStart = $serviceContent.IndexOf('function Restore-OriginalDNS')
+            $restoreEnd = $serviceContent.IndexOf('function Restore-OpenPathCaptivePortalDNS')
+            $restoreBody = $serviceContent.Substring($restoreStart, $restoreEnd - $restoreStart)
+
+            $disableBody | Should -Match 'Restore-OriginalDNS'
+            $restoreBody | Should -Match 'Reset-OpenPathDnsLoopbackResolvers'
+        }
     }
 
     Context "Help text completeness" {

@@ -144,11 +144,102 @@ Describe "DNS Module" {
                 'InterfaceAlias = [string]$adapter.Name',
                 'InterfaceIndex = [int]$adapter.ifIndex',
                 'Gateway = [string]$gateway',
-                'ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })',
+                'Origin = [string]$origin',
+                'ServerAddresses = @($serverAddresses)',
+                'version = 3',
+                'Get-OpenPathDnsInterfaceRegistryState',
+                'DhcpNameServer',
                 'networkFingerprint',
                 '$snapshotSaved = Save-OpenPathOriginalDnsSnapshot'
             )
             $fingerprintBody | Should -Not -Match 'ServerAddresses'
+        }
+
+        It "Records DHCP origin when the registry NameServer is loopback" {
+            $snapshotPath = Join-Path $TestDrive 'dns-v3-dhcp.json'
+            $global:openPathSnapshotPath = $snapshotPath
+            Mock Get-NetAdapter {
+                @([PSCustomObject]@{ InterfaceGuid = 'dhcp-guid'; Name = 'Ethernet'; ifIndex = 7; Status = 'Up' })
+            } -ModuleName DNS
+            Mock Get-DnsClientServerAddress {
+                [PSCustomObject]@{ ServerAddresses = @('127.0.0.1') }
+            } -ModuleName DNS
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ NameServer = '127.0.0.1'; DhcpNameServer = '10.0.0.53'; EnableDHCP = 1 }
+            } -ModuleName DNS
+            Mock Write-OpenPathLog { } -ModuleName DNS
+
+            InModuleScope DNS {
+                Save-OpenPathOriginalDnsSnapshot -Path $global:openPathSnapshotPath -Force | Should -BeTrue
+            }
+
+            $payload = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+            $payload.version | Should -Be 3
+            @($payload.adapters).Count | Should -Be 1
+            [string]$payload.adapters[0].Origin | Should -Be 'dhcp'
+            @($payload.adapters[0].ServerAddresses) | Should -Not -Contain '127.0.0.1'
+            Remove-Variable -Name openPathSnapshotPath -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It "Records static origin from a manual NameServer and drops loopback entries" {
+            $snapshotPath = Join-Path $TestDrive 'dns-v3-static.json'
+            $global:openPathSnapshotPath = $snapshotPath
+            Mock Get-NetAdapter {
+                @([PSCustomObject]@{ InterfaceGuid = 'static-guid'; Name = 'Ethernet'; ifIndex = 7; Status = 'Up' })
+            } -ModuleName DNS
+            Mock Get-DnsClientServerAddress {
+                [PSCustomObject]@{ ServerAddresses = @('127.0.0.1') }
+            } -ModuleName DNS
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ NameServer = '127.0.0.1, 10.0.0.53'; DhcpNameServer = '192.168.1.1'; EnableDHCP = 0 }
+            } -ModuleName DNS
+            Mock Write-OpenPathLog { } -ModuleName DNS
+
+            InModuleScope DNS {
+                Save-OpenPathOriginalDnsSnapshot -Path $global:openPathSnapshotPath -Force | Should -BeTrue
+            }
+
+            $payload = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+            $payload.version | Should -Be 3
+            [string]$payload.adapters[0].Origin | Should -Be 'static'
+            (@($payload.adapters[0].ServerAddresses) -join ',') | Should -Be '10.0.0.53'
+            Remove-Variable -Name openPathSnapshotPath -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It "Refreshes the original DNS snapshot with v3 origin data after a network change" {
+            $snapshotPath = Join-Path $TestDrive 'dns-v2-stale.json'
+            $global:openPathSnapshotPath = $snapshotPath
+            [PSCustomObject]@{
+                version            = 2
+                networkFingerprint = 'stale-network'
+                adapters           = @(
+                    [PSCustomObject]@{
+                        InterfaceGuid   = 'old-guid'
+                        InterfaceAlias  = 'Old'
+                        InterfaceIndex  = 1
+                        ServerAddresses = @('10.0.0.1')
+                    }
+                )
+            } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $snapshotPath -Encoding UTF8
+            Mock Get-NetAdapter {
+                @([PSCustomObject]@{ InterfaceGuid = 'new-guid'; Name = 'Ethernet'; ifIndex = 7; Status = 'Up' })
+            } -ModuleName DNS
+            Mock Get-DnsClientServerAddress {
+                [PSCustomObject]@{ ServerAddresses = @('10.0.0.53') }
+            } -ModuleName DNS
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ NameServer = ''; DhcpNameServer = '10.0.0.53'; EnableDHCP = 1 }
+            } -ModuleName DNS
+            Mock Write-OpenPathLog { } -ModuleName DNS
+
+            InModuleScope DNS {
+                Update-OpenPathOriginalDnsSnapshotForCurrentNetwork -Path $global:openPathSnapshotPath | Should -BeTrue
+            }
+
+            $payload = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+            $payload.version | Should -Be 3
+            [string]$payload.adapters[0].Origin | Should -Be 'dhcp'
+            Remove-Variable -Name openPathSnapshotPath -Scope Global -ErrorAction SilentlyContinue
         }
 
         It "Restores DNS by InterfaceGuid with index and alias fallback and resets empty server lists" {
@@ -231,6 +322,7 @@ Describe "DNS Module" {
                 }
             } -ModuleName DNS
             Mock Get-DnsClientServerAddress { @() } -ModuleName DNS
+            Mock Get-ItemProperty { throw 'registry key unavailable' } -ModuleName DNS
         }
 
         AfterEach {
@@ -279,6 +371,103 @@ Describe "DNS Module" {
 
             @($global:openPathRestoreDnsCalls).Count | Should -Be 1
             $global:openPathRestoreDnsCalls[0].InterfaceIndex | Should -Be 7
+            $global:openPathRestoreDnsCalls[0].ResetServerAddresses | Should -BeFalse
+            (@($global:openPathRestoreDnsCalls[0].ServerAddresses) -join ',') | Should -Be '10.0.0.53'
+        }
+
+        It "Resets a v3 snapshot entry whose origin is DHCP instead of restoring static DNS" {
+            $snapshot = [PSCustomObject]@{
+                version  = 3
+                adapters = @(
+                    [PSCustomObject]@{
+                        InterfaceGuid   = 'adapter-guid'
+                        InterfaceAlias  = 'Ethernet'
+                        InterfaceIndex  = 7
+                        Origin          = 'dhcp'
+                        ServerAddresses = @('10.0.0.53')
+                    }
+                )
+            }
+            $snapshotPath = Join-Path $TestDrive 'original-dns.json'
+            $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $snapshotPath -Encoding UTF8
+
+            InModuleScope DNS { Restore-OriginalDNS -Confirm:$false }
+
+            @($global:openPathRestoreDnsCalls).Count | Should -Be 1
+            $global:openPathRestoreDnsCalls[0].InterfaceIndex | Should -Be 7
+            $global:openPathRestoreDnsCalls[0].ResetServerAddresses | Should -BeTrue
+            $global:openPathRestoreDnsCalls[0].ServerAddresses | Should -BeNullOrEmpty
+        }
+
+        It "Restores non-loopback addresses from a v3 static-origin snapshot entry" {
+            $snapshot = [PSCustomObject]@{
+                version  = 3
+                adapters = @(
+                    [PSCustomObject]@{
+                        InterfaceGuid   = 'adapter-guid'
+                        InterfaceAlias  = 'Ethernet'
+                        InterfaceIndex  = 7
+                        Origin          = 'static'
+                        ServerAddresses = @('127.0.0.1', '10.0.0.53')
+                    }
+                )
+            }
+            $snapshotPath = Join-Path $TestDrive 'original-dns.json'
+            $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $snapshotPath -Encoding UTF8
+
+            InModuleScope DNS { Restore-OriginalDNS -Confirm:$false }
+
+            @($global:openPathRestoreDnsCalls).Count | Should -Be 1
+            $global:openPathRestoreDnsCalls[0].ResetServerAddresses | Should -BeFalse
+            (@($global:openPathRestoreDnsCalls[0].ServerAddresses) -join ',') | Should -Be '10.0.0.53'
+        }
+
+        It "Resets a legacy snapshot entry when the adapter still gets DNS from DHCP" {
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ NameServer = ''; DhcpNameServer = '10.0.0.99'; EnableDHCP = 1 }
+            } -ModuleName DNS
+            $snapshot = [PSCustomObject]@{
+                version  = 2
+                adapters = @(
+                    [PSCustomObject]@{
+                        InterfaceGuid   = 'adapter-guid'
+                        InterfaceAlias  = 'Ethernet'
+                        InterfaceIndex  = 7
+                        ServerAddresses = @('10.0.0.53')
+                    }
+                )
+            }
+            $snapshotPath = Join-Path $TestDrive 'original-dns.json'
+            $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $snapshotPath -Encoding UTF8
+
+            InModuleScope DNS { Restore-OriginalDNS -Confirm:$false }
+
+            @($global:openPathRestoreDnsCalls).Count | Should -Be 1
+            $global:openPathRestoreDnsCalls[0].ResetServerAddresses | Should -BeTrue
+            $global:openPathRestoreDnsCalls[0].ServerAddresses | Should -BeNullOrEmpty
+        }
+
+        It "Restores a legacy snapshot entry when the adapter does not use DHCP DNS" {
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ NameServer = '10.0.0.53'; DhcpNameServer = ''; EnableDHCP = 0 }
+            } -ModuleName DNS
+            $snapshot = [PSCustomObject]@{
+                version  = 2
+                adapters = @(
+                    [PSCustomObject]@{
+                        InterfaceGuid   = 'adapter-guid'
+                        InterfaceAlias  = 'Ethernet'
+                        InterfaceIndex  = 7
+                        ServerAddresses = @('10.0.0.53')
+                    }
+                )
+            }
+            $snapshotPath = Join-Path $TestDrive 'original-dns.json'
+            $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $snapshotPath -Encoding UTF8
+
+            InModuleScope DNS { Restore-OriginalDNS -Confirm:$false }
+
+            @($global:openPathRestoreDnsCalls).Count | Should -Be 1
             $global:openPathRestoreDnsCalls[0].ResetServerAddresses | Should -BeFalse
             (@($global:openPathRestoreDnsCalls[0].ServerAddresses) -join ',') | Should -Be '10.0.0.53'
         }

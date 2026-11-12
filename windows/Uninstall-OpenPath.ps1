@@ -199,6 +199,55 @@ function Test-OpenPathUninstallLoopbackAddress {
     return ($text -eq '::1' -or $text -eq '0.0.0.0' -or $text -match '^127\.')
 }
 
+function ConvertFrom-OpenPathUninstallDnsNameServerValue {
+    # splits a registry NameServer or DhcpNameServer value into individual address strings.
+    param([object]$Value)
+
+    return @(
+        foreach ($part in ([string]$Value -split '[,\s]+')) {
+            $address = ([string]$part).Trim()
+            if ($address) { $address }
+        }
+    )
+}
+
+function Get-OpenPathUninstallDnsInterfaceRegistryState {
+    # reads the static and dhcp dns registry values for one adapter interface; an unreadable
+    # key returns Readable = false so the caller can use the connectivity-safe dhcp direction.
+    param([string]$InterfaceGuid)
+
+    $state = [PSCustomObject]@{
+        Readable = $false
+        EnableDhcp = $false
+        NameServer = @()
+        DhcpNameServer = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($InterfaceGuid)) { return $state }
+
+    try {
+        $interfaceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$InterfaceGuid"
+        $properties = Get-ItemProperty -Path $interfaceKey -ErrorAction Stop
+        $state.Readable = $true
+        $state.NameServer = @(ConvertFrom-OpenPathUninstallDnsNameServerValue -Value $properties.NameServer)
+        $state.DhcpNameServer = @(ConvertFrom-OpenPathUninstallDnsNameServerValue -Value $properties.DhcpNameServer)
+        if ($null -ne $properties.EnableDHCP) {
+            $state.EnableDhcp = ([int]$properties.EnableDHCP -ne 0)
+        }
+    }
+    catch {
+    }
+
+    return $state
+}
+
+function Test-OpenPathUninstallDnsLegacyDhcpOrigin {
+    # returns true when a live adapter still uses DHCP and has a DHCP-offered DNS server.
+    param([object]$Adapter)
+
+    $registryState = Get-OpenPathUninstallDnsInterfaceRegistryState -InterfaceGuid ([string]$Adapter.InterfaceGuid)
+    return [bool]($registryState.Readable -and $registryState.EnableDhcp -and @($registryState.DhcpNameServer).Count -gt 0)
+}
+
 function Restore-OpenPathOriginalDns {
     $snapshotPath = Join-Path $OpenPathRoot 'data\original-dns.json'
     if ((Test-Path $snapshotPath) -and (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) {
@@ -229,11 +278,30 @@ function Restore-OpenPathOriginalDns {
                 $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
                         $_ -and -not (Test-OpenPathUninstallLoopbackAddress -Address $_)
                     })
-                if ($servers.Count -gt 0) {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction SilentlyContinue
+                $origin = ''
+                if ($entry.PSObject.Properties['Origin']) {
+                    $origin = ([string]$entry.Origin).Trim().ToLowerInvariant()
+                }
+
+                $resetToDhcp = $false
+                if ($origin -eq 'static') {
+                    $resetToDhcp = ($servers.Count -le 0)
+                }
+                elseif ($origin) {
+                    $resetToDhcp = $true
+                }
+                elseif (Test-OpenPathUninstallDnsLegacyDhcpOrigin -Adapter $adapter) {
+                    $resetToDhcp = $true
+                }
+                elseif ($servers.Count -le 0) {
+                    $resetToDhcp = $true
+                }
+
+                if ($resetToDhcp) {
+                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
                 }
                 else {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction SilentlyContinue
                 }
             }
         }

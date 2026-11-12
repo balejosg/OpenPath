@@ -317,10 +317,28 @@ Uses `Get-Content -Raw` extensively.
 | `windows/lib/CaptivePortal.psm1`                  | Function body slices via `IndexOf`, ordering assertions, absent patterns                                                   | Same as above.                                                                                         |
 | `windows/lib/internal/Common.Domains.Catalog.ps1` | Function definition presence for `function Get-OpenPathCaptivePortalProbeDomains` (moved here from Common.Domains.ps1)     | Same as above.                                                                                         |
 | `windows/lib/internal/Common.Domains.ps1`         | Call-site needle `Domains = @(Get-OpenPathCaptivePortalProbeDomains)` (definition now lives in Common.Domains.Catalog.ps1) | Same as above.                                                                                         |
+| `windows/lib/internal/Common.Network.ps1`         | `Get-OpenPathCaptivePortalOriginalDnsCandidates` reads the v3 snapshot `adapters[].ServerAddresses` shape                  | Keep the candidate reader compatible with `adapters[].ServerAddresses`.                                |
 
 **Ordering assertions in this test are especially fragile:** `$content.IndexOf('A') | Should -BeLessThan $content.IndexOf('B')` fails if either string moves past the other, even within the same logical function. Do not reorder code blocks in guarded files without checking for `IndexOf` ordering asserts first.
 
 ---
+
+### windows/tests/Windows.DNS.Core.Tests.ps1
+
+Uses `Get-Content -Raw` for snapshot capture and restore contracts.
+
+| Source files read                              | Needle kinds                                                                                                                                                                              | Before renaming or editing                                                                                   |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `windows/lib/internal/DNS.Acrylic.Service.ps1` | Snapshot capture contract (`version = 3`, `Origin`, registry `NameServer`/`DhcpNameServer`), restore matching order, loopback sweep, and the `Restore-OriginalDNS` snapshot rollback body | Update the needles together with the capture fields, restore rules, or `Reset-OpenPathDnsLoopbackResolvers`. |
+
+### windows/tests/Windows.Cli.Tests.ps1
+
+Uses `Get-Content -Raw`.
+
+| Source files read                              | Needle kinds                                                                                                                                                         | Before renaming or editing                                                 |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `windows/OpenPath.ps1`                         | Canonical verbs, disable/suspend calls (`Restore-OriginalDNS`), enable/egress-floor ordering, and the `'disable'` / `'help'` slice boundaries for source-text checks | Keep the `'disable'` block before `'help'` or update the slice boundaries. |
+| `windows/lib/internal/DNS.Acrylic.Service.ps1` | The suspend path must call the restore that contains `Reset-OpenPathDnsLoopbackResolvers`                                                                            | Update both needles if the restore or the loopback sweep is renamed.       |
 
 ### windows/tests/Windows.Browser.NativeHost.Tests.ps1
 

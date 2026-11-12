@@ -185,6 +185,8 @@ Describe "Installer cleanup helper" {
             }
         }
 
+        function global:Get-DnsClientServerAddress { @() }
+
         function global:Set-DnsClientServerAddress {
             [CmdletBinding()]
             param(
@@ -216,12 +218,164 @@ Describe "Installer cleanup helper" {
             Remove-Item Function:\Test-Path -ErrorAction SilentlyContinue
             Remove-Item Function:\Get-Content -ErrorAction SilentlyContinue
             Remove-Item Function:\Get-NetAdapter -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-DnsClientServerAddress -ErrorAction SilentlyContinue
             Remove-Item Function:\Set-DnsClientServerAddress -ErrorAction SilentlyContinue
             Remove-Item Function:\Clear-DnsClientCache -ErrorAction SilentlyContinue
             Remove-Variable -Name setDnsCalls -Scope Script -ErrorAction SilentlyContinue
             if ($createdCDrive) {
                 Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
             }
+        }
+    }
+
+    Context "Installer DNS restore origin handling" {
+        BeforeEach {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+
+            $script:createdCDrive = $false
+            if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
+                New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
+                $script:createdCDrive = $true
+            }
+
+            $script:setDnsCalls = @()
+            $script:snapshotJson = '[]'
+            $script:adapters = @()
+            $script:dnsEntries = @()
+            $script:registryByGuid = @{}
+
+            function global:Test-Path {
+                param([string]$Path)
+                return ([string]$Path).Replace('/', '\') -eq 'C:\OpenPath\data\original-dns.json'
+            }
+
+            function global:Get-Content {
+                param([string]$Path, [switch]$Raw)
+                return $script:snapshotJson
+            }
+
+            function global:Get-NetAdapter {
+                return @($script:adapters)
+            }
+
+            function global:Get-DnsClientServerAddress {
+                return @($script:dnsEntries)
+            }
+
+            function global:Get-ItemProperty {
+                param([string]$Path)
+                $guid = ([string]$Path -split '[\\/]')[-1]
+                return $script:registryByGuid[$guid]
+            }
+
+            function global:Set-DnsClientServerAddress {
+                [CmdletBinding()]
+                param(
+                    [int]$InterfaceIndex,
+                    [string[]]$ServerAddresses,
+                    [switch]$ResetServerAddresses
+                )
+
+                $script:setDnsCalls += [pscustomobject]@{
+                    InterfaceIndex = $InterfaceIndex
+                    ServerAddresses = @($ServerAddresses)
+                    ResetServerAddresses = $ResetServerAddresses.IsPresent
+                }
+            }
+
+            function global:Clear-DnsClientCache {}
+        }
+
+        AfterEach {
+            Remove-Item Function:\Test-Path -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-Content -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-NetAdapter -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-DnsClientServerAddress -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-ItemProperty -ErrorAction SilentlyContinue
+            Remove-Item Function:\Set-DnsClientServerAddress -ErrorAction SilentlyContinue
+            Remove-Item Function:\Clear-DnsClientCache -ErrorAction SilentlyContinue
+            Remove-Variable -Name setDnsCalls, snapshotJson, adapters, dnsEntries, registryByGuid -Scope Script -ErrorAction SilentlyContinue
+            if ($script:createdCDrive) {
+                Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
+                $script:createdCDrive = $false
+            }
+        }
+
+        It "Applies v3 origin rules instead of restoring DHCP DNS as static" {
+            $script:snapshotJson = ([pscustomobject]@{
+                    version  = 3
+                    adapters = @(
+                        [pscustomobject]@{ InterfaceGuid = 'dhcp-guid'; InterfaceAlias = 'Ethernet'; InterfaceIndex = 12; Origin = 'dhcp'; ServerAddresses = @('10.0.0.53') },
+                        [pscustomobject]@{ InterfaceGuid = 'static-guid'; InterfaceAlias = 'Wi-Fi'; InterfaceIndex = 7; Origin = 'static'; ServerAddresses = @('127.0.0.1', '10.0.0.54') }
+                    )
+                } | ConvertTo-Json -Depth 8)
+            $script:adapters = @(
+                [pscustomobject]@{ InterfaceGuid = 'dhcp-guid'; Name = 'Ethernet'; ifIndex = 12; Status = 'Up' },
+                [pscustomobject]@{ InterfaceGuid = 'static-guid'; Name = 'Wi-Fi'; ifIndex = 7; Status = 'Up' }
+            )
+
+            Restore-OpenPathInstallerDnsSettings
+
+            $dhcpCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 12)
+            $dhcpCall.Count | Should -Be 1
+            $dhcpCall[0].ResetServerAddresses | Should -BeTrue
+            $dhcpCall[0].ServerAddresses | Should -BeNullOrEmpty
+
+            $staticCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 7)
+            $staticCall.Count | Should -Be 1
+            $staticCall[0].ResetServerAddresses | Should -BeFalse
+            (@($staticCall[0].ServerAddresses) -join ',') | Should -Be '10.0.0.54'
+        }
+
+        It "Resets legacy DHCP-backed adapters and restores legacy static adapters" {
+            $script:snapshotJson = ([pscustomobject]@{
+                    version  = 2
+                    adapters = @(
+                        [pscustomobject]@{ InterfaceGuid = 'legacy-dhcp-guid'; InterfaceAlias = 'Ethernet'; InterfaceIndex = 12; ServerAddresses = @('10.0.0.53') },
+                        [pscustomobject]@{ InterfaceGuid = 'legacy-static-guid'; InterfaceAlias = 'Wi-Fi'; InterfaceIndex = 7; ServerAddresses = @('10.0.0.54') }
+                    )
+                } | ConvertTo-Json -Depth 8)
+            $script:adapters = @(
+                [pscustomobject]@{ InterfaceGuid = 'legacy-dhcp-guid'; Name = 'Ethernet'; ifIndex = 12; Status = 'Up' },
+                [pscustomobject]@{ InterfaceGuid = 'legacy-static-guid'; Name = 'Wi-Fi'; ifIndex = 7; Status = 'Up' }
+            )
+            $script:registryByGuid = @{
+                'legacy-dhcp-guid'   = [pscustomobject]@{ NameServer = ''; DhcpNameServer = '10.0.0.99'; EnableDHCP = 1 }
+                'legacy-static-guid' = [pscustomobject]@{ NameServer = '10.0.0.54'; DhcpNameServer = ''; EnableDHCP = 0 }
+            }
+
+            Restore-OpenPathInstallerDnsSettings
+
+            $dhcpCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 12)
+            $dhcpCall.Count | Should -Be 1
+            $dhcpCall[0].ResetServerAddresses | Should -BeTrue
+            $dhcpCall[0].ServerAddresses | Should -BeNullOrEmpty
+
+            $staticCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 7)
+            $staticCall.Count | Should -Be 1
+            $staticCall[0].ResetServerAddresses | Should -BeFalse
+            (@($staticCall[0].ServerAddresses) -join ',') | Should -Be '10.0.0.54'
+        }
+
+        It "Sweeps an adapter left on loopback after the snapshot restore" {
+            $script:snapshotJson = ([pscustomobject]@{
+                    version  = 3
+                    adapters = @(
+                        [pscustomobject]@{ InterfaceGuid = 'static-guid'; InterfaceAlias = 'Wi-Fi'; InterfaceIndex = 7; Origin = 'static'; ServerAddresses = @('10.0.0.54') }
+                    )
+                } | ConvertTo-Json -Depth 8)
+            $script:adapters = @(
+                [pscustomobject]@{ InterfaceGuid = 'static-guid'; Name = 'Wi-Fi'; ifIndex = 7; Status = 'Up' }
+            )
+            $script:dnsEntries = @(
+                [pscustomobject]@{ InterfaceIndex = 99; ServerAddresses = @('127.0.0.1') }
+            )
+
+            Restore-OpenPathInstallerDnsSettings
+
+            $strayCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 99)
+            $strayCall.Count | Should -Be 1
+            $strayCall[0].ResetServerAddresses | Should -BeTrue
         }
     }
 
@@ -340,6 +494,9 @@ Describe "Installer cleanup helper" {
             'Select-OpenPathUninstallScalarValue',
             'ConvertTo-OpenPathUninstallNullableInt',
             'Test-OpenPathUninstallLoopbackAddress',
+            'ConvertFrom-OpenPathUninstallDnsNameServerValue',
+            'Get-OpenPathUninstallDnsInterfaceRegistryState',
+            'Test-OpenPathUninstallDnsLegacyDhcpOrigin',
             'Restore-OpenPathOriginalDns'
         )
         foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wanted }, $true)) {
@@ -424,6 +581,144 @@ Describe "Installer cleanup helper" {
             if ($createdCDrive) {
                 Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
             }
+        }
+    }
+
+    Context "Standalone uninstall DNS restore origin handling" {
+        BeforeEach {
+            $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+            $wanted = @(
+                'Select-OpenPathUninstallScalarValue',
+                'ConvertTo-OpenPathUninstallNullableInt',
+                'Test-OpenPathUninstallLoopbackAddress',
+                'ConvertFrom-OpenPathUninstallDnsNameServerValue',
+                'Get-OpenPathUninstallDnsInterfaceRegistryState',
+                'Test-OpenPathUninstallDnsLegacyDhcpOrigin',
+                'Restore-OpenPathOriginalDns'
+            )
+            foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wanted }, $true)) {
+                . ([scriptblock]::Create($fn.Extent.Text))
+            }
+
+            $OpenPathRoot = 'C:\OpenPath'
+            $script:createdCDrive = $false
+            if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
+                New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
+                $script:createdCDrive = $true
+            }
+            $script:setDnsCalls = @()
+            $script:snapshotJson = '[]'
+            $script:adapters = @()
+            $script:dnsEntries = @()
+            $script:registryByGuid = @{}
+
+            function global:Test-Path {
+                param([string]$Path)
+                return ([string]$Path).Replace('/', '\') -eq 'C:\OpenPath\data\original-dns.json'
+            }
+
+            function global:Get-Content {
+                param([string]$Path, [switch]$Raw)
+                return $script:snapshotJson
+            }
+
+            function global:Get-NetAdapter {
+                return @($script:adapters)
+            }
+
+            function global:Get-DnsClientServerAddress {
+                return @($script:dnsEntries)
+            }
+
+            function global:Get-ItemProperty {
+                param([string]$Path)
+                $guid = ([string]$Path -split '[\\/]')[-1]
+                return $script:registryByGuid[$guid]
+            }
+
+            function global:Set-DnsClientServerAddress {
+                [CmdletBinding()]
+                param([int]$InterfaceIndex, [string[]]$ServerAddresses, [switch]$ResetServerAddresses)
+                $script:setDnsCalls += [pscustomobject]@{
+                    InterfaceIndex = $InterfaceIndex
+                    ServerAddresses = @($ServerAddresses)
+                    ResetServerAddresses = $ResetServerAddresses.IsPresent
+                }
+            }
+
+            function global:Clear-DnsClientCache {}
+        }
+
+        AfterEach {
+            Remove-Item Function:\Test-Path -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-Content -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-NetAdapter -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-DnsClientServerAddress -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-ItemProperty -ErrorAction SilentlyContinue
+            Remove-Item Function:\Set-DnsClientServerAddress -ErrorAction SilentlyContinue
+            Remove-Item Function:\Clear-DnsClientCache -ErrorAction SilentlyContinue
+            Remove-Variable -Name setDnsCalls, snapshotJson, adapters, dnsEntries, registryByGuid -Scope Script -ErrorAction SilentlyContinue
+            if ($script:createdCDrive) {
+                Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
+                $script:createdCDrive = $false
+            }
+        }
+
+        It "Applies v3 origin rules instead of restoring DHCP DNS as static" {
+            $script:snapshotJson = ([pscustomobject]@{
+                    version  = 3
+                    adapters = @(
+                        [pscustomobject]@{ InterfaceGuid = 'dhcp-guid'; InterfaceAlias = 'Ethernet'; InterfaceIndex = 12; Origin = 'dhcp'; ServerAddresses = @('10.0.0.53') },
+                        [pscustomobject]@{ InterfaceGuid = 'static-guid'; InterfaceAlias = 'Wi-Fi'; InterfaceIndex = 7; Origin = 'static'; ServerAddresses = @('127.0.0.1', '10.0.0.54') }
+                    )
+                } | ConvertTo-Json -Depth 8)
+            $script:adapters = @(
+                [pscustomobject]@{ InterfaceGuid = 'dhcp-guid'; Name = 'Ethernet'; ifIndex = 12; Status = 'Up' },
+                [pscustomobject]@{ InterfaceGuid = 'static-guid'; Name = 'Wi-Fi'; ifIndex = 7; Status = 'Up' }
+            )
+
+            Restore-OpenPathOriginalDns
+
+            $dhcpCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 12)
+            $dhcpCall.Count | Should -Be 1
+            $dhcpCall[0].ResetServerAddresses | Should -BeTrue
+            $dhcpCall[0].ServerAddresses | Should -BeNullOrEmpty
+
+            $staticCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 7)
+            $staticCall.Count | Should -Be 1
+            $staticCall[0].ResetServerAddresses | Should -BeFalse
+            (@($staticCall[0].ServerAddresses) -join ',') | Should -Be '10.0.0.54'
+        }
+
+        It "Resets legacy DHCP-backed adapters and restores legacy static adapters" {
+            $script:snapshotJson = ([pscustomobject]@{
+                    version  = 2
+                    adapters = @(
+                        [pscustomobject]@{ InterfaceGuid = 'legacy-dhcp-guid'; InterfaceAlias = 'Ethernet'; InterfaceIndex = 12; ServerAddresses = @('10.0.0.53') },
+                        [pscustomobject]@{ InterfaceGuid = 'legacy-static-guid'; InterfaceAlias = 'Wi-Fi'; InterfaceIndex = 7; ServerAddresses = @('10.0.0.54') }
+                    )
+                } | ConvertTo-Json -Depth 8)
+            $script:adapters = @(
+                [pscustomobject]@{ InterfaceGuid = 'legacy-dhcp-guid'; Name = 'Ethernet'; ifIndex = 12; Status = 'Up' },
+                [pscustomobject]@{ InterfaceGuid = 'legacy-static-guid'; Name = 'Wi-Fi'; ifIndex = 7; Status = 'Up' }
+            )
+            $script:registryByGuid = @{
+                'legacy-dhcp-guid'   = [pscustomobject]@{ NameServer = ''; DhcpNameServer = '10.0.0.99'; EnableDHCP = 1 }
+                'legacy-static-guid' = [pscustomobject]@{ NameServer = '10.0.0.54'; DhcpNameServer = ''; EnableDHCP = 0 }
+            }
+
+            Restore-OpenPathOriginalDns
+
+            $dhcpCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 12)
+            $dhcpCall.Count | Should -Be 1
+            $dhcpCall[0].ResetServerAddresses | Should -BeTrue
+            $dhcpCall[0].ServerAddresses | Should -BeNullOrEmpty
+
+            $staticCall = @($script:setDnsCalls | Where-Object InterfaceIndex -eq 7)
+            $staticCall.Count | Should -Be 1
+            $staticCall[0].ResetServerAddresses | Should -BeFalse
+            (@($staticCall[0].ServerAddresses) -join ',') | Should -Be '10.0.0.54'
         }
     }
 

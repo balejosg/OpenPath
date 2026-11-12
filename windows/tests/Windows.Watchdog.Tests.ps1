@@ -53,6 +53,38 @@ Describe "Watchdog Script" {
         }
     }
 
+    Context "Captive portal original DNS candidates" {
+        BeforeAll {
+            Import-OpenPathTestModules -ModuleNames @('Common')
+        }
+
+        It "Reads DNS addresses from a v3 snapshot" {
+            $root = Join-Path $TestDrive 'openpath-captive-v3'
+            $dataPath = Join-Path $root 'data'
+            New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
+            ([pscustomobject]@{
+                    version  = 3
+                    adapters = @(
+                        [pscustomobject]@{ InterfaceGuid = 'dhcp-guid'; InterfaceAlias = 'Ethernet'; InterfaceIndex = 12; Origin = 'dhcp'; ServerAddresses = @('10.0.0.53', '127.0.0.1') },
+                        [pscustomobject]@{ InterfaceGuid = 'static-guid'; InterfaceAlias = 'Wi-Fi'; InterfaceIndex = 7; Origin = 'static'; ServerAddresses = @('10.0.0.54') }
+                    )
+                }) | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $dataPath 'original-dns.json') -Encoding UTF8
+
+            $global:captiveSnapshotRoot = $root
+            InModuleScope Common {
+                $global:captiveSnapshotPreviousRoot = $script:OpenPathRoot
+                $script:OpenPathRoot = $global:captiveSnapshotRoot
+                $global:captiveSnapshotCandidates = @(Get-OpenPathCaptivePortalOriginalDnsCandidates)
+                $script:OpenPathRoot = $global:captiveSnapshotPreviousRoot
+            }
+
+            $global:captiveSnapshotCandidates | Should -Contain '10.0.0.53'
+            $global:captiveSnapshotCandidates | Should -Contain '10.0.0.54'
+            $global:captiveSnapshotCandidates | Should -Not -Contain '127.0.0.1'
+            Remove-Variable -Name captiveSnapshotRoot, captiveSnapshotPreviousRoot, captiveSnapshotCandidates -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
     Context "Firefox managed extension refresh" {
         It "Refreshes only the Firefox managed extension policy without reading local blocked paths" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"

@@ -132,10 +132,61 @@ function Get-OpenPathDnsNetworkFingerprint {
     return ($parts -join ';')
 }
 
+function ConvertFrom-OpenPathDnsNameServerValue {
+    <#
+    .SYNOPSIS
+    Splits a registry NameServer or DhcpNameServer value into individual address strings.
+    #>
+    param([object]$Value)
+
+    return @(
+        foreach ($part in ([string]$Value -split '[,\s]+')) {
+            $address = ([string]$part).Trim()
+            if ($address) { $address }
+        }
+    )
+}
+
+function Get-OpenPathDnsInterfaceRegistryState {
+    <#
+    .SYNOPSIS
+    Reads the static and DHCP DNS registry values for one adapter interface.
+    .DESCRIPTION
+    NameServer is the manual DNS value and is empty when DNS comes from DHCP. DhcpNameServer is
+    what DHCP offered. EnableDHCP tells whether the adapter currently uses DHCP. An unreadable
+    key returns Readable = false so callers can use the connectivity-safe DHCP direction.
+    #>
+    param([string]$InterfaceGuid)
+
+    $state = [PSCustomObject]@{
+        Readable = $false
+        EnableDhcp = $false
+        NameServer = @()
+        DhcpNameServer = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($InterfaceGuid)) { return $state }
+
+    try {
+        $interfaceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$InterfaceGuid"
+        $properties = Get-ItemProperty -Path $interfaceKey -ErrorAction Stop
+        $state.Readable = $true
+        $state.NameServer = @(ConvertFrom-OpenPathDnsNameServerValue -Value $properties.NameServer)
+        $state.DhcpNameServer = @(ConvertFrom-OpenPathDnsNameServerValue -Value $properties.DhcpNameServer)
+        if ($null -ne $properties.EnableDHCP) {
+            $state.EnableDhcp = ([int]$properties.EnableDHCP -ne 0)
+        }
+    }
+    catch {
+        # A missing or unreadable key is treated as DHCP origin by the caller.
+    }
+
+    return $state
+}
+
 function Get-OpenPathCurrentDnsSnapshotEntries {
     <#
     .SYNOPSIS
-    Reads the current adapter list and returns a snapshot object per active adapter including its IPv4 DNS and gateway.
+    Reads the current adapter list and returns a snapshot object per active adapter including its IPv4 DNS, gateway, and origin.
     #>
     if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return @() }
     if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return @() }
@@ -154,12 +205,34 @@ function Get-OpenPathCurrentDnsSnapshotEntries {
                 $gateway = ''
             }
 
+            $registryState = Get-OpenPathDnsInterfaceRegistryState -InterfaceGuid ([string]$adapter.InterfaceGuid)
+            $nameServers = @($registryState.NameServer | Where-Object {
+                    $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
+                })
+            $dhcpNameServers = @($registryState.DhcpNameServer | Where-Object {
+                    $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
+                })
+            $effectiveServers = @($dns.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
+                    $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
+                })
+            $origin = if ($nameServers.Count -gt 0) { 'static' } else { 'dhcp' }
+            $serverAddresses = if ($origin -eq 'static') {
+                @($nameServers)
+            }
+            elseif ($dhcpNameServers.Count -gt 0) {
+                @($dhcpNameServers)
+            }
+            else {
+                @($effectiveServers)
+            }
+
             [PSCustomObject]@{
                 InterfaceGuid = [string]$adapter.InterfaceGuid
                 InterfaceAlias = [string]$adapter.Name
                 InterfaceIndex = [int]$adapter.ifIndex
                 Gateway = [string]$gateway
-                ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })
+                Origin = [string]$origin
+                ServerAddresses = @($serverAddresses)
             }
         }
     )
@@ -187,7 +260,7 @@ function Save-OpenPathOriginalDnsSnapshot {
         $snapshot = @(Get-OpenPathCurrentDnsSnapshotEntries)
         $networkFingerprint = Get-OpenPathDnsNetworkFingerprint -Entries $snapshot
         $payload = [PSCustomObject]@{
-            version = 2
+            version = 3
             networkFingerprint = [string]$networkFingerprint
             adapters = @($snapshot)
         }
@@ -279,6 +352,20 @@ function Test-OpenPathDnsLoopbackAddress {
     return ($text -eq '::1' -or $text -eq '0.0.0.0' -or $text -match '^127\.')
 }
 
+function Test-OpenPathDnsLegacyDhcpOrigin {
+    <#
+    .SYNOPSIS
+    Returns true when a live adapter still uses DHCP and has a DHCP-offered DNS server.
+    .DESCRIPTION
+    Legacy snapshots have no origin field. Resetting them to DHCP is the connectivity-safe rule
+    whenever the adapter is still DHCP-backed with a real DHCP DNS value.
+    #>
+    param([object]$Adapter)
+
+    $registryState = Get-OpenPathDnsInterfaceRegistryState -InterfaceGuid ([string]$Adapter.InterfaceGuid)
+    return [bool]($registryState.Readable -and $registryState.EnableDhcp -and @($registryState.DhcpNameServer).Count -gt 0)
+}
+
 function Reset-OpenPathDnsLoopbackResolvers {
     <#
     .SYNOPSIS
@@ -343,13 +430,35 @@ function Restore-OriginalDNS {
                 $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
                         $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
                     })
-                if ($servers.Count -gt 0) {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction Stop
-                    Write-OpenPathLog "Restored DNS for adapter: $($adapter.Name)"
+                $origin = ''
+                if ($entry.PSObject.Properties['Origin']) {
+                    $origin = ([string]$entry.Origin).Trim().ToLowerInvariant()
                 }
-                else {
+
+                $resetToDhcp = $false
+                if ($origin -eq 'static') {
+                    # Keep an administrator-configured static DNS, but never a loopback-only one.
+                    $resetToDhcp = ($servers.Count -le 0)
+                }
+                elseif ($origin) {
+                    # v3 DHCP origin: returning to DHCP is the whole point of the origin field.
+                    $resetToDhcp = $true
+                }
+                elseif (Test-OpenPathDnsLegacyDhcpOrigin -Adapter $adapter) {
+                    # Legacy snapshot on a DHCP-backed adapter: do not freeze DHCP DNS as static.
+                    $resetToDhcp = $true
+                }
+                elseif ($servers.Count -le 0) {
+                    $resetToDhcp = $true
+                }
+
+                if ($resetToDhcp) {
                     Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses -ErrorAction Stop
                     Write-OpenPathLog "Reset DNS for adapter: $($adapter.Name)"
+                }
+                else {
+                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction Stop
+                    Write-OpenPathLog "Restored DNS for adapter: $($adapter.Name)"
                 }
             }
             Reset-OpenPathDnsLoopbackResolvers
