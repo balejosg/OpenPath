@@ -396,15 +396,21 @@ function Invoke-OpenPathDnsProxyRepair {
                 if ($failureModeOpen) {
                     Write-OpenPathLog 'Skipping firewall reapply while the DNS failure open mode is active' -Level WARN
                 }
-                elseif (Get-Command -Name Set-OpenPathFirewall -ErrorAction SilentlyContinue) {
-                    $acrylicPath = Get-AcrylicPath
-                    $firewallApplied = [bool](Set-OpenPathFirewall -UpstreamDNS $upstream -AcrylicPath $acrylicPath)
-                    if (-not $firewallApplied) {
-                        throw 'Firewall reapply failed after the Acrylic reinstall'
-                    }
-                }
                 else {
-                    Write-OpenPathLog 'Set-OpenPathFirewall is unavailable; the reinstall could not reapply the DNS firewall' -Level WARN
+                    $firewallCommand = Get-Command -Name 'Set-OpenPathFirewall' -ErrorAction SilentlyContinue
+                    if (-not $firewallCommand) {
+                        $firewallCommand = Get-Command -Name 'Firewall\Set-OpenPathFirewall' -ErrorAction SilentlyContinue
+                    }
+                    if ($firewallCommand) {
+                        $acrylicPath = Get-AcrylicPath
+                        $firewallApplied = [bool](& $firewallCommand -UpstreamDNS $upstream -AcrylicPath $acrylicPath)
+                        if (-not $firewallApplied) {
+                            throw 'Firewall reapply failed after the Acrylic reinstall'
+                        }
+                    }
+                    else {
+                        Write-OpenPathLog 'Set-OpenPathFirewall is unavailable; the reinstall could not reapply the DNS firewall' -Level WARN
+                    }
                 }
 
                 $result.Repaired = $true
