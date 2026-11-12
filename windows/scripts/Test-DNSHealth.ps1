@@ -66,7 +66,13 @@ Initialize-OpenPathScriptSession `
     'Set-AcrylicServiceAutoStart',
     'Restore-OpenPathCaptivePortalDNS',
     'Enable-OpenPathCaptivePortalMode',
-    'Disable-OpenPathCaptivePortalMode'
+    'Disable-OpenPathCaptivePortalMode',
+    'Read-OpenPathDnsFailureModeState',
+    'Enable-OpenPathControlPlaneValve',
+    'Disable-OpenPathControlPlaneValve',
+    'Enable-OpenPathDnsFailureOpenMode',
+    'Close-OpenPathDnsFailureMode',
+    'Remove-OpenPathOrphanControlPlaneValve'
 ) `
     -ScriptName 'Test-DNSHealth.ps1' | Out-Null
 
@@ -76,13 +82,25 @@ $watchdogFailCountPath = "$OpenPathRoot\data\watchdog-fails.txt"
 $staleFailsafeStatePath = "$OpenPathRoot\data\stale-failsafe-state.json"
 $config = $null
 
+$failureModeSetting = 'protected'
 try {
     $config = Get-OpenPathConfig
+    if ($config -and $config.PSObject.Properties['failureMode'] -and $config.failureMode) {
+        $failureModeSetting = ([string]$config.failureMode).Trim().ToLowerInvariant()
+        if ($failureModeSetting -notin @('protected', 'open')) { $failureModeSetting = 'protected' }
+    }
 }
 catch {
     $issues += "Configuration load failed"
     $recoveryEligibleIssues += "Configuration load failed"
     Write-OpenPathLog "Watchdog: Error loading configuration: $_" -Level ERROR
+}
+
+try {
+    Remove-OpenPathOrphanControlPlaneValve -OpenPathRoot $OpenPathRoot | Out-Null
+}
+catch {
+    Write-OpenPathLog "Watchdog: Could not remove an orphaned control-plane valve block: $_" -Level WARN
 }
 
 $precheckResult = Invoke-OpenPathWatchdogPrechecks -Config $config -OpenPathRoot $OpenPathRoot
@@ -109,6 +127,25 @@ $checkResult = Invoke-OpenPathWatchdogChecks `
     -GroupSyncFailed ([bool]$precheckResult.GroupSyncFailed)
 $issues += @($checkResult.Issues)
 $recoveryEligibleIssues += @($checkResult.RecoveryEligibleIssues)
+
+$failureModeState = Read-OpenPathDnsFailureModeState -OpenPathRoot $OpenPathRoot
+$failureModeActive = [bool]($failureModeState -and [string]$failureModeState.mode -in @('protected', 'open'))
+$failureModeOpenActive = [bool]($failureModeState -and [string]$failureModeState.mode -eq 'open')
+if (
+    $failureModeActive -and
+    $checkResult.DnsProxyState -and
+    $checkResult.DnsProxyState.State -eq 'listening' -and
+    $checkResult.DnsResolutionHealthy -eq $true
+) {
+    Close-OpenPathDnsFailureMode `
+        -Config $config `
+        -OpenPathRoot $OpenPathRoot `
+        -ProtectedModeSuppressed ([bool]$checkResult.FailOpenActive) | Out-Null
+    Reset-WatchdogFailCount -WatchdogFailCountPath $watchdogFailCountPath | Out-Null
+    $failureModeActive = $false
+    $failureModeOpenActive = $false
+}
+
 $outcome = Get-OpenPathWatchdogOutcome `
     -Config $config `
     -Issues @($issues) `
@@ -118,8 +155,56 @@ $outcome = Get-OpenPathWatchdogOutcome `
     -IntegrityTampered $checkResult.IntegrityTampered `
     -FailOpenActive $checkResult.FailOpenActive `
     -PortalModeActive $portalModeActive `
+    -DnsFailureClass ([string]$checkResult.DnsFailureClass) `
+    -FailureModeActive $failureModeActive `
+    -FailureModeOpenActive $failureModeOpenActive `
     -WatchdogFailCountPath $watchdogFailCountPath `
     -OpenPathRoot $OpenPathRoot
+
+if ($outcome.EnterDnsFailureMode) {
+    $entryReasonCodes = @($outcome.ReasonCodes)
+    if ($checkResult.DnsFailureClass) {
+        $entryReasonCodes += [string]$checkResult.DnsFailureClass
+    }
+
+    if ($failureModeSetting -eq 'open') {
+        $openResult = Enable-OpenPathDnsFailureOpenMode `
+            -Reason ([string]$checkResult.DnsFailureClass) `
+            -Config $config `
+            -OpenPathRoot $OpenPathRoot
+        if ($openResult.Activated) {
+            $outcome.Status = 'FAIL_OPEN'
+            $entryReasonCodes += 'fail_open_activated'
+            $outcome.Actions = if ($outcome.Actions -eq 'watchdog_ok') {
+                'fail_open_activated'
+            }
+            else {
+                "$($outcome.Actions); fail_open_activated"
+            }
+        }
+    }
+    else {
+        $valveResult = Enable-OpenPathControlPlaneValve `
+            -Reason ([string]$checkResult.DnsFailureClass) `
+            -Config $config `
+            -OpenPathRoot $OpenPathRoot
+        if ($valveResult.Activated) {
+            $outcome.Status = 'PROTECTED'
+            $entryReasonCodes += 'control_plane_valve_active'
+            $outcome.Actions = if ($outcome.Actions -eq 'watchdog_ok') {
+                'control_plane_valve_active'
+            }
+            else {
+                "$($outcome.Actions); control_plane_valve_active"
+            }
+        }
+        else {
+            $entryReasonCodes += 'control_plane_valve_unavailable'
+        }
+    }
+
+    $outcome.ReasonCodes = @($entryReasonCodes | Where-Object { $_ } | Select-Object -Unique)
+}
 
 $runtimeHealth = Get-OpenPathRuntimeHealth
 Send-OpenPathHealthReport -Status $outcome.Status `

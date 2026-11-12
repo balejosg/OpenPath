@@ -1130,9 +1130,20 @@ function Invoke-OpenPathWatchdogChecks {
     $dnsFailureClass = $null
     $dnsResolutionHealthy = $null
     $dnsProxyState = $null
+    $failureModeState = $null
+    if (Get-Command -Name Read-OpenPathDnsFailureModeState -ErrorAction SilentlyContinue) {
+        try {
+            $failureModeState = Read-OpenPathDnsFailureModeState -OpenPathRoot $OpenPathRoot
+        }
+        catch {
+            $failureModeState = $null
+        }
+    }
+    $failureModeActive = [bool]($failureModeState -and [string]$failureModeState.mode -in @('protected', 'open'))
+    $failureModeOpenActive = [bool]($failureModeState -and [string]$failureModeState.mode -eq 'open')
     $localWhitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
     $localWhitelistSections = $null
-    $policyState = Get-OpenPathEndpointPolicyState -PortalModeActive:$PortalModeActive
+    $policyState = Get-OpenPathEndpointPolicyState -PortalModeActive:$PortalModeActive -FailureModeState $failureModeState
 
     try {
         $watchdogTaskHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
@@ -1162,7 +1173,8 @@ function Invoke-OpenPathWatchdogChecks {
         $policyState = Get-OpenPathEndpointPolicyState `
             -WhitelistSections $localWhitelistSections `
             -PortalModeActive:$PortalModeActive `
-            -StaleFailsafeActive:$staleFailsafeCurrentlyActive
+            -StaleFailsafeActive:$staleFailsafeCurrentlyActive `
+            -FailureModeState $failureModeState
         if ($policyState.FailOpenActive) {
             Write-OpenPathLog "Watchdog: local fail-open whitelist marker active; skipping protected-mode DNS/firewall recovery" -Level WARN
         }
@@ -1183,6 +1195,7 @@ function Invoke-OpenPathWatchdogChecks {
     $issues += @($passthroughEmergency.Issues)
 
     $shouldRunProtectedModeChecks = [bool]$policyState.ProtectedModeEligible
+    $shouldRunDnsProxyChecks = [bool]($shouldRunProtectedModeChecks -or $failureModeActive)
 
     try {
         $acrylicService = if ($shouldRunProtectedModeChecks) { Get-Service -DisplayName "*Acrylic*" -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
@@ -1201,7 +1214,7 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
-        if ($shouldRunProtectedModeChecks) {
+        if ($shouldRunDnsProxyChecks) {
             $dnsResolutionHealthy = [bool](Test-DNSResolution)
         }
         if ($shouldRunProtectedModeChecks -and -not $dnsResolutionHealthy) {
@@ -1218,7 +1231,7 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
-        if ($shouldRunProtectedModeChecks -and (Get-Command -Name Get-OpenPathDnsProxyState -ErrorAction SilentlyContinue)) {
+        if ($shouldRunDnsProxyChecks -and (Get-Command -Name Get-OpenPathDnsProxyState -ErrorAction SilentlyContinue)) {
             $dnsProxyState = Get-OpenPathDnsProxyState
             $dnsFailureClass = Get-OpenPathDnsFailureClass `
                 -ProxyState $dnsProxyState `
@@ -1241,11 +1254,15 @@ function Invoke-OpenPathWatchdogChecks {
                     }
                 }
             }
-            elseif ($dnsProxyState -and $dnsProxyState.State -eq 'listening' -and $dnsResolutionHealthy -eq $true -and
-                (Get-Command -Name Invoke-OpenPathAcrylicArtifactCacheSeed -ErrorAction SilentlyContinue)) {
-                Invoke-OpenPathAcrylicArtifactCacheSeed `
-                    -ProxyState $dnsProxyState `
-                    -LocalResolutionHealthy $dnsResolutionHealthy | Out-Null
+            elseif ($dnsProxyState -and $dnsProxyState.State -eq 'listening' -and $dnsResolutionHealthy -eq $true) {
+                if (Get-Command -Name Update-OpenPathControlPlaneDnsCache -ErrorAction SilentlyContinue) {
+                    Update-OpenPathControlPlaneDnsCache -Config $Config | Out-Null
+                }
+                if (Get-Command -Name Invoke-OpenPathAcrylicArtifactCacheSeed -ErrorAction SilentlyContinue) {
+                    Invoke-OpenPathAcrylicArtifactCacheSeed `
+                        -ProxyState $dnsProxyState `
+                        -LocalResolutionHealthy $dnsResolutionHealthy | Out-Null
+                }
             }
         }
     }
@@ -1539,6 +1556,10 @@ function Invoke-OpenPathWatchdogChecks {
         IntegrityTampered = $integrityTampered
         FailOpenActive = [bool]$policyState.FailOpenActive
         DnsFailureClass = $dnsFailureClass
+        DnsProxyState = $dnsProxyState
+        DnsResolutionHealthy = $dnsResolutionHealthy
+        FailureModeActive = $failureModeActive
+        FailureModeOpenActive = $failureModeOpenActive
     }
 }
 
@@ -1573,6 +1594,12 @@ function Get-OpenPathWatchdogOutcome {
         [Parameter(Mandatory = $true)]
         [bool]$PortalModeActive,
 
+        [string]$DnsFailureClass = '',
+
+        [bool]$FailureModeActive = $false,
+
+        [bool]$FailureModeOpenActive = $false,
+
         [Parameter(Mandatory = $true)]
         [string]$WatchdogFailCountPath,
 
@@ -1588,11 +1615,14 @@ function Get-OpenPathWatchdogOutcome {
     }
 
     $status = 'HEALTHY'
-    if ($FailOpenActive) {
+    if ($FailOpenActive -or $FailureModeOpenActive) {
         $status = 'FAIL_OPEN'
     }
     elseif ($IntegrityTampered) {
         $status = 'TAMPERED'
+    }
+    elseif ($FailureModeActive) {
+        $status = 'PROTECTED'
     }
     elseif ($StaleFailsafeActive) {
         $status = 'STALE_FAILSAFE'
@@ -1606,6 +1636,7 @@ function Get-OpenPathWatchdogOutcome {
     if (
         $status -eq 'HEALTHY' -or
         $status -eq 'FAIL_OPEN' -or
+        $status -eq 'PROTECTED' -or
         $status -eq 'STALE_FAILSAFE' -or
         ($PortalModeActive -and $status -eq 'DEGRADED') -or
         (-not $shouldIncrementFailCount)
@@ -1621,6 +1652,7 @@ function Get-OpenPathWatchdogOutcome {
 
     $issuesList = @($Issues)
     $checkpointRecovered = $false
+    $checkpointRollbackFailed = $false
     if ($status -eq 'CRITICAL' -and $Config) {
         $checkpointRollbackEnabled = $true
         if ($Config.PSObject.Properties['enableCheckpointRollback']) {
@@ -1638,8 +1670,19 @@ function Get-OpenPathWatchdogOutcome {
             }
             else {
                 $issuesList += "Checkpoint rollback failed"
+                $checkpointRollbackFailed = $true
             }
         }
+    }
+
+    $enterDnsFailureMode = $false
+    if (
+        $status -eq 'CRITICAL' -and
+        $checkpointRollbackFailed -and
+        -not [string]::IsNullOrWhiteSpace([string]$DnsFailureClass) -and
+        -not $PortalModeActive
+    ) {
+        $enterDnsFailureMode = $true
     }
 
     $actions = if ($issuesList.Count -gt 0) {
@@ -1661,6 +1704,25 @@ function Get-OpenPathWatchdogOutcome {
         $actions = if ($actions -eq 'watchdog_ok') { 'fail_open_active' } else { "$actions; fail_open_active" }
     }
 
+    if ($FailureModeOpenActive) {
+        if (-not $reasonCodesList.Contains('fail_open_activated')) {
+            [void]$reasonCodesList.Add('fail_open_activated')
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$DnsFailureClass) -and -not $reasonCodesList.Contains([string]$DnsFailureClass)) {
+            [void]$reasonCodesList.Add([string]$DnsFailureClass)
+        }
+        $actions = if ($actions -eq 'watchdog_ok') { 'fail_open_activated' } else { "$actions; fail_open_activated" }
+    }
+    elseif ($FailureModeActive) {
+        if (-not $reasonCodesList.Contains('control_plane_valve_active')) {
+            [void]$reasonCodesList.Add('control_plane_valve_active')
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$DnsFailureClass) -and -not $reasonCodesList.Contains([string]$DnsFailureClass)) {
+            [void]$reasonCodesList.Add([string]$DnsFailureClass)
+        }
+        $actions = if ($actions -eq 'watchdog_ok') { 'control_plane_valve_active' } else { "$actions; control_plane_valve_active" }
+    }
+
     if ($checkpointRecovered) {
         $actions = if ($actions -eq 'watchdog_ok') { 'checkpoint_recovery_applied' } else { "$actions; checkpoint_recovery_applied" }
     }
@@ -1670,6 +1732,10 @@ function Get-OpenPathWatchdogOutcome {
         WatchdogFailCount = $watchdogFailCount
         Actions = $actions
         ReasonCodes = @($reasonCodesList.ToArray())
+        EnterDnsFailureMode = $enterDnsFailureMode
+        DnsFailureClass = [string]$DnsFailureClass
+        FailureModeActive = $FailureModeActive
+        FailureModeOpenActive = $FailureModeOpenActive
     }
 }
 

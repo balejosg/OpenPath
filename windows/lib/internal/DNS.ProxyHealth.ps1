@@ -1,3 +1,16 @@
+function ConvertTo-OpenPathIsoTimestamp {
+    <#
+    .SYNOPSIS
+    Normalizes a JSON timestamp to invariant ISO-8601, including PowerShell 7 DateTime coercion.
+    #>
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [DateTimeOffset]) { return $Value.ToUniversalTime().ToString('o') }
+    if ($Value -is [DateTime]) { return $Value.ToUniversalTime().ToString('o') }
+    return [string]$Value
+}
+
 function New-OpenPathDnsProxyState {
     <#
     .SYNOPSIS
@@ -150,7 +163,12 @@ function Read-OpenPathAcrylicRepairState {
         $stored = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         foreach ($propertyName in @('lastReinstallAttemptAt', 'lastReinstallResult', 'lastCacheSeedAttemptAt')) {
             if ($stored.PSObject.Properties[$propertyName]) {
-                $state.$propertyName = [string]$stored.$propertyName
+                $state.$propertyName = if ($propertyName -eq 'lastReinstallResult') {
+                    [string]$stored.$propertyName
+                }
+                else {
+                    ConvertTo-OpenPathIsoTimestamp -Value $stored.$propertyName
+                }
             }
         }
     }
@@ -307,6 +325,17 @@ function Invoke-OpenPathDnsProxyRepair {
         Detail = ''
     }
 
+    $failureModeOpen = $false
+    if (Get-Command -Name Read-OpenPathDnsFailureModeState -ErrorAction SilentlyContinue) {
+        try {
+            $failureModeState = Read-OpenPathDnsFailureModeState -OpenPathRoot $OpenPathRoot
+            $failureModeOpen = [bool]($failureModeState -and [string]$failureModeState.mode -eq 'open')
+        }
+        catch {
+            $failureModeOpen = $false
+        }
+    }
+
     switch ($FailureClass) {
         'dns_proxy_down' {
             $result.Attempted = $true
@@ -364,7 +393,10 @@ function Invoke-OpenPathDnsProxyRepair {
                 if ($Config -and $Config.PSObject.Properties['primaryDNS'] -and $Config.primaryDNS) {
                     $upstream = [string]$Config.primaryDNS
                 }
-                if (Get-Command -Name Set-OpenPathFirewall -ErrorAction SilentlyContinue) {
+                if ($failureModeOpen) {
+                    Write-OpenPathLog 'Skipping firewall reapply while the DNS failure open mode is active' -Level WARN
+                }
+                elseif (Get-Command -Name Set-OpenPathFirewall -ErrorAction SilentlyContinue) {
                     $acrylicPath = Get-AcrylicPath
                     $firewallApplied = [bool](Set-OpenPathFirewall -UpstreamDNS $upstream -AcrylicPath $acrylicPath)
                     if (-not $firewallApplied) {

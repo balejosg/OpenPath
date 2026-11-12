@@ -24,11 +24,16 @@ function New-OpenPathEndpointStateRepairPlan {
         $actions += 'ClearRuntimeDependencyOverlay'
     }
     elseif ($Mode -eq 'ApplyWhitelist') {
-        $actions += 'RestoreProtectedMode'
+        $failureModeOpen = [bool]($PolicyState.PSObject.Properties['FailureModeOpenActive'] -and $PolicyState.FailureModeOpenActive)
+        if (-not $failureModeOpen) {
+            $actions += 'RestoreProtectedMode'
+        }
         if ($EnableBrowserPolicies) {
             $actions += 'SetAllBrowserPolicy'
         }
-        $actions += 'RestoreProtectedModeNoRestart'
+        if (-not $failureModeOpen) {
+            $actions += 'RestoreProtectedModeNoRestart'
+        }
     }
     elseif ($QueueChanged -and $PolicyState.ProtectedModeEligible) {
         $actions += 'RestoreProtectedMode'
@@ -174,16 +179,34 @@ function Invoke-OpenPathEndpointStateRepairPlan {
                 Remove-BrowserPolicy -PreserveFirefoxManagedExtension
             }
             'RestoreProtectedMode' {
-                $protectedModeResult = Restore-OpenPathProtectedMode -Config $Config -PassThru
-                if ($protectedModeResult -is [PSCustomObject]) {
-                    if ($null -ne $protectedModeResult.Restarted) { $acrylicRunning = [bool]$protectedModeResult.Restarted }
-                    if ($null -ne $protectedModeResult.Flushed) { $dnsFlushed = [bool]$protectedModeResult.Flushed }
+                $failureModeState = $null
+                if (Get-Command -Name Read-OpenPathDnsFailureModeState -ErrorAction SilentlyContinue) {
+                    try { $failureModeState = Read-OpenPathDnsFailureModeState } catch { $failureModeState = $null }
+                }
+                if ([bool]($failureModeState -and [string]$failureModeState.mode -eq 'open')) {
+                    Write-OpenPathLog 'Skipping protected-mode restore while the DNS failure open mode is active' -Level WARN
+                }
+                else {
+                    $protectedModeResult = Restore-OpenPathProtectedMode -Config $Config -PassThru
+                    if ($protectedModeResult -is [PSCustomObject]) {
+                        if ($null -ne $protectedModeResult.Restarted) { $acrylicRunning = [bool]$protectedModeResult.Restarted }
+                        if ($null -ne $protectedModeResult.Flushed) { $dnsFlushed = [bool]$protectedModeResult.Flushed }
+                    }
                 }
             }
             'RestoreProtectedModeNoRestart' {
-                $protectedModeResult = Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart -PassThru
-                if ($protectedModeResult -is [PSCustomObject]) {
-                    if ($null -ne $protectedModeResult.Flushed) { $dnsFlushed = [bool]$protectedModeResult.Flushed }
+                $failureModeState = $null
+                if (Get-Command -Name Read-OpenPathDnsFailureModeState -ErrorAction SilentlyContinue) {
+                    try { $failureModeState = Read-OpenPathDnsFailureModeState } catch { $failureModeState = $null }
+                }
+                if ([bool]($failureModeState -and [string]$failureModeState.mode -eq 'open')) {
+                    Write-OpenPathLog 'Skipping protected-mode restore while the DNS failure open mode is active' -Level WARN
+                }
+                else {
+                    $protectedModeResult = Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart -PassThru
+                    if ($protectedModeResult -is [PSCustomObject]) {
+                        if ($null -ne $protectedModeResult.Flushed) { $dnsFlushed = [bool]$protectedModeResult.Flushed }
+                    }
                 }
             }
             'SetAllBrowserPolicy' {

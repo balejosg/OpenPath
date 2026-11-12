@@ -212,6 +212,22 @@ Describe "DNS proxy health" {
             $global:openPathFirewallCalls[0].UpstreamDNS | Should -Be '10.0.0.53'
         }
 
+        It "Skips the firewall reapply while the open failure mode is active" {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $script:repairCachePath) -Force | Out-Null
+            Set-Content -LiteralPath $script:repairCachePath -Value 'payload' -Encoding ASCII
+            [PSCustomObject]@{
+                mode = 'open'
+                reason = 'dns_proxy_down'
+                enteredAt = [DateTimeOffset]::UtcNow.ToString('o')
+                valveHosts = @()
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Get-OpenPathDnsFailureModeStatePath -OpenPathRoot $script:repairRoot) -Encoding UTF8
+
+            $result = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_proxy_missing' -OpenPathRoot $script:repairRoot
+
+            $result.Repaired | Should -BeTrue
+            @($global:openPathFirewallCalls).Count | Should -Be 0
+        }
+
         It "Does not repair port conflicts or upstream failures" {
             $portConflict = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_port_conflict' -OpenPathRoot $script:repairRoot
             $upstream = Invoke-OpenPathDnsProxyRepair -FailureClass 'dns_upstream_unreachable' -OpenPathRoot $script:repairRoot

@@ -31,6 +31,12 @@ function Get-OpenPathConfigPosture {
         $egressFloorEnabled = [bool]$Config.outboundEgressFloorEnabled
     }
 
+    $failureMode = 'protected'
+    if ($Config -and $Config.PSObject.Properties['failureMode'] -and $Config.failureMode) {
+        $failureMode = ([string]$Config.failureMode).Trim().ToLowerInvariant()
+        if ($failureMode -notin @('protected', 'open')) { $failureMode = 'protected' }
+    }
+
     $posture = @{}
     if ($egressFloorEnabled) {
         $posture['outboundEgressFloorEnabled'] = 'true'
@@ -38,6 +44,7 @@ function Get-OpenPathConfigPosture {
     else {
         $posture['outboundEgressFloorEnabled'] = 'false'
     }
+    $posture['failureMode'] = $failureMode
     return $posture
 }
 

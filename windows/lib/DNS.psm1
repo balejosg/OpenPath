@@ -18,6 +18,7 @@ $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 . (Join-Path $script:InternalModulePath 'DNS.Acrylic.Restart.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.Diagnostics.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.ProxyHealth.ps1')
+. (Join-Path $script:InternalModulePath 'DNS.ControlPlaneValve.ps1')
 
 Export-ModuleMember -Function @(
     'Get-AcrylicPath',
@@ -63,5 +64,16 @@ Export-ModuleMember -Function @(
     'Save-OpenPathAcrylicArtifactToCache',
     'Install-OpenPathAcrylicFromVerifiedArchive',
     'Invoke-OpenPathDnsProxyRepair',
-    'Invoke-OpenPathAcrylicArtifactCacheSeed'
+    'Invoke-OpenPathAcrylicArtifactCacheSeed',
+    'Get-OpenPathControlPlaneHostsPath',
+    'Get-OpenPathControlPlaneDnsCachePath',
+    'Get-OpenPathDnsFailureModeStatePath',
+    'Read-OpenPathControlPlaneDnsCache',
+    'Update-OpenPathControlPlaneDnsCache',
+    'Read-OpenPathDnsFailureModeState',
+    'Enable-OpenPathControlPlaneValve',
+    'Disable-OpenPathControlPlaneValve',
+    'Enable-OpenPathDnsFailureOpenMode',
+    'Close-OpenPathDnsFailureMode',
+    'Remove-OpenPathOrphanControlPlaneValve'
 )

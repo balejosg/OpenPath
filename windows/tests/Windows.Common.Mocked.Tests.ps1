@@ -727,6 +727,7 @@ download.mozilla.org/firefox/releases
                     apiUrl = 'https://api.example.com'
                     version = '4.1.0'
                     outboundEgressFloorEnabled = $true
+                    failureMode = 'open'
                 }
             } -ModuleName Common
             Mock Get-OpenPathHealthReportFailStreakPath { $streakPath } -ModuleName Common
@@ -741,6 +742,7 @@ download.mozilla.org/firefox/releases
 
             $payload = $script:capturedBody | ConvertFrom-Json
             $payload.configPosture.outboundEgressFloorEnabled | Should -Be 'true'
+            $payload.configPosture.failureMode | Should -Be 'open'
             # Linux-only keys must be absent on Windows.
             $payload.configPosture.PSObject.Properties.Name | Should -Not -Contain 'sinkholeFastFail'
             # Zero streak must be omitted.
@@ -768,6 +770,7 @@ download.mozilla.org/firefox/releases
 
             $payload = $script:capturedBody | ConvertFrom-Json
             $payload.configPosture.outboundEgressFloorEnabled | Should -Be 'false'
+            $payload.configPosture.failureMode | Should -Be 'protected'
         }
 
         It "Counts a fail streak on delivery failure, reports it on next success, then resets" {

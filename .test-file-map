@@ -353,6 +353,7 @@ windows/lib/internal/DNS.Acrylic.Restart.ps1|windows/tests/Windows.DNS.Restart.T
 windows/lib/internal/DNS.Acrylic.Service.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/DNS.Diagnostics.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/DNS.ProxyHealth.ps1|windows/tests/Windows.DNS.ProxyHealth.Tests.ps1
+windows/lib/internal/DNS.ControlPlaneValve.ps1|windows/tests/Windows.DNS.ControlPlaneValve.Tests.ps1
 windows/scripts/Enroll-Machine.ps1|windows/tests/Windows.Tests.ps1
 windows/scripts/Pre-Install-Validation.ps1|windows/tests/Windows.Tests.ps1
 windows/scripts/Start-SSEListener.ps1|windows/tests/Windows.Tests.ps1,windows/tests/Windows.SSE.Coalescer.Tests.ps1

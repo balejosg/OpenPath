@@ -92,6 +92,12 @@ function ConvertTo-OpenPathNormalizedConfig {
     if ($sseUpdateCooldown -lt 1) { $sseUpdateCooldown = 10 }
     Set-OpenPathConfigValue -Config $normalized -Name 'sseUpdateCooldown' -Value $sseUpdateCooldown
 
+    # Failure posture mirrors Linux FAILURE_MODE. Unknown values fail closed.
+    $failureMode = [string](Get-OpenPathConfigValue -Config $normalized -Name 'failureMode' -DefaultValue 'protected')
+    $failureMode = $failureMode.Trim().ToLowerInvariant()
+    if ($failureMode -notin @('protected', 'open')) { $failureMode = 'protected' }
+    Set-OpenPathConfigValue -Config $normalized -Name 'failureMode' -Value $failureMode
+
     return $normalized
 }
 
