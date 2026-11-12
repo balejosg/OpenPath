@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: `windows/`
-> Last verified: 2026-06-12
+> Last verified: 2026-11-12
 > Source of truth: `windows/TROUBLESHOOTING.md`
 
 ## First Checks
@@ -16,7 +16,7 @@ Run as Administrator from `C:\OpenPath\`:
 Get-Content C:\OpenPath\data\logs\openpath.log -Tail 100
 ```
 
-`.\OpenPath.ps1 status` prints an `Overall:` line of `HEALTHY`, `DEGRADED`, `CRITICAL`, or `STALE_FAILSAFE`. The individual fields it checks are Acrylic service state, DNS resolution, sinkhole state, and firewall rule presence.
+`.\OpenPath.ps1 status` prints an `Overall:` line of `HEALTHY`, `DEGRADED`, `CRITICAL`, `STALE_FAILSAFE`, `PROTECTED`, or `FAIL_OPEN`. The individual fields it checks are Acrylic service state, DNS resolution, sinkhole state, firewall rule presence, and the DNS failure-mode marker.
 
 ## Important Scheduled Tasks
 
@@ -148,6 +148,53 @@ A resolution failure the proxy still answers for (dead upstream, network
 outage) is not fixed by restarting Acrylic; the health report keeps it
 DEGRADED and the next cycle re-evaluates. `.\OpenPath.ps1 restart` follows the
 same rule and then triggers a normal update cycle.
+
+### Acrylic down: PROTECTED / FAIL_OPEN
+
+When Acrylic stops serving `127.0.0.1:53` and the watchdog reaches `CRITICAL`
+after a failed checkpoint rollback, the agent keeps the machine closed and
+enters a DNS failure mode instead of leaving it without name resolution:
+
+- `PROTECTED` (default) keeps the `127.0.0.1` pin and firewall. The only
+  exception is a marked block at the top of the hosts file containing the
+  last-known-good IPv4 addresses of the configured `apiUrl` and `whitelistUrl`
+  hosts. This lets the next health report reach the API.
+- `FAIL_OPEN` is the opt-in escape hatch (`failureMode: "open"` in
+  `C:\OpenPath\data\config.json`). It restores the original (filtered) DNS
+  configuration and removes the DNS firewall. Browser policies are untouched.
+
+Inspect the active mode:
+
+```powershell
+.\OpenPath.ps1 status
+Get-Content C:\OpenPath\data\dns-failure-mode.json -Raw
+Get-Content C:\Windows\System32\drivers\etc\hosts | Select-String -Pattern 'OpenPath control-plane valve' -Context 1,5
+```
+
+The valve block starts with `# BEGIN OpenPath control-plane valve` and ends
+with `# END OpenPath control-plane valve`. The agent removes it automatically
+after Acrylic listens again and a protected domain resolves through
+`127.0.0.1`.
+
+Manual recovery:
+
+```powershell
+# Start/repair Acrylic and let the next watchdog cycle exit the mode
+Restart-Service -DisplayName '*Acrylic*'
+.\OpenPath.ps1 health
+
+# If the agent is gone, remove the block manually and delete the marker:
+notepad C:\Windows\System32\drivers\etc\hosts
+Remove-Item C:\OpenPath\data\dns-failure-mode.json -Force
+
+# Return to the default protected posture after using the escape hatch
+# Set "failureMode": "protected" in C:\OpenPath\data\config.json
+```
+
+Acrylic repairs use `C:\OpenPath\data\cache\acrylic\Acrylic-Portable.zip`.
+The watchdog re-runs that local install at most once every 30 minutes and
+never downloads while DNS is broken. A healthy cycle seeds the cache at most
+once every 24 hours (or the installer writes it during installation).
 
 ### DNS Does Not Resolve
 

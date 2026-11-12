@@ -289,6 +289,23 @@ Note: if a function is renamed in `linux/lib/*.sh`, these tests will fail becaus
 
 ---
 
+### windows/tests/Windows.DNS.ControlPlaneValve.Tests.ps1
+
+Uses `Get-Content -Raw`.
+
+| Source files read                                | Needle kinds                                                                                           | Before renaming or editing                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `windows/scripts/Test-DNSHealth.ps1`             | Call ordering (`Remove-OpenPathOrphanControlPlaneValve` before checks, valve entry/exit before report) | Update the ordering needles when moving the failure-mode block. |
+| `windows/lib/internal/DNS.ControlPlaneValve.ps1` | Protected-mode restore call and `ProtectedModeSuppressed` exit guard                                   | Update the test if the exit helper is renamed.                  |
+
+### windows/tests/Windows.DNS.ProxyHealth.Tests.ps1
+
+Uses `Get-Content -Raw`.
+
+| Source files read                           | Needle kinds                                                               | Before renaming or editing                                       |
+| ------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `windows/lib/internal/Watchdog.Runtime.ps1` | DNS failure-class reason-code wiring and `DnsFailureClass` output property | Update the test if the watchdog integration is renamed or moved. |
+
 ### windows/tests/Windows.Watchdog.Tests.ps1
 
 Uses `Get-Content -Raw` extensively.

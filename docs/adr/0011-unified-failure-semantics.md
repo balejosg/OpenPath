@@ -103,3 +103,25 @@ The `OPENPATH_FAILURE_MODE=open` escape hatch is available as a temporary revert
   implementation already demonstrated that a narrow valve is the right balance.
 - **Make Windows match Linux (both fail-open)**: rejected by the operator; fail-open is not
   acceptable as the default posture on either platform.
+
+## Addendum (2026-11-12): Windows DNS proxy failure
+
+The Windows agent now implements the same fail-closed posture when the local
+DNS proxy itself is the failure, not only when the whitelist checkpoint is
+stale.
+
+- A watchdog cycle classifies the proxy as `missing`, `service-down`,
+  `port-conflict`, or `listening`. A listening proxy that cannot resolve a
+  protected domain through `127.0.0.1` is reported as an upstream failure.
+- The `protected` mode (default) keeps the `127.0.0.1` pin and firewall. A
+  marked hosts block supplies last-known-good addresses for the configured
+  `apiUrl` and `whitelistUrl` hosts so the health report can still reach the
+  API. The block is removed automatically once Acrylic is healthy again.
+- Acrylic is repaired from a hash-verified local ZIP cache. Reinstalls are
+  limited to one attempt every 30 minutes and never download while DNS is
+  broken; a healthy cycle seeds the cache at most once every 24 hours.
+- `failureMode: "open"` is the opt-in escape hatch for labs and pilots. It
+  restores the filtered original DNS configuration and removes the DNS
+  firewall, reports `FAIL_OPEN`, and never touches browser policies.
+- `PROTECTED` and `FAIL_OPEN` are distinct from the whitelist-disabled
+  fail-open marker; neither path deletes the other marker.

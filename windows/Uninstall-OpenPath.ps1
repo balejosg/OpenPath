@@ -514,6 +514,58 @@ function Remove-OpenPathFirewallRules {
         Remove-NetFirewallRule -ErrorAction SilentlyContinue
 }
 
+function Remove-OpenPathUninstallDnsFailureArtifacts {
+    # Removes the control-plane hosts valve and the DNS failure-mode state/cache files.
+    $systemRoot = [string]$env:SystemRoot
+    if ([string]::IsNullOrWhiteSpace($systemRoot)) { $systemRoot = 'C:\Windows' }
+    $hostsPath = "$systemRoot\System32\drivers\etc\hosts"
+
+    if (Test-Path $hostsPath) {
+        try {
+            $encoding = [System.Text.Encoding]::GetEncoding(28591)
+            $text = $encoding.GetString([System.IO.File]::ReadAllBytes($hostsPath))
+            $beginMarker = '# BEGIN OpenPath control-plane valve'
+            $endMarker = '# END OpenPath control-plane valve'
+            $changed = $false
+            while ($true) {
+                $startIndex = $text.IndexOf($beginMarker, [System.StringComparison]::Ordinal)
+                if ($startIndex -lt 0) { break }
+                $endIndex = $text.IndexOf($endMarker, $startIndex, [System.StringComparison]::Ordinal)
+                if ($endIndex -lt 0) { break }
+                $endIndex += $endMarker.Length
+                if ($endIndex -lt $text.Length -and $text[$endIndex] -eq "`r") { $endIndex++ }
+                if ($endIndex -lt $text.Length -and $text[$endIndex] -eq "`n") { $endIndex++ }
+                if ($startIndex -ge 2 -and $text.Substring($startIndex - 2, 2) -eq "`r`n") {
+                    $startIndex -= 2
+                }
+                elseif ($startIndex -ge 1 -and $text[$startIndex - 1] -eq "`n") {
+                    $startIndex -= 1
+                }
+                $text = $text.Remove($startIndex, $endIndex - $startIndex)
+                $changed = $true
+            }
+            if ($changed) {
+                [System.IO.File]::WriteAllBytes($hostsPath, $encoding.GetBytes($text))
+            }
+        }
+        catch {
+            Write-Host "  WARNING: Could not remove the control-plane hosts valve: $_" -ForegroundColor Yellow
+        }
+    }
+
+    foreach ($relativePath in @(
+            'data\dns-failure-mode.json',
+            'data\control-plane-dns-cache.json',
+            'data\acrylic-repair-state.json'
+        )) {
+        $artifactPath = Join-Path $OpenPathRoot $relativePath
+        if (Test-Path $artifactPath) {
+            Remove-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Remove-Item -LiteralPath (Join-Path $OpenPathRoot 'data\cache\acrylic') -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 function Remove-OpenPathInstallRoot {
     param(
         [switch]$KeepLogs
@@ -771,6 +823,7 @@ else {
 Write-Host "[6/6] Removing files..." -ForegroundColor Yellow
 if (Test-Path $OpenPathRoot) {
     Stop-OpenPathRootedProcess
+    Remove-OpenPathUninstallDnsFailureArtifacts
 
     if ($KeepLogs) {
         Remove-OpenPathInstallRoot -KeepLogs

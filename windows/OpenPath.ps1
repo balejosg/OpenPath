@@ -150,6 +150,7 @@ function Show-OpenPathStatus {
 
     $configPath = "$OpenPathRoot\data\config.json"
     $staleStatePath = "$OpenPathRoot\data\stale-failsafe-state.json"
+    $failureModePath = "$OpenPathRoot\data\dns-failure-mode.json"
     $watchdogFailPath = "$OpenPathRoot\data\watchdog-fails.txt"
 
     $config = $null
@@ -209,6 +210,15 @@ function Show-OpenPathStatus {
     }
 
     $staleFailsafe = Test-Path $staleStatePath
+    $failureModeState = $null
+    if (Test-Path $failureModePath) {
+        try {
+            $failureModeState = Get-Content $failureModePath -Raw | ConvertFrom-Json
+        }
+        catch {
+            $failureModeState = $null
+        }
+    }
 
     $watchdogTaskHealth = $null
     try {
@@ -308,7 +318,13 @@ function Show-OpenPathStatus {
         'CRITICAL'
     }
 
-    if ($staleFailsafe) {
+    if ($failureModeState -and [string]$failureModeState.mode -eq 'open') {
+        $overallStatus = 'FAIL_OPEN'
+    }
+    elseif ($failureModeState) {
+        $overallStatus = 'PROTECTED'
+    }
+    elseif ($staleFailsafe) {
         $overallStatus = 'STALE_FAILSAFE'
     }
     elseif (-not $requiredBoundaryHealthy -and $overallStatus -eq 'HEALTHY') {
@@ -344,6 +360,14 @@ function Show-OpenPathStatus {
         Write-Host "Configuration reason codes: $($configurationReasonCodes -join ', ')"
     }
     Write-Host "Stale failsafe: $staleFailsafe"
+    if ($failureModeState) {
+        Write-Host "DNS failure mode: $($failureModeState.mode)"
+        Write-Host "DNS failure reason: $($failureModeState.reason)"
+        Write-Host "DNS failure since: $($failureModeState.enteredAt)"
+    }
+    else {
+        Write-Host 'DNS failure mode: inactive'
+    }
     Write-Host "Watchdog fail count: $watchdogFails"
 
     if ($config) {

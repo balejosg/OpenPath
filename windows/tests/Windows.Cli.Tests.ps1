@@ -114,6 +114,20 @@ Describe "Operational Command Script" {
             )
         }
 
+        It "renders the active DNS failure mode and its reason" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'dns-failure-mode.json',
+                'DNS failure mode:',
+                'DNS failure reason:',
+                'DNS failure since:',
+                "`$overallStatus = 'FAIL_OPEN'",
+                "`$overallStatus = 'PROTECTED'"
+            )
+        }
+
         It "observes required boundary health without mutating scheduled tasks" {
             $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
             $tokens = $null

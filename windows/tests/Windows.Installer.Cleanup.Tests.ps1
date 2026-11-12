@@ -20,8 +20,32 @@ Describe "Installer cleanup helper" {
             'Remove-OpenPathInstallerFirewallRules',
             'Restore-OpenPathInstallerDnsSettings',
             'Remove-OpenPathInstallerBrowserArtifacts',
+            'Remove-OpenPathInstallerDnsFailureArtifacts',
             'Remove-OpenPathInstallerInstallRoot -KeepLogs:$KeepLogs'
         )
+    }
+
+    It "Removes the hosts valve and DNS failure artifacts before wiping the install root" {
+        . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+        $root = Join-Path $TestDrive 'dns-failure-artifacts'
+        $cacheDir = Join-Path $root 'data\cache\acrylic'
+        New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+        foreach ($relativePath in @('data\dns-failure-mode.json', 'data\control-plane-dns-cache.json', 'data\acrylic-repair-state.json', 'data\cache\acrylic\Acrylic-Portable.zip')) {
+            Set-Content -LiteralPath (Join-Path $root $relativePath) -Value 'payload' -Encoding ASCII
+        }
+
+        $hostsPath = Join-Path $TestDrive 'hosts-cleanup'
+        $originalText = "# user entry`r`n10.1.2.3 custom.example`r`n"
+        $blockText = "# BEGIN OpenPath control-plane valve`r`n203.0.113.10 api.openpath.example.invalid`r`n# END OpenPath control-plane valve`r`n"
+        [System.IO.File]::WriteAllText($hostsPath, ($blockText + $originalText), [System.Text.Encoding]::GetEncoding(28591))
+
+        Remove-OpenPathInstallerDnsFailureArtifacts -OpenPathRoot $root -HostsPath $hostsPath
+
+        (Get-Content -LiteralPath $hostsPath -Raw) | Should -Be $originalText
+        Test-Path (Join-Path $root 'data\dns-failure-mode.json') | Should -BeFalse
+        Test-Path (Join-Path $root 'data\control-plane-dns-cache.json') | Should -BeFalse
+        Test-Path (Join-Path $root 'data\acrylic-repair-state.json') | Should -BeFalse
+        Test-Path $cacheDir | Should -BeFalse
     }
 
     It "Does not uninstall Acrylic as part of reinstall cleanup" {
