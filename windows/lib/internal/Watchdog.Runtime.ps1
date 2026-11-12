@@ -467,7 +467,7 @@ function Invoke-OpenPathWatchdogPrechecks {
     if (Get-Command -Name Get-OpenPathDnsProxyState -ErrorAction SilentlyContinue) {
         try { $proxyState = Get-OpenPathDnsProxyState } catch { $proxyState = $null }
     }
-    $proxyBlocksPortalDetection = $false
+    $proxyBlocksPortalDetection = [bool]($proxyState -and [string]$proxyState.State -in @('missing', 'service-down', 'port-conflict'))
     if (Get-Command -Name Test-OpenPathDnsProxyBlocksPortalDetection -ErrorAction SilentlyContinue) {
         $proxyBlocksPortalDetection = [bool](Test-OpenPathDnsProxyBlocksPortalDetection -ProxyState $proxyState)
     }
