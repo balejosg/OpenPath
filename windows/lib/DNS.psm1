@@ -58,6 +58,7 @@ Export-ModuleMember -Function @(
     'Test-DNSSinkhole',
     'Get-OpenPathDnsProxyState',
     'Get-OpenPathDnsFailureClass',
+    'Test-OpenPathDnsProxyBlocksPortalDetection',
     'Get-OpenPathAcrylicArtifactSpec',
     'Get-OpenPathAcrylicCachePath',
     'Get-OpenPathAcrylicRepairStatePath',

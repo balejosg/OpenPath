@@ -463,11 +463,30 @@ function Invoke-OpenPathWatchdogPrechecks {
 
     $portalModeActive = Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore
     $captiveState = 'NoNetwork'
-    try {
-        $captiveState = Test-OpenPathCaptivePortalState -TimeoutSec 3
+    $proxyState = $null
+    if (Get-Command -Name Get-OpenPathDnsProxyState -ErrorAction SilentlyContinue) {
+        try { $proxyState = Get-OpenPathDnsProxyState } catch { $proxyState = $null }
     }
-    catch {
+    $proxyBlocksPortalDetection = $false
+    if (Get-Command -Name Test-OpenPathDnsProxyBlocksPortalDetection -ErrorAction SilentlyContinue) {
+        $proxyBlocksPortalDetection = [bool](Test-OpenPathDnsProxyBlocksPortalDetection -ProxyState $proxyState)
+    }
+    if ($proxyBlocksPortalDetection) {
+        if ($portalModeActive) {
+            Remove-Item -LiteralPath (Join-Path $OpenPathRoot 'data\captive-portal-active.json') -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $OpenPathRoot 'data\captive-portal-observation.json') -Force -ErrorAction SilentlyContinue
+            $portalModeActive = $false
+        }
         $captiveState = 'NoNetwork'
+        Write-OpenPathLog "Watchdog: DNS proxy is $($proxyState.State); skipping captive portal detection" -Level WARN
+    }
+    else {
+        try {
+            $captiveState = Test-OpenPathCaptivePortalState -TimeoutSec 3
+        }
+        catch {
+            $captiveState = 'NoNetwork'
+        }
     }
 
     $portalObservation = Update-OpenPathCaptivePortalObservation -DetectedState $captiveState

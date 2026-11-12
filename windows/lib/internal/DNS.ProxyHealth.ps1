@@ -427,6 +427,23 @@ function Invoke-OpenPathDnsProxyRepair {
     }
 }
 
+function Test-OpenPathDnsProxyBlocksPortalDetection {
+    <#
+    .SYNOPSIS
+    Returns true when a failed HTTP portal probe cannot be attributed to a captive portal.
+    .DESCRIPTION
+    A missing/stopped proxy makes every probe fail even on a normal network. Those
+    transport failures must not enter portal passthrough; the DNS failure mode owns
+    that state. A listening proxy keeps the normal portal detection path.
+    #>
+    param([AllowNull()][object]$ProxyState)
+
+    if ($null -eq $ProxyState -or -not $ProxyState.PSObject.Properties['State']) {
+        return $false
+    }
+    return ([string]$ProxyState.State -in @('missing', 'service-down', 'port-conflict'))
+}
+
 function Get-OpenPathDnsFailureClass {
     <#
     .SYNOPSIS

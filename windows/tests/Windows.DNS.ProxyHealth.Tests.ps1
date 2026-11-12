@@ -270,6 +270,28 @@ Describe "DNS proxy health" {
         }
     }
 
+    Context "Portal detection guard" {
+        It "Treats a missing, stopped, or conflicting proxy as a portal-probe false positive" {
+            (Test-OpenPathDnsProxyBlocksPortalDetection -ProxyState ([PSCustomObject]@{ State = 'missing' })) | Should -BeTrue
+            (Test-OpenPathDnsProxyBlocksPortalDetection -ProxyState ([PSCustomObject]@{ State = 'service-down' })) | Should -BeTrue
+            (Test-OpenPathDnsProxyBlocksPortalDetection -ProxyState ([PSCustomObject]@{ State = 'port-conflict' })) | Should -BeTrue
+            (Test-OpenPathDnsProxyBlocksPortalDetection -ProxyState ([PSCustomObject]@{ State = 'listening' })) | Should -BeFalse
+            (Test-OpenPathDnsProxyBlocksPortalDetection -ProxyState ([PSCustomObject]@{ State = 'unknown' })) | Should -BeFalse
+            (Test-OpenPathDnsProxyBlocksPortalDetection -ProxyState $null) | Should -BeFalse
+        }
+
+        It "Skips captive portal detection while the DNS proxy is unavailable" {
+            $watchdogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $content = Get-Content $watchdogPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Test-OpenPathDnsProxyBlocksPortalDetection',
+                'skipping captive portal detection',
+                'captive-portal-active.json'
+            )
+        }
+    }
+
     Context "Get-OpenPathDnsFailureClass" {
         It "Maps missing, service-down and port-conflict states to distinct reason codes" {
             (Get-OpenPathDnsFailureClass -ProxyState ([PSCustomObject]@{ State = 'missing' }) -LocalResolutionHealthy $false) | Should -Be 'dns_proxy_missing'
