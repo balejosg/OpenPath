@@ -1193,6 +1193,8 @@ function Invoke-OpenPathWatchdogPendingUpdateFinalization {
         return $result
     }
     if (-not (Get-Command -Name 'Get-OpenPathScheduledTaskCatalog' -ErrorAction SilentlyContinue)) {
+        $result.ReasonCode = 'self_update_finalization_retry_failed'
+        $result.Message = 'Could not resolve the AgentUpdate task name: the scheduled task catalog is unavailable'
         return $result
     }
 
@@ -1204,6 +1206,8 @@ function Invoke-OpenPathWatchdogPendingUpdateFinalization {
         return $result
     }
     if ([string]::IsNullOrWhiteSpace($taskName)) {
+        $result.ReasonCode = 'self_update_finalization_retry_failed'
+        $result.Message = 'Could not resolve the AgentUpdate task name from the scheduled task catalog'
         return $result
     }
 

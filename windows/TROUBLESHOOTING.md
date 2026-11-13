@@ -833,6 +833,8 @@ The journal counts finalization attempts in `finalizationAttempts`. The watchdog
 
 A stuck finalization does not block a new build. On its next run the updater still asks the server for the manifest. If finalization failed at the target hash check, the published build is reinstalled even when its version and build match the stuck target. If finalization failed for another reason and the server publishes a different build from the journal's target, that build is installed through the normal flow with new backups and a new journal. If the server still publishes the same target, the updater returns the finalization error and keeps the journal for the next bounded retry. A run that fails before writing its journal, or that completes its rollback, removes its own backup directory; an incomplete rollback keeps the journal and the backup directory it points to.
 
+A replacement install never loses a stuck journal. Before it writes its own journal, the updater preserves a committed journal byte-for-byte as `data\agent-update\superseded-update-journal.json`. If the replacement fails and its rollback completes, that preserved journal atomically replaces the replacement journal, so the pending finalization, its attempt counter and its `updatedAt` value survive. If the replacement finalizes successfully, the preserved file is removed before the journal. An incomplete rollback keeps both files. The recovery script and the start of `self-update` also put the preserved file back when it is found without a journal. A preserved file that cannot be parsed, or whose `schemaVersion` is not 2, follows the same quarantine rule as a journal.
+
 A release that fails validation or the health gate is recorded in `data\agent-update\failed-update.json`. The same build is skipped for seven days, then retried in case the failure was environmental. Publishing a different build clears the record automatically. To retry immediately, delete that file and run the update explicitly:
 
 ```powershell
@@ -844,6 +846,7 @@ A completed rollback leaves `data\agent-update\recovery-report.json`; the watchd
 
 ```powershell
 Get-Content "C:\OpenPath\data\agent-update\update-journal.json" -Raw
+Get-Content "C:\OpenPath\data\agent-update\superseded-update-journal.json" -Raw
 Get-Content "C:\OpenPath\data\agent-update\failed-update.json" -Raw
 Get-ChildItem "C:\OpenPath\data\agent-update\update-journal.quarantine-*.json"
 ```
@@ -858,6 +861,7 @@ Get-ChildItem "C:\OpenPath\data\agent-update\update-journal.quarantine-*.json"
 - `C:\OpenPath\data\integrity-baseline.json` - integrity hashes for critical files
 - `C:\OpenPath\data\integrity-backup\` - backup copies used for integrity restoration
 - `C:\OpenPath\data\agent-update\update-journal.json` - present while an update is in flight or needs recovery
+- `C:\OpenPath\data\agent-update\superseded-update-journal.json` - stuck committed journal preserved while a replacement install runs
 - `C:\OpenPath\data\agent-update\backups\run-*\` - this update run's file backups, used by rollback and recovery; older runs are removed after a successful update
 - `C:\OpenPath\data\agent-update\failed-update.json` - target build rejected by validation or the health gate
 - `C:\OpenPath\data\agent-update\recovery-report.json` - pending recovery health report, removed after it is sent

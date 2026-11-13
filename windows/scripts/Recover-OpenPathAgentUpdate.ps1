@@ -43,6 +43,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:UpdateRoot = ''
 $script:JournalPath = ''
+$script:SupersededJournalPath = ''
 $script:ReportPath = ''
 $script:LogPath = ''
 
@@ -265,15 +266,20 @@ function Move-OpenPathRecoveryJournalToQuarantine {
         [Parameter(Mandatory = $true)][string]$ReasonCode,
         [string]$Version = '',
         [string]$Build = '',
-        [string]$Detail = ''
+        [string]$Detail = '',
+        [string]$SourcePath = ''
     )
+
+    if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+        $SourcePath = $script:JournalPath
+    }
 
     $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ', [Globalization.CultureInfo]::InvariantCulture)
     $quarantineName = "update-journal.quarantine-$timestamp-$([guid]::NewGuid().ToString('N')).json"
     $quarantinePath = Join-Path $script:UpdateRoot $quarantineName
 
     try {
-        Move-Item -LiteralPath $script:JournalPath -Destination $quarantinePath -Force -ErrorAction Stop
+        Move-Item -LiteralPath $SourcePath -Destination $quarantinePath -Force -ErrorAction Stop
     }
     catch {
         Write-OpenPathRecoveryLog "Could not quarantine the unusable update journal: $_"
@@ -303,13 +309,70 @@ function Move-OpenPathRecoveryJournalToQuarantine {
     Write-OpenPathRecoveryLog "Quarantined an unusable update journal as $quarantineName"
 }
 
+function Restore-OpenPathRecoverySupersededJournal {
+    # This rule must stay identical to Restore-OpenPathAgentUpdateSupersededJournal
+    # in Common.Update.ps1. The script cannot import that module, so the two
+    # implementations are pinned together by the parity tests.
+    if (-not (Test-Path -LiteralPath $script:SupersededJournalPath -PathType Leaf)) {
+        return 'missing'
+    }
+
+    $reasonCode = ''
+    $detail = ''
+    try {
+        $supersededJournal = Get-Content -LiteralPath $script:SupersededJournalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $schemaVersion = 0
+        [void][int]::TryParse([string]$supersededJournal.schemaVersion, [ref]$schemaVersion)
+        if ($schemaVersion -ne 2) {
+            $reasonCode = 'self_update_recovery_journal_schema_unsupported'
+            $detail = ("The superseded update journal has unsupported schemaVersion '{0}'" -f $supersededJournal.schemaVersion)
+        }
+    }
+    catch {
+        $reasonCode = 'self_update_recovery_journal_unreadable'
+        $detail = "The superseded update journal could not be parsed: $_"
+    }
+
+    if ($reasonCode) {
+        Move-OpenPathRecoveryJournalToQuarantine `
+            -ReasonCode $reasonCode `
+            -Detail $detail `
+            -SourcePath $script:SupersededJournalPath
+        if (Test-Path -LiteralPath $script:SupersededJournalPath -PathType Leaf) {
+            Write-OpenPathRecoveryLog 'Could not quarantine the unusable superseded update journal'
+            return 'failed'
+        }
+        return 'quarantined'
+    }
+
+    try {
+        if (Test-Path -LiteralPath $script:JournalPath -PathType Leaf) {
+            [System.IO.File]::Replace($script:SupersededJournalPath, $script:JournalPath, [NullString]::Value)
+        }
+        else {
+            [System.IO.File]::Move($script:SupersededJournalPath, $script:JournalPath)
+        }
+        return 'moved'
+    }
+    catch {
+        if ((Test-Path -LiteralPath $script:JournalPath -PathType Leaf) -and
+            -not (Test-Path -LiteralPath $script:SupersededJournalPath -PathType Leaf)) {
+            return 'moved'
+        }
+        Write-OpenPathRecoveryLog "Could not put the superseded update journal back: $_"
+        return 'failed'
+    }
+}
+
 $script:OpenPathRoot = Resolve-OpenPathRecoveryRoot -ExplicitRoot $OpenPathRoot
 $script:UpdateRoot = Join-Path (Join-Path $script:OpenPathRoot 'data') 'agent-update'
 $script:JournalPath = Join-Path $script:UpdateRoot 'update-journal.json'
+$script:SupersededJournalPath = Join-Path $script:UpdateRoot 'superseded-update-journal.json'
 $script:ReportPath = Join-Path $script:UpdateRoot 'recovery-report.json'
 $script:LogPath = Join-Path (Join-Path (Join-Path $script:OpenPathRoot 'data') 'logs') 'openpath.log'
 
-if (-not (Test-Path -LiteralPath $script:JournalPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $script:JournalPath -PathType Leaf) -and
+    -not (Test-Path -LiteralPath $script:SupersededJournalPath -PathType Leaf)) {
     return
 }
 
@@ -326,6 +389,20 @@ try {
 
     if (-not $acquired) {
         return
+    }
+
+    if (-not (Test-Path -LiteralPath $script:JournalPath -PathType Leaf)) {
+        $supersededRestore = Restore-OpenPathRecoverySupersededJournal
+        if ($supersededRestore -eq 'moved') {
+            Write-OpenPathRecoveryLog 'Moved the superseded update journal into place'
+        }
+        elseif ($supersededRestore -eq 'quarantined') {
+            return
+        }
+        else {
+            Write-OpenPathRecoveryLog 'The superseded update journal is present but could not be put back'
+            return
+        }
     }
 
     $journal = $null
@@ -362,7 +439,33 @@ try {
     $rollbackComplete = Restore-OpenPathRecoveryJournal -Journal $journal
 
     if ($rollbackComplete) {
-        Remove-Item -LiteralPath $script:JournalPath -Force -ErrorAction Stop
+        $supersededRestore = Restore-OpenPathRecoverySupersededJournal
+        if ($supersededRestore -eq 'failed') {
+            $failedReasonCode = ConvertTo-OpenPathRecoveryReasonCode -Prefix 'self_update_recovery_failed' -Version $targetVersion -Build $targetBuild
+            Write-OpenPathRecoveryReport `
+                -Status 'DEGRADED' `
+                -ReasonCode $failedReasonCode `
+                -Actions 'self_update_recovery_failed' `
+                -Version $targetVersion `
+                -Build $targetBuild `
+                -Message 'Interrupted update rollback completed but the superseded update journal could not be restored'
+            Write-OpenPathRecoveryLog 'Interrupted update rollback completed but the superseded update journal could not be restored; keeping both journals'
+            throw 'OpenPath agent update recovery did not complete'
+        }
+
+        if ($supersededRestore -eq 'quarantined') {
+            # The quarantine rule already wrote the pending recovery report.
+            Remove-Item -LiteralPath $script:JournalPath -Force -ErrorAction Stop
+            Write-OpenPathRecoveryLog "Rolled back interrupted update to $targetVersion build $targetBuild and quarantined an unusable superseded journal"
+            return
+        }
+
+        if ($supersededRestore -eq 'missing') {
+            Remove-Item -LiteralPath $script:JournalPath -Force -ErrorAction Stop
+        }
+        # A moved superseded journal now occupies the journal place and must
+        # not be removed: it records the earlier update's pending finalization.
+
         $reasonCode = ConvertTo-OpenPathRecoveryReasonCode -Prefix 'self_update_recovery_rolled_back' -Version $targetVersion -Build $targetBuild
         Write-OpenPathRecoveryReport `
             -Status 'DEGRADED' `

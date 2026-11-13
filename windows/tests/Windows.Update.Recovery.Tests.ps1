@@ -95,6 +95,40 @@ Describe "OpenPath agent update recovery" {
                 Set-Content -LiteralPath (Join-Path $updateRoot 'update-journal.json') -Encoding UTF8
         }
 
+        function Write-RecoverySupersededJournal {
+            param(
+                [Parameter(Mandatory = $true)][string]$Root,
+                [object[]]$Files = @(),
+                [string]$Phase = 'committed',
+                [int]$SchemaVersion = 2,
+                [string]$BackupRoot = '',
+                [string]$TargetVersion = '9.9.7',
+                [string]$TargetBuild = 'build-stuck',
+                [string]$UpdatedAt = '2026-11-13T10:00:00.0000000Z'
+            )
+
+            $updateRoot = Join-Path $Root 'data/agent-update'
+            New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+            if ([string]::IsNullOrWhiteSpace($BackupRoot)) {
+                $BackupRoot = Join-Path $updateRoot 'backups/run-stuck'
+            }
+
+            [PSCustomObject]@{
+                schemaVersion        = $SchemaVersion
+                phase                = $Phase
+                targetVersion        = $TargetVersion
+                targetBuild          = $TargetBuild
+                previousVersion      = '9.9.6'
+                previousBuild        = 'build-older'
+                backupRoot           = $BackupRoot
+                createdAt            = '2026-11-13T09:00:00.0000000Z'
+                updatedAt            = $UpdatedAt
+                finalizationAttempts = 2
+                files                = @($Files)
+            } | ConvertTo-Json -Depth 10 |
+                Set-Content -LiteralPath (Join-Path $updateRoot 'superseded-update-journal.json') -Encoding UTF8
+        }
+
         function Invoke-RecoveryScript {
             param([Parameter(Mandatory = $true)][string]$Root)
 
@@ -334,6 +368,141 @@ Export-ModuleMember -Function *
             $result.ExitCode | Should -Be 0
             (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'new-a'
             Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/recovery-report.json') | Should -BeFalse
+        }
+
+        It "Moves a superseded journal into place when no journal exists" {
+            $root = New-RecoveryRoot
+            Write-RecoverySupersededJournal -Root $root
+            $supersededPath = Join-Path $root 'data/agent-update/superseded-update-journal.json'
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            $supersededBytes = [System.IO.File]::ReadAllBytes($supersededPath)
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            Test-Path -LiteralPath $journalPath | Should -BeTrue
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be ([Convert]::ToBase64String($supersededBytes))
+            Test-Path -LiteralPath $supersededPath | Should -BeFalse
+            $journalOnDisk = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+            $journalOnDisk.phase | Should -Be 'committed'
+            $journalOnDisk.finalizationAttempts | Should -Be 2
+            (Get-Content -LiteralPath $journalPath -Raw) | Should -Match '2026-11-13T10:00:00\.0000000Z'
+        }
+
+        It "Puts the superseded journal in place after a complete rollback" {
+            $fixture = New-PartialRollbackFixture -Kind partial
+            $root = $fixture.Root
+            Write-RecoverySupersededJournal -Root $root
+            $supersededPath = Join-Path $root 'data/agent-update/superseded-update-journal.json'
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            $supersededBytes = [System.IO.File]::ReadAllBytes($supersededPath)
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            (Get-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Raw).Trim() | Should -Be 'old-a'
+            Test-Path -LiteralPath (Join-Path $root 'lib/b.ps1') | Should -BeFalse
+            Test-Path -LiteralPath $journalPath | Should -BeTrue
+            Test-Path -LiteralPath $supersededPath | Should -BeFalse
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be ([Convert]::ToBase64String($supersededBytes))
+
+            $reportPath = Join-Path $root 'data/agent-update/recovery-report.json'
+            $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            $report.reasonCode | Should -Match 'self_update_recovery_rolled_back'
+            $report.build | Should -Be 'build-new'
+        }
+
+        It "Keeps both journals when the replacement rollback is incomplete" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            $journalBytes = [System.IO.File]::ReadAllBytes($journalPath)
+            Write-RecoverySupersededJournal -Root $root
+            $supersededPath = Join-Path $root 'data/agent-update/superseded-update-journal.json'
+            $supersededBytes = [System.IO.File]::ReadAllBytes($supersededPath)
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Not -Be 0
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be ([Convert]::ToBase64String($journalBytes))
+            Test-Path -LiteralPath $supersededPath | Should -BeTrue
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($supersededPath)) |
+                Should -Be ([Convert]::ToBase64String($supersededBytes))
+            (Get-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Raw).Trim() | Should -Be 'new-a'
+        }
+
+        It "Quarantines an unusable superseded journal (<Kind>)" -ForEach @(
+            @{ Kind = 'unreadable' }
+            @{ Kind = 'schema1' }
+        ) {
+            $root = New-RecoveryRoot
+            $updateRoot = Join-Path $root 'data/agent-update'
+            New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+            $supersededPath = Join-Path $updateRoot 'superseded-update-journal.json'
+            if ($Kind -eq 'unreadable') {
+                Set-Content -LiteralPath $supersededPath -Value '{ "schemaVersion": 2, "phase": ' -Encoding UTF8
+            }
+            else {
+                Write-RecoverySupersededJournal -Root $root -SchemaVersion 1
+            }
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            Test-Path -LiteralPath (Join-Path $updateRoot 'update-journal.json') | Should -BeFalse
+            Test-Path -LiteralPath $supersededPath | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $updateRoot -Filter 'update-journal.quarantine-*.json' -File).Count | Should -Be 1
+            $report = Get-Content -LiteralPath (Join-Path $updateRoot 'recovery-report.json') -Raw | ConvertFrom-Json
+            $report.reasonCode | Should -Match '^self_update_recovery_journal_'
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Match 'quarantin'
+        }
+
+        It "Quarantines an unusable superseded journal and removes the rolled-back journal" {
+            $fixture = New-PartialRollbackFixture -Kind partial
+            $root = $fixture.Root
+            $updateRoot = Join-Path $root 'data/agent-update'
+            $supersededPath = Join-Path $updateRoot 'superseded-update-journal.json'
+            Set-Content -LiteralPath $supersededPath -Value '{ "schemaVersion": 2, "phase": ' -Encoding UTF8
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            (Get-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Raw).Trim() | Should -Be 'old-a'
+            Test-Path -LiteralPath (Join-Path $root 'lib/b.ps1') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $updateRoot 'update-journal.json') | Should -BeFalse
+            Test-Path -LiteralPath $supersededPath | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $updateRoot -Filter 'update-journal.quarantine-*.json' -File).Count | Should -Be 1
+        }
+
+        It "Leaves a committed journal and its superseded sibling for the updater" {
+            $root = New-RecoveryRoot
+            $destination = Join-Path $root 'lib/a.ps1'
+            New-RecoveryFile -Path $destination -Content 'new-a'
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-current'
+            Write-RecoveryJournal -Root $root -Phase 'committed' -BackupRoot $backupRoot -Files @(
+                New-RecoveryJournalEntry -RelativePath 'lib\a.ps1' -ExistedBefore $true `
+                    -PreviousSha256 (Get-TestContentHash -Content 'old-a') `
+                    -TargetSha256 (Get-TestContentHash -Content 'new-a')
+            )
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            $journalBytes = [System.IO.File]::ReadAllBytes($journalPath)
+            Write-RecoverySupersededJournal -Root $root
+            $supersededPath = Join-Path $root 'data/agent-update/superseded-update-journal.json'
+            $supersededBytes = [System.IO.File]::ReadAllBytes($supersededPath)
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be ([Convert]::ToBase64String($journalBytes))
+            Test-Path -LiteralPath $supersededPath | Should -BeTrue
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($supersededPath)) |
+                Should -Be ([Convert]::ToBase64String($supersededBytes))
             Test-Path -LiteralPath (Join-Path $root 'data/agent-update/recovery-report.json') | Should -BeFalse
         }
 

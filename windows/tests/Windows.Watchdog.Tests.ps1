@@ -3852,6 +3852,38 @@ Describe "Watchdog committed update journal" {
         $global:OpenPathTestLockReleases | Should -Be 1
     }
 
+    It "Reports a stable reason code when the scheduled task catalog is unavailable" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11))
+        Mock Get-Command { $null } -ParameterFilter {
+            $Name -eq 'Get-OpenPathScheduledTaskCatalog'
+        }
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        $result.ReasonCode | Should -Be 'self_update_finalization_retry_failed'
+        $result.Message | Should -Match 'task name'
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Reports a stable reason code when the catalog yields no AgentUpdate task name" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11))
+        Mock Get-OpenPathScheduledTaskCatalog {
+            [PSCustomObject]@{
+                Tasks = [PSCustomObject]@{
+                    AgentUpdate = [PSCustomObject]@{ Name = '' }
+                }
+            }
+        }
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        $result.ReasonCode | Should -Be 'self_update_finalization_retry_failed'
+        $result.Message | Should -Match 'task name'
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
     It "Wires the resume attempt ahead of the integrity restore" {
         $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1") -Raw
         $resumeStart = $content.IndexOf('Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $OpenPathRoot')

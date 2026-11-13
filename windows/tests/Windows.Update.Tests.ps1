@@ -1358,6 +1358,7 @@ Describe "Update Script" {
                 $script:Captured.Reports.Count | Should -Be 1
                 (@($script:Captured.Reports[0].ReasonCodes) -join ' ') | Should -Match 'self_update_health_gate_failed'
                 Test-Path -LiteralPath (Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root) | Should -BeFalse
+                Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/superseded-update-journal.json') | Should -BeFalse
 
                 $record = Get-Content -LiteralPath (Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root) -Raw | ConvertFrom-Json
                 $record.stage | Should -Be 'gate'
@@ -1435,6 +1436,7 @@ Describe "Update Script" {
                 $script:Captured.Tasks | Should -BeGreaterThan 0
                 $script:Captured.GateCalls | Should -Be 1
                 Test-Path -LiteralPath (Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root) | Should -BeFalse
+                Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/superseded-update-journal.json') | Should -BeFalse
                 Test-Path -LiteralPath (Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root) | Should -BeFalse
 
                 $remainingBackups = @(Get-ChildItem -LiteralPath $backupsRoot -Directory)
@@ -2007,7 +2009,10 @@ Describe "Update Script" {
             }
         }
 
-        It "Runs finalization from a committed journal at the start of self-update" {
+        It "Runs finalization from a committed journal at the start of self-update (<JournalLocation>)" -ForEach @(
+            @{ JournalLocation = 'journal' }
+            @{ JournalLocation = 'superseded' }
+        ) {
             $root = Join-Path $TestDrive ('finalize-startup-' + [guid]::NewGuid().ToString('N'))
             $destination = Join-Path $root 'lib/existing.ps1'
             New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
@@ -2034,7 +2039,12 @@ Describe "Update Script" {
                     }
                 )
             }
-            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            $journalPath = if ($JournalLocation -eq 'superseded') {
+                Join-Path $root 'data/agent-update/superseded-update-journal.json'
+            }
+            else {
+                Join-Path $root 'data/agent-update/update-journal.json'
+            }
             New-Item -ItemType Directory -Path (Split-Path $journalPath -Parent) -Force | Out-Null
             $journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $journalPath -Encoding UTF8
             $manifest = [PSCustomObject]@{
@@ -2095,6 +2105,7 @@ Describe "Update Script" {
                 $script:Captured.Tasks | Should -BeGreaterThan 0
                 $script:Captured.GateCalls | Should -Be 0
                 Test-Path -LiteralPath (Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root) | Should -BeFalse
+                Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/superseded-update-journal.json') | Should -BeFalse
             }
         }
     }
@@ -2155,6 +2166,147 @@ Describe "Update Script" {
                     Journal     = $journal
                     JournalPath = $journalPath
                     TargetHash  = $targetHash
+                }
+            }
+
+            function Invoke-SupersededReplacementScenario {
+                param(
+                    [Parameter(Mandatory = $true)][string]$Root,
+                    [Parameter(Mandatory = $true)][object]$Manifest,
+                    [string]$StagedSource = '',
+                    [Parameter(Mandatory = $true)][ValidateSet(
+                        'gate-failure',
+                        'replace-failure',
+                        'success',
+                        'download-failure',
+                        'incomplete-rollback',
+                        'save-failure',
+                        'hash-mismatch-gate-failure'
+                    )][string]$Mode
+                )
+
+                InModuleScope Common -Parameters @{
+                    Root = $Root
+                    Manifest = $Manifest
+                    StagedSource = $StagedSource
+                    Mode = $Mode
+                } {
+                    $script:OpenPathRoot = $Root
+                    $script:TestManifest = $Manifest
+                    $script:TestStagedSource = $StagedSource
+                    $script:TestMode = $Mode
+                    $script:Captured = @{
+                        Config              = $null
+                        Integrity           = 0
+                        Baseline            = 0
+                        Tasks               = 0
+                        Reports             = @()
+                        GateCalls           = 0
+                        ManifestRequests    = 0
+                        WebRequests         = 0
+                        ConfigWrites        = 0
+                        StuckJournalBase64  = ''
+                        SupersededBase64    = ''
+                    }
+
+                    Mock Get-OpenPathConfig {
+                        [PSCustomObject]@{
+                            apiUrl       = 'https://api.test'
+                            whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                            version      = '9.9.8'
+                            agentBuild   = 'build-old'
+                        }
+                    }
+                    Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                    Mock Invoke-RestMethod {
+                        $script:Captured.ManifestRequests++
+                        $script:TestManifest
+                    }
+                    Mock Invoke-WebRequest {
+                        param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                        $script:Captured.WebRequests++
+                        if ($script:TestMode -eq 'download-failure') {
+                            throw 'download failed'
+                        }
+                        Copy-Item -LiteralPath $script:TestStagedSource -Destination $OutFile -Force
+                    }
+                    Mock Write-OpenPathLog { }
+                    Mock Set-OpenPathConfig {
+                        $script:Captured.ConfigWrites++
+                        if ($script:TestMode -ne 'hash-mismatch-gate-failure' -and $script:Captured.ConfigWrites -eq 1) {
+                            $journalPath = Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $script:OpenPathRoot
+                            $script:Captured.StuckJournalBase64 = [Convert]::ToBase64String(
+                                [System.IO.File]::ReadAllBytes($journalPath)
+                            )
+                            throw 'simulated config failure'
+                        }
+                        $script:Captured.Config = $Config
+                    }
+                    Mock Save-OpenPathIntegrityBackup { $script:Captured.Integrity++ }
+                    Mock New-OpenPathIntegrityBaseline { $script:Captured.Baseline++ }
+                    foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                        if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                            Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                        }
+                    }
+                    Mock Register-OpenPathTask { $script:Captured.Tasks++ }
+                    Mock Enable-OpenPathTask { $script:Captured.Tasks++ }
+                    Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                    Mock Register-OpenPathFirefoxNativeHost { }
+                    Mock Restore-OpenPathProtectedMode { }
+                    Mock Start-OpenPathTask { }
+                    Mock Send-OpenPathHealthReport {
+                        param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions, $Version, $ReasonCodes)
+                        $script:Captured.Reports += [PSCustomObject]@{
+                            Status      = $Status
+                            Actions     = $Actions
+                            ReasonCodes = @($ReasonCodes)
+                        }
+                    }
+                    Mock Invoke-OpenPathAgentUpdateHealthGate {
+                        $script:Captured.GateCalls++
+                        $supersededPath = Get-OpenPathAgentUpdateSupersededJournalPath -OpenPathRoot $script:OpenPathRoot
+                        if (Test-Path -LiteralPath $supersededPath -PathType Leaf) {
+                            $script:Captured.SupersededBase64 = [Convert]::ToBase64String(
+                                [System.IO.File]::ReadAllBytes($supersededPath)
+                            )
+                        }
+                        [PSCustomObject]@{
+                            Healthy  = [bool]($script:TestMode -eq 'success')
+                            Message  = 'gate failed'
+                            TimedOut = $false
+                        }
+                    }
+
+                    if ($script:TestMode -eq 'replace-failure') {
+                        Mock Copy-Item {
+                            $supersededPath = Get-OpenPathAgentUpdateSupersededJournalPath -OpenPathRoot $script:OpenPathRoot
+                            if (Test-Path -LiteralPath $supersededPath -PathType Leaf) {
+                                $script:Captured.SupersededBase64 = [Convert]::ToBase64String(
+                                    [System.IO.File]::ReadAllBytes($supersededPath)
+                                )
+                            }
+                            throw 'simulated interruption during replacement'
+                        } -ParameterFilter {
+                            $Destination -and [string]$Destination -match '\.openpath-update-'
+                        }
+                    }
+                    if ($script:TestMode -eq 'incomplete-rollback') {
+                        Mock Restore-OpenPathAgentUpdateJournalBackups {
+                            [PSCustomObject]@{ Complete = $false; Errors = @('simulated incomplete rollback') }
+                        }
+                    }
+                    if ($script:TestMode -eq 'save-failure') {
+                        Mock Save-OpenPathAgentUpdateSupersededJournal {
+                            throw 'simulated superseded journal failure'
+                        }
+                    }
+
+                    $result = Invoke-OpenPathAgentSelfUpdate -Silent
+                    [PSCustomObject]@{
+                        Result   = $result
+                        Captured = $script:Captured
+                    }
                 }
             }
         }
@@ -2468,6 +2620,232 @@ Describe "Update Script" {
                 $script:WebRequests | Should -Be 0
                 Test-Path -LiteralPath (Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root) | Should -BeTrue
             }
+        }
+
+        It "Restores the stuck journal after a replacement build fails the health gate" {
+            $fixture = New-StuckFinalizationFixture -InstalledContent 'stuck-target' -JournalTargetContent 'stuck-target' -TargetBuild 'build-stuck'
+            $stagedSource = Join-Path $TestDrive ('gate-replacement-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'published-target' -Encoding ASCII
+            $publishedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-published'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $publishedHash })
+            }
+
+            $scenario = Invoke-SupersededReplacementScenario -Root $fixture.Root -Manifest $manifest `
+                -StagedSource $stagedSource -Mode 'gate-failure'
+
+            $scenario.Result.Success | Should -BeFalse
+            (Get-Content -LiteralPath $fixture.Destination -Raw).Trim() | Should -Be 'stuck-target'
+            $scenario.Captured.SupersededBase64 | Should -Not -BeNullOrEmpty
+
+            $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+            $supersededPath = Join-Path $fixture.Root 'data/agent-update/superseded-update-journal.json'
+            Test-Path -LiteralPath $journalPath | Should -BeTrue
+            Test-Path -LiteralPath $supersededPath | Should -BeFalse
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be $scenario.Captured.SupersededBase64
+
+            $journalOnDisk = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+            $journalOnDisk.phase | Should -Be 'committed'
+            $journalOnDisk.targetBuild | Should -Be 'build-stuck'
+            $journalOnDisk.finalizationAttempts | Should -Be 1
+
+            $backupDirectories = @(Get-ChildItem -LiteralPath (Join-Path $fixture.Root 'data/agent-update/backups') -Directory)
+            $backupDirectories.Count | Should -Be 1
+            $backupDirectories[0].Name | Should -Be 'run-stuck'
+
+            $record = Get-Content -LiteralPath (Join-Path $fixture.Root 'data/agent-update/failed-update.json') -Raw | ConvertFrom-Json
+            $record.build | Should -Be 'build-published'
+            $record.stage | Should -Be 'gate'
+        }
+
+        It "Restores the stuck journal after a replacement build fails during file replacement" {
+            $fixture = New-StuckFinalizationFixture -InstalledContent 'stuck-target' -JournalTargetContent 'stuck-target' -TargetBuild 'build-stuck'
+            $stagedSource = Join-Path $TestDrive ('replace-replacement-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'published-target' -Encoding ASCII
+            $publishedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-published'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $publishedHash })
+            }
+
+            $scenario = Invoke-SupersededReplacementScenario -Root $fixture.Root -Manifest $manifest `
+                -StagedSource $stagedSource -Mode 'replace-failure'
+
+            $scenario.Result.Success | Should -BeFalse
+            (Get-Content -LiteralPath $fixture.Destination -Raw).Trim() | Should -Be 'stuck-target'
+            $scenario.Captured.SupersededBase64 | Should -Not -BeNullOrEmpty
+
+            $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+            $supersededPath = Join-Path $fixture.Root 'data/agent-update/superseded-update-journal.json'
+            Test-Path -LiteralPath $journalPath | Should -BeTrue
+            Test-Path -LiteralPath $supersededPath | Should -BeFalse
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be $scenario.Captured.SupersededBase64
+
+            $journalOnDisk = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+            $journalOnDisk.phase | Should -Be 'committed'
+            $journalOnDisk.targetBuild | Should -Be 'build-stuck'
+
+            $backupDirectories = @(Get-ChildItem -LiteralPath (Join-Path $fixture.Root 'data/agent-update/backups') -Directory)
+            $backupDirectories.Count | Should -Be 1
+            $backupDirectories[0].Name | Should -Be 'run-stuck'
+        }
+
+        It "Restores the stuck journal after a hash-mismatch reinstall fails the health gate" {
+            $fixture = New-StuckFinalizationFixture -InstalledContent 'wrong-target' -JournalTargetContent 'stuck-target' -TargetBuild 'build-stuck'
+            $stagedSource = Join-Path $TestDrive ('hash-reinstall-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'stuck-target' -Encoding ASCII
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-stuck'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $fixture.TargetHash })
+            }
+
+            $scenario = Invoke-SupersededReplacementScenario -Root $fixture.Root -Manifest $manifest `
+                -StagedSource $stagedSource -Mode 'hash-mismatch-gate-failure'
+
+            $scenario.Result.Success | Should -BeFalse
+            (Get-Content -LiteralPath $fixture.Destination -Raw).Trim() | Should -Be 'wrong-target'
+            $scenario.Captured.SupersededBase64 | Should -Not -BeNullOrEmpty
+
+            $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+            $supersededPath = Join-Path $fixture.Root 'data/agent-update/superseded-update-journal.json'
+            Test-Path -LiteralPath $journalPath | Should -BeTrue
+            Test-Path -LiteralPath $supersededPath | Should -BeFalse
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be $scenario.Captured.SupersededBase64
+
+            $journalOnDisk = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+            $journalOnDisk.phase | Should -Be 'committed'
+            $journalOnDisk.targetBuild | Should -Be 'build-stuck'
+
+            $record = Get-Content -LiteralPath (Join-Path $fixture.Root 'data/agent-update/failed-update.json') -Raw | ConvertFrom-Json
+            $record.build | Should -Be 'build-stuck'
+            $record.stage | Should -Be 'gate'
+        }
+
+        It "Removes the superseded journal when the replacement build finalizes successfully" {
+            $fixture = New-StuckFinalizationFixture -InstalledContent 'stuck-target' -JournalTargetContent 'stuck-target' -TargetBuild 'build-stuck'
+            $stagedSource = Join-Path $TestDrive ('success-replacement-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'published-target' -Encoding ASCII
+            $publishedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-published'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $publishedHash })
+            }
+
+            $scenario = Invoke-SupersededReplacementScenario -Root $fixture.Root -Manifest $manifest `
+                -StagedSource $stagedSource -Mode 'success'
+
+            $scenario.Result.Success | Should -BeTrue
+            $scenario.Result.Updated | Should -BeTrue
+            (Get-Content -LiteralPath $fixture.Destination -Raw).Trim() | Should -Be 'published-target'
+            $scenario.Captured.SupersededBase64 | Should -Not -BeNullOrEmpty
+            $scenario.Captured.Config.version | Should -Be '9.9.9'
+            $scenario.Captured.Config.agentBuild | Should -Be 'build-published'
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/update-journal.json') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/superseded-update-journal.json') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/failed-update.json') | Should -BeFalse
+
+            $backupDirectories = @(Get-ChildItem -LiteralPath (Join-Path $fixture.Root 'data/agent-update/backups') -Directory)
+            $backupDirectories.Count | Should -Be 1
+            $backupDirectories[0].Name | Should -Not -Be 'run-stuck'
+        }
+
+        It "Leaves the stuck journal untouched when the replacement fails before its journal is written" {
+            $fixture = New-StuckFinalizationFixture -InstalledContent 'stuck-target' -JournalTargetContent 'stuck-target' -TargetBuild 'build-stuck'
+            $stagedSource = Join-Path $TestDrive ('download-replacement-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'published-target' -Encoding ASCII
+            $publishedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-published'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $publishedHash })
+            }
+
+            $scenario = Invoke-SupersededReplacementScenario -Root $fixture.Root -Manifest $manifest `
+                -StagedSource $stagedSource -Mode 'download-failure'
+
+            $scenario.Result.Success | Should -BeFalse
+            $scenario.Captured.StuckJournalBase64 | Should -Not -BeNullOrEmpty
+            (Get-Content -LiteralPath $fixture.Destination -Raw).Trim() | Should -Be 'stuck-target'
+
+            $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be $scenario.Captured.StuckJournalBase64
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/superseded-update-journal.json') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/failed-update.json') | Should -BeFalse
+
+            $backupDirectories = @(Get-ChildItem -LiteralPath (Join-Path $fixture.Root 'data/agent-update/backups') -Directory)
+            $backupDirectories.Count | Should -Be 1
+            $backupDirectories[0].Name | Should -Be 'run-stuck'
+        }
+
+        It "Keeps the replacement journal and the superseded journal when the rollback is incomplete" {
+            $fixture = New-StuckFinalizationFixture -InstalledContent 'stuck-target' -JournalTargetContent 'stuck-target' -TargetBuild 'build-stuck'
+            $stagedSource = Join-Path $TestDrive ('incomplete-replacement-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'published-target' -Encoding ASCII
+            $publishedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-published'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $publishedHash })
+            }
+
+            $scenario = Invoke-SupersededReplacementScenario -Root $fixture.Root -Manifest $manifest `
+                -StagedSource $stagedSource -Mode 'incomplete-rollback'
+
+            $scenario.Result.Success | Should -BeFalse
+            $scenario.Captured.SupersededBase64 | Should -Not -BeNullOrEmpty
+
+            $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+            $supersededPath = Join-Path $fixture.Root 'data/agent-update/superseded-update-journal.json'
+            Test-Path -LiteralPath $journalPath | Should -BeTrue
+            Test-Path -LiteralPath $supersededPath | Should -BeTrue
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($supersededPath)) |
+                Should -Be $scenario.Captured.SupersededBase64
+
+            $journalOnDisk = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+            $journalOnDisk.phase | Should -Be 'validating'
+            $journalOnDisk.targetBuild | Should -Be 'build-published'
+            Test-Path -LiteralPath ([string]$journalOnDisk.backupRoot) | Should -BeTrue
+            (Get-Content -LiteralPath $fixture.Destination -Raw).Trim() | Should -Be 'published-target'
+        }
+
+        It "Aborts before any installed file changes when saving the superseded journal fails" {
+            $fixture = New-StuckFinalizationFixture -InstalledContent 'stuck-target' -JournalTargetContent 'stuck-target' -TargetBuild 'build-stuck'
+            $stagedSource = Join-Path $TestDrive ('save-failure-replacement-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'published-target' -Encoding ASCII
+            $publishedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-published'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $publishedHash })
+            }
+
+            $scenario = Invoke-SupersededReplacementScenario -Root $fixture.Root -Manifest $manifest `
+                -StagedSource $stagedSource -Mode 'save-failure'
+
+            $scenario.Result.Success | Should -BeFalse
+            $scenario.Result.Message | Should -Match 'simulated superseded journal failure'
+            $scenario.Captured.StuckJournalBase64 | Should -Not -BeNullOrEmpty
+            $scenario.Captured.GateCalls | Should -Be 0
+            (Get-Content -LiteralPath $fixture.Destination -Raw).Trim() | Should -Be 'stuck-target'
+
+            $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)) |
+                Should -Be $scenario.Captured.StuckJournalBase64
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/superseded-update-journal.json') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/failed-update.json') | Should -BeFalse
+
+            $backupDirectories = @(Get-ChildItem -LiteralPath (Join-Path $fixture.Root 'data/agent-update/backups') -Directory)
+            $backupDirectories.Count | Should -Be 1
+            $backupDirectories[0].Name | Should -Be 'run-stuck'
         }
     }
 
