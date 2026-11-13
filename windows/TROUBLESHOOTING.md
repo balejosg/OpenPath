@@ -821,8 +821,13 @@ The `OpenPath-AgentUpdate` scheduled task runs `self-update --silent` daily at 3
 A self-update now validates the staged tree before it touches the installed files:
 
 1. Every staged `.ps1`, `.psm1` and `.json` file is parsed under the system Windows PowerShell. A syntax error rejects the release and leaves the running version unchanged.
-2. Before the first file is replaced, the updater writes `data\agent-update\update-journal.json`. Every scheduled task entry script and `OpenPath.ps1` runs `scripts\Recover-OpenPathAgentUpdate.ps1` before loading any module, so a machine powered off mid-replacement is rolled back to the previous version on the next task start.
-3. After replacement, a fresh Windows PowerShell process loads the module set used by the scheduled tasks and checks that the required commands exist. If that gate fails, the files are restored from `data\agent-update\backups\`, the config version, scheduled tasks and integrity baseline are left untouched, and the update reports `DEGRADED`.
+2. Before the journal is written, every installed file that will be replaced is copied into a new per-run directory under `data\agent-update\backups\run-*`. The journal records the pre-update and target SHA-256 for each file, so rollback never reads a backup left by an earlier update.
+3. Before the first file is replaced, the updater writes `data\agent-update\update-journal.json` with `schemaVersion` 2. Every scheduled task entry script and `OpenPath.ps1` runs `scripts\Recover-OpenPathAgentUpdate.ps1` before loading any module, so a machine powered off mid-replacement is rolled back to the previous version on the next task start.
+4. After replacement, a fresh Windows PowerShell process loads the module set used by the scheduled tasks and checks that the required commands exist. Passing that gate is the commit point: the updater writes the journal as `committed` immediately and only then writes the config version, re-registers tasks, restores protected mode and refreshes the integrity backup and baseline.
+
+Before the commit point, a failure or interruption rolls the files back. A file that still matches its recorded pre-update hash is left alone; otherwise the backup is restored only when the backup itself matches that hash. If any entry cannot be verified, the journal is kept and the rollback is reported as incomplete.
+
+After the commit point, a failure never rolls the files back. The journal stays `committed`, the config keeps the new version, the update reports `DEGRADED` with `self_update_finalization_failed`, and the next update task run retries the follow-up work. The watchdog starts `OpenPath-AgentUpdate` when a committed journal has not been touched for ten minutes and the update lock is free; if the task cannot be started it reports `self_update_finalization_retry_failed`. Finalization checks every journal file against its target hash before refreshing the integrity backup and baseline, and removes older per-run backup directories only after the update succeeds.
 
 A release that fails validation or the health gate is recorded in `data\agent-update\failed-update.json`. The same build is skipped for seven days, then retried in case the failure was environmental. Publishing a different build clears the record automatically. To retry immediately, delete that file and run the update explicitly:
 
@@ -831,11 +836,12 @@ Remove-Item "C:\OpenPath\data\agent-update\failed-update.json" -Force
 .\OpenPath.ps1 self-update
 ```
 
-A completed rollback leaves `data\agent-update\recovery-report.json`; the watchdog sends it in its next health report and removes it. The journal is deleted only after a successful commit or a completed rollback, so an operator can inspect a stuck recovery with:
+A completed rollback leaves `data\agent-update\recovery-report.json`; the watchdog sends it in its next health report and removes it. A journal that cannot be parsed, or whose `schemaVersion` is not 2, is renamed to `data\agent-update\update-journal.quarantine-*.json` so the watchdog integrity check resumes; at most three quarantined journals are kept. A committed journal is not deleted by the recovery script because its finalization needs the agent modules. An operator can inspect a stuck update with:
 
 ```powershell
 Get-Content "C:\OpenPath\data\agent-update\update-journal.json" -Raw
 Get-Content "C:\OpenPath\data\agent-update\failed-update.json" -Raw
+Get-ChildItem "C:\OpenPath\data\agent-update\update-journal.quarantine-*.json"
 ```
 
 ## Useful Files
@@ -848,7 +854,7 @@ Get-Content "C:\OpenPath\data\agent-update\failed-update.json" -Raw
 - `C:\OpenPath\data\integrity-baseline.json` - integrity hashes for critical files
 - `C:\OpenPath\data\integrity-backup\` - backup copies used for integrity restoration
 - `C:\OpenPath\data\agent-update\update-journal.json` - present while an update is in flight or needs recovery
-- `C:\OpenPath\data\agent-update\backups\` - per-version file backups used by update rollback and recovery
+- `C:\OpenPath\data\agent-update\backups\run-*\` - this update run's file backups, used by rollback and recovery; older runs are removed after a successful update
 - `C:\OpenPath\data\agent-update\failed-update.json` - target build rejected by validation or the health gate
 - `C:\OpenPath\data\agent-update\recovery-report.json` - pending recovery health report, removed after it is sent
 - `C:\OpenPath\data\captive-portal-active.json` - present when captive portal mode is active

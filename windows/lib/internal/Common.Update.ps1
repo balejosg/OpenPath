@@ -597,10 +597,364 @@ function Invoke-OpenPathAgentUpdateHealthGate {
     }
 }
 
+function New-OpenPathAgentUpdateBackupRoot {
+    <#
+    .SYNOPSIS
+        Creates a new, empty backup directory owned by a single update run
+    #>
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
+
+    $backupsRoot = Join-Path (Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot) 'backups'
+    if (-not (Test-Path -LiteralPath $backupsRoot)) {
+        New-Item -ItemType Directory -Path $backupsRoot -Force | Out-Null
+    }
+
+    $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ', [Globalization.CultureInfo]::InvariantCulture)
+    $runName = "run-$timestamp-$([guid]::NewGuid().ToString('N'))"
+    $backupRoot = Join-Path $backupsRoot $runName
+    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    return $backupRoot
+}
+
+function Save-OpenPathAgentUpdateInstalledFileBackups {
+    <#
+    .SYNOPSIS
+        Copies every installed file that will be replaced into this run's backup directory
+    .DESCRIPTION
+        Runs before the journal is written and before any installed file changes.
+        Each entry gets the hash of the pre-update file so rollback can prove that
+        a backup belongs to this run and matches the tree it is restoring.
+    #>
+    param([Parameter(Mandatory = $true)][object[]]$Files)
+
+    foreach ($file in $Files) {
+        $hadExistingFile = Test-Path -LiteralPath $file.DestinationPath -PathType Leaf
+        $file | Add-Member -NotePropertyName HadExistingFile -NotePropertyValue ([bool]$hadExistingFile) -Force
+
+        if (-not $hadExistingFile) {
+            $file | Add-Member -NotePropertyName PreviousSha256 -NotePropertyValue '' -Force
+            continue
+        }
+
+        $previousHash = (Get-FileHash -LiteralPath $file.DestinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+        $backupDirectory = Split-Path $file.BackupPath -Parent
+        if (-not (Test-Path -LiteralPath $backupDirectory)) {
+            New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
+        }
+
+        Copy-Item -LiteralPath $file.DestinationPath -Destination $file.BackupPath -Force -ErrorAction Stop
+        $backupHash = (Get-FileHash -LiteralPath $file.BackupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+        if (-not [string]::Equals($backupHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Backup checksum mismatch for $($file.RelativePath)"
+        }
+
+        $file | Add-Member -NotePropertyName PreviousSha256 -NotePropertyValue $previousHash -Force
+    }
+}
+
+function Remove-OpenPathAgentUpdateBackupDirectories {
+    <#
+    .SYNOPSIS
+        Removes old per-run and legacy per-version backup directories
+    #>
+    param(
+        [string]$OpenPathRoot = $script:OpenPathRoot,
+        [string]$KeepPath = ''
+    )
+
+    $backupsRoot = Join-Path (Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot) 'backups'
+    if (-not (Test-Path -LiteralPath $backupsRoot)) {
+        return
+    }
+
+    $resolvedKeepPath = ''
+    if (-not [string]::IsNullOrWhiteSpace($KeepPath)) {
+        try {
+            $resolvedKeepPath = [System.IO.Path]::GetFullPath($KeepPath)
+        }
+        catch {
+            $resolvedKeepPath = ''
+        }
+    }
+
+    foreach ($directory in @(Get-ChildItem -LiteralPath $backupsRoot -Directory -ErrorAction SilentlyContinue)) {
+        $resolvedDirectory = [System.IO.Path]::GetFullPath($directory.FullName)
+        if ($resolvedKeepPath -and [string]::Equals($resolvedDirectory, $resolvedKeepPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        try {
+            Remove-Item -LiteralPath $directory.FullName -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            try {
+                Write-OpenPathLog "Self-update: could not remove an old backup directory: $_" -Level WARN
+            }
+            catch {
+                # Cleanup must never turn a healthy tree into a failed update.
+            }
+        }
+    }
+}
+
+function Test-OpenPathAgentUpdateJournalTargetHashes {
+    <#
+    .SYNOPSIS
+        Verifies that every file named by the journal is the target build
+    #>
+    param(
+        [string]$OpenPathRoot = $script:OpenPathRoot,
+        [Parameter(Mandatory = $true)][object]$Journal
+    )
+
+    $errors = New-Object System.Collections.ArrayList
+    foreach ($entry in @($Journal.files)) {
+        $relativePath = [string]$entry.relativePath
+        if ([string]::IsNullOrWhiteSpace($relativePath) -or $relativePath.Contains('..') -or [System.IO.Path]::IsPathRooted($relativePath)) {
+            [void]$errors.Add("Unsafe journal path: $relativePath")
+            continue
+        }
+
+        $nativePath = ($relativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar) -replace '\\', [System.IO.Path]::DirectorySeparatorChar
+        $destinationPath = Join-Path $OpenPathRoot $nativePath
+        if (-not (Test-Path -LiteralPath $destinationPath -PathType Leaf)) {
+            [void]$errors.Add("Missing file: $relativePath")
+            continue
+        }
+
+        $expectedHash = [string]$entry.sha256
+        if ([string]::IsNullOrWhiteSpace($expectedHash)) {
+            [void]$errors.Add("Journal entry has no target hash: $relativePath")
+            continue
+        }
+
+        try {
+            $actualHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+        }
+        catch {
+            [void]$errors.Add("Could not hash ${relativePath}: $_")
+            continue
+        }
+
+        if (-not [string]::Equals($actualHash, $expectedHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+            [void]$errors.Add("Target hash mismatch: $relativePath")
+        }
+    }
+
+    return [PSCustomObject]@{
+        Complete = ($errors.Count -eq 0)
+        Errors   = @($errors.ToArray())
+    }
+}
+
+function Send-OpenPathAgentUpdateFinalizationFailureReport {
+    param(
+        [string]$Version,
+        [string]$Build,
+        [string]$Message
+    )
+
+    try {
+        $summary = "self-update finalization failed for $Version build $Build : $Message"
+        if ($summary.Length -gt 500) {
+            $summary = $summary.Substring(0, 500)
+        }
+        Send-OpenPathHealthReport `
+            -Status 'DEGRADED' `
+            -Actions $summary `
+            -ReasonCodes @('self_update_finalization_failed') `
+            -Version $Version | Out-Null
+    }
+    catch {
+        try {
+            Write-OpenPathLog "Self-update: could not send finalization health report: $_" -Level WARN
+        }
+        catch {
+            # Reporting must never change the update outcome.
+        }
+    }
+}
+
+function Complete-OpenPathAgentUpdateFinalization {
+    <#
+    .SYNOPSIS
+        Finishes a committed update and is safe to run more than once
+    .DESCRIPTION
+        The health gate is the commit point. Everything after it is follow-up
+        work: config, scheduled tasks, protected mode, the SSE listener, and
+        the integrity backup and baseline. A failure here never rolls files
+        back and leaves the committed journal for the next attempt.
+    #>
+    param(
+        [string]$OpenPathRoot = $script:OpenPathRoot,
+        [Parameter(Mandatory = $true)][object]$Journal,
+        [object]$Config = $null
+    )
+
+    $targetVersion = [string]$Journal.targetVersion
+    $targetBuild = [string]$Journal.targetBuild
+    $step = 'journal'
+
+    try {
+        if ([string]$Journal.phase -ne 'committed') {
+            throw "Journal phase is not committed: $($Journal.phase)"
+        }
+
+        # Every attempt refreshes updatedAt so the watchdog spaces retries.
+        Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot $OpenPathRoot -Journal $Journal -Phase 'committed'
+
+        $step = 'config'
+        if (-not $Config) {
+            $Config = Get-OpenPathConfig
+        }
+
+        $configChanged = $false
+        if ([string]$Config.version -ne $targetVersion) {
+            if ($Config.PSObject.Properties['version']) {
+                $Config.version = $targetVersion
+            }
+            else {
+                $Config | Add-Member -NotePropertyName version -NotePropertyValue $targetVersion
+            }
+            $configChanged = $true
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($targetBuild)) {
+            $currentBuild = if ($Config.PSObject.Properties['agentBuild']) { [string]$Config.agentBuild } else { '' }
+            if ($currentBuild -ne $targetBuild) {
+                if ($Config.PSObject.Properties['agentBuild']) {
+                    $Config.agentBuild = $targetBuild
+                }
+                else {
+                    $Config | Add-Member -NotePropertyName agentBuild -NotePropertyValue $targetBuild
+                }
+                $configChanged = $true
+            }
+        }
+
+        $hasUpdateTimestamp = (
+            $Config.PSObject.Properties['lastAgentUpdateAt'] -and
+            -not [string]::IsNullOrWhiteSpace([string]$Config.lastAgentUpdateAt)
+        )
+        if ($configChanged -or -not $hasUpdateTimestamp) {
+            $updatedAt = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            if ($Config.PSObject.Properties['lastAgentUpdateAt']) {
+                $Config.lastAgentUpdateAt = $updatedAt
+            }
+            else {
+                $Config | Add-Member -NotePropertyName lastAgentUpdateAt -NotePropertyValue $updatedAt
+            }
+            $configChanged = $true
+        }
+
+        if ($configChanged) {
+            Set-OpenPathConfig -Config $Config | Out-Null
+        }
+
+        $step = 'tasks'
+        $updateInterval = 5
+        if ($Config.PSObject.Properties['updateIntervalMinutes']) {
+            try {
+                $candidate = [int]$Config.updateIntervalMinutes
+                if ($candidate -ge 1) {
+                    $updateInterval = $candidate
+                }
+            }
+            catch {
+                # Keep default
+            }
+        }
+
+        $watchdogInterval = 1
+        if ($Config.PSObject.Properties['watchdogIntervalMinutes']) {
+            try {
+                $candidate = [int]$Config.watchdogIntervalMinutes
+                if ($candidate -ge 1) {
+                    $watchdogInterval = $candidate
+                }
+            }
+            catch {
+                # Keep default
+            }
+        }
+
+        if (Get-Command -Name 'Register-OpenPathTask' -ErrorAction SilentlyContinue) {
+            Register-OpenPathTask -OpenPathRoot $OpenPathRoot -UpdateIntervalMinutes $updateInterval -WatchdogIntervalMinutes $watchdogInterval | Out-Null
+        }
+        if (Get-Command -Name 'Enable-OpenPathTask' -ErrorAction SilentlyContinue) {
+            Enable-OpenPathTask | Out-Null
+        }
+        if (Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure' -ErrorAction SilentlyContinue) {
+            try { Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $Config | Out-Null } catch { }
+        }
+        if (Get-Command -Name 'Register-OpenPathFirefoxNativeHost' -ErrorAction SilentlyContinue) {
+            Register-OpenPathFirefoxNativeHost -Config $Config -PreserveExistingOnNotReady | Out-Null
+        }
+        if (Get-Command -Name 'Restore-OpenPathProtectedMode' -ErrorAction SilentlyContinue) {
+            Restore-OpenPathProtectedMode -Config $Config | Out-Null
+        }
+        elseif (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
+            Restart-AcrylicService | Out-Null
+        }
+        if (Get-Command -Name 'Start-OpenPathTask' -ErrorAction SilentlyContinue) {
+            Start-OpenPathTask -TaskType SSE | Out-Null
+        }
+
+        $step = 'integrity-verification'
+        $targetCheck = Test-OpenPathAgentUpdateJournalTargetHashes -OpenPathRoot $OpenPathRoot -Journal $Journal
+        if (-not $targetCheck.Complete) {
+            throw ("Installed files do not match the journal target hashes: " + (@($targetCheck.Errors) -join '; '))
+        }
+
+        # Refresh the integrity data only from a tree proven to be the target
+        # build. Otherwise the watchdog would treat a mixed tree as trusted.
+        $step = 'integrity'
+        Save-OpenPathIntegrityBackup | Out-Null
+        New-OpenPathIntegrityBaseline | Out-Null
+
+        $step = 'backup-cleanup'
+        Remove-OpenPathAgentUpdateBackupDirectories -OpenPathRoot $OpenPathRoot -KeepPath ([string]$Journal.backupRoot)
+
+        $step = 'journal-removal'
+        Remove-OpenPathAgentUpdateJournal -OpenPathRoot $OpenPathRoot
+        try {
+            Clear-OpenPathAgentUpdateFailureRecord -OpenPathRoot $OpenPathRoot
+        }
+        catch {
+            Write-OpenPathLog "Self-update: could not clear the failed-build record: $_" -Level WARN
+        }
+
+        return [PSCustomObject]@{
+            Success = $true
+            Message = ''
+        }
+    }
+    catch {
+        $message = "Finalization failed at ${step}: $_"
+        try {
+            Write-OpenPathLog "Self-update: $message" -Level ERROR
+        }
+        catch {
+            # Logging must never change the finalization outcome.
+        }
+        Send-OpenPathAgentUpdateFinalizationFailureReport -Version $targetVersion -Build $targetBuild -Message $message
+        return [PSCustomObject]@{
+            Success = $false
+            Message = $message
+        }
+    }
+}
+
 function Restore-OpenPathAgentUpdateJournalBackups {
     <#
     .SYNOPSIS
         Rolls back every file named by an update journal
+    .DESCRIPTION
+        One restore rule, shared with the standalone recovery script: leave a
+        file whose current hash is the recorded pre-update hash; otherwise
+        restore the backup only if the backup itself matches that hash. A file
+        that did not exist before is removed. Rollback is complete only when
+        every entry ends in a verified state.
     #>
     param(
         [string]$OpenPathRoot = $script:OpenPathRoot,
@@ -611,14 +965,21 @@ function Restore-OpenPathAgentUpdateJournalBackups {
     $errors = New-Object System.Collections.ArrayList
     $updateRoot = Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot
     $allowedBackupRoot = [System.IO.Path]::GetFullPath((Join-Path $updateRoot 'backups'))
+    $allowedBackupPrefix = $allowedBackupRoot.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
     $backupRoot = [string]$Journal.backupRoot
 
     if ([string]::IsNullOrWhiteSpace($backupRoot)) {
         return [PSCustomObject]@{ Complete = $false; Errors = @('Journal has no backup root') }
     }
 
-    $resolvedBackupRoot = [System.IO.Path]::GetFullPath($backupRoot)
-    if (-not $resolvedBackupRoot.StartsWith($allowedBackupRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    try {
+        $resolvedBackupRoot = [System.IO.Path]::GetFullPath($backupRoot)
+    }
+    catch {
+        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is not a valid path: $backupRoot") }
+    }
+
+    if (-not $resolvedBackupRoot.StartsWith($allowedBackupPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is outside the update directory: $backupRoot") }
     }
 
@@ -636,21 +997,42 @@ function Restore-OpenPathAgentUpdateJournalBackups {
 
         try {
             if ([bool]$entry.existedBefore) {
-                if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
-                    $destinationDirectory = Split-Path $destinationPath -Parent
-                    if (-not (Test-Path -LiteralPath $destinationDirectory)) {
-                        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
-                    }
-                    Copy-Item -LiteralPath $backupPath -Destination $destinationPath -Force -ErrorAction Stop
-                    $restoredHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash
-                    $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash
-                    if ($restoredHash -ne $backupHash) {
-                        [void]$errors.Add("Restored file does not match backup: $relativePath")
-                        $complete = $false
+                $previousHash = [string]$entry.previousSha256
+                if ($previousHash -notmatch '^[0-9a-fA-F]{64}$') {
+                    [void]$errors.Add("Journal entry has no pre-update hash: $relativePath")
+                    $complete = $false
+                    continue
+                }
+
+                $destinationIsFile = Test-Path -LiteralPath $destinationPath -PathType Leaf
+                if ($destinationIsFile) {
+                    $currentHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                    if ([string]::Equals($currentHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        continue
                     }
                 }
-                elseif (-not (Test-Path -LiteralPath $destinationPath -PathType Leaf)) {
+
+                if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
                     [void]$errors.Add("Missing file and backup: $relativePath")
+                    $complete = $false
+                    continue
+                }
+
+                $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                if (-not [string]::Equals($backupHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$errors.Add("Backup hash does not match the recorded pre-update hash: $relativePath")
+                    $complete = $false
+                    continue
+                }
+
+                $destinationDirectory = Split-Path $destinationPath -Parent
+                if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+                    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+                }
+                Copy-Item -LiteralPath $backupPath -Destination $destinationPath -Force -ErrorAction Stop
+                $restoredHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                if (-not [string]::Equals($restoredHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$errors.Add("Restored file does not match the recorded pre-update hash: $relativePath")
                     $complete = $false
                 }
             }
@@ -726,6 +1108,66 @@ function Invoke-OpenPathAgentSelfUpdate {
             Success = $false
             Updated = $false
             Message = $message
+        }
+    }
+
+    # A committed journal means the new tree already passed the health gate.
+    # Finish its follow-up work before a new update downloads anything.
+    $journalPath = Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $script:OpenPathRoot
+    $pendingJournal = $null
+    if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+        try {
+            $pendingJournal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $pendingJournal = $null
+        }
+    }
+
+    if ($pendingJournal -and [string]$pendingJournal.phase -eq 'committed') {
+        $pendingFinalizationLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 120000
+        if (-not $pendingFinalizationLock.Acquired) {
+            $message = 'Another self-update process is already running'
+            Write-SelfUpdateMessage -Message $message -Level WARN
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
+        }
+
+        try {
+            if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+                $pendingJournal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                if ([string]$pendingJournal.phase -eq 'committed') {
+                    $pendingFinalization = Complete-OpenPathAgentUpdateFinalization `
+                        -OpenPathRoot $script:OpenPathRoot `
+                        -Journal $pendingJournal `
+                        -Config $config
+                    if (-not $pendingFinalization.Success) {
+                        $message = "Agent self-update finalization failed: $($pendingFinalization.Message)"
+                        Write-SelfUpdateMessage -Message $message -Level ERROR
+                        return [PSCustomObject]@{
+                            Success = $false
+                            Updated = $false
+                            Message = $message
+                        }
+                    }
+                    Write-SelfUpdateMessage -Message 'Completed an interrupted agent update finalization'
+                }
+            }
+        }
+        catch {
+            $message = "Could not complete the committed agent update journal: $_"
+            Write-SelfUpdateMessage -Message $message -Level ERROR
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
+        }
+        finally {
+            Exit-OpenPathAgentUpdateLock -Lock $pendingFinalizationLock
         }
     }
 
@@ -861,11 +1303,10 @@ function Invoke-OpenPathAgentSelfUpdate {
     }
 
     $updateLock = $null
-    $replacementBackups = @()
     $updateJournal = $null
     $failureStage = $null
     $updateCommitted = $false
-    $journalPath = Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $script:OpenPathRoot
+    $replacementStarted = $false
 
     try {
         # Wait briefly: the watchdog holds this lock for the few seconds its
@@ -890,19 +1331,17 @@ function Invoke-OpenPathAgentSelfUpdate {
             throw 'Manifest did not include files to update'
         }
 
-        # data\agent-update holds the update journal, per-version backups and
-        # the staged download tree.
+        # data\agent-update holds the update journal, per-run backups and the
+        # staged download tree. The backup directory belongs to this run only.
         $updateRoot = Join-Path (Join-Path $script:OpenPathRoot 'data') 'agent-update'
         $stagingRoot = Join-Path $updateRoot ("staging-$targetVersion")
-        $backupRoot = Join-Path (Join-Path $updateRoot 'backups') $currentVersion
+        $backupRoot = New-OpenPathAgentUpdateBackupRoot -OpenPathRoot $script:OpenPathRoot
 
         if (Test-Path $stagingRoot) {
             Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
 
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
-        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
-        $manifest | ConvertTo-Json -Depth 20 | Set-Content -Path (Join-Path $backupRoot 'manifest.json') -Encoding UTF8 -Force
 
         $downloadedFiles = @()
         foreach ($file in $manifestFiles) {
@@ -962,12 +1401,14 @@ function Invoke-OpenPathAgentSelfUpdate {
             throw "Self-update staged artifact validation failed: $($stagedValidation.Message)"
         }
 
-        foreach ($download in $downloadedFiles) {
-            $download | Add-Member -NotePropertyName HadExistingFile -NotePropertyValue ([bool](Test-Path -LiteralPath $download.DestinationPath)) -Force
-        }
+        # Back up every installed file this run will replace, and record the
+        # pre-update hash, before the journal exists and before any file
+        # changes. Rollback never reads a backup from another run.
+        Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles
+        $manifest | ConvertTo-Json -Depth 20 | Set-Content -Path (Join-Path $backupRoot 'manifest.json') -Encoding UTF8 -Force
 
         $updateJournal = [PSCustomObject]@{
-            schemaVersion   = 1
+            schemaVersion   = 2
             phase           = 'replacing'
             targetVersion   = $targetVersion
             targetBuild     = $targetBuild
@@ -979,24 +1420,21 @@ function Invoke-OpenPathAgentSelfUpdate {
             files           = @(
                 $downloadedFiles | ForEach-Object {
                     [PSCustomObject]@{
-                        relativePath  = $_.RelativePath
-                        existedBefore = [bool]$_.HadExistingFile
-                        sha256        = [string]$_.ExpectedSha256
+                        relativePath   = $_.RelativePath
+                        existedBefore  = [bool]$_.HadExistingFile
+                        previousSha256 = [string]$_.PreviousSha256
+                        sha256         = [string]$_.ExpectedSha256
                     }
                 }
             )
         }
         Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot -Journal $updateJournal | Out-Null
 
+        $replacementStarted = $true
         foreach ($download in $downloadedFiles) {
             $destinationDir = Split-Path $download.DestinationPath -Parent
             if (-not (Test-Path $destinationDir)) {
                 New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
-            }
-
-            $backupDir = Split-Path $download.BackupPath -Parent
-            if (-not (Test-Path $backupDir)) {
-                New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
             }
 
             $enforceSignature = ($env:OPENPATH_SELFUPDATE_REQUIRE_SIGNATURE -eq '1')
@@ -1007,20 +1445,9 @@ function Invoke-OpenPathAgentSelfUpdate {
                 }
             }
 
-            $hadExistingFile = [bool]$download.HadExistingFile
-            if ($hadExistingFile) {
-                Copy-Item -Path $download.DestinationPath -Destination $download.BackupPath -Force -ErrorAction Stop
-            }
-
             $tempDestinationPath = "$($download.DestinationPath).openpath-update-$([guid]::NewGuid()).tmp"
             Copy-Item -Path $download.StagedPath -Destination $tempDestinationPath -Force -ErrorAction Stop
             Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop
-
-            $replacementBackups += [PSCustomObject]@{
-                DestinationPath = $download.DestinationPath
-                BackupPath = $download.BackupPath
-                HadExistingFile = [bool]$hadExistingFile
-            }
         }
 
         foreach ($download in $downloadedFiles) {
@@ -1043,96 +1470,23 @@ function Invoke-OpenPathAgentSelfUpdate {
             throw "Self-update health gate failed: $($healthGate.Message)"
         }
 
-        if ($config.PSObject.Properties['version']) {
-            $config.version = $targetVersion
-        }
-        else {
-            $config | Add-Member -NotePropertyName version -NotePropertyValue $targetVersion
-        }
-
-        if ($targetBuild) {
-            if ($config.PSObject.Properties['agentBuild']) {
-                $config.agentBuild = $targetBuild
-            }
-            else {
-                $config | Add-Member -NotePropertyName agentBuild -NotePropertyValue $targetBuild
-            }
-        }
-
-        $updatedAt = Get-Date -Format 'o'
-        if ($config.PSObject.Properties['lastAgentUpdateAt']) {
-            $config.lastAgentUpdateAt = $updatedAt
-        }
-        else {
-            $config | Add-Member -NotePropertyName lastAgentUpdateAt -NotePropertyValue $updatedAt
-        }
-
-        Set-OpenPathConfig -Config $config | Out-Null
-
-        $updateInterval = 5
-        if ($config.PSObject.Properties['updateIntervalMinutes']) {
-            try {
-                $candidate = [int]$config.updateIntervalMinutes
-                if ($candidate -ge 1) {
-                    $updateInterval = $candidate
-                }
-            }
-            catch {
-                # Keep default
-            }
-        }
-
-        $watchdogInterval = 1
-        if ($config.PSObject.Properties['watchdogIntervalMinutes']) {
-            try {
-                $candidate = [int]$config.watchdogIntervalMinutes
-                if ($candidate -ge 1) {
-                    $watchdogInterval = $candidate
-                }
-            }
-            catch {
-                # Keep default
-            }
-        }
-
-        if (Get-Command -Name 'Register-OpenPathTask' -ErrorAction SilentlyContinue) {
-            Register-OpenPathTask -OpenPathRoot $script:OpenPathRoot -UpdateIntervalMinutes $updateInterval -WatchdogIntervalMinutes $watchdogInterval | Out-Null
-        }
-        if (Get-Command -Name 'Enable-OpenPathTask' -ErrorAction SilentlyContinue) {
-            Enable-OpenPathTask | Out-Null
-        }
-        if (Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure' -ErrorAction SilentlyContinue) {
-            # Phase 5.2 D2: compile/refresh before the registration decides which
-            # launch path the Firefox manifest should carry.
-            try { Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $config | Out-Null } catch { }
-        }
-        if (Get-Command -Name 'Register-OpenPathFirefoxNativeHost' -ErrorAction SilentlyContinue) {
-            Register-OpenPathFirefoxNativeHost -Config $config -PreserveExistingOnNotReady | Out-Null
-        }
-        if (Get-Command -Name 'Restore-OpenPathProtectedMode' -ErrorAction SilentlyContinue) {
-            Restore-OpenPathProtectedMode -Config $config | Out-Null
-        }
-        elseif (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
-            Restart-AcrylicService | Out-Null
-        }
-        if (Get-Command -Name 'Start-OpenPathTask' -ErrorAction SilentlyContinue) {
-            Start-OpenPathTask -TaskType SSE | Out-Null
-        }
-
-        # Refresh the integrity backup and baseline only now, still under the
-        # update lock: a backup taken before the replacement holds the old
-        # files, and the watchdog would restore them over the new version.
-        Save-OpenPathIntegrityBackup | Out-Null
-        New-OpenPathIntegrityBaseline | Out-Null
-
+        # The gate is the commit point. Write the committed journal at once;
+        # everything after it is finalization and never rolls files back.
         Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot $script:OpenPathRoot -Journal $updateJournal -Phase 'committed'
         $updateCommitted = $true
-        try {
-            Remove-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot
-            Clear-OpenPathAgentUpdateFailureRecord -OpenPathRoot $script:OpenPathRoot
-        }
-        catch {
-            Write-SelfUpdateMessage -Message "Update committed but cleanup failed: $_" -Level WARN
+
+        $finalization = Complete-OpenPathAgentUpdateFinalization `
+            -OpenPathRoot $script:OpenPathRoot `
+            -Journal $updateJournal `
+            -Config $config
+        if (-not $finalization.Success) {
+            $message = "Agent self-update finalization failed: $($finalization.Message)"
+            Write-SelfUpdateMessage -Message $message -Level ERROR
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
         }
 
         $message = "Agent self-update applied successfully: $currentVersion -> $targetVersion"
@@ -1147,13 +1501,34 @@ function Invoke-OpenPathAgentSelfUpdate {
     }
     catch {
         $failureMessage = [string]$_
-        $journalRollbackComplete = $true
 
-        if (-not $updateCommitted -and (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+        if ($updateCommitted) {
+            # The tree passed the gate. A finalization failure keeps the
+            # committed journal for the next attempt and never rolls back.
+            Send-OpenPathAgentUpdateFinalizationFailureReport `
+                -Version $targetVersion `
+                -Build $targetBuild `
+                -Message $failureMessage
+            $message = "Agent self-update finalization failed: $failureMessage"
+            Write-SelfUpdateMessage -Message $message -Level ERROR
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
+        }
+
+        $journalRollbackComplete = $true
+        if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
             try {
-                $journalOnDisk = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json -ErrorAction Stop
-                if ([string]$journalOnDisk.phase -eq 'committed') {
-                    Remove-Item -LiteralPath $journalPath -Force -ErrorAction Stop
+                $journalOnDisk = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                if ([int]$journalOnDisk.schemaVersion -ne 2) {
+                    $journalRollbackComplete = $false
+                    Write-SelfUpdateMessage -Message "Cannot roll back a journal with unsupported schemaVersion $($journalOnDisk.schemaVersion)" -Level ERROR
+                }
+                elseif ([string]$journalOnDisk.phase -eq 'committed') {
+                    $journalRollbackComplete = $false
+                    Write-SelfUpdateMessage -Message 'Update is committed; files are not rolled back' -Level WARN
                 }
                 else {
                     $journalRollback = Restore-OpenPathAgentUpdateJournalBackups -OpenPathRoot $script:OpenPathRoot -Journal $journalOnDisk
@@ -1170,24 +1545,12 @@ function Invoke-OpenPathAgentSelfUpdate {
                 Write-SelfUpdateMessage -Message "Could not read update journal for rollback: $_" -Level ERROR
             }
         }
-
-        if (-not $updateCommitted) {
-            foreach ($replacement in @($replacementBackups | Sort-Object { $_.DestinationPath.Length } -Descending)) {
-                try {
-                    if ($replacement.HadExistingFile -and (Test-Path $replacement.BackupPath)) {
-                        Copy-Item -Path $replacement.BackupPath -Destination $replacement.DestinationPath -Force -ErrorAction Stop
-                    }
-                    elseif (-not $replacement.HadExistingFile -and (Test-Path $replacement.DestinationPath)) {
-                        Remove-Item -Path $replacement.DestinationPath -Force -ErrorAction Stop
-                    }
-                }
-                catch {
-                    Write-SelfUpdateMessage -Message "Rollback failed for $($replacement.DestinationPath): $_" -Level ERROR
-                }
-            }
+        elseif ($replacementStarted) {
+            $journalRollbackComplete = $false
+            Write-SelfUpdateMessage -Message 'Update journal is missing; rollback cannot be verified' -Level ERROR
         }
 
-        if (-not $updateCommitted -and $journalRollbackComplete -and (Test-Path -LiteralPath $journalPath)) {
+        if ($journalRollbackComplete -and (Test-Path -LiteralPath $journalPath)) {
             Remove-Item -LiteralPath $journalPath -Force -ErrorAction SilentlyContinue
         }
 

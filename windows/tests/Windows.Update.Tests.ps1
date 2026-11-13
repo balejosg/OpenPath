@@ -570,26 +570,133 @@ Describe "Update Script" {
     }
 
     Context "Self-update transactions" {
-        It "Backs up the current version and rolls back file replacements on failure" {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+        }
+
+        It "Backs up every existing file into a per-run directory before replacing anything" {
             $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
             $content = Get-Content $updateHelperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 'data\agent-update',
                 '''backups''',
-                '$currentVersion',
+                'New-OpenPathAgentUpdateBackupRoot',
+                'Save-OpenPathAgentUpdateInstalledFileBackups',
                 'manifest.json',
-                '$replacementBackups',
                 '$tempDestinationPath',
                 'Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop',
-                'Post-replacement checksum mismatch',
-                'Rollback failed for $($replacement.DestinationPath)'
+                'Post-replacement checksum mismatch'
             )
 
-            $replacementStart = $content.IndexOf('foreach ($download in $downloadedFiles)')
-            $configUpdateStart = $content.IndexOf('if ($config.PSObject.Properties[''version''])')
-            $postReplacementBody = $content.Substring($replacementStart, $configUpdateStart - $replacementStart)
-            $postReplacementBody | Should -Match 'Post-replacement checksum mismatch'
+            $content | Should -Not -Match '\$replacementBackups'
+
+            $backupStart = $content.IndexOf('Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles')
+            $journalWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot')
+            $firstReplacementStart = $content.IndexOf('Move-Item -Path $tempDestinationPath')
+
+            $backupStart | Should -BeGreaterThan 0
+            $backupStart | Should -BeLessThan $journalWriteStart
+            $journalWriteStart | Should -BeLessThan $firstReplacementStart
+        }
+
+        It "Rolls back from this run's backups even when an older run left a backup for the same version" {
+            $root = Join-Path $TestDrive ('update-stale-backup-' + [guid]::NewGuid().ToString('N'))
+            $destinationA = Join-Path $root 'lib/existing-a.ps1'
+            $destinationB = Join-Path $root 'lib/existing-b.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destinationA -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destinationA -Value 'Write-Output "old-a"' -Encoding ASCII
+            Set-Content -LiteralPath $destinationB -Value 'Write-Output "old-b"' -Encoding ASCII
+
+            $staleBackup = Join-Path $root 'data/agent-update/backups/9.9.8/lib/existing-a.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $staleBackup -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $staleBackup -Value 'Write-Output "stale-a"' -Encoding ASCII
+
+            $stagedA = Join-Path $TestDrive ('staged-a-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            $stagedB = Join-Path $TestDrive ('staged-b-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedA -Value 'Write-Output "new-a"' -Encoding ASCII
+            Set-Content -LiteralPath $stagedB -Value 'Write-Output "new-b"' -Encoding ASCII
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @(
+                    [PSCustomObject]@{ path = 'lib/existing-a.ps1'; sha256 = (Get-FileHash -LiteralPath $stagedA -Algorithm SHA256).Hash.ToLowerInvariant() },
+                    [PSCustomObject]@{ path = 'lib/existing-b.ps1'; sha256 = (Get-FileHash -LiteralPath $stagedB -Algorithm SHA256).Hash.ToLowerInvariant() }
+                )
+            }
+
+            InModuleScope Common -Parameters @{
+                Root = $root
+                Manifest = $manifest
+                StagedA = $stagedA
+                StagedB = $stagedB
+            } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TestStagedA = $StagedA
+                $script:TestStagedB = $StagedB
+                $script:Captured = @{ Config = $null; Integrity = 0; Baseline = 0; Tasks = 0; GateCalls = 0 }
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.8'
+                        agentBuild   = 'build-old'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest {
+                    param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                    if ($Uri -match 'existing-a\.ps1$') {
+                        Microsoft.PowerShell.Management\Copy-Item -LiteralPath $script:TestStagedA -Destination $OutFile -Force
+                    }
+                    else {
+                        Microsoft.PowerShell.Management\Copy-Item -LiteralPath $script:TestStagedB -Destination $OutFile -Force
+                    }
+                }
+                Mock Write-OpenPathLog { }
+                Mock Set-OpenPathConfig { $script:Captured.Config = $Config }
+                Mock Save-OpenPathIntegrityBackup { $script:Captured.Integrity++ }
+                Mock New-OpenPathIntegrityBaseline { $script:Captured.Baseline++ }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { $script:Captured.Tasks++ }
+                Mock Enable-OpenPathTask { $script:Captured.Tasks++ }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Send-OpenPathHealthReport { }
+                Mock Invoke-OpenPathAgentUpdateHealthGate {
+                    $script:Captured.GateCalls++
+                    [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false }
+                }
+
+                $script:FailStagedPath = $StagedB
+                Mock Copy-Item {
+                    param($Path, $LiteralPath, $Destination, $Force, $ErrorAction)
+                    $source = if ($Path) { $Path } else { $LiteralPath }
+                    if ($source -eq $script:FailStagedPath) {
+                        throw 'simulated interruption during replacement'
+                    }
+                    Microsoft.PowerShell.Management\Copy-Item -LiteralPath $source -Destination $Destination -Force
+                }
+
+                $result = Invoke-OpenPathAgentSelfUpdate -Silent
+
+                $result.Success | Should -BeFalse
+                (Get-Content -LiteralPath (Join-Path $Root 'lib/existing-a.ps1') -Raw).Trim() | Should -Be 'Write-Output "old-a"'
+                (Get-Content -LiteralPath (Join-Path $Root 'lib/existing-b.ps1') -Raw).Trim() | Should -Be 'Write-Output "old-b"'
+                $script:Captured.Config | Should -BeNullOrEmpty
+                $script:Captured.Integrity | Should -Be 0
+                $script:Captured.Baseline | Should -Be 0
+                $script:Captured.Tasks | Should -Be 0
+                $script:Captured.GateCalls | Should -Be 0
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root) | Should -BeFalse
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root) | Should -BeFalse
+            }
         }
     }
 
@@ -622,10 +729,11 @@ Describe "Update Script" {
             $downloadLoopBody = $content.Substring($downloadLoopStart, $applyLoopStart - $downloadLoopStart)
             $downloadLoopBody | Should -Match '(?s)Invoke-WebRequest -Uri \$fileUrl.*?\$actualHash = \(Get-FileHash -Path \$stagedPath -Algorithm SHA256 -ErrorAction Stop\)\.Hash\.ToLowerInvariant\(\)\s+if \(\$actualHash -ne \$expectedHash\.ToLowerInvariant\(\)\) \{\s+throw "Checksum mismatch for \$manifestPath"'
 
-            $postReplacementStart = $content.IndexOf('foreach ($download in $downloadedFiles)', $applyLoopStart + 1)
-            $configUpdateStart = $content.IndexOf('if ($config.PSObject.Properties[''version''])')
-            $postReplacementBody = $content.Substring($postReplacementStart, $configUpdateStart - $postReplacementStart)
-            $postReplacementBody | Should -Match '(?s)\$actualHash = \(Get-FileHash -Path \$download\.DestinationPath -Algorithm SHA256 -ErrorAction Stop\)\.Hash\.ToLowerInvariant\(\)\s+if \(\$actualHash -ne \$expectedHash\.ToLowerInvariant\(\)\) \{\s+throw "Post-replacement checksum mismatch for \$\(\$download\.RelativePath\)"'
+            $postReplacementStart = $content.IndexOf('Post-replacement checksum mismatch')
+            $gateStart = $content.IndexOf('Invoke-OpenPathAgentUpdateHealthGate -OpenPathRoot $script:OpenPathRoot')
+            $postReplacementStart | Should -BeGreaterThan 0
+            $gateStart | Should -BeGreaterThan $postReplacementStart
+            $content | Should -Match '(?s)\$actualHash = \(Get-FileHash -Path \$download\.DestinationPath -Algorithm SHA256 -ErrorAction Stop\)\.Hash\.ToLowerInvariant\(\)\s+if \(\$actualHash -ne \$expectedHash\.ToLowerInvariant\(\)\) \{\s+throw "Post-replacement checksum mismatch for \$\(\$download\.RelativePath\)"'
         }
 
         It "Refreshes the integrity backup only after the new files are verified, under the update lock" {
@@ -637,16 +745,33 @@ Describe "Update Script" {
             $lockStart = $content.IndexOf('$updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds')
             $replaceStart = $content.IndexOf('Move-Item -Path $tempDestinationPath')
             $verifyStart = $content.IndexOf('Post-replacement checksum mismatch')
-            $backupStart = $content.IndexOf('Save-OpenPathIntegrityBackup | Out-Null')
-            $baselineStart = $content.IndexOf('New-OpenPathIntegrityBaseline | Out-Null')
+            $commitStart = $content.IndexOf("Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot `$script:OpenPathRoot -Journal `$updateJournal -Phase 'committed'")
+            $finalizationCall = $content.IndexOf('Complete-OpenPathAgentUpdateFinalization `', $commitStart)
             $releaseStart = $content.IndexOf('Exit-OpenPathAgentUpdateLock -Lock $updateLock')
+
+            $finalizationStart = $content.IndexOf('function Complete-OpenPathAgentUpdateFinalization')
+            $finalizationEnd = $content.IndexOf("`nfunction ", $finalizationStart + 1)
+            if ($finalizationEnd -lt 0) {
+                $finalizationEnd = $content.Length
+            }
+            $finalizationBody = $content.Substring($finalizationStart, $finalizationEnd - $finalizationStart)
+            $targetCheckStart = $finalizationBody.IndexOf('Test-OpenPathAgentUpdateJournalTargetHashes')
+            $backupStart = $finalizationBody.IndexOf('Save-OpenPathIntegrityBackup | Out-Null')
+            $baselineStart = $finalizationBody.IndexOf('New-OpenPathIntegrityBaseline | Out-Null')
+            $journalRemovalStart = $finalizationBody.IndexOf('Remove-OpenPathAgentUpdateJournal')
 
             $lockStart | Should -BeGreaterThan 0
             $lockStart | Should -BeLessThan $replaceStart
             ([regex]::Matches($content, 'Save-OpenPathIntegrityBackup')).Count | Should -Be 1
-            $backupStart | Should -BeGreaterThan $verifyStart
+            $verifyStart | Should -BeGreaterThan $replaceStart
+            $commitStart | Should -BeGreaterThan $verifyStart
+            $commitStart | Should -BeLessThan $finalizationCall
+            $finalizationStart | Should -BeGreaterThan 0
+            $targetCheckStart | Should -BeGreaterThan 0
+            $backupStart | Should -BeGreaterThan $targetCheckStart
             $backupStart | Should -BeLessThan $baselineStart
-            $releaseStart | Should -BeGreaterThan $baselineStart
+            $journalRemovalStart | Should -BeGreaterThan $baselineStart
+            $releaseStart | Should -BeGreaterThan $finalizationCall
         }
 
         It "Lets only one holder take the agent update lock at a time" {
@@ -1106,7 +1231,7 @@ Describe "Update Script" {
             $root = Join-Path $TestDrive ('update-journal-' + [guid]::NewGuid().ToString('N'))
             $backupRoot = Join-Path $root 'data/agent-update/backups/9.9.8'
             $journal = [PSCustomObject]@{
-                schemaVersion   = 1
+                schemaVersion   = 2
                 phase           = 'replacing'
                 targetVersion   = '9.9.9'
                 targetBuild     = 'build-new'
@@ -1116,8 +1241,8 @@ Describe "Update Script" {
                 createdAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
                 updatedAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
                 files           = @(
-                    [PSCustomObject]@{ relativePath = 'lib\a.ps1'; existedBefore = $true; sha256 = ('a' * 64) },
-                    [PSCustomObject]@{ relativePath = 'lib\b.ps1'; existedBefore = $false; sha256 = ('b' * 64) }
+                    [PSCustomObject]@{ relativePath = 'lib\a.ps1'; existedBefore = $true; previousSha256 = ('c' * 64); sha256 = ('a' * 64) },
+                    [PSCustomObject]@{ relativePath = 'lib\b.ps1'; existedBefore = $false; previousSha256 = ''; sha256 = ('b' * 64) }
                 )
             }
 
@@ -1127,10 +1252,11 @@ Describe "Update Script" {
                 $journalPath = Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root
                 Test-Path -LiteralPath $journalPath | Should -BeTrue
                 $written = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
-                $written.schemaVersion | Should -Be 1
+                $written.schemaVersion | Should -Be 2
                 $written.phase | Should -Be 'replacing'
                 @($written.files).Count | Should -Be 2
                 @($written.files | Where-Object { $_.relativePath -eq 'lib\a.ps1' }).existedBefore | Should -BeTrue
+                @($written.files | Where-Object { $_.relativePath -eq 'lib\a.ps1' }).previousSha256 | Should -Be ('c' * 64)
                 @($written.files | Where-Object { $_.relativePath -eq 'lib\b.ps1' }).existedBefore | Should -BeFalse
 
                 Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot $Root -Journal $Journal -Phase 'validating'
@@ -1141,10 +1267,13 @@ Describe "Update Script" {
             $updatePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
             $content = Get-Content $updatePath -Raw
             $lockStart = $content.IndexOf('$updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds')
+            $backupStart = $content.IndexOf('Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles', $lockStart)
             $journalWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot', $lockStart)
             $firstReplacementStart = $content.IndexOf('Move-Item -Path $tempDestinationPath', $lockStart)
 
             $lockStart | Should -BeGreaterThan 0
+            $backupStart | Should -BeGreaterThan $lockStart
+            $backupStart | Should -BeLessThan $journalWriteStart
             $journalWriteStart | Should -BeGreaterThan $lockStart
             $firstReplacementStart | Should -BeGreaterThan $journalWriteStart
         }
@@ -1174,7 +1303,7 @@ Describe "Update Script" {
                 $script:OpenPathRoot = $Root
                 $script:TestManifest = $Manifest
                 $script:TestStagedSource = $StagedSource
-                $script:Captured = @{ Config = $null; Integrity = 0; Baseline = 0; Reports = @(); GateCalls = 0 }
+                $script:Captured = @{ Config = $null; Integrity = 0; Baseline = 0; Tasks = 0; Reports = @(); GateCalls = 0 }
                 Mock Get-OpenPathConfig {
                     [PSCustomObject]@{
                         apiUrl       = 'https://api.test'
@@ -1193,6 +1322,13 @@ Describe "Update Script" {
                 Mock Set-OpenPathConfig { $script:Captured.Config = $Config }
                 Mock Save-OpenPathIntegrityBackup { $script:Captured.Integrity++ }
                 Mock New-OpenPathIntegrityBaseline { $script:Captured.Baseline++ }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { $script:Captured.Tasks++ }
+                Mock Enable-OpenPathTask { $script:Captured.Tasks++ }
                 Mock Restore-OpenPathProtectedMode { }
                 Mock Send-OpenPathHealthReport {
                     param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions, $Version, $ReasonCodes)
@@ -1217,6 +1353,7 @@ Describe "Update Script" {
                 $script:Captured.Config | Should -BeNullOrEmpty
                 $script:Captured.Integrity | Should -Be 0
                 $script:Captured.Baseline | Should -Be 0
+                $script:Captured.Tasks | Should -Be 0
                 $script:Captured.GateCalls | Should -Be 2
                 $script:Captured.Reports.Count | Should -Be 1
                 (@($script:Captured.Reports[0].ReasonCodes) -join ' ') | Should -Match 'self_update_health_gate_failed'
@@ -1247,7 +1384,12 @@ Describe "Update Script" {
                 $script:OpenPathRoot = $Root
                 $script:TestManifest = $Manifest
                 $script:TestStagedSource = $StagedSource
-                $script:Captured = @{ Config = $null; Integrity = 0; Baseline = 0; Reports = @(); GateCalls = 0 }
+                $script:Captured = @{ Config = $null; Integrity = 0; Baseline = 0; Tasks = 0; Reports = @(); GateCalls = 0 }
+                $backupsRoot = Join-Path $Root 'data/agent-update/backups'
+                New-Item -ItemType Directory -Path (Join-Path $backupsRoot '9.9.8') -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $backupsRoot '9.9.8/stale.txt') -Value 'stale' -Encoding ASCII
+                New-Item -ItemType Directory -Path (Join-Path $backupsRoot 'run-old') -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $backupsRoot 'run-old/stale.txt') -Value 'stale' -Encoding ASCII
                 Mock Get-OpenPathConfig {
                     [PSCustomObject]@{
                         apiUrl       = 'https://api.test'
@@ -1266,7 +1408,15 @@ Describe "Update Script" {
                 Mock Set-OpenPathConfig { $script:Captured.Config = $Config }
                 Mock Save-OpenPathIntegrityBackup { $script:Captured.Integrity++ }
                 Mock New-OpenPathIntegrityBaseline { $script:Captured.Baseline++ }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { $script:Captured.Tasks++ }
+                Mock Enable-OpenPathTask { $script:Captured.Tasks++ }
                 Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
                 Mock Send-OpenPathHealthReport { }
                 Mock Invoke-OpenPathAgentUpdateHealthGate {
                     $script:Captured.GateCalls++
@@ -1282,9 +1432,14 @@ Describe "Update Script" {
                 $script:Captured.Config.agentBuild | Should -Be 'build-new'
                 $script:Captured.Integrity | Should -Be 1
                 $script:Captured.Baseline | Should -Be 1
+                $script:Captured.Tasks | Should -BeGreaterThan 0
                 $script:Captured.GateCalls | Should -Be 1
                 Test-Path -LiteralPath (Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root) | Should -BeFalse
                 Test-Path -LiteralPath (Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root) | Should -BeFalse
+
+                $remainingBackups = @(Get-ChildItem -LiteralPath $backupsRoot -Directory)
+                $remainingBackups.Count | Should -Be 1
+                $remainingBackups[0].Name | Should -Match '^run-'
             }
         }
 
@@ -1453,6 +1608,355 @@ Describe "Update Script" {
 
                 $result.Success | Should -BeTrue
                 $script:WebRequests | Should -Be 1
+            }
+        }
+    }
+
+    Context "Self-update finalization" {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+        }
+
+        It "Keeps the committed journal and does not roll back when finalization fails at <Step>" -ForEach @(
+            @{ Step = 'config' }
+            @{ Step = 'tasks' }
+            @{ Step = 'integrity' }
+            @{ Step = 'baseline' }
+            @{ Step = 'backup-cleanup' }
+            @{ Step = 'journal-removal' }
+        ) {
+            $root = Join-Path $TestDrive ('finalize-fail-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'new-target' -Encoding ASCII
+            $targetHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            New-Item -ItemType Directory -Path (Split-Path (Join-Path $backupRoot 'lib/existing.ps1') -Parent) -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $backupRoot 'lib/existing.ps1') -Value 'old-target' -Encoding ASCII
+            $previousHash = (Get-FileHash -LiteralPath (Join-Path $backupRoot 'lib/existing.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            $journal = [PSCustomObject]@{
+                schemaVersion   = 2
+                phase           = 'committed'
+                targetVersion   = '9.9.9'
+                targetBuild     = 'build-new'
+                previousVersion = '9.9.8'
+                previousBuild   = 'build-old'
+                backupRoot      = $backupRoot
+                createdAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                files           = @(
+                    [PSCustomObject]@{
+                        relativePath   = 'lib\existing.ps1'
+                        existedBefore  = $true
+                        previousSha256 = $previousHash
+                        sha256         = $targetHash
+                    }
+                )
+            }
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            New-Item -ItemType Directory -Path (Split-Path $journalPath -Parent) -Force | Out-Null
+            $journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $journalPath -Encoding UTF8
+            $config = [PSCustomObject]@{ version = '9.9.8'; agentBuild = 'build-old' }
+
+            InModuleScope Common -Parameters @{
+                Root = $root
+                Journal = $journal
+                Step = $Step
+                Config = $config
+            } {
+                $script:OpenPathRoot = $Root
+                $script:ReportCount = 0
+                $script:LastReasonCodes = @()
+                Mock Write-OpenPathLog { }
+                Mock Send-OpenPathHealthReport {
+                    param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions, $Version, $ReasonCodes)
+                    $script:ReportCount++
+                    $script:LastReasonCodes = @($ReasonCodes)
+                }
+                Mock Set-OpenPathConfig {
+                    if ($Step -eq 'config') { throw 'config failure' }
+                }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask {
+                    if ($Step -eq 'tasks') { throw 'task failure' }
+                }
+                Mock Enable-OpenPathTask { }
+                Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                Mock Register-OpenPathFirefoxNativeHost { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Save-OpenPathIntegrityBackup {
+                    if ($Step -eq 'integrity') { throw 'integrity failure' }
+                }
+                Mock New-OpenPathIntegrityBaseline {
+                    if ($Step -eq 'baseline') { throw 'baseline failure' }
+                }
+                Mock Remove-OpenPathAgentUpdateBackupDirectories {
+                    if ($Step -eq 'backup-cleanup') { throw 'cleanup failure' }
+                }
+                Mock Remove-OpenPathAgentUpdateJournal {
+                    if ($Step -eq 'journal-removal') { throw 'journal failure' }
+                }
+
+                $result = Complete-OpenPathAgentUpdateFinalization -OpenPathRoot $Root -Journal $Journal -Config $Config
+
+                $result.Success | Should -BeFalse
+                (Get-Content -LiteralPath (Join-Path $Root 'lib/existing.ps1') -Raw).Trim() | Should -Be 'new-target'
+                Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/update-journal.json') | Should -BeTrue
+                $journalOnDisk = Get-Content -LiteralPath (Join-Path $Root 'data/agent-update/update-journal.json') -Raw | ConvertFrom-Json
+                $journalOnDisk.phase | Should -Be 'committed'
+                $script:ReportCount | Should -Be 1
+                ($script:LastReasonCodes -join ' ') | Should -Be 'self_update_finalization_failed'
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root) | Should -BeFalse
+            }
+        }
+
+        It "Stops before refreshing integrity when an installed file does not match the target hash" {
+            $root = Join-Path $TestDrive ('finalize-hash-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'wrong-target' -Encoding ASCII
+            $targetHash = ('d' * 64)
+
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            $journal = [PSCustomObject]@{
+                schemaVersion   = 2
+                phase           = 'committed'
+                targetVersion   = '9.9.9'
+                targetBuild     = 'build-new'
+                previousVersion = '9.9.8'
+                previousBuild   = 'build-old'
+                backupRoot      = $backupRoot
+                createdAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                files           = @(
+                    [PSCustomObject]@{
+                        relativePath   = 'lib\existing.ps1'
+                        existedBefore  = $true
+                        previousSha256 = ('e' * 64)
+                        sha256         = $targetHash
+                    }
+                )
+            }
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            New-Item -ItemType Directory -Path (Split-Path $journalPath -Parent) -Force | Out-Null
+            $journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $journalPath -Encoding UTF8
+            $config = [PSCustomObject]@{ version = '9.9.8'; agentBuild = 'build-old' }
+
+            InModuleScope Common -Parameters @{ Root = $root; Journal = $journal; Config = $config } {
+                $script:OpenPathRoot = $Root
+                $script:IntegrityCalls = 0
+                $script:BaselineCalls = 0
+                $script:ReportCount = 0
+                Mock Write-OpenPathLog { }
+                Mock Send-OpenPathHealthReport {
+                    param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions, $Version, $ReasonCodes)
+                    $script:ReportCount++
+                }
+                Mock Set-OpenPathConfig { }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { }
+                Mock Enable-OpenPathTask { }
+                Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                Mock Register-OpenPathFirefoxNativeHost { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Save-OpenPathIntegrityBackup { $script:IntegrityCalls++ }
+                Mock New-OpenPathIntegrityBaseline { $script:BaselineCalls++ }
+                Mock Remove-OpenPathAgentUpdateBackupDirectories { }
+                Mock Remove-OpenPathAgentUpdateJournal { }
+
+                $result = Complete-OpenPathAgentUpdateFinalization -OpenPathRoot $Root -Journal $Journal -Config $Config
+
+                $result.Success | Should -BeFalse
+                $script:IntegrityCalls | Should -Be 0
+                $script:BaselineCalls | Should -Be 0
+                $script:ReportCount | Should -Be 1
+                Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/update-journal.json') | Should -BeTrue
+                $journalOnDisk = Get-Content -LiteralPath (Join-Path $Root 'data/agent-update/update-journal.json') -Raw | ConvertFrom-Json
+                $journalOnDisk.phase | Should -Be 'committed'
+            }
+        }
+
+        It "Completes finalization idempotently when the first attempt fails after writing config" {
+            $root = Join-Path $TestDrive ('finalize-retry-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'new-target' -Encoding ASCII
+            $targetHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            $journal = [PSCustomObject]@{
+                schemaVersion   = 2
+                phase           = 'committed'
+                targetVersion   = '9.9.9'
+                targetBuild     = 'build-new'
+                previousVersion = '9.9.8'
+                previousBuild   = 'build-old'
+                backupRoot      = $backupRoot
+                createdAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                files           = @(
+                    [PSCustomObject]@{
+                        relativePath   = 'lib\existing.ps1'
+                        existedBefore  = $true
+                        previousSha256 = ('e' * 64)
+                        sha256         = $targetHash
+                    }
+                )
+            }
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            New-Item -ItemType Directory -Path (Split-Path $journalPath -Parent) -Force | Out-Null
+            $journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $journalPath -Encoding UTF8
+            $config = [PSCustomObject]@{ version = '9.9.8'; agentBuild = 'build-old' }
+
+            InModuleScope Common -Parameters @{ Root = $root; Journal = $journal; Config = $config } {
+                $script:OpenPathRoot = $Root
+                $script:IntegrityAttempts = 0
+                $script:ReportCount = 0
+                Mock Write-OpenPathLog { }
+                Mock Send-OpenPathHealthReport {
+                    param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions, $Version, $ReasonCodes)
+                    $script:ReportCount++
+                }
+                Mock Set-OpenPathConfig { }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { }
+                Mock Enable-OpenPathTask { }
+                Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                Mock Register-OpenPathFirefoxNativeHost { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Save-OpenPathIntegrityBackup {
+                    $script:IntegrityAttempts++
+                    if ($script:IntegrityAttempts -eq 1) {
+                        throw 'disk full'
+                    }
+                }
+                Mock New-OpenPathIntegrityBaseline { }
+                Mock Remove-OpenPathAgentUpdateBackupDirectories { }
+
+                $first = Complete-OpenPathAgentUpdateFinalization -OpenPathRoot $Root -Journal $Journal -Config $Config
+
+                $first.Success | Should -BeFalse
+                $Config.version | Should -Be '9.9.9'
+                $Config.agentBuild | Should -Be 'build-new'
+                (Get-Content -LiteralPath (Join-Path $Root 'lib/existing.ps1') -Raw).Trim() | Should -Be 'new-target'
+                Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/update-journal.json') | Should -BeTrue
+
+                $second = Complete-OpenPathAgentUpdateFinalization -OpenPathRoot $Root -Journal $Journal -Config $Config
+
+                $second.Success | Should -BeTrue
+                $Config.version | Should -Be '9.9.9'
+                $Config.agentBuild | Should -Be 'build-new'
+                $script:IntegrityAttempts | Should -Be 2
+                $script:ReportCount | Should -Be 1
+                Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/update-journal.json') | Should -BeFalse
+            }
+        }
+
+        It "Runs finalization from a committed journal at the start of self-update" {
+            $root = Join-Path $TestDrive ('finalize-startup-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'new-target' -Encoding ASCII
+            $targetHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            $journal = [PSCustomObject]@{
+                schemaVersion   = 2
+                phase           = 'committed'
+                targetVersion   = '9.9.9'
+                targetBuild     = 'build-new'
+                previousVersion = '9.9.8'
+                previousBuild   = 'build-old'
+                backupRoot      = $backupRoot
+                createdAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                files           = @(
+                    [PSCustomObject]@{
+                        relativePath   = 'lib\existing.ps1'
+                        existedBefore  = $true
+                        previousSha256 = ('e' * 64)
+                        sha256         = $targetHash
+                    }
+                )
+            }
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            New-Item -ItemType Directory -Path (Split-Path $journalPath -Parent) -Force | Out-Null
+            $journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $journalPath -Encoding UTF8
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $targetHash })
+            }
+
+            InModuleScope Common -Parameters @{
+                Root = $root
+                Manifest = $manifest
+                TargetHash = $targetHash
+            } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TargetHash = $TargetHash
+                $script:Captured = @{ Config = $null; Integrity = 0; Baseline = 0; Tasks = 0; GateCalls = 0 }
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.8'
+                        agentBuild   = 'build-old'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest { throw 'the update should not download when finalization already caught up' }
+                Mock Write-OpenPathLog { }
+                Mock Set-OpenPathConfig { $script:Captured.Config = $Config }
+                Mock Save-OpenPathIntegrityBackup { $script:Captured.Integrity++ }
+                Mock New-OpenPathIntegrityBaseline { $script:Captured.Baseline++ }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { $script:Captured.Tasks++ }
+                Mock Enable-OpenPathTask { $script:Captured.Tasks++ }
+                Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                Mock Register-OpenPathFirefoxNativeHost { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Send-OpenPathHealthReport { }
+                Mock Invoke-OpenPathAgentUpdateHealthGate {
+                    $script:Captured.GateCalls++
+                    [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false }
+                }
+
+                $result = Invoke-OpenPathAgentSelfUpdate -Silent
+
+                $result.Success | Should -BeTrue
+                $result.Updated | Should -BeFalse
+                $script:Captured.Config.version | Should -Be '9.9.9'
+                $script:Captured.Config.agentBuild | Should -Be 'build-new'
+                $script:Captured.Integrity | Should -Be 1
+                $script:Captured.Baseline | Should -Be 1
+                $script:Captured.Tasks | Should -BeGreaterThan 0
+                $script:Captured.GateCalls | Should -Be 0
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root) | Should -BeFalse
             }
         }
     }

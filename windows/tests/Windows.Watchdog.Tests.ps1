@@ -3689,3 +3689,132 @@ Describe "Watchdog egress floor check" {
     }
 }
 
+Describe "Watchdog committed update journal" {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1")
+
+        function New-WatchdogJournalRoot {
+            param(
+                [string]$Phase = 'committed',
+                [DateTimeOffset]$UpdatedAt = [DateTimeOffset]::UtcNow.AddMinutes(-11)
+            )
+
+            $root = Join-Path $TestDrive ('watchdog-journal-' + [guid]::NewGuid().ToString('N'))
+            $updateRoot = Join-Path $root 'data/agent-update'
+            New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+            [PSCustomObject]@{
+                schemaVersion   = 2
+                phase           = $Phase
+                targetVersion   = '9.9.9'
+                targetBuild     = 'build-new'
+                previousVersion = '9.9.8'
+                previousBuild   = 'build-old'
+                backupRoot      = (Join-Path $updateRoot 'backups/run-test')
+                createdAt       = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt       = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                files           = @()
+            } | ConvertTo-Json -Depth 10 |
+                Set-Content -LiteralPath (Join-Path $updateRoot 'update-journal.json') -Encoding UTF8
+            return $root
+        }
+    }
+
+    BeforeEach {
+        $global:OpenPathTestLockAcquired = $true
+        $global:OpenPathTestLockReleases = 0
+        $global:OpenPathTestStartedTasks = @()
+        $global:OpenPathTestStartFails = $false
+        $global:OpenPathTestLogs = @()
+        function global:Enter-OpenPathAgentUpdateLock {
+            param([int]$TimeoutMilliseconds)
+            [pscustomobject]@{ Acquired = $global:OpenPathTestLockAcquired; Abandoned = $false; Mutex = $null }
+        }
+        function global:Exit-OpenPathAgentUpdateLock {
+            param($Lock)
+            $global:OpenPathTestLockReleases++
+        }
+        function global:Start-ScheduledTask {
+            param($TaskName, $ErrorAction)
+            if ($global:OpenPathTestStartFails) {
+                throw 'task is disabled'
+            }
+            $global:OpenPathTestStartedTasks += [string]$TaskName
+        }
+        function global:Write-OpenPathLog {
+            param($Message, $Level)
+            $global:OpenPathTestLogs += [string]$Message
+        }
+    }
+
+    AfterEach {
+        foreach ($name in @('Enter-OpenPathAgentUpdateLock', 'Exit-OpenPathAgentUpdateLock', 'Start-ScheduledTask', 'Write-OpenPathLog')) {
+            Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+        }
+        Remove-Variable -Scope Global -Name OpenPathTestLockAcquired, OpenPathTestLockReleases, OpenPathTestStartedTasks, OpenPathTestStartFails, OpenPathTestLogs -ErrorAction SilentlyContinue
+    }
+
+    It "Starts the update task when a committed journal has not been touched for ten minutes" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11))
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.JournalPresent | Should -BeTrue
+        $result.RetryStarted | Should -BeTrue
+        $global:OpenPathTestStartedTasks | Should -Contain 'OpenPath-AgentUpdate'
+        $global:OpenPathTestLockReleases | Should -Be 1
+    }
+
+    It "Does not start the update task when the committed journal was touched two minutes ago" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-2))
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.JournalPresent | Should -BeTrue
+        $result.RetryStarted | Should -BeFalse
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Does not start the update task for a journal in another phase" {
+        $root = New-WatchdogJournalRoot -Phase 'replacing' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11))
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.JournalPresent | Should -BeTrue
+        $result.RetryStarted | Should -BeFalse
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Does not start the update task while a live updater holds the update lock" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11))
+        $global:OpenPathTestLockAcquired = $false
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Reports a stable reason code when the update task cannot be started" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11))
+        $global:OpenPathTestStartFails = $true
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        $result.ReasonCode | Should -Be 'self_update_finalization_retry_failed'
+        $result.Message | Should -Match 'OpenPath-AgentUpdate'
+        $global:OpenPathTestLockReleases | Should -Be 1
+    }
+
+    It "Wires the resume attempt ahead of the integrity restore" {
+        $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1") -Raw
+        $resumeStart = $content.IndexOf('Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $OpenPathRoot')
+        $restoreStart = $content.IndexOf('Restore-OpenPathIntegrity -IntegrityResult')
+
+        $content | Should -Match 'OpenPath-AgentUpdate'
+        $content | Should -Match 'self_update_finalization_retry_failed'
+        $resumeStart | Should -BeGreaterThan -1
+        $restoreStart | Should -BeGreaterThan $resumeStart
+    }
+}
+

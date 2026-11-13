@@ -1114,6 +1114,91 @@ function Invoke-OpenPathWatchdogAppControlHealth {
     }
 }
 
+function Invoke-OpenPathWatchdogPendingUpdateFinalization {
+    <#
+    .SYNOPSIS
+        Starts the updater when a committed journal has stopped making progress
+    .DESCRIPTION
+        Finalization re-registers the scheduled tasks, including this watchdog,
+        so it must run in the AgentUpdate task process, never in the watchdog.
+        A committed journal whose updatedAt is at least ten minutes old, with a
+        free update lock, means the update task should finish it. A start
+        failure is reported with one stable reason code and no fallback route.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow,
+        [int]$StaleMinutes = 10
+    )
+
+    $journalPath = [System.IO.Path]::Combine($OpenPathRoot, 'data', 'agent-update', 'update-journal.json')
+    $result = [PSCustomObject]@{
+        JournalPresent = $false
+        RetryStarted   = $false
+        ReasonCode     = ''
+        Message        = ''
+    }
+
+    if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+        return $result
+    }
+    $result.JournalPresent = $true
+
+    try {
+        $journal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        return $result
+    }
+
+    if ([string]$journal.phase -ne 'committed') {
+        return $result
+    }
+
+    $updatedAt = [DateTimeOffset]::MinValue
+    $hasUpdatedAt = [DateTimeOffset]::TryParse(
+        [string]$journal.updatedAt,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind,
+        [ref]$updatedAt
+    )
+    if (-not $hasUpdatedAt) {
+        try {
+            $updatedAt = [DateTimeOffset](Get-Item -LiteralPath $journalPath).LastWriteTimeUtc
+        }
+        catch {
+            $updatedAt = $Now
+        }
+    }
+
+    if (($Now - $updatedAt).TotalMinutes -lt $StaleMinutes) {
+        return $result
+    }
+
+    if (-not (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
+        return $result
+    }
+
+    $lock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 0
+    if (-not $lock.Acquired) {
+        return $result
+    }
+
+    try {
+        Start-ScheduledTask -TaskName 'OpenPath-AgentUpdate' -ErrorAction Stop
+        $result.RetryStarted = $true
+        return $result
+    }
+    catch {
+        $result.ReasonCode = 'self_update_finalization_retry_failed'
+        $result.Message = "Could not start OpenPath-AgentUpdate to finish a committed update: $_"
+        return $result
+    }
+    finally {
+        Exit-OpenPathAgentUpdateLock -Lock $lock
+    }
+}
+
 function Invoke-OpenPathWatchdogChecks {
     # main body of the per-minute watchdog cycle
     # checks acrylic, dns resolution, sinkhole, firewall, local dns adapters, split-dns drift,
@@ -1478,9 +1563,27 @@ function Invoke-OpenPathWatchdogChecks {
         # integrity backup then would restore only the critical subset over a
         # mixed tree, so defer to the recovery script.
         $updateJournalPath = [System.IO.Path]::Combine($OpenPathRoot, 'data', 'agent-update', 'update-journal.json')
-        if ($integrityChecksEnabled -and (Test-Path $updateJournalPath)) {
+        if (Test-Path $updateJournalPath) {
             $integrityChecksEnabled = $false
             Write-OpenPathLog "Watchdog: agent update journal present, integrity check deferred to recovery" -Level WARN
+
+            # A committed journal belongs to the updater process, which must
+            # re-register this watchdog task itself. Only start that process;
+            # never run finalization here.
+            try {
+                $pendingFinalization = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $OpenPathRoot
+                if ($pendingFinalization.RetryStarted) {
+                    Write-OpenPathLog 'Watchdog: started OpenPath-AgentUpdate to finish the committed update' -Level WARN
+                }
+                elseif ($pendingFinalization.ReasonCode) {
+                    & $addReasonCode ([string]$pendingFinalization.ReasonCode)
+                    $issues += [string]$pendingFinalization.Message
+                    Write-OpenPathLog "Watchdog: $($pendingFinalization.Message)" -Level ERROR
+                }
+            }
+            catch {
+                Write-OpenPathLog "Watchdog: could not resume a committed agent update: $_" -Level ERROR
+            }
         }
 
         if ($integrityChecksEnabled -and (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {

@@ -11,19 +11,71 @@ Describe "OpenPath agent update recovery" {
             return $root
         }
 
+        function New-RecoveryFile {
+            param(
+                [Parameter(Mandatory = $true)][string]$Path,
+                [Parameter(Mandatory = $true)][string]$Content
+            )
+
+            $directory = Split-Path $Path -Parent
+            if (-not (Test-Path -LiteralPath $directory)) {
+                New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            }
+            Set-Content -LiteralPath $Path -Value $Content -Encoding ASCII
+        }
+
+        function Get-TestFileHash {
+            param([Parameter(Mandatory = $true)][string]$Path)
+
+            return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+
+        function Get-TestContentHash {
+            param([Parameter(Mandatory = $true)][string]$Content)
+
+            $path = Join-Path $TestDrive ('hash-source-' + [guid]::NewGuid().ToString('N'))
+            New-RecoveryFile -Path $path -Content $Content
+            try {
+                return Get-TestFileHash -Path $path
+            }
+            finally {
+                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        function New-RecoveryJournalEntry {
+            param(
+                [Parameter(Mandatory = $true)][string]$RelativePath,
+                [Parameter(Mandatory = $true)][bool]$ExistedBefore,
+                [string]$PreviousSha256 = '',
+                [Parameter(Mandatory = $true)][string]$TargetSha256
+            )
+
+            return [PSCustomObject]@{
+                relativePath    = $RelativePath
+                existedBefore   = $ExistedBefore
+                previousSha256  = $PreviousSha256
+                sha256          = $TargetSha256
+            }
+        }
+
         function Write-RecoveryJournal {
             param(
                 [Parameter(Mandatory = $true)][string]$Root,
                 [Parameter(Mandatory = $true)][object[]]$Files,
                 [string]$Phase = 'replacing',
-                [int]$SchemaVersion = 1,
-                [string]$BackupRoot = ''
+                [int]$SchemaVersion = 2,
+                [string]$BackupRoot = '',
+                [string]$UpdatedAt = ''
             )
 
             $updateRoot = Join-Path $Root 'data/agent-update'
             New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
             if ([string]::IsNullOrWhiteSpace($BackupRoot)) {
-                $BackupRoot = Join-Path $updateRoot 'backups/9.9.8'
+                $BackupRoot = Join-Path $updateRoot 'backups/run-test'
+            }
+            if ([string]::IsNullOrWhiteSpace($UpdatedAt)) {
+                $UpdatedAt = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
             }
 
             $journal = [PSCustomObject]@{
@@ -35,7 +87,7 @@ Describe "OpenPath agent update recovery" {
                 previousBuild   = 'build-old'
                 backupRoot      = $BackupRoot
                 createdAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
-                updatedAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt       = $UpdatedAt
                 files           = @($Files)
             }
 
@@ -127,6 +179,60 @@ Export-ModuleMember -Function *
                 Output   = (@($output) -join [Environment]::NewLine)
             }
         }
+
+        function New-PartialRollbackFixture {
+            param([ValidateSet('partial', 'corrupt-backup', 'untouched', 'stale-backup', 'outside')][string]$Kind = 'partial')
+
+            $root = New-RecoveryRoot
+            $updateRoot = Join-Path $root 'data/agent-update'
+            $backupRoot = Join-Path $updateRoot 'backups/run-current'
+            $oldHash = Get-TestContentHash -Content 'old-a'
+            $newHash = Get-TestContentHash -Content 'new-a'
+            $newBHash = Get-TestContentHash -Content 'new-b'
+
+            New-RecoveryFile -Path (Join-Path $root 'lib/a.ps1') -Content 'new-a'
+
+            if ($Kind -eq 'untouched') {
+                New-RecoveryFile -Path (Join-Path $root 'lib/a.ps1') -Content 'old-a'
+                $files = @(
+                    New-RecoveryJournalEntry -RelativePath 'lib\a.ps1' -ExistedBefore $true `
+                        -PreviousSha256 $oldHash -TargetSha256 $newHash
+                )
+            }
+            elseif ($Kind -eq 'outside') {
+                $backupRoot = Join-Path $updateRoot 'backups-x/run-current'
+                New-RecoveryFile -Path (Join-Path $backupRoot 'lib/a.ps1') -Content 'old-a'
+                $files = @(
+                    New-RecoveryJournalEntry -RelativePath 'lib\a.ps1' -ExistedBefore $true `
+                        -PreviousSha256 $oldHash -TargetSha256 $newHash
+                )
+            }
+            else {
+                $backupContent = if ($Kind -eq 'corrupt-backup') { 'corrupt-a' } else { 'old-a' }
+                New-RecoveryFile -Path (Join-Path $backupRoot 'lib/a.ps1') -Content $backupContent
+                if ($Kind -eq 'stale-backup') {
+                    New-RecoveryFile -Path (Join-Path $updateRoot 'backups/9.9.8/lib/a.ps1') -Content 'stale-a'
+                }
+                $files = @(
+                    New-RecoveryJournalEntry -RelativePath 'lib\a.ps1' -ExistedBefore $true `
+                        -PreviousSha256 $oldHash -TargetSha256 $newHash
+                )
+            }
+
+            if ($Kind -eq 'partial') {
+                New-RecoveryFile -Path (Join-Path $root 'lib/b.ps1') -Content 'new-b'
+                $files += New-RecoveryJournalEntry -RelativePath 'lib\b.ps1' -ExistedBefore $false `
+                    -TargetSha256 $newBHash
+            }
+
+            Write-RecoveryJournal -Root $root -BackupRoot $backupRoot -Files $files
+
+            return [PSCustomObject]@{
+                Root   = $root
+                BackupRoot = $backupRoot
+                Files  = $files
+            }
+        }
     }
 
     Context "Standalone recovery script" {
@@ -151,13 +257,76 @@ Export-ModuleMember -Function *
             Test-Path -LiteralPath (Join-Path $root 'data/agent-update/recovery-report.json') | Should -BeFalse
         }
 
-        It "Ignores and logs an unknown journal schema without touching files" {
+        It "Quarantines a journal with an unknown schema and writes a recovery report" {
             $root = New-RecoveryRoot
             $destination = Join-Path $root 'lib/a.ps1'
-            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
-            Set-Content -LiteralPath $destination -Value 'new-a' -Encoding ASCII
-            Write-RecoveryJournal -Root $root -SchemaVersion 99 -Files @(
-                [PSCustomObject]@{ relativePath = 'lib\a.ps1'; existedBefore = $false; sha256 = ('a' * 64) }
+            New-RecoveryFile -Path $destination -Content 'new-a'
+            Write-RecoveryJournal -Root $root -SchemaVersion 1 -Files @(
+                New-RecoveryJournalEntry -RelativePath 'lib\a.ps1' -ExistedBefore $false `
+                    -TargetSha256 (Get-TestContentHash -Content 'new-a')
+            )
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'new-a'
+            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeFalse
+            @(Get-ChildItem -LiteralPath (Join-Path $root 'data/agent-update') -Filter 'update-journal.quarantine-*.json' -File).Count | Should -Be 1
+            $reportPath = Join-Path $root 'data/agent-update/recovery-report.json'
+            Test-Path -LiteralPath $reportPath | Should -BeTrue
+            $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            $report.status | Should -Be 'DEGRADED'
+            $report.reasonCode | Should -Match '^self_update_recovery_journal_'
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Match 'quarantin'
+        }
+
+        It "Quarantines an unreadable journal and resumes the integrity check" {
+            $root = New-RecoveryRoot
+            $updateRoot = Join-Path $root 'data/agent-update'
+            New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $updateRoot 'update-journal.json') `
+                -Value '{ "schemaVersion": 2, "phase": ' -Encoding UTF8
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            Test-Path -LiteralPath (Join-Path $updateRoot 'update-journal.json') | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $updateRoot -Filter 'update-journal.quarantine-*.json' -File).Count | Should -Be 1
+            $report = Get-Content -LiteralPath (Join-Path $updateRoot 'recovery-report.json') -Raw | ConvertFrom-Json
+            $report.reasonCode | Should -Match '^self_update_recovery_journal_'
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Match 'quarantin'
+        }
+
+        It "Keeps at most three quarantined journals" {
+            $root = New-RecoveryRoot
+            $updateRoot = Join-Path $root 'data/agent-update'
+            New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+            foreach ($index in 1..5) {
+                $path = Join-Path $updateRoot ("update-journal.quarantine-20200101T00000{0}Z-old.json" -f $index)
+                Set-Content -LiteralPath $path -Value '{}' -Encoding UTF8
+                (Get-Item -LiteralPath $path).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(-$index)
+            }
+            Set-Content -LiteralPath (Join-Path $updateRoot 'update-journal.json') `
+                -Value '{ "schemaVersion": 2, "phase": ' -Encoding UTF8
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            @(Get-ChildItem -LiteralPath $updateRoot -Filter 'update-journal.quarantine-*.json' -File).Count | Should -Be 3
+        }
+
+        It "Leaves a committed journal in place" {
+            $root = New-RecoveryRoot
+            $destination = Join-Path $root 'lib/a.ps1'
+            New-RecoveryFile -Path $destination -Content 'new-a'
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-current'
+            New-RecoveryFile -Path (Join-Path $backupRoot 'lib/a.ps1') -Content 'old-a'
+            Write-RecoveryJournal -Root $root -Phase 'committed' -BackupRoot $backupRoot -Files @(
+                New-RecoveryJournalEntry -RelativePath 'lib\a.ps1' -ExistedBefore $true `
+                    -PreviousSha256 (Get-TestContentHash -Content 'old-a') `
+                    -TargetSha256 (Get-TestContentHash -Content 'new-a')
             )
 
             $result = Invoke-RecoveryScript -Root $root
@@ -165,34 +334,14 @@ Export-ModuleMember -Function *
             $result.ExitCode | Should -Be 0
             (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'new-a'
             Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeTrue
-            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
-            $log | Should -Match 'schema'
-        }
-
-        It "Only removes the journal when its phase is committed" {
-            $root = New-RecoveryRoot
-            $destination = Join-Path $root 'lib/a.ps1'
-            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
-            Set-Content -LiteralPath $destination -Value 'new-a' -Encoding ASCII
-            $backupRoot = Join-Path $root 'data/agent-update/backups/9.9.8'
-            New-Item -ItemType Directory -Path (Join-Path $backupRoot 'lib') -Force | Out-Null
-            Set-Content -LiteralPath (Join-Path $backupRoot 'lib/a.ps1') -Value 'old-a' -Encoding ASCII
-            Write-RecoveryJournal -Root $root -Phase 'committed' -BackupRoot $backupRoot -Files @(
-                [PSCustomObject]@{ relativePath = 'lib\a.ps1'; existedBefore = $true; sha256 = ('a' * 64) }
-            )
-
-            $result = Invoke-RecoveryScript -Root $root
-
-            $result.ExitCode | Should -Be 0
-            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'new-a'
-            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeFalse
             Test-Path -LiteralPath (Join-Path $root 'data/agent-update/recovery-report.json') | Should -BeFalse
         }
 
         It "Returns to the calling entry script instead of terminating its session" {
             $root = New-RecoveryRoot
             Write-RecoveryJournal -Root $root -Phase 'committed' -Files @(
-                [PSCustomObject]@{ relativePath = 'lib\a.ps1'; existedBefore = $false; sha256 = ('a' * 64) }
+                New-RecoveryJournalEntry -RelativePath 'lib\a.ps1' -ExistedBefore $false `
+                    -TargetSha256 (Get-TestContentHash -Content 'new-a')
             )
 
             & $script:RecoveryScriptPath -OpenPathRoot $root
@@ -200,21 +349,12 @@ Export-ModuleMember -Function *
             Set-Content -LiteralPath $marker -Value 'continued' -Encoding ASCII
 
             Test-Path -LiteralPath $marker | Should -BeTrue
-            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeTrue
         }
 
         It "Rolls a partially replaced tree back to the previous version and removes new files" {
-            $root = New-RecoveryRoot
-            $backupRoot = Join-Path $root 'data/agent-update/backups/9.9.8'
-            New-Item -ItemType Directory -Path (Join-Path $backupRoot 'lib') -Force | Out-Null
-            New-Item -ItemType Directory -Path (Join-Path $root 'lib') -Force | Out-Null
-            Set-Content -LiteralPath (Join-Path $backupRoot 'lib/a.ps1') -Value 'old-a' -Encoding ASCII
-            Set-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Value 'new-a' -Encoding ASCII
-            Set-Content -LiteralPath (Join-Path $root 'lib/b.ps1') -Value 'new-b' -Encoding ASCII
-            Write-RecoveryJournal -Root $root -BackupRoot $backupRoot -Files @(
-                [PSCustomObject]@{ relativePath = 'lib\a.ps1'; existedBefore = $true; sha256 = ('a' * 64) },
-                [PSCustomObject]@{ relativePath = 'lib\b.ps1'; existedBefore = $false; sha256 = ('b' * 64) }
-            )
+            $fixture = New-PartialRollbackFixture -Kind partial
+            $root = $fixture.Root
 
             $result = Invoke-RecoveryScript -Root $root
 
@@ -231,13 +371,60 @@ Export-ModuleMember -Function *
             $report.build | Should -Be 'build-new'
         }
 
+        It "Ignores a stale backup from an earlier update run" {
+            $fixture = New-PartialRollbackFixture -Kind stale-backup
+            $root = $fixture.Root
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            (Get-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Raw).Trim() | Should -Be 'old-a'
+        }
+
+        It "Does not overwrite a file when the backup hash is not the pre-update hash" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Raw).Trim() | Should -Be 'new-a'
+            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeTrue
+            $report = Get-Content -LiteralPath (Join-Path $root 'data/agent-update/recovery-report.json') -Raw | ConvertFrom-Json
+            $report.reasonCode | Should -Match 'self_update_recovery_failed'
+        }
+
+        It "Leaves an untouched file alone when no backup exists" {
+            $fixture = New-PartialRollbackFixture -Kind untouched
+            $root = $fixture.Root
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Be 0
+            (Get-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Raw).Trim() | Should -Be 'old-a'
+            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeFalse
+        }
+
+        It "Rejects a backup root in a sibling directory whose name merely starts with backups" {
+            $fixture = New-PartialRollbackFixture -Kind outside
+            $root = $fixture.Root
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Raw).Trim() | Should -Be 'new-a'
+            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeTrue
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Match 'outside the update backup directory'
+        }
+
         It "Does nothing while a live updater holds the update lock" {
             $root = New-RecoveryRoot
             $destination = Join-Path $root 'lib/a.ps1'
-            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
-            Set-Content -LiteralPath $destination -Value 'new-a' -Encoding ASCII
+            New-RecoveryFile -Path $destination -Content 'new-a'
             Write-RecoveryJournal -Root $root -Files @(
-                [PSCustomObject]@{ relativePath = 'lib\a.ps1'; existedBefore = $false; sha256 = ('a' * 64) }
+                New-RecoveryJournalEntry -RelativePath 'lib\a.ps1' -ExistedBefore $false `
+                    -TargetSha256 (Get-TestContentHash -Content 'new-a')
             )
 
             $holderScript = @"
@@ -312,6 +499,40 @@ Export-ModuleMember -Function *
                 (@($script:CapturedReport.ReasonCodes) -join ' ') | Should -Match 'self_update_recovery_rolled_back'
                 Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/recovery-report.json') | Should -BeFalse
             }
+        }
+    }
+
+    Context "Rollback rule parity" {
+        It "Applies the same restore rule in the standalone script and the updater (<Kind>)" -ForEach @(
+            @{ Kind = 'partial' }
+            @{ Kind = 'corrupt-backup' }
+            @{ Kind = 'untouched' }
+            @{ Kind = 'stale-backup' }
+            @{ Kind = 'outside' }
+        ) {
+            $scriptFixture = New-PartialRollbackFixture -Kind $Kind
+            $moduleFixture = New-PartialRollbackFixture -Kind $Kind
+
+            $scriptResult = Invoke-RecoveryScript -Root $scriptFixture.Root
+
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
+            Import-Module $modulePath -Force -Global
+            $moduleResult = InModuleScope Common -Parameters @{
+                Root = $moduleFixture.Root
+                JournalPath = (Join-Path $moduleFixture.Root 'data/agent-update/update-journal.json')
+            } {
+                $script:OpenPathRoot = $Root
+                $journal = Get-Content -LiteralPath $JournalPath -Raw | ConvertFrom-Json
+                Restore-OpenPathAgentUpdateJournalBackups -OpenPathRoot $Root -Journal $journal
+            }
+
+            $scriptComplete = ($scriptResult.ExitCode -eq 0)
+            [bool]$moduleResult.Complete | Should -Be $scriptComplete
+
+            $scriptFile = Join-Path $scriptFixture.Root 'lib/a.ps1'
+            $moduleFile = Join-Path $moduleFixture.Root 'lib/a.ps1'
+            (Get-Content -LiteralPath $scriptFile -Raw).Trim() | Should -Be (Get-Content -LiteralPath $moduleFile -Raw).Trim()
+            Test-Path -LiteralPath (Join-Path $scriptFixture.Root 'lib/b.ps1') | Should -Be (Test-Path -LiteralPath (Join-Path $moduleFixture.Root 'lib/b.ps1'))
         }
     }
 

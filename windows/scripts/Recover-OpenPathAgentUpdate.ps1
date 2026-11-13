@@ -24,10 +24,15 @@
     cmdlets, so a tree whose modules no longer load can still be repaired.
     Without a journal it exits immediately. A live updater holds the update
     lock; in that case this script leaves the update alone. A journal in the
-    committed phase is deleted. Any other phase is rolled back from the
-    per-update backups: files that existed before are restored and files that
-    were new are removed. The journal is deleted only after every restored file
-    matches its backup. A pending health report is left for the watchdog.
+    committed phase is left for the updater and watchdog: the tree already
+    passed the health gate and finalization needs the modules. Any other phase
+    is rolled back from this run's backups: files that existed before are left
+    alone when they already match the recorded pre-update hash, or restored only
+    when the backup also matches that hash; files that were new are removed.
+    The journal is deleted only after every entry ends in a verified state. A
+    journal that cannot be parsed, or whose schemaVersion is not 2, is moved to
+    a quarantine name so the watchdog integrity check can resume. A pending
+    health report is left for the watchdog.
 #>
 
 [CmdletBinding()]
@@ -153,10 +158,14 @@ function Write-OpenPathRecoveryReport {
 }
 
 function Restore-OpenPathRecoveryJournal {
+    # This rule must stay identical to Restore-OpenPathAgentUpdateJournalBackups
+    # in Common.Update.ps1. The script cannot import that module, so the two
+    # implementations are pinned together by the parity tests.
     param([Parameter(Mandatory = $true)]$Journal)
 
     $backupRoot = [string]$Journal.backupRoot
     $allowedBackupRoot = [System.IO.Path]::GetFullPath((Join-Path $script:UpdateRoot 'backups'))
+    $allowedBackupPrefix = $allowedBackupRoot.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
     $complete = $true
 
     if ([string]::IsNullOrWhiteSpace($backupRoot)) {
@@ -164,8 +173,15 @@ function Restore-OpenPathRecoveryJournal {
         return $false
     }
 
-    $resolvedBackupRoot = [System.IO.Path]::GetFullPath($backupRoot)
-    if (-not $resolvedBackupRoot.StartsWith($allowedBackupRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    try {
+        $resolvedBackupRoot = [System.IO.Path]::GetFullPath($backupRoot)
+    }
+    catch {
+        Write-OpenPathRecoveryLog "Journal backup root is not a valid path: $backupRoot"
+        return $false
+    }
+
+    if (-not $resolvedBackupRoot.StartsWith($allowedBackupPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         Write-OpenPathRecoveryLog "Journal backup root is outside the update backup directory: $backupRoot"
         return $false
     }
@@ -185,22 +201,43 @@ function Restore-OpenPathRecoveryJournal {
 
         try {
             if ($existedBefore) {
-                if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
-                    $destinationDirectory = Split-Path $destinationPath -Parent
-                    if (-not (Test-Path -LiteralPath $destinationDirectory)) {
-                        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
-                    }
-                    Copy-Item -LiteralPath $backupPath -Destination $destinationPath -Force -ErrorAction Stop
+                $previousHash = [string]$entry.previousSha256
+                if ($previousHash -notmatch '^[0-9a-fA-F]{64}$') {
+                    Write-OpenPathRecoveryLog "Journal entry has no pre-update hash: $relativePath"
+                    $complete = $false
+                    continue
+                }
 
-                    $restoredHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash
-                    $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash
-                    if ($restoredHash -ne $backupHash) {
-                        Write-OpenPathRecoveryLog "Restored file does not match its backup: $relativePath"
-                        $complete = $false
+                $destinationIsFile = Test-Path -LiteralPath $destinationPath -PathType Leaf
+                if ($destinationIsFile) {
+                    $currentHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                    if ([string]::Equals($currentHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        continue
                     }
                 }
-                elseif (-not (Test-Path -LiteralPath $destinationPath -PathType Leaf)) {
+
+                if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
                     Write-OpenPathRecoveryLog "File was present before the update but is missing and has no backup: $relativePath"
+                    $complete = $false
+                    continue
+                }
+
+                $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                if (-not [string]::Equals($backupHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    Write-OpenPathRecoveryLog "Backup hash does not match the recorded pre-update hash: $relativePath"
+                    $complete = $false
+                    continue
+                }
+
+                $destinationDirectory = Split-Path $destinationPath -Parent
+                if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+                    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+                }
+                Copy-Item -LiteralPath $backupPath -Destination $destinationPath -Force -ErrorAction Stop
+
+                $restoredHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                if (-not [string]::Equals($restoredHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    Write-OpenPathRecoveryLog "Restored file does not match the recorded pre-update hash: $relativePath"
                     $complete = $false
                 }
             }
@@ -221,6 +258,49 @@ function Restore-OpenPathRecoveryJournal {
     }
 
     return $complete
+}
+
+function Move-OpenPathRecoveryJournalToQuarantine {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReasonCode,
+        [string]$Version = '',
+        [string]$Build = '',
+        [string]$Detail = ''
+    )
+
+    $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ', [Globalization.CultureInfo]::InvariantCulture)
+    $quarantineName = "update-journal.quarantine-$timestamp-$([guid]::NewGuid().ToString('N')).json"
+    $quarantinePath = Join-Path $script:UpdateRoot $quarantineName
+
+    try {
+        Move-Item -LiteralPath $script:JournalPath -Destination $quarantinePath -Force -ErrorAction Stop
+    }
+    catch {
+        Write-OpenPathRecoveryLog "Could not quarantine the unusable update journal: $_"
+        return
+    }
+
+    try {
+        $quarantined = @(
+            Get-ChildItem -LiteralPath $script:UpdateRoot -Filter 'update-journal.quarantine-*.json' -File -ErrorAction SilentlyContinue |
+                Sort-Object -Property LastWriteTimeUtc -Descending
+        )
+        if ($quarantined.Count -gt 3) {
+            $quarantined | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        # Retention is housekeeping; the quarantine itself already succeeded.
+    }
+
+    Write-OpenPathRecoveryReport `
+        -Status 'DEGRADED' `
+        -ReasonCode $ReasonCode `
+        -Actions $ReasonCode `
+        -Version $Version `
+        -Build $Build `
+        -Message $Detail
+    Write-OpenPathRecoveryLog "Quarantined an unusable update journal as $quarantineName"
 }
 
 $script:OpenPathRoot = Resolve-OpenPathRecoveryRoot -ExplicitRoot $OpenPathRoot
@@ -253,20 +333,27 @@ try {
         $journal = Get-Content -LiteralPath $script:JournalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
-        Write-OpenPathRecoveryLog "Ignoring unreadable journal: $_"
+        Move-OpenPathRecoveryJournalToQuarantine `
+            -ReasonCode 'self_update_recovery_journal_unreadable' `
+            -Detail "The update journal could not be parsed: $_"
         return
     }
 
     $schemaVersion = 0
     [void][int]::TryParse([string]$journal.schemaVersion, [ref]$schemaVersion)
-    if ($schemaVersion -ne 1) {
-        Write-OpenPathRecoveryLog "Ignoring journal with unsupported schemaVersion '$($journal.schemaVersion)'"
+    if ($schemaVersion -ne 2) {
+        Move-OpenPathRecoveryJournalToQuarantine `
+            -ReasonCode 'self_update_recovery_journal_schema_unsupported' `
+            -Version ([string]$journal.targetVersion) `
+            -Build ([string]$journal.targetBuild) `
+            -Detail ("The update journal has unsupported schemaVersion '{0}'" -f $journal.schemaVersion)
         return
     }
 
     $phase = [string]$journal.phase
     if ($phase -eq 'committed') {
-        Remove-Item -LiteralPath $script:JournalPath -Force -ErrorAction Stop
+        # The tree passed the health gate. Finalization needs the modules, so
+        # the standalone script leaves the journal for the updater/watchdog.
         return
     }
 
