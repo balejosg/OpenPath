@@ -393,6 +393,9 @@ function Show-OpenPathStatus {
 try {
     $openPathRoot = Resolve-OpenPathRoot
 
+    # Repair a tree left mid-update before any module is imported.
+    try { & (Join-Path $openPathRoot 'scripts\Recover-OpenPathAgentUpdate.ps1') -OpenPathRoot $openPathRoot } catch { }
+
     # Import dependent modules first, then re-import Common globally so its
     # exported helpers remain visible across standalone CLI command execution.
     Import-Module "$openPathRoot\lib\DNS.psm1" -Force

@@ -14,6 +14,9 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot '..\lib\internal\WindowsRoot.ps1')
 $OpenPathRoot = Resolve-OpenPathWindowsRoot
 
+# Repair a tree left mid-update before any module is imported.
+try { & (Join-Path $OpenPathRoot 'scripts\Recover-OpenPathAgentUpdate.ps1') -OpenPathRoot $OpenPathRoot } catch { }
+
 Import-Module "$OpenPathRoot\lib\Update.Runtime.psm1" -Force
 
 $exitCode = Invoke-OpenPathRuntimeDependencyFastApply -OpenPathRoot $OpenPathRoot

@@ -31,6 +31,10 @@ if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {
     $OpenPathRoot = Split-Path $PSScriptRoot -Parent
 }
 $OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
+
+# Repair a tree left mid-update before any module is imported.
+try { & (Join-Path $OpenPathRoot 'scripts\Recover-OpenPathAgentUpdate.ps1') -OpenPathRoot $OpenPathRoot } catch { }
+
 . (Join-Path $OpenPathRoot 'lib\internal\Watchdog.FailCount.ps1')
 . (Join-Path $OpenPathRoot 'lib\internal\Watchdog.Runtime.ps1')
 
@@ -72,7 +76,8 @@ Initialize-OpenPathScriptSession `
     'Disable-OpenPathControlPlaneValve',
     'Enable-OpenPathDnsFailureOpenMode',
     'Close-OpenPathDnsFailureMode',
-    'Remove-OpenPathOrphanControlPlaneValve'
+    'Remove-OpenPathOrphanControlPlaneValve',
+    'Send-OpenPathAgentUpdateRecoveryReport'
 ) `
     -ScriptName 'Test-DNSHealth.ps1' | Out-Null
 
@@ -207,6 +212,7 @@ if ($outcome.EnterDnsFailureMode) {
 }
 
 $runtimeHealth = Get-OpenPathRuntimeHealth
+try { Send-OpenPathAgentUpdateRecoveryReport -OpenPathRoot $OpenPathRoot | Out-Null } catch { }
 Send-OpenPathHealthReport -Status $outcome.Status `
     -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
     -DnsResolving $runtimeHealth.DnsResolving `

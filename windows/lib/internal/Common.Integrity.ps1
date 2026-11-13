@@ -50,7 +50,9 @@ function Get-OpenPathCriticalFiles {
         "$script:OpenPathRoot\scripts\Start-SSEListener.ps1",
         "$script:OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1",
         "$script:OpenPathRoot\scripts\Start-RuntimeDependencyWorker.ps1",
-        "$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1"
+        "$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1",
+        "$script:OpenPathRoot\scripts\Recover-OpenPathAgentUpdate.ps1",
+        "$script:OpenPathRoot\scripts\Test-OpenPathAgentUpdateHealth.ps1"
     )
 
     # W-5: include the install/bootstrap helpers under lib\install (all dot-sourced by the

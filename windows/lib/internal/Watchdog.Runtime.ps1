@@ -1472,6 +1472,17 @@ function Invoke-OpenPathWatchdogChecks {
         # Checking in that window would "restore" the old files over the new
         # version, so skip this cycle while the lock is held and hold it
         # ourselves while checking and restoring.
+        #
+        # A journal left on disk means the previous update did not finish and
+        # the entry script could not complete recovery. Restoring from the
+        # integrity backup then would restore only the critical subset over a
+        # mixed tree, so defer to the recovery script.
+        $updateJournalPath = [System.IO.Path]::Combine($OpenPathRoot, 'data', 'agent-update', 'update-journal.json')
+        if ($integrityChecksEnabled -and (Test-Path $updateJournalPath)) {
+            $integrityChecksEnabled = $false
+            Write-OpenPathLog "Watchdog: agent update journal present, integrity check deferred to recovery" -Level WARN
+        }
+
         if ($integrityChecksEnabled -and (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
             $integrityUpdateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 0
             if (-not $integrityUpdateLock.Acquired) {

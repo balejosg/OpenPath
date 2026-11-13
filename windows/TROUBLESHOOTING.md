@@ -816,6 +816,28 @@ A `STALE_FAILSAFE` status means the cached whitelist is stale and the agent has 
 
 The `OpenPath-AgentUpdate` scheduled task runs `self-update --silent` daily at 3 am (with a random delay of up to 45 minutes).
 
+#### Interrupted or rejected self-updates
+
+A self-update now validates the staged tree before it touches the installed files:
+
+1. Every staged `.ps1`, `.psm1` and `.json` file is parsed under the system Windows PowerShell. A syntax error rejects the release and leaves the running version unchanged.
+2. Before the first file is replaced, the updater writes `data\agent-update\update-journal.json`. Every scheduled task entry script and `OpenPath.ps1` runs `scripts\Recover-OpenPathAgentUpdate.ps1` before loading any module, so a machine powered off mid-replacement is rolled back to the previous version on the next task start.
+3. After replacement, a fresh Windows PowerShell process loads the module set used by the scheduled tasks and checks that the required commands exist. If that gate fails, the files are restored from `data\agent-update\backups\`, the config version, scheduled tasks and integrity baseline are left untouched, and the update reports `DEGRADED`.
+
+A release that fails validation or the health gate is recorded in `data\agent-update\failed-update.json`. The same build is skipped for seven days, then retried in case the failure was environmental. Publishing a different build clears the record automatically. To retry immediately, delete that file and run the update explicitly:
+
+```powershell
+Remove-Item "C:\OpenPath\data\agent-update\failed-update.json" -Force
+.\OpenPath.ps1 self-update
+```
+
+A completed rollback leaves `data\agent-update\recovery-report.json`; the watchdog sends it in its next health report and removes it. The journal is deleted only after a successful commit or a completed rollback, so an operator can inspect a stuck recovery with:
+
+```powershell
+Get-Content "C:\OpenPath\data\agent-update\update-journal.json" -Raw
+Get-Content "C:\OpenPath\data\agent-update\failed-update.json" -Raw
+```
+
 ## Useful Files
 
 - `C:\OpenPath\data\config.json` - runtime configuration (API URL, whitelist URL, enrollment state, version)
@@ -825,6 +847,10 @@ The `OpenPath-AgentUpdate` scheduled task runs `self-update --silent` daily at 3
 - `C:\OpenPath\data\whitelist.verified` - last time the server confirmed the cached whitelist is current
 - `C:\OpenPath\data\integrity-baseline.json` - integrity hashes for critical files
 - `C:\OpenPath\data\integrity-backup\` - backup copies used for integrity restoration
+- `C:\OpenPath\data\agent-update\update-journal.json` - present while an update is in flight or needs recovery
+- `C:\OpenPath\data\agent-update\backups\` - per-version file backups used by update rollback and recovery
+- `C:\OpenPath\data\agent-update\failed-update.json` - target build rejected by validation or the health gate
+- `C:\OpenPath\data\agent-update\recovery-report.json` - pending recovery health report, removed after it is sent
 - `C:\OpenPath\data\captive-portal-active.json` - present when captive portal mode is active
 - `C:\OpenPath\data\captive-portal-observation.json` - captive portal state observation log
 - `C:\OpenPath\data\runtime-dependency-queue\` - queued browser-requested dependency hosts
