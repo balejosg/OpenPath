@@ -3696,23 +3696,25 @@ Describe "Watchdog committed update journal" {
         function New-WatchdogJournalRoot {
             param(
                 [string]$Phase = 'committed',
-                [DateTimeOffset]$UpdatedAt = [DateTimeOffset]::UtcNow.AddMinutes(-11)
+                [DateTimeOffset]$UpdatedAt = [DateTimeOffset]::UtcNow.AddMinutes(-11),
+                [int]$FinalizationAttempts = 0
             )
 
             $root = Join-Path $TestDrive ('watchdog-journal-' + [guid]::NewGuid().ToString('N'))
             $updateRoot = Join-Path $root 'data/agent-update'
             New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
             [PSCustomObject]@{
-                schemaVersion   = 2
-                phase           = $Phase
-                targetVersion   = '9.9.9'
-                targetBuild     = 'build-new'
-                previousVersion = '9.9.8'
-                previousBuild   = 'build-old'
-                backupRoot      = (Join-Path $updateRoot 'backups/run-test')
-                createdAt       = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
-                updatedAt       = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
-                files           = @()
+                schemaVersion        = 2
+                phase                = $Phase
+                targetVersion        = '9.9.9'
+                targetBuild          = 'build-new'
+                previousVersion      = '9.9.8'
+                previousBuild        = 'build-old'
+                backupRoot           = (Join-Path $updateRoot 'backups/run-test')
+                createdAt            = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt            = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                finalizationAttempts = $FinalizationAttempts
+                files                = @()
             } | ConvertTo-Json -Depth 10 |
                 Set-Content -LiteralPath (Join-Path $updateRoot 'update-journal.json') -Encoding UTF8
             return $root
@@ -3774,6 +3776,50 @@ Describe "Watchdog committed update journal" {
         @($global:OpenPathTestStartedTasks).Count | Should -Be 0
     }
 
+    It "Starts the update task after two attempts and eleven minutes" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11)) -FinalizationAttempts 2
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeTrue
+        $global:OpenPathTestStartedTasks | Should -Contain 'OpenPath-AgentUpdate'
+    }
+
+    It "Does not start the update task after three attempts and eleven minutes" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11)) -FinalizationAttempts 3
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Starts the update task after three attempts and twenty-five hours" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddHours(-25)) -FinalizationAttempts 3
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeTrue
+        $global:OpenPathTestStartedTasks | Should -Contain 'OpenPath-AgentUpdate'
+    }
+
+    It "Starts the update task named by the scheduled task catalog" {
+        $root = New-WatchdogJournalRoot -Phase 'committed' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11))
+        Mock Get-OpenPathScheduledTaskCatalog {
+            [PSCustomObject]@{
+                Tasks = [PSCustomObject]@{
+                    AgentUpdate = [PSCustomObject]@{ Name = 'OpenPath-CatalogAgentUpdate' }
+                }
+            }
+        }
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeTrue
+        $global:OpenPathTestStartedTasks | Should -Contain 'OpenPath-CatalogAgentUpdate'
+        $global:OpenPathTestStartedTasks | Should -Not -Contain 'OpenPath-AgentUpdate'
+    }
+
     It "Does not start the update task for a journal in another phase" {
         $root = New-WatchdogJournalRoot -Phase 'replacing' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11))
 
@@ -3811,7 +3857,8 @@ Describe "Watchdog committed update journal" {
         $resumeStart = $content.IndexOf('Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $OpenPathRoot')
         $restoreStart = $content.IndexOf('Restore-OpenPathIntegrity -IntegrityResult')
 
-        $content | Should -Match 'OpenPath-AgentUpdate'
+        $content | Should -Match 'Get-OpenPathScheduledTaskCatalog'
+        $content | Should -Not -Match "Start-ScheduledTask -TaskName 'OpenPath-AgentUpdate'"
         $content | Should -Match 'self_update_finalization_retry_failed'
         $resumeStart | Should -BeGreaterThan -1
         $restoreStart | Should -BeGreaterThan $resumeStart

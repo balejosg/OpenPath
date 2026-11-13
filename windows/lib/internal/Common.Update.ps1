@@ -238,6 +238,25 @@ function Test-OpenPathAgentUpdateFailureBackoffActive {
     return (($Now - $failedAt).TotalDays -lt 7)
 }
 
+function Test-OpenPathAgentUpdateTargetsMatch {
+    <#
+    .SYNOPSIS
+        Compares two update targets, preferring the build when both sides have one
+    #>
+    param(
+        [string]$VersionA = '',
+        [string]$BuildA = '',
+        [string]$VersionB = '',
+        [string]$BuildB = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($BuildA) -and -not [string]::IsNullOrWhiteSpace($BuildB)) {
+        return [string]::Equals($BuildA, $BuildB, [System.StringComparison]::OrdinalIgnoreCase)
+    }
+
+    return [string]::Equals($VersionA, $VersionB, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function ConvertTo-OpenPathAgentUpdateReasonCode {
     param(
         [Parameter(Mandatory = $true)][string]$Stage,
@@ -697,6 +716,60 @@ function Remove-OpenPathAgentUpdateBackupDirectories {
     }
 }
 
+function Remove-OpenPathAgentUpdateRunBackupDirectory {
+    <#
+    .SYNOPSIS
+        Removes a failed run's backup directory unless a journal still points to it
+    .DESCRIPTION
+        A run that failed before writing its journal, or that completed its
+        rollback, leaves no updater state behind. A journal on disk that names
+        the same backup root means the rollback is incomplete, so keep it.
+    #>
+    param(
+        [string]$OpenPathRoot = $script:OpenPathRoot,
+        [string]$BackupRoot = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($BackupRoot)) {
+        return
+    }
+
+    $backupsRoot = Join-Path (Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot) 'backups'
+    $allowedPrefix = [System.IO.Path]::GetFullPath($backupsRoot).TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+    try {
+        $resolvedBackupRoot = [System.IO.Path]::GetFullPath($BackupRoot)
+    }
+    catch {
+        return
+    }
+
+    if (-not $resolvedBackupRoot.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    $journalPath = Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $OpenPathRoot
+    if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+        try {
+            $journal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            $journalBackupRoot = [string]$journal.backupRoot
+            if (-not [string]::IsNullOrWhiteSpace($journalBackupRoot)) {
+                $resolvedJournalBackupRoot = [System.IO.Path]::GetFullPath($journalBackupRoot)
+                if ([string]::Equals($resolvedJournalBackupRoot, $resolvedBackupRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return
+                }
+            }
+        }
+        catch {
+            # An unreadable journal is not proof that this directory is unused.
+            return
+        }
+    }
+
+    if (Test-Path -LiteralPath $resolvedBackupRoot) {
+        Remove-Item -LiteralPath $resolvedBackupRoot -Recurse -Force -ErrorAction Stop
+    }
+}
+
 function Test-OpenPathAgentUpdateJournalTargetHashes {
     <#
     .SYNOPSIS
@@ -794,14 +867,37 @@ function Complete-OpenPathAgentUpdateFinalization {
     $targetVersion = [string]$Journal.targetVersion
     $targetBuild = [string]$Journal.targetBuild
     $step = 'journal'
+    $failureCode = ''
 
     try {
         if ([string]$Journal.phase -ne 'committed') {
             throw "Journal phase is not committed: $($Journal.phase)"
         }
 
-        # Every attempt refreshes updatedAt so the watchdog spaces retries.
+        # Verify the installed tree before anything else. A hash mismatch must
+        # not touch the config, the tasks, protected mode or the integrity data,
+        # because those steps restart the local DNS proxy.
+        $step = 'integrity-verification'
+        $targetCheck = Test-OpenPathAgentUpdateJournalTargetHashes -OpenPathRoot $OpenPathRoot -Journal $Journal
+
+        # Every attempt refreshes updatedAt so the watchdog spaces retries, and
+        # counts the attempt in the same journal write.
+        $attempts = 0
+        if ($Journal.PSObject.Properties['finalizationAttempts']) {
+            try {
+                $attempts = [int]$Journal.finalizationAttempts
+            }
+            catch {
+                $attempts = 0
+            }
+        }
+        $Journal | Add-Member -NotePropertyName finalizationAttempts -NotePropertyValue ($attempts + 1) -Force
         Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot $OpenPathRoot -Journal $Journal -Phase 'committed'
+
+        if (-not $targetCheck.Complete) {
+            $failureCode = 'hash_mismatch'
+            throw ("Installed files do not match the journal target hashes: " + (@($targetCheck.Errors) -join '; '))
+        }
 
         $step = 'config'
         if (-not $Config) {
@@ -900,12 +996,6 @@ function Complete-OpenPathAgentUpdateFinalization {
             Start-OpenPathTask -TaskType SSE | Out-Null
         }
 
-        $step = 'integrity-verification'
-        $targetCheck = Test-OpenPathAgentUpdateJournalTargetHashes -OpenPathRoot $OpenPathRoot -Journal $Journal
-        if (-not $targetCheck.Complete) {
-            throw ("Installed files do not match the journal target hashes: " + (@($targetCheck.Errors) -join '; '))
-        }
-
         # Refresh the integrity data only from a tree proven to be the target
         # build. Otherwise the watchdog would treat a mixed tree as trusted.
         $step = 'integrity'
@@ -927,6 +1017,7 @@ function Complete-OpenPathAgentUpdateFinalization {
         return [PSCustomObject]@{
             Success = $true
             Message = ''
+            FailureCode = ''
         }
     }
     catch {
@@ -938,9 +1029,13 @@ function Complete-OpenPathAgentUpdateFinalization {
             # Logging must never change the finalization outcome.
         }
         Send-OpenPathAgentUpdateFinalizationFailureReport -Version $targetVersion -Build $targetBuild -Message $message
+        if ([string]::IsNullOrWhiteSpace($failureCode)) {
+            $failureCode = 'finalization_failed'
+        }
         return [PSCustomObject]@{
             Success = $false
             Message = $message
+            FailureCode = $failureCode
         }
     }
 }
@@ -1112,9 +1207,14 @@ function Invoke-OpenPathAgentSelfUpdate {
     }
 
     # A committed journal means the new tree already passed the health gate.
-    # Finish its follow-up work before a new update downloads anything.
+    # Finish its follow-up work before a new update downloads anything. If that
+    # finalization fails, the manifest still decides whether a new build can be
+    # installed instead of returning at once.
     $journalPath = Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $script:OpenPathRoot
     $pendingJournal = $null
+    $pendingFinalizationFailure = $null
+    $pendingJournalTargetVersion = ''
+    $pendingJournalTargetBuild = ''
     if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
         try {
             $pendingJournal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
@@ -1122,6 +1222,10 @@ function Invoke-OpenPathAgentSelfUpdate {
         catch {
             $pendingJournal = $null
         }
+    }
+    if ($pendingJournal -and [string]$pendingJournal.phase -eq 'committed') {
+        $pendingJournalTargetVersion = [string]$pendingJournal.targetVersion
+        $pendingJournalTargetBuild = [string]$pendingJournal.targetBuild
     }
 
     if ($pendingJournal -and [string]$pendingJournal.phase -eq 'committed') {
@@ -1140,31 +1244,31 @@ function Invoke-OpenPathAgentSelfUpdate {
             if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
                 $pendingJournal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
                 if ([string]$pendingJournal.phase -eq 'committed') {
+                    $pendingJournalTargetVersion = [string]$pendingJournal.targetVersion
+                    $pendingJournalTargetBuild = [string]$pendingJournal.targetBuild
                     $pendingFinalization = Complete-OpenPathAgentUpdateFinalization `
                         -OpenPathRoot $script:OpenPathRoot `
                         -Journal $pendingJournal `
                         -Config $config
                     if (-not $pendingFinalization.Success) {
-                        $message = "Agent self-update finalization failed: $($pendingFinalization.Message)"
-                        Write-SelfUpdateMessage -Message $message -Level ERROR
-                        return [PSCustomObject]@{
-                            Success = $false
-                            Updated = $false
-                            Message = $message
-                        }
+                        $pendingFinalizationFailure = $pendingFinalization
+                        Write-SelfUpdateMessage `
+                            -Message "Agent self-update finalization failed: $($pendingFinalization.Message); checking the published manifest before deciding whether to install it" `
+                            -Level WARN
                     }
-                    Write-SelfUpdateMessage -Message 'Completed an interrupted agent update finalization'
+                    else {
+                        Write-SelfUpdateMessage -Message 'Completed an interrupted agent update finalization'
+                    }
                 }
             }
         }
         catch {
-            $message = "Could not complete the committed agent update journal: $_"
-            Write-SelfUpdateMessage -Message $message -Level ERROR
-            return [PSCustomObject]@{
-                Success = $false
-                Updated = $false
-                Message = $message
+            $pendingFinalizationFailure = [PSCustomObject]@{
+                Success     = $false
+                Message     = "Could not complete the committed agent update journal: $_"
+                FailureCode = 'finalization_failed'
             }
+            Write-SelfUpdateMessage -Message $pendingFinalizationFailure.Message -Level WARN
         }
         finally {
             Exit-OpenPathAgentUpdateLock -Lock $pendingFinalizationLock
@@ -1181,6 +1285,15 @@ function Invoke-OpenPathAgentSelfUpdate {
     }
 
     if (-not $apiUrl -or -not $whitelistUrl) {
+        if ($pendingFinalizationFailure) {
+            $message = "Agent self-update finalization failed: $($pendingFinalizationFailure.Message)"
+            Write-SelfUpdateMessage -Message $message -Level ERROR
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
+        }
         $message = 'Classroom mode is not configured; self-update skipped'
         Write-SelfUpdateMessage -Message $message -Level WARN
         return [PSCustomObject]@{
@@ -1192,6 +1305,15 @@ function Invoke-OpenPathAgentSelfUpdate {
 
     $machineToken = Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl $whitelistUrl
     if (-not $machineToken) {
+        if ($pendingFinalizationFailure) {
+            $message = "Agent self-update finalization failed: $($pendingFinalizationFailure.Message)"
+            Write-SelfUpdateMessage -Message $message -Level ERROR
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
+        }
         $message = 'Could not extract machine token from whitelist URL'
         Write-SelfUpdateMessage -Message $message -Level ERROR
         return [PSCustomObject]@{
@@ -1209,6 +1331,16 @@ function Invoke-OpenPathAgentSelfUpdate {
         $manifest = Invoke-RestMethod -Uri "$apiBaseUrl/api/agent/windows/manifest" -Method Get -Headers $headers -TimeoutSec 30 -ErrorAction Stop
     }
     catch {
+        if ($pendingFinalizationFailure) {
+            Write-SelfUpdateMessage -Message "Manifest download failed while a committed update is stuck: $_" -Level WARN
+            $message = "Agent self-update finalization failed: $($pendingFinalizationFailure.Message)"
+            Write-SelfUpdateMessage -Message $message -Level ERROR
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
+        }
         $message = "Manifest download failed: $_"
         Write-SelfUpdateMessage -Message $message -Level WARN
         return [PSCustomObject]@{
@@ -1219,6 +1351,15 @@ function Invoke-OpenPathAgentSelfUpdate {
     }
 
     if (-not $manifest -or -not $manifest.version -or -not $manifest.files) {
+        if ($pendingFinalizationFailure) {
+            $message = "Agent self-update finalization failed: $($pendingFinalizationFailure.Message)"
+            Write-SelfUpdateMessage -Message $message -Level ERROR
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
+        }
         $message = 'Invalid manifest payload received from server'
         Write-SelfUpdateMessage -Message $message -Level ERROR
         return [PSCustomObject]@{
@@ -1233,7 +1374,38 @@ function Invoke-OpenPathAgentSelfUpdate {
     $targetBuild = if ($manifest.PSObject.Properties['build'] -and $manifest.build) { [string]$manifest.build } else { '' }
     $updateNeeded = Test-OpenPathAgentUpdateNeeded -CurrentVersion $currentVersion -CurrentBuild $currentBuild `
         -TargetVersion $targetVersion -TargetBuild $targetBuild
-    if (-not $updateNeeded) {
+
+    # A stuck finalization must not block a build that can fix the machine.
+    # The journal's target decides whether the published build is different.
+    $installPublishedBuild = $false
+    if ($pendingFinalizationFailure) {
+        $publishedBuildLabel = if ($targetBuild) { $targetBuild } else { '(none)' }
+        $stuckBuildLabel = if ($pendingJournalTargetBuild) { $pendingJournalTargetBuild } else { '(none)' }
+        if ([string]$pendingFinalizationFailure.FailureCode -eq 'hash_mismatch') {
+            $installPublishedBuild = $true
+            Write-SelfUpdateMessage -Message "Finalization failed at the target hash check; installing the published build $targetVersion build $publishedBuildLabel even if it matches the stuck target" -Level WARN
+        }
+        elseif (-not (Test-OpenPathAgentUpdateTargetsMatch `
+                    -VersionA $targetVersion `
+                    -BuildA $targetBuild `
+                    -VersionB $pendingJournalTargetVersion `
+                    -BuildB $pendingJournalTargetBuild)) {
+            $installPublishedBuild = $true
+            Write-SelfUpdateMessage -Message "Finalization failed for the stuck target $pendingJournalTargetVersion build $stuckBuildLabel; the server publishes $targetVersion build $publishedBuildLabel, so the published build is installed" -Level WARN
+        }
+        else {
+            Write-SelfUpdateMessage -Message "Finalization failed for the stuck target $pendingJournalTargetVersion build $stuckBuildLabel; the server still publishes that target, so the committed journal is kept for the next bounded retry" -Level WARN
+            $message = "Agent self-update finalization failed: $($pendingFinalizationFailure.Message)"
+            Write-SelfUpdateMessage -Message $message -Level ERROR
+            return [PSCustomObject]@{
+                Success = $false
+                Updated = $false
+                Message = $message
+            }
+        }
+    }
+
+    if (-not $updateNeeded -and -not $installPublishedBuild) {
         $message = "Agent already up to date (current=$currentVersion)"
         Write-SelfUpdateMessage -Message $message
         # Phase 5.2 D2: the periodic Update task also retries the compiled
@@ -1304,6 +1476,7 @@ function Invoke-OpenPathAgentSelfUpdate {
 
     $updateLock = $null
     $updateJournal = $null
+    $runBackupRoot = $null
     $failureStage = $null
     $updateCommitted = $false
     $replacementStarted = $false
@@ -1336,6 +1509,7 @@ function Invoke-OpenPathAgentSelfUpdate {
         $updateRoot = Join-Path (Join-Path $script:OpenPathRoot 'data') 'agent-update'
         $stagingRoot = Join-Path $updateRoot ("staging-$targetVersion")
         $backupRoot = New-OpenPathAgentUpdateBackupRoot -OpenPathRoot $script:OpenPathRoot
+        $runBackupRoot = $backupRoot
 
         if (Test-Path $stagingRoot) {
             Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -1596,6 +1770,19 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
     }
     finally {
+        if ($runBackupRoot -and -not $updateCommitted) {
+            try {
+                Remove-OpenPathAgentUpdateRunBackupDirectory -OpenPathRoot $script:OpenPathRoot -BackupRoot $runBackupRoot
+            }
+            catch {
+                try {
+                    Write-OpenPathLog "Self-update: could not remove the failed run backup directory: $_" -Level WARN
+                }
+                catch {
+                    # Cleanup must never change the update outcome.
+                }
+            }
+        }
         Exit-OpenPathAgentUpdateLock -Lock $updateLock
     }
 }

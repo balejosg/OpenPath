@@ -84,7 +84,7 @@ function Restore-CheckpointFromWatchdog {
 . (Join-Path $PSScriptRoot 'EndpointStateReconciler.ps1')
 . (Join-Path $PSScriptRoot 'Watchdog.CaptivePortalPolicy.ps1')
 
-if (-not (Get-Command -Name 'Get-OpenPathScheduledTaskSpec' -ErrorAction SilentlyContinue)) {
+if (-not (Get-Command -Name 'Get-OpenPathScheduledTaskCatalog' -ErrorAction SilentlyContinue)) {
     $scheduledTaskCatalogPath = Join-Path $PSScriptRoot 'ScheduledTaskCatalog.ps1'
     if (Test-Path -LiteralPath $scheduledTaskCatalogPath) {
         . $scheduledTaskCatalogPath
@@ -1121,14 +1121,17 @@ function Invoke-OpenPathWatchdogPendingUpdateFinalization {
     .DESCRIPTION
         Finalization re-registers the scheduled tasks, including this watchdog,
         so it must run in the AgentUpdate task process, never in the watchdog.
-        A committed journal whose updatedAt is at least ten minutes old, with a
-        free update lock, means the update task should finish it. A start
-        failure is reported with one stable reason code and no fallback route.
+        A committed journal is retried after ten minutes while it has fewer
+        than three finalization attempts; from the third attempt on it is
+        retried once a day. A free update lock means the update task should
+        finish it. A start failure is reported with one stable reason code and
+        no fallback route.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$OpenPathRoot,
         [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow,
-        [int]$StaleMinutes = 10
+        [int]$StaleMinutes = 10,
+        [int]$LongRetryMinutes = 1440
     )
 
     $journalPath = [System.IO.Path]::Combine($OpenPathRoot, 'data', 'agent-update', 'update-journal.json')
@@ -1155,6 +1158,16 @@ function Invoke-OpenPathWatchdogPendingUpdateFinalization {
         return $result
     }
 
+    $attempts = 0
+    if ($journal.PSObject.Properties['finalizationAttempts']) {
+        try {
+            $attempts = [int]$journal.finalizationAttempts
+        }
+        catch {
+            $attempts = 0
+        }
+    }
+
     $updatedAt = [DateTimeOffset]::MinValue
     $hasUpdatedAt = [DateTimeOffset]::TryParse(
         [string]$journal.updatedAt,
@@ -1171,11 +1184,26 @@ function Invoke-OpenPathWatchdogPendingUpdateFinalization {
         }
     }
 
-    if (($Now - $updatedAt).TotalMinutes -lt $StaleMinutes) {
+    $requiredStaleMinutes = if ($attempts -ge 3) { $LongRetryMinutes } else { $StaleMinutes }
+    if (($Now - $updatedAt).TotalMinutes -lt $requiredStaleMinutes) {
         return $result
     }
 
     if (-not (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
+        return $result
+    }
+    if (-not (Get-Command -Name 'Get-OpenPathScheduledTaskCatalog' -ErrorAction SilentlyContinue)) {
+        return $result
+    }
+
+    $taskName = ''
+    try {
+        $taskName = [string](Get-OpenPathScheduledTaskCatalog).Tasks.AgentUpdate.Name
+    }
+    catch {
+        return $result
+    }
+    if ([string]::IsNullOrWhiteSpace($taskName)) {
         return $result
     }
 
@@ -1185,13 +1213,13 @@ function Invoke-OpenPathWatchdogPendingUpdateFinalization {
     }
 
     try {
-        Start-ScheduledTask -TaskName 'OpenPath-AgentUpdate' -ErrorAction Stop
+        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
         $result.RetryStarted = $true
         return $result
     }
     catch {
         $result.ReasonCode = 'self_update_finalization_retry_failed'
-        $result.Message = "Could not start OpenPath-AgentUpdate to finish a committed update: $_"
+        $result.Message = "Could not start $taskName to finish a committed update: $_"
         return $result
     }
     finally {
@@ -1573,7 +1601,7 @@ function Invoke-OpenPathWatchdogChecks {
             try {
                 $pendingFinalization = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $OpenPathRoot
                 if ($pendingFinalization.RetryStarted) {
-                    Write-OpenPathLog 'Watchdog: started OpenPath-AgentUpdate to finish the committed update' -Level WARN
+                    Write-OpenPathLog 'Watchdog: started the update task to finish the committed update' -Level WARN
                 }
                 elseif ($pendingFinalization.ReasonCode) {
                     & $addReasonCode ([string]$pendingFinalization.ReasonCode)
