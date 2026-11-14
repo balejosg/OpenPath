@@ -1965,6 +1965,249 @@ Describe "Update Script" {
         }
     }
 
+    Context "Self-update blocked repair" {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+
+            function Write-RepairState {
+                param(
+                    [Parameter(Mandatory = $true)][string]$Root,
+                    [int]$RepairAttempts = 0,
+                    [int]$MinutesAgo = -1
+                )
+
+                $updateRoot = Join-Path $Root 'data/agent-update'
+                New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+                $lastRepairAt = if ($MinutesAgo -ge 0) {
+                    [DateTime]::UtcNow.AddMinutes(-$MinutesAgo).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                }
+                else {
+                    ''
+                }
+                [PSCustomObject]@{
+                    schemaVersion  = 1
+                    state          = 'blocked'
+                    reasonCode     = 'self_update_recovery_journal_unreadable'
+                    attempts       = 1
+                    firstSeenAt    = [DateTime]::UtcNow.AddHours(-1).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                    lastAttemptAt  = [DateTime]::UtcNow.AddHours(-1).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                    repairAttempts = $RepairAttempts
+                    lastRepairAt   = $lastRepairAt
+                    runId          = 'run-blocked'
+                } | ConvertTo-Json -Depth 5 |
+                    Set-Content -LiteralPath (Join-Path $updateRoot 'recovery-state.json') -Encoding UTF8
+            }
+        }
+
+        It "Forces the published build over a blocked tree even when version and build match" {
+            $root = Join-Path $TestDrive ('update-repair-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/changed.ps1'
+            $unchangedDestination = Join-Path $root 'lib/unchanged.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'old' -Encoding ASCII
+            Set-Content -LiteralPath $unchangedDestination -Value 'same' -Encoding ASCII
+            (Get-Item -LiteralPath $unchangedDestination).LastWriteTimeUtc = [DateTime]::UtcNow.AddYears(-2)
+            $unchangedTimestamp = (Get-Item -LiteralPath $unchangedDestination).LastWriteTimeUtc
+
+            $staged = Join-Path $TestDrive ('repair-staged-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            $stagedUnchanged = Join-Path $TestDrive ('repair-staged-unchanged-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $staged -Value 'new' -Encoding ASCII
+            Set-Content -LiteralPath $stagedUnchanged -Value 'same' -Encoding ASCII
+            $changedHash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant()
+            $unchangedHash = (Get-FileHash -LiteralPath $stagedUnchanged -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @(
+                    [PSCustomObject]@{ path = 'lib/changed.ps1'; sha256 = $changedHash },
+                    [PSCustomObject]@{ path = 'lib/unchanged.ps1'; sha256 = $unchangedHash }
+                )
+            }
+            Write-RepairState -Root $root
+
+            InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest; Staged = $staged; StagedUnchanged = $stagedUnchanged; UnchangedTimestamp = $unchangedTimestamp } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TestStaged = $Staged
+                $script:TestStagedUnchanged = $StagedUnchanged
+                $script:Captured = @{ Config = $null; GateCalls = 0 }
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.9'
+                        agentBuild   = 'build-new'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest {
+                    param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                    $source = if ($Uri -match 'unchanged\.ps1$') { $script:TestStagedUnchanged } else { $script:TestStaged }
+                    Copy-Item -LiteralPath $source -Destination $OutFile -Force
+                }
+                Mock Write-OpenPathLog { }
+                Mock Set-OpenPathConfig { $script:Captured.Config = $Config }
+                Mock Save-OpenPathIntegrityBackup { }
+                Mock New-OpenPathIntegrityBaseline { }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { }
+                Mock Enable-OpenPathTask { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Send-OpenPathHealthReport { }
+                Mock Invoke-OpenPathAgentUpdateHealthGate {
+                    $script:Captured.GateCalls++
+                    [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false }
+                }
+
+                $result = Invoke-OpenPathAgentSelfUpdate -Silent
+
+                $result.Success | Should -BeTrue -Because $result.Message
+                $result.Updated | Should -BeTrue -Because $result.Message
+                $script:Captured.GateCalls | Should -Be 1
+                (Get-Content -LiteralPath (Join-Path $Root 'lib/changed.ps1') -Raw).Trim() | Should -Be 'new'
+                (Get-Item -LiteralPath (Join-Path $Root 'lib/unchanged.ps1')).LastWriteTimeUtc | Should -Be $UnchangedTimestamp
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateRecoveryStatePath -OpenPathRoot $Root) | Should -BeFalse
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root) | Should -BeFalse
+            }
+        }
+
+        It "Repairs a blocked tree even when the target build has a failed-build record" {
+            $root = Join-Path $TestDrive ('update-repair-backoff-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'old' -Encoding ASCII
+
+            $staged = Join-Path $TestDrive ('repair-staged-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $staged -Value 'new' -Encoding ASCII
+            $hash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $hash })
+            }
+            Write-RepairState -Root $root
+            [PSCustomObject]@{
+                schemaVersion = 1
+                version       = '9.9.9'
+                build         = 'build-new'
+                stage         = 'gate'
+                message       = 'previous failure'
+                failedAt      = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            } | ConvertTo-Json -Depth 5 |
+                Set-Content -LiteralPath (Join-Path $root 'data/agent-update/failed-update.json') -Encoding UTF8
+
+            InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest; Staged = $staged } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TestStaged = $Staged
+                $script:GateCalls = 0
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.8'
+                        agentBuild   = 'build-old'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest {
+                    param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                    Copy-Item -LiteralPath $script:TestStaged -Destination $OutFile -Force
+                }
+                Mock Write-OpenPathLog { }
+                Mock Set-OpenPathConfig { }
+                Mock Save-OpenPathIntegrityBackup { }
+                Mock New-OpenPathIntegrityBaseline { }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { }
+                Mock Enable-OpenPathTask { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Send-OpenPathHealthReport { }
+                Mock Invoke-OpenPathAgentUpdateHealthGate {
+                    $script:GateCalls++
+                    [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false }
+                }
+
+                $result = Invoke-OpenPathAgentSelfUpdate -Silent
+
+                $result.Success | Should -BeTrue
+                $result.Updated | Should -BeTrue
+                $script:GateCalls | Should -Be 1
+                (Get-Content -LiteralPath (Join-Path $Root 'lib/existing.ps1') -Raw).Trim() | Should -Be 'new'
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root) | Should -BeFalse
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateRecoveryStatePath -OpenPathRoot $Root) | Should -BeFalse
+            }
+        }
+
+        It "Does not start a repair before its <Case> bound" -ForEach @(
+            @{ Case = 'ten-minute'; RepairAttempts = 1; MinutesAgo = 5 }
+            @{ Case = 'daily'; RepairAttempts = 3; MinutesAgo = 60 }
+        ) {
+            $root = Join-Path $TestDrive ('update-repair-bound-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'old' -Encoding ASCII
+
+            $staged = Join-Path $TestDrive ('repair-staged-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $staged -Value 'new' -Encoding ASCII
+            $hash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $hash })
+            }
+            $attempts = if ($Case -eq 'ten-minute') { 1 } else { 3 }
+            $minutesAgo = if ($Case -eq 'ten-minute') { 5 } else { 60 }
+            Write-RepairState -Root $root -RepairAttempts $attempts -MinutesAgo $minutesAgo
+
+            InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest; Staged = $staged } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TestStaged = $Staged
+                $script:GateCalls = 0
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.8'
+                        agentBuild   = 'build-old'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest {
+                    param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                    Copy-Item -LiteralPath $script:TestStaged -Destination $OutFile -Force
+                }
+                Mock Write-OpenPathLog { }
+                Mock Invoke-OpenPathAgentUpdateHealthGate {
+                    $script:GateCalls++
+                    [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false }
+                }
+
+                $result = Invoke-OpenPathAgentSelfUpdate -Silent
+
+                $result.Success | Should -BeTrue -Because $result.Message
+                $result.Updated | Should -BeFalse -Because $result.Message
+                $script:GateCalls | Should -Be 0
+                (Get-Content -LiteralPath (Join-Path $Root 'lib/existing.ps1') -Raw).Trim() | Should -Be 'old'
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateRecoveryStatePath -OpenPathRoot $Root) | Should -BeTrue
+            }
+        }
+    }
+
     Context "Self-update health gate and failure backoff" {
         BeforeAll {
             Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global

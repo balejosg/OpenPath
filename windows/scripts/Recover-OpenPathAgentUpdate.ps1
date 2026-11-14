@@ -303,7 +303,14 @@ function Write-OpenPathRecoveryReport {
 }
 
 function ConvertTo-OpenPathRecoveryDateTimeOffset {
-    param([string]$Value)
+    param([object]$Value)
+
+    if ($Value -is [DateTimeOffset]) {
+        return [DateTimeOffset]$Value
+    }
+    if ($Value -is [DateTime]) {
+        return [DateTimeOffset]$Value
+    }
 
     $parsed = [DateTimeOffset]::MinValue
     $ok = [DateTimeOffset]::TryParse(
@@ -509,7 +516,7 @@ function Get-OpenPathRecoveryRunIntents {
             RunId      = $runId
             BackupRoot = $directory.FullName
             IntentPath = $intentPath
-            CreatedAt  = ConvertTo-OpenPathRecoveryDateTimeOffset -Value ([string]$record.createdAt)
+            CreatedAt  = ConvertTo-OpenPathRecoveryDateTimeOffset -Value $record.createdAt
         })
     }
 
@@ -943,7 +950,7 @@ try {
             Write-OpenPathRecoveryLog 'Recovery state is blocked; skipping hashing until the updater repairs the tree'
             return
         }
-        $lastAttemptAt = ConvertTo-OpenPathRecoveryDateTimeOffset -Value ([string]$stateInfo.State.lastAttemptAt)
+        $lastAttemptAt = ConvertTo-OpenPathRecoveryDateTimeOffset -Value $stateInfo.State.lastAttemptAt
         if ($lastAttemptAt -ne [DateTimeOffset]::MinValue -and
             ([DateTimeOffset]::UtcNow - $lastAttemptAt).TotalMinutes -lt 10) {
             Write-OpenPathRecoveryLog 'Recovery is retrying and its ten-minute backoff is still active'

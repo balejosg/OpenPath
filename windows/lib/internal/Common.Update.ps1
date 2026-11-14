@@ -213,6 +213,155 @@ function Test-OpenPathAgentUpdateCommitEvidence {
     return ($null -ne (Read-OpenPathAgentUpdateCommittedMarker -MarkerPath $markerPath -RunId $runId))
 }
 
+function Read-OpenPathAgentUpdateRecoveryState {
+    <#
+    .SYNOPSIS
+        Reads recovery-state.json, treating an unreadable file as blocked
+    #>
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
+
+    $statePath = Get-OpenPathAgentUpdateRecoveryStatePath -OpenPathRoot $OpenPathRoot
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $schemaVersion = 0
+        [void][int]::TryParse([string]$state.schemaVersion, [ref]$schemaVersion)
+        if ($schemaVersion -ne 1 -or [string]$state.state -notin @('retrying', 'blocked')) {
+            throw 'unsupported recovery state'
+        }
+        return $state
+    }
+    catch {
+        return [PSCustomObject]@{
+            schemaVersion  = 1
+            state          = 'blocked'
+            reasonCode     = 'self_update_recovery_state_unreadable'
+            attempts       = 0
+            firstSeenAt    = ''
+            lastAttemptAt  = ''
+            repairAttempts = 0
+            lastRepairAt   = ''
+            runId          = ''
+            Unreadable     = $true
+        }
+    }
+}
+
+function Test-OpenPathAgentUpdateRecoveryBlocked {
+    param([AllowNull()][object]$State)
+
+    if (-not $State) {
+        return $false
+    }
+
+    return ([bool]$State.PSObject.Properties['Unreadable'] -or [string]$State.state -eq 'blocked')
+}
+
+function Test-OpenPathAgentUpdateRepairAllowed {
+    param(
+        [AllowNull()][object]$State,
+        [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow
+    )
+
+    $attempts = 0
+    if ($State -and $State.PSObject.Properties['repairAttempts']) {
+        try { $attempts = [int]$State.repairAttempts } catch { $attempts = 0 }
+    }
+
+    $requiredMinutes = if ($attempts -ge 3) { 1440 } else { 10 }
+    $lastRepairAt = [DateTimeOffset]::MinValue
+    if ($State -and $State.PSObject.Properties['lastRepairAt'] -and $null -ne $State.lastRepairAt) {
+        $value = $State.lastRepairAt
+        if ($value -is [DateTimeOffset]) {
+            $lastRepairAt = [DateTimeOffset]$value
+        }
+        elseif ($value -is [DateTime]) {
+            $lastRepairAt = [DateTimeOffset]$value
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $parsed = [DateTimeOffset]::MinValue
+            $ok = [DateTimeOffset]::TryParse(
+                [string]$value,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind,
+                [ref]$parsed
+            )
+            if ($ok) {
+                $lastRepairAt = $parsed
+            }
+        }
+    }
+
+    $waitedMinutes = if ($lastRepairAt -eq [DateTimeOffset]::MinValue) { [double]::PositiveInfinity } else { ($Now - $lastRepairAt).TotalMinutes }
+    return [PSCustomObject]@{
+        Allowed        = ($waitedMinutes -ge $requiredMinutes)
+        Attempts       = $attempts
+        RequiredMinutes = $requiredMinutes
+        WaitedMinutes  = $waitedMinutes
+    }
+}
+
+function Register-OpenPathAgentUpdateRepairAttempt {
+    param(
+        [string]$OpenPathRoot = $script:OpenPathRoot,
+        [AllowNull()][object]$State
+    )
+
+    $attempts = 0
+    $firstSeenAt = ''
+    $reasonCode = 'self_update_recovery_blocked'
+    $runId = ''
+    if ($State) {
+        if ($State.PSObject.Properties['repairAttempts']) {
+            try { $attempts = [int]$State.repairAttempts } catch { $attempts = 0 }
+        }
+        if ($State.PSObject.Properties['firstSeenAt']) {
+            $firstSeenAt = [string]$State.firstSeenAt
+        }
+        if ($State.PSObject.Properties['reasonCode'] -and -not [string]::IsNullOrWhiteSpace([string]$State.reasonCode)) {
+            $reasonCode = [string]$State.reasonCode
+        }
+        if ($State.PSObject.Properties['runId']) {
+            $runId = [string]$State.runId
+        }
+    }
+
+    $now = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+    if ([string]::IsNullOrWhiteSpace($firstSeenAt)) {
+        $firstSeenAt = $now
+    }
+    $record = [PSCustomObject]@{
+        schemaVersion  = 1
+        state          = 'blocked'
+        reasonCode     = $reasonCode
+        attempts       = 0
+        firstSeenAt    = $firstSeenAt
+        lastAttemptAt  = $now
+        repairAttempts = ($attempts + 1)
+        lastRepairAt   = $now
+        runId          = $runId
+    }
+    if ($State -and $State.PSObject.Properties['attempts']) {
+        try { $record.attempts = [int]$State.attempts } catch { }
+    }
+    Write-OpenPathAgentUpdateJsonFile `
+        -Path (Get-OpenPathAgentUpdateRecoveryStatePath -OpenPathRoot $OpenPathRoot) `
+        -Object $record
+    return $record
+}
+
+function Remove-OpenPathAgentUpdateRecoveryState {
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
+
+    $statePath = Get-OpenPathAgentUpdateRecoveryStatePath -OpenPathRoot $OpenPathRoot
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+        Remove-Item -LiteralPath $statePath -Force -ErrorAction Stop
+    }
+}
+
 function Copy-OpenPathAgentUpdateFileDurable {
     <#
     .SYNOPSIS
@@ -1490,6 +1639,8 @@ function Complete-OpenPathAgentUpdateFinalization {
         catch {
             Write-OpenPathLog "Self-update: could not clear the failed-build record: $_" -Level WARN
         }
+        $step = 'recovery-state-removal'
+        Remove-OpenPathAgentUpdateRecoveryState -OpenPathRoot $OpenPathRoot
 
         return [PSCustomObject]@{
             Success = $true
@@ -1808,6 +1959,21 @@ function Invoke-OpenPathAgentSelfUpdate {
 
     $apiUrl = if ($config.PSObject.Properties['apiUrl']) { [string]$config.apiUrl } else { '' }
     $whitelistUrl = if ($config.PSObject.Properties['whitelistUrl']) { [string]$config.whitelistUrl } else { '' }
+    $recoveryState = Read-OpenPathAgentUpdateRecoveryState -OpenPathRoot $script:OpenPathRoot
+    $repairRequired = Test-OpenPathAgentUpdateRecoveryBlocked -State $recoveryState
+    if ($repairRequired) {
+        $repairDecision = Test-OpenPathAgentUpdateRepairAllowed -State $recoveryState
+        if (-not $repairDecision.Allowed) {
+            $message = "Blocked agent update repair is waiting for its next bound ($($repairDecision.RequiredMinutes) minutes)"
+            Write-SelfUpdateMessage -Message $message -Level WARN
+            return [PSCustomObject]@{
+                Success = $true
+                Updated = $false
+                Message = $message
+            }
+        }
+    }
+
     $currentVersion = if ($config.PSObject.Properties['version'] -and $config.version) {
         [string]$config.version
     }
@@ -1936,6 +2102,11 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
     }
 
+    if ($repairRequired) {
+        $installPublishedBuild = $true
+        Write-SelfUpdateMessage -Message "Blocked recovery state; installing the published build $targetVersion build $targetBuild to repair the tree" -Level WARN
+    }
+
     if (-not $updateNeeded -and -not $installPublishedBuild) {
         $message = "Agent already up to date (current=$currentVersion)"
         Write-SelfUpdateMessage -Message $message
@@ -1977,7 +2148,7 @@ function Invoke-OpenPathAgentSelfUpdate {
     # after seven days the same build is attempted again in case the failure
     # was environmental.
     $failureRecord = Get-OpenPathAgentUpdateFailureRecord -OpenPathRoot $script:OpenPathRoot
-    if ($failureRecord -and (Test-OpenPathAgentUpdateFailureMatchesTarget -Record $failureRecord -TargetVersion $targetVersion -TargetBuild $targetBuild)) {
+    if (-not $repairRequired -and $failureRecord -and (Test-OpenPathAgentUpdateFailureMatchesTarget -Record $failureRecord -TargetVersion $targetVersion -TargetBuild $targetBuild)) {
         if (Test-OpenPathAgentUpdateFailureBackoffActive -Record $failureRecord) {
             $message = "Skipping previously failed agent update: $targetVersion build $targetBuild (failed at $($failureRecord.failedAt))"
             Write-SelfUpdateMessage -Message $message -Level WARN
@@ -2028,6 +2199,21 @@ function Invoke-OpenPathAgentSelfUpdate {
                 Updated = $false
                 Message = $message
             }
+        }
+
+        if ($repairRequired) {
+            $repairState = Read-OpenPathAgentUpdateRecoveryState -OpenPathRoot $script:OpenPathRoot
+            $repairDecision = Test-OpenPathAgentUpdateRepairAllowed -State $repairState
+            if (-not $repairDecision.Allowed) {
+                $message = "Blocked agent update repair is waiting for its next bound ($($repairDecision.RequiredMinutes) minutes)"
+                Write-SelfUpdateMessage -Message $message -Level WARN
+                return [PSCustomObject]@{
+                    Success = $true
+                    Updated = $false
+                    Message = $message
+                }
+            }
+            $recoveryState = Register-OpenPathAgentUpdateRepairAttempt -OpenPathRoot $script:OpenPathRoot -State $repairState
         }
 
         $manifestFiles = @($manifest.files)
