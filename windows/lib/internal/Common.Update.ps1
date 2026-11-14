@@ -96,22 +96,158 @@ function Get-OpenPathAgentUpdateSupersededJournalPath {
     return (Join-Path (Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot) 'superseded-update-journal.json')
 }
 
+function Copy-OpenPathAgentUpdateFileDurable {
+    <#
+    .SYNOPSIS
+        Copies a file once, flushes it to disk and returns the SHA-256 of the bytes written
+    .DESCRIPTION
+        Reads the source and writes the destination in the same pass, feeding the
+        incremental SHA-256 with exactly the bytes written. Flush($true) makes the
+        data durable before the caller gives the destination a visible name. The
+        destination is not replaced atomically by this helper; callers write to a
+        temp sibling or a backup path they own.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath,
+        [int]$BufferSize = 1048576
+    )
+
+    if ($BufferSize -lt 1) {
+        $BufferSize = 1048576
+    }
+
+    $destinationDirectory = Split-Path -Path $DestinationPath -Parent
+    if ($destinationDirectory -and -not (Test-Path -LiteralPath $destinationDirectory)) {
+        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+    }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $inputStream = $null
+    $outputStream = $null
+    try {
+        $inputStream = [System.IO.File]::OpenRead($SourcePath)
+        $outputStream = [System.IO.File]::Create($DestinationPath)
+        $buffer = New-Object byte[] $BufferSize
+        while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            [void]$sha.TransformBlock($buffer, 0, $read, $buffer, 0)
+            $outputStream.Write($buffer, 0, $read)
+        }
+        $empty = New-Object byte[] 0
+        [void]$sha.TransformFinalBlock($empty, 0, 0)
+        $outputStream.Flush($true)
+        $hashBytes = $sha.Hash
+    }
+    finally {
+        if ($outputStream) {
+            $outputStream.Dispose()
+            $outputStream = $null
+        }
+        if ($inputStream) {
+            $inputStream.Dispose()
+            $inputStream = $null
+        }
+        $sha.Dispose()
+    }
+
+    return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+function Move-OpenPathAgentUpdateFileIntoPlace {
+    <#
+    .SYNOPSIS
+        Atomically swaps an already flushed temp sibling into its destination
+    .DESCRIPTION
+        File.Replace is one metadata operation for an existing destination and
+        File.Move is one for a new one. Both are used instead of Move-Item -Force,
+        whose Windows PowerShell 5.1 implementation is not guaranteed to be a
+        single rename.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$TempPath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+
+    $backupPath = "$TempPath.bak"
+    try {
+        if ([System.IO.File]::Exists($DestinationPath)) {
+            if (Get-Command -Name 'Invoke-OpenPathAtomicFileReplace' -ErrorAction SilentlyContinue) {
+                Invoke-OpenPathAtomicFileReplace `
+                    -TempPath $TempPath `
+                    -DestinationPath $DestinationPath `
+                    -BackupPath $backupPath
+            }
+            else {
+                [System.IO.File]::Replace($TempPath, $DestinationPath, $backupPath, $true)
+            }
+        }
+        else {
+            [System.IO.File]::Move($TempPath, $DestinationPath)
+        }
+    }
+    finally {
+        if ([System.IO.File]::Exists($TempPath)) {
+            try { [System.IO.File]::Delete($TempPath) } catch {}
+        }
+        if ([System.IO.File]::Exists($backupPath)) {
+            try { [System.IO.File]::Delete($backupPath) } catch {}
+        }
+    }
+}
+
 function Write-OpenPathAgentUpdateJsonFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][object]$Object
     )
 
-    $directory = Split-Path $Path -Parent
-    if (-not (Test-Path -LiteralPath $directory)) {
-        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    if (Get-Command -Name 'Write-OpenPathAtomicJsonFile' -ErrorAction SilentlyContinue) {
+        Write-OpenPathAtomicJsonFile -Path $Path -Data $Object -Depth 10
+        return
     }
 
+    # The standalone unit tests dot-source this file without the rest of the
+    # module. Keep the same durable contract instead of falling back to a plain
+    # text write.
+    $directory = Split-Path $Path -Parent
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
     $temporaryPath = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    $backupPath = "$Path.$([guid]::NewGuid().ToString('N')).bak"
     $json = $Object | ConvertTo-Json -Depth 10
     $encoding = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($temporaryPath, $json, $encoding)
-    Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+    $bytes = $encoding.GetBytes($json)
+    $fileStream = $null
+    try {
+        $fileStream = [System.IO.File]::Create($temporaryPath)
+        $fileStream.Write($bytes, 0, $bytes.Length)
+        $fileStream.Flush($true)
+    }
+    finally {
+        if ($fileStream) {
+            $fileStream.Dispose()
+            $fileStream = $null
+        }
+    }
+    try {
+        if ([System.IO.File]::Exists($Path)) {
+            Invoke-OpenPathAtomicFileReplace -TempPath $temporaryPath -DestinationPath $Path -BackupPath $backupPath
+        }
+        else {
+            [System.IO.File]::Move($temporaryPath, $Path)
+        }
+    }
+    finally {
+        if ([System.IO.File]::Exists($temporaryPath)) {
+            try { [System.IO.File]::Delete($temporaryPath) } catch {}
+        }
+        if ([System.IO.File]::Exists($backupPath)) {
+            try { [System.IO.File]::Delete($backupPath) } catch {}
+        }
+    }
 }
 
 function Write-OpenPathAgentUpdateJournal {

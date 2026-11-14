@@ -783,6 +783,123 @@ Describe "Update Script" {
         }
     }
 
+    Context "Durable update primitives" {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+        }
+
+        It "Writes a JSON record durably over a <State> destination" -ForEach @(
+            @{ State = 'new' }
+            @{ State = 'existing' }
+        ) {
+            $root = Join-Path $TestDrive ('durable-json-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $path = Join-Path $root 'update-journal.json'
+            if ($State -eq 'existing') {
+                Set-Content -LiteralPath $path -Value '{"phase":"old"}' -Encoding UTF8
+            }
+
+            InModuleScope Common -Parameters @{ Path = $path } {
+                Write-OpenPathAgentUpdateJsonFile -Path $Path -Object ([PSCustomObject]@{ schemaVersion = 2; phase = 'replacing' })
+            }
+
+            (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).phase | Should -Be 'replacing'
+            @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -match '\.tmp$|\.bak$' }).Count | Should -Be 0
+        }
+
+        It "Leaves the previous destination and no temp file when the atomic write cannot finish" {
+            $root = Join-Path $TestDrive ('durable-json-fail-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $destinationDirectory = Join-Path $root 'destination.json'
+            New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+
+            InModuleScope Common -Parameters @{ Path = $destinationDirectory } {
+                { Write-OpenPathAgentUpdateJsonFile -Path $Path -Object ([PSCustomObject]@{ phase = 'new' }) } |
+                    Should -Throw
+            }
+
+            Test-Path -LiteralPath $destinationDirectory -PathType Container | Should -BeTrue
+            @(Get-ChildItem -LiteralPath $root -File).Count | Should -Be 0
+        }
+
+        It "Durable copy returns the SHA-256 of the bytes it copied (<Case>)" -ForEach @(
+            @{ Case = 'zero-byte'; Size = 0 }
+            @{ Case = 'small'; Size = 37 }
+            @{ Case = 'larger-than-buffer'; Size = 2097152 }
+            @{ Case = 'destination-missing-directory'; Size = 4096 }
+            @{ Case = 'destination-exists'; Size = 4096 }
+        ) {
+            $root = Join-Path $TestDrive ('durable-copy-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $source = Join-Path $root 'source.bin'
+            $bytes = New-Object byte[] $Size
+            if ($Size -gt 0) {
+                $random = [System.Random]::new(1234)
+                $random.NextBytes($bytes)
+            }
+            [System.IO.File]::WriteAllBytes($source, $bytes)
+
+            $destination = if ($Case -eq 'destination-missing-directory') {
+                Join-Path (Join-Path $root 'nested/dir') 'copy.bin'
+            }
+            else {
+                Join-Path $root 'copy.bin'
+            }
+            if ($Case -eq 'destination-exists') {
+                Set-Content -LiteralPath $destination -Value 'old' -Encoding ASCII
+            }
+
+            $hash = InModuleScope Common -Parameters @{ Source = $source; Destination = $destination } {
+                Copy-OpenPathAgentUpdateFileDurable -SourcePath $Source -DestinationPath $Destination
+            }
+
+            $hash | Should -Be (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+            [System.IO.File]::ReadAllBytes($destination).Length | Should -Be $Size
+            if ($Size -gt 0) {
+                (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() | Should -Be $hash
+            }
+        }
+
+        It "Fails durable copy without leaving the destination when the source is missing" {
+            $root = Join-Path $TestDrive ('durable-copy-fail-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $source = Join-Path $root 'missing.bin'
+            $destination = Join-Path $root 'copy.bin'
+
+            InModuleScope Common -Parameters @{ Source = $source; Destination = $destination } {
+                { Copy-OpenPathAgentUpdateFileDurable -SourcePath $Source -DestinationPath $Destination } | Should -Throw
+            }
+
+            Test-Path -LiteralPath $destination | Should -BeFalse
+        }
+
+        It "Swaps a flushed temp sibling into place, creating a missing destination and replacing an existing one" {
+            $root = Join-Path $TestDrive ('durable-swap-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $newFile = Join-Path $root 'new.ps1'
+            $missingFile = Join-Path $root 'missing.ps1'
+            Set-Content -LiteralPath $newFile -Value 'new-content' -Encoding ASCII
+
+            InModuleScope Common -Parameters @{ Temp = $newFile; Destination = $missingFile } {
+                Move-OpenPathAgentUpdateFileIntoPlace -TempPath $Temp -DestinationPath $Destination
+            }
+            (Get-Content -LiteralPath $missingFile -Raw).Trim() | Should -Be 'new-content'
+            Test-Path -LiteralPath $newFile | Should -BeFalse
+
+            $replacement = Join-Path $root 'replacement.ps1'
+            $existing = Join-Path $root 'existing.ps1'
+            Set-Content -LiteralPath $replacement -Value 'replacement-content' -Encoding ASCII
+            Set-Content -LiteralPath $existing -Value 'old-content' -Encoding ASCII
+
+            InModuleScope Common -Parameters @{ Temp = $replacement; Destination = $existing } {
+                Move-OpenPathAgentUpdateFileIntoPlace -TempPath $Temp -DestinationPath $Destination
+            }
+            (Get-Content -LiteralPath $existing -Raw).Trim() | Should -Be 'replacement-content'
+            Test-Path -LiteralPath $replacement | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -match '\.tmp$|\.bak$' }).Count | Should -Be 0
+        }
+    }
+
     Context "Self-update transactions" {
         BeforeAll {
             Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
