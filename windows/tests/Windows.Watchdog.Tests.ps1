@@ -3752,27 +3752,72 @@ Describe "Watchdog committed update journal" {
             param(
                 [string]$Phase = 'committed',
                 [DateTimeOffset]$UpdatedAt = [DateTimeOffset]::UtcNow.AddMinutes(-11),
-                [int]$FinalizationAttempts = 0
+                [int]$FinalizationAttempts = 0,
+                [string]$RunId = 'run-test',
+                [switch]$WithMarker
             )
 
             $root = Join-Path $TestDrive ('watchdog-journal-' + [guid]::NewGuid().ToString('N'))
             $updateRoot = Join-Path $root 'data/agent-update'
             New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+            $backupRoot = Join-Path $updateRoot 'backups/run-test'
             [PSCustomObject]@{
                 schemaVersion        = 2
                 phase                = $Phase
+                runId                = $RunId
+                durable              = $true
                 targetVersion        = '9.9.9'
                 targetBuild          = 'build-new'
                 previousVersion      = '9.9.8'
                 previousBuild        = 'build-old'
-                backupRoot           = (Join-Path $updateRoot 'backups/run-test')
+                backupRoot           = $backupRoot
                 createdAt            = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
                 updatedAt            = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
                 finalizationAttempts = $FinalizationAttempts
                 files                = @()
             } | ConvertTo-Json -Depth 10 |
                 Set-Content -LiteralPath (Join-Path $updateRoot 'update-journal.json') -Encoding UTF8
+
+            if ($WithMarker) {
+                New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+                [PSCustomObject]@{
+                    schemaVersion = 1
+                    runId         = $RunId
+                    targetVersion = '9.9.9'
+                    targetBuild   = 'build-new'
+                    committedAt   = $UpdatedAt.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                } | ConvertTo-Json -Depth 5 |
+                    Set-Content -LiteralPath (Join-Path $backupRoot 'committed.marker') -Encoding UTF8
+            }
+
             return $root
+        }
+
+        function Write-WatchdogRecoveryState {
+            param(
+                [Parameter(Mandatory = $true)][string]$Root,
+                [int]$RepairAttempts = 0,
+                [int]$MinutesAgo = -1
+            )
+
+            $updateRoot = Join-Path $Root 'data/agent-update'
+            New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+            $lastRepairAt = if ($MinutesAgo -ge 0) {
+                [DateTime]::UtcNow.AddMinutes(-$MinutesAgo).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            }
+            else { '' }
+            [PSCustomObject]@{
+                schemaVersion  = 1
+                state          = 'blocked'
+                reasonCode     = 'self_update_recovery_journal_unreadable'
+                attempts       = 1
+                firstSeenAt    = [DateTime]::UtcNow.AddHours(-1).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                lastAttemptAt  = [DateTime]::UtcNow.AddHours(-1).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                repairAttempts = $RepairAttempts
+                lastRepairAt   = $lastRepairAt
+                runId          = 'run-blocked'
+            } | ConvertTo-Json -Depth 5 |
+                Set-Content -LiteralPath (Join-Path $updateRoot 'recovery-state.json') -Encoding UTF8
         }
     }
 
@@ -3801,10 +3846,20 @@ Describe "Watchdog committed update journal" {
             param($Message, $Level)
             $global:OpenPathTestLogs += [string]$Message
         }
+        function global:Read-OpenPathAgentUpdateRecoveryState {
+            param($OpenPathRoot)
+            $path = Join-Path $OpenPathRoot 'data/agent-update/recovery-state.json'
+            if (-not (Test-Path -LiteralPath $path)) { return $null }
+            return (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json)
+        }
+        function global:Test-OpenPathAgentUpdateRecoveryBlocked {
+            param($State)
+            return ($null -ne $State -and [string]$State.state -eq 'blocked')
+        }
     }
 
     AfterEach {
-        foreach ($name in @('Enter-OpenPathAgentUpdateLock', 'Exit-OpenPathAgentUpdateLock', 'Start-ScheduledTask', 'Write-OpenPathLog')) {
+        foreach ($name in @('Enter-OpenPathAgentUpdateLock', 'Exit-OpenPathAgentUpdateLock', 'Start-ScheduledTask', 'Write-OpenPathLog', 'Read-OpenPathAgentUpdateRecoveryState', 'Test-OpenPathAgentUpdateRecoveryBlocked')) {
             Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
         }
         Remove-Variable -Scope Global -Name OpenPathTestLockAcquired, OpenPathTestLockReleases, OpenPathTestStartedTasks, OpenPathTestStartFails, OpenPathTestLogs -ErrorAction SilentlyContinue
@@ -3937,6 +3992,93 @@ Describe "Watchdog committed update journal" {
         $result.ReasonCode | Should -Be 'self_update_finalization_retry_failed'
         $result.Message | Should -Match 'task name'
         @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Starts the update task when a replacing journal has a commit marker" {
+        $root = New-WatchdogJournalRoot -Phase 'replacing' -UpdatedAt ([DateTimeOffset]::UtcNow.AddMinutes(-11)) -WithMarker
+
+        $result = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $root
+
+        $result.JournalPresent | Should -BeTrue
+        $result.RetryStarted | Should -BeTrue
+        $global:OpenPathTestStartedTasks | Should -Contain 'OpenPath-AgentUpdate'
+    }
+
+    It "Starts the AgentUpdate task for a blocked recovery state" {
+        $root = Join-Path $TestDrive ('watchdog-blocked-' + [guid]::NewGuid().ToString('N'))
+        Write-WatchdogRecoveryState -Root $root
+
+        $result = Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $root
+
+        $result.StatePresent | Should -BeTrue
+        $result.RetryStarted | Should -BeTrue
+        $global:OpenPathTestStartedTasks | Should -Contain 'OpenPath-AgentUpdate'
+        $global:OpenPathTestLockReleases | Should -Be 1
+    }
+
+    It "Does not start a blocked repair before its ten-minute bound" {
+        $root = Join-Path $TestDrive ('watchdog-blocked-bound-' + [guid]::NewGuid().ToString('N'))
+        Write-WatchdogRecoveryState -Root $root -RepairAttempts 1 -MinutesAgo 5
+
+        $result = Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Does not start a fourth blocked repair within a day" {
+        $root = Join-Path $TestDrive ('watchdog-blocked-daily-' + [guid]::NewGuid().ToString('N'))
+        Write-WatchdogRecoveryState -Root $root -RepairAttempts 3 -MinutesAgo 60
+
+        $result = Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Reports self_update_repair_failed when the repair task cannot be started" {
+        $root = Join-Path $TestDrive ('watchdog-blocked-fail-' + [guid]::NewGuid().ToString('N'))
+        Write-WatchdogRecoveryState -Root $root
+        $global:OpenPathTestStartFails = $true
+
+        $result = Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        $result.ReasonCode | Should -Be 'self_update_repair_failed'
+    }
+
+    It "Names the record that defers the integrity check" {
+        $journalRoot = New-WatchdogJournalRoot -Phase 'replacing'
+        Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $journalRoot | Should -Be 'journal'
+
+        $blockedRoot = Join-Path $TestDrive ('watchdog-reason-blocked-' + [guid]::NewGuid().ToString('N'))
+        Write-WatchdogRecoveryState -Root $blockedRoot
+        Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $blockedRoot | Should -Be 'blocked'
+
+        $intentRoot = Join-Path $TestDrive ('watchdog-reason-intent-' + [guid]::NewGuid().ToString('N'))
+        $intentDir = Join-Path $intentRoot 'data/agent-update/backups/run-intent'
+        New-Item -ItemType Directory -Path $intentDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $intentDir 'journal-intent.json') -Value '{}' -Encoding UTF8
+        Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $intentRoot | Should -Be 'unfinished-run'
+
+        $emptyRoot = Join-Path $TestDrive ('watchdog-reason-empty-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $emptyRoot -Force | Out-Null
+        Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $emptyRoot | Should -Be ''
+    }
+
+    It "Wires the blocked repair and the unfinished-run guard ahead of the integrity restore" {
+        $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1") -Raw
+        $reasonStart = $content.IndexOf('Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $OpenPathRoot')
+        $repairStart = $content.IndexOf('Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $OpenPathRoot')
+        $restoreStart = $content.IndexOf('Restore-OpenPathIntegrity -IntegrityResult')
+
+        $content | Should -Match 'journal-intent\.json'
+        $content | Should -Match 'recovery-state\.json'
+        $content | Should -Match 'self_update_recovery_blocked'
+        $content | Should -Match 'self_update_repair_failed'
+        $reasonStart | Should -BeGreaterThan -1
+        $repairStart | Should -BeGreaterThan $reasonStart
+        $restoreStart | Should -BeGreaterThan $repairStart
     }
 
     It "Wires the resume attempt ahead of the integrity restore" {

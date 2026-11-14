@@ -1154,7 +1154,34 @@ function Invoke-OpenPathWatchdogPendingUpdateFinalization {
         return $result
     }
 
-    if ([string]$journal.phase -ne 'committed') {
+    $journalRunId = ''
+    if ($journal.PSObject.Properties['runId'] -and -not [string]::IsNullOrWhiteSpace([string]$journal.runId)) {
+        $journalRunId = [string]$journal.runId
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace([string]$journal.backupRoot)) {
+        $journalRunId = Split-Path -Path ([string]$journal.backupRoot).TrimEnd([char[]]@('\', '/')) -Leaf
+    }
+
+    $hasMarker = $false
+    if (-not [string]::IsNullOrWhiteSpace($journalRunId)) {
+        $markerPath = Join-Path ([string]$journal.backupRoot) 'committed.marker'
+        if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+            try {
+                $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                $markerSchema = 0
+                [void][int]::TryParse([string]$marker.schemaVersion, [ref]$markerSchema)
+                $hasMarker = (
+                    $markerSchema -eq 1 -and
+                    [string]::Equals([string]$marker.runId, $journalRunId, [System.StringComparison]::OrdinalIgnoreCase)
+                )
+            }
+            catch {
+                $hasMarker = $false
+            }
+        }
+    }
+
+    if ([string]$journal.phase -ne 'committed' -and -not $hasMarker) {
         return $result
     }
 
@@ -1224,6 +1251,146 @@ function Invoke-OpenPathWatchdogPendingUpdateFinalization {
     catch {
         $result.ReasonCode = 'self_update_finalization_retry_failed'
         $result.Message = "Could not start $taskName to finish a committed update: $_"
+        return $result
+    }
+    finally {
+        Exit-OpenPathAgentUpdateLock -Lock $lock
+    }
+}
+
+function Get-OpenPathWatchdogUnfinishedUpdateReason {
+    <#
+    .SYNOPSIS
+        Names the record that makes the installed tree untrusted, if any
+    #>
+    param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
+
+    $updateRoot = [System.IO.Path]::Combine($OpenPathRoot, 'data', 'agent-update')
+    $journalPath = [System.IO.Path]::Combine($updateRoot, 'update-journal.json')
+    if (Test-Path -LiteralPath $journalPath) {
+        return 'journal'
+    }
+
+    $statePath = [System.IO.Path]::Combine($updateRoot, 'recovery-state.json')
+    if (Test-Path -LiteralPath $statePath) {
+        return 'blocked'
+    }
+
+    $backupsRoot = [System.IO.Path]::Combine($updateRoot, 'backups')
+    if (Test-Path -LiteralPath $backupsRoot) {
+        $intent = Get-ChildItem -LiteralPath $backupsRoot -Directory -Filter 'run-*' -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'journal-intent.json') -PathType Leaf } |
+            Select-Object -First 1
+        if ($intent) {
+            return 'unfinished-run'
+        }
+    }
+
+    return ''
+}
+
+function Invoke-OpenPathWatchdogBlockedUpdateRepair {
+    <#
+    .SYNOPSIS
+        Starts the AgentUpdate task for a blocked recovery state under its bound
+    .DESCRIPTION
+        The watchdog never repairs the tree itself. It only starts the updater
+        process, which owns the repair bound and the manifest convergence. A
+        start failure is reported with one stable reason code.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow,
+        [int]$RetryMinutes = 10,
+        [int]$LongRetryMinutes = 1440
+    )
+
+    $result = [PSCustomObject]@{
+        StatePresent = $false
+        RetryStarted = $false
+        ReasonCode   = ''
+        Message      = ''
+    }
+
+    if (-not (Get-Command -Name 'Read-OpenPathAgentUpdateRecoveryState' -ErrorAction SilentlyContinue) -or
+        -not (Get-Command -Name 'Test-OpenPathAgentUpdateRecoveryBlocked' -ErrorAction SilentlyContinue)) {
+        return $result
+    }
+
+    $state = Read-OpenPathAgentUpdateRecoveryState -OpenPathRoot $OpenPathRoot
+    if (-not $state) {
+        return $result
+    }
+    $result.StatePresent = $true
+    if (-not (Test-OpenPathAgentUpdateRecoveryBlocked -State $state)) {
+        return $result
+    }
+
+    $attempts = 0
+    if ($state.PSObject.Properties['repairAttempts']) {
+        try { $attempts = [int]$state.repairAttempts } catch { $attempts = 0 }
+    }
+    $lastRepairAt = [DateTimeOffset]::MinValue
+    if ($state.PSObject.Properties['lastRepairAt'] -and $null -ne $state.lastRepairAt) {
+        $value = $state.lastRepairAt
+        if ($value -is [DateTimeOffset]) {
+            $lastRepairAt = [DateTimeOffset]$value
+        }
+        elseif ($value -is [DateTime]) {
+            $lastRepairAt = [DateTimeOffset]$value
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $parsed = [DateTimeOffset]::MinValue
+            if ([DateTimeOffset]::TryParse(
+                    [string]$value,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind,
+                    [ref]$parsed)) {
+                $lastRepairAt = $parsed
+            }
+        }
+    }
+
+    $requiredMinutes = if ($attempts -ge 3) { $LongRetryMinutes } else { $RetryMinutes }
+    if ($lastRepairAt -ne [DateTimeOffset]::MinValue -and ($Now - $lastRepairAt).TotalMinutes -lt $requiredMinutes) {
+        return $result
+    }
+
+    if (-not (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
+        return $result
+    }
+    if (-not (Get-Command -Name 'Get-OpenPathScheduledTaskCatalog' -ErrorAction SilentlyContinue)) {
+        $result.ReasonCode = 'self_update_repair_failed'
+        $result.Message = 'Could not resolve the AgentUpdate task name: the scheduled task catalog is unavailable'
+        return $result
+    }
+
+    $taskName = ''
+    try {
+        $taskName = [string](Get-OpenPathScheduledTaskCatalog).Tasks.AgentUpdate.Name
+    }
+    catch {
+        return $result
+    }
+    if ([string]::IsNullOrWhiteSpace($taskName)) {
+        $result.ReasonCode = 'self_update_repair_failed'
+        $result.Message = 'Could not resolve the AgentUpdate task name from the scheduled task catalog'
+        return $result
+    }
+
+    $lock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 0
+    if (-not $lock.Acquired) {
+        return $result
+    }
+
+    try {
+        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        $result.RetryStarted = $true
+        return $result
+    }
+    catch {
+        $result.ReasonCode = 'self_update_repair_failed'
+        $result.Message = "Could not start $taskName to repair a blocked update: $_"
         return $result
     }
     finally {
@@ -1595,26 +1762,56 @@ function Invoke-OpenPathWatchdogChecks {
         # integrity backup then would restore only the critical subset over a
         # mixed tree, so defer to the recovery script.
         $updateJournalPath = [System.IO.Path]::Combine($OpenPathRoot, 'data', 'agent-update', 'update-journal.json')
-        if (Test-Path $updateJournalPath) {
+        $unfinishedUpdateReason = Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $OpenPathRoot
+        if ($unfinishedUpdateReason) {
             $integrityChecksEnabled = $false
-            Write-OpenPathLog "Watchdog: agent update journal present, integrity check deferred to recovery" -Level WARN
+            if (Test-Path $updateJournalPath) {
+                Write-OpenPathLog "Watchdog: agent update journal present, integrity check deferred to recovery" -Level WARN
 
-            # A committed journal belongs to the updater process, which must
-            # re-register this watchdog task itself. Only start that process;
-            # never run finalization here.
-            try {
-                $pendingFinalization = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $OpenPathRoot
-                if ($pendingFinalization.RetryStarted) {
-                    Write-OpenPathLog 'Watchdog: started the update task to finish the committed update' -Level WARN
+                # A committed journal belongs to the updater process, which must
+                # re-register this watchdog task itself. Only start that process;
+                # never run finalization here.
+                try {
+                    $pendingFinalization = Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $OpenPathRoot
+                    if ($pendingFinalization.RetryStarted) {
+                        Write-OpenPathLog 'Watchdog: started the update task to finish the committed update' -Level WARN
+                    }
+                    elseif ($pendingFinalization.ReasonCode) {
+                        & $addReasonCode ([string]$pendingFinalization.ReasonCode)
+                        $issues += [string]$pendingFinalization.Message
+                        Write-OpenPathLog "Watchdog: $($pendingFinalization.Message)" -Level ERROR
+                    }
                 }
-                elseif ($pendingFinalization.ReasonCode) {
-                    & $addReasonCode ([string]$pendingFinalization.ReasonCode)
-                    $issues += [string]$pendingFinalization.Message
-                    Write-OpenPathLog "Watchdog: $($pendingFinalization.Message)" -Level ERROR
+                catch {
+                    Write-OpenPathLog "Watchdog: could not resume a committed agent update: $_" -Level ERROR
+                }
+            }
+            else {
+                Write-OpenPathLog "Watchdog: agent update $unfinishedUpdateReason present, integrity check deferred to recovery" -Level WARN
+            }
+
+            try {
+                if (Get-Command -Name 'Read-OpenPathAgentUpdateRecoveryState' -ErrorAction SilentlyContinue) {
+                    $blockedState = Read-OpenPathAgentUpdateRecoveryState -OpenPathRoot $OpenPathRoot
+                    if ($blockedState -and
+                        (Get-Command -Name 'Test-OpenPathAgentUpdateRecoveryBlocked' -ErrorAction SilentlyContinue) -and
+                        (Test-OpenPathAgentUpdateRecoveryBlocked -State $blockedState)) {
+                        & $addReasonCode 'self_update_recovery_blocked'
+                        $issues += 'Agent update recovery is blocked'
+                        $repairNudge = Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $OpenPathRoot
+                        if ($repairNudge.RetryStarted) {
+                            Write-OpenPathLog 'Watchdog: started the update task to repair a blocked agent update' -Level WARN
+                        }
+                        elseif ($repairNudge.ReasonCode) {
+                            & $addReasonCode ([string]$repairNudge.ReasonCode)
+                            $issues += [string]$repairNudge.Message
+                            Write-OpenPathLog "Watchdog: $($repairNudge.Message)" -Level ERROR
+                        }
+                    }
                 }
             }
             catch {
-                Write-OpenPathLog "Watchdog: could not resume a committed agent update: $_" -Level ERROR
+                Write-OpenPathLog "Watchdog: could not start a blocked update repair: $_" -Level ERROR
             }
         }
 
