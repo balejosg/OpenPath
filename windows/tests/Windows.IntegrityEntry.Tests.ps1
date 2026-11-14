@@ -1,6 +1,6 @@
 Describe "Update-OpenPathIntegrityEntry" {
     BeforeAll {
-        $modulePath = Join-Path $PSScriptRoot ".." "lib"
+        $modulePath = Join-Path (Join-Path $PSScriptRoot "..") "lib"
         Import-Module (Join-Path $modulePath "Common.psm1") -Force -Global -ErrorAction Stop
     }
 
@@ -78,7 +78,7 @@ Describe "Update-OpenPathIntegrityEntry" {
 
 Describe "Invoke-OpenPathFirefoxNativeHostCompiledEnsure integrity refresh" {
     BeforeAll {
-        $modulePath = Join-Path $PSScriptRoot ".." "lib"
+        $modulePath = Join-Path (Join-Path $PSScriptRoot "..") "lib"
         Import-Module (Join-Path $modulePath "Common.psm1") -Force -Global -ErrorAction Stop
         Import-Module (Join-Path $modulePath "Browser.Common.psm1") -Force -Global -ErrorAction Stop
         Import-Module (Join-Path $modulePath "Browser.FirefoxNativeHost.psm1") -Force -Global -ErrorAction Stop
@@ -143,7 +143,7 @@ Describe "Invoke-OpenPathFirefoxNativeHostCompiledEnsure integrity refresh" {
 
 Describe "Integrity backup restore" {
     BeforeAll {
-        $modulePath = Join-Path $PSScriptRoot ".." "lib"
+        $modulePath = Join-Path (Join-Path $PSScriptRoot "..") "lib"
         Import-Module (Join-Path $modulePath "Common.psm1") -Force -Global -ErrorAction Stop
     }
 

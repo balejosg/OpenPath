@@ -141,7 +141,14 @@ Describe "OpenPath agent update recovery" {
         function Invoke-RecoveryScript {
             param([Parameter(Mandatory = $true)][string]$Root)
 
-            $output = & $script:PwshPath -NoProfile -NonInteractive -File $script:RecoveryScriptPath -OpenPathRoot $Root 2>&1
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $output = & $script:PwshPath -NoProfile -NonInteractive -File $script:RecoveryScriptPath -OpenPathRoot $Root 2>&1
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
             return [PSCustomObject]@{
                 ExitCode = $LASTEXITCODE
                 Output   = (@($output) -join [Environment]::NewLine)
@@ -358,7 +365,14 @@ Export-ModuleMember -Function *
         function Invoke-GateScript {
             param([Parameter(Mandatory = $true)][string]$Root)
 
-            $output = & $script:PwshPath -NoProfile -NonInteractive -File $script:GateScriptPath -OpenPathRoot $Root 2>&1
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $output = & $script:PwshPath -NoProfile -NonInteractive -File $script:GateScriptPath -OpenPathRoot $Root 2>&1
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
             return [PSCustomObject]@{
                 ExitCode = $LASTEXITCODE
                 Output   = (@($output) -join [Environment]::NewLine)
@@ -1013,10 +1027,10 @@ Export-ModuleMember -Function *
 `$null = [Console]::In.ReadLine()
 `$m.ReleaseMutex()
 "@
+            $holderScriptPath = Join-Path $TestDrive ("recovery-lock-holder-$([guid]::NewGuid().ToString('N')).ps1")
+            Set-Content -LiteralPath $holderScriptPath -Value $holderScript -Encoding UTF8
             $psi = [System.Diagnostics.ProcessStartInfo]::new($script:PwshPath)
-            $psi.ArgumentList.Add('-NoProfile')
-            $psi.ArgumentList.Add('-Command')
-            $psi.ArgumentList.Add($holderScript)
+            $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$holderScriptPath`""
             $psi.RedirectStandardInput = $true
             $psi.RedirectStandardOutput = $true
             $psi.UseShellExecute = $false
@@ -1054,7 +1068,7 @@ Export-ModuleMember -Function *
                 recordedAt    = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
             } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $updateRoot 'recovery-report.json') -Encoding UTF8
 
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1"
             Import-Module $modulePath -Force -Global
             InModuleScope Common -Parameters @{ Root = $root } {
                 $script:OpenPathRoot = $Root
@@ -1094,7 +1108,7 @@ Export-ModuleMember -Function *
 
             $scriptResult = Invoke-RecoveryScript -Root $scriptFixture.Root
 
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1"
             Import-Module $modulePath -Force -Global
             $moduleResult = InModuleScope Common -Parameters @{
                 Root = $moduleFixture.Root
@@ -1152,7 +1166,7 @@ if (Test-Path -LiteralPath (Join-Path $OpenPathRoot 'gate-fail.flag')) {
 exit 0
 '@
 
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1"
             Import-Module $modulePath -Force -Global
             InModuleScope Common -Parameters @{ Root = $root; PwshPath = $script:PwshPath } {
                 $healthy = Invoke-OpenPathAgentUpdateHealthGate -OpenPathRoot $Root -PowerShellPath $PwshPath -TimeoutSeconds 30
@@ -1176,7 +1190,7 @@ Start-Sleep -Seconds 20
 exit 0
 '@
 
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1"
             Import-Module $modulePath -Force -Global
             InModuleScope Common -Parameters @{ Root = $root; PwshPath = $script:PwshPath } {
                 $result = Invoke-OpenPathAgentUpdateHealthGate -OpenPathRoot $Root -PowerShellPath $PwshPath -TimeoutSeconds 2

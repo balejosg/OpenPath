@@ -21,7 +21,7 @@ Describe "Watchdog Script" {
 
     Context "Module import resilience" {
         It "Uses the shared standalone bootstrap helper" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -38,7 +38,7 @@ Describe "Watchdog Script" {
         }
 
         It "accepts an explicit root and defaults relative to the script" {
-            $content = Get-Content (Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1") -Raw
+            $content = Get-Content (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1") -Raw
             Assert-ContentContainsAll -Content $content -Needles @(
                 'param([string]$OpenPathRoot',
                 'if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {',
@@ -48,7 +48,7 @@ Describe "Watchdog Script" {
         }
 
         It "preserves the script synopsis through Get-Help" {
-            $help = Get-Help (Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1")
+            $help = Get-Help (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1")
             $help.Synopsis | Should -Be 'Watchdog script to verify DNS health and auto-recover'
         }
     }
@@ -87,7 +87,7 @@ Describe "Watchdog Script" {
 
     Context "Firefox managed extension refresh" {
         It "Refreshes only the Firefox managed extension policy without reading local blocked paths" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -207,7 +207,7 @@ Describe "Watchdog Script" {
 
     Context "SSE listener monitoring" {
         It "Checks and restarts SSE listener task" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -217,7 +217,7 @@ Describe "Watchdog Script" {
         }
 
         It "Checks and restarts the resident runtime dependency worker task" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -230,7 +230,7 @@ Describe "Watchdog Script" {
 
     Context "AppControl repair" {
         It "Reconciles the restricted group with CreateIfMissing when AppControl is enabled" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -240,7 +240,7 @@ Describe "Watchdog Script" {
         }
 
         It "Reapplies AppControl with approved student browsers from config" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -253,7 +253,7 @@ Describe "Watchdog Script" {
         }
 
         It "Emits health issues and does not swallow failure when Set-OpenPathNonAdminAppControl returns false" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup {
@@ -334,7 +334,7 @@ Describe "Watchdog Script" {
         }
 
         It "Surfaces health issue when required OpenPath-Restricted group is missing and cannot be recreated" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup {
@@ -415,7 +415,7 @@ Describe "Watchdog Script" {
         }
 
         It "Surfaces health issue and degraded status when group exists but membership sync returns false" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
@@ -477,7 +477,7 @@ Describe "Watchdog Script" {
         }
 
         It "Surfaces health issue and degraded status when group exists but membership sync throws" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
@@ -539,7 +539,7 @@ Describe "Watchdog Script" {
         }
 
         It "Reports HEALTHY when membership sync succeeds and policy is valid" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
@@ -624,7 +624,7 @@ Describe "Watchdog Script" {
         }
 
         It "Surfaces the compiled native host reason code in the watchdog health result (Phase 8)" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
@@ -685,7 +685,7 @@ Describe "Watchdog Script" {
         }
 
         It "Reports smart_app_control_enforced even while the host works, only with the boundary active and SAC enforced (Phase 8e E3)" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
@@ -777,7 +777,7 @@ Describe "Watchdog Script" {
         }
 
         It "Surfaces AppControl effective policy invalid when repair returns true but effective verification returns false" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-OpenPathNonAdminAppControlHealth { [pscustomobject]@{ Healthy = $false; ReasonCodes = @('appcontrol_effective_policy_invalid') } }
@@ -842,7 +842,7 @@ Describe "Watchdog Script" {
         }
 
         It "Surfaces uncommitted issue when appControlCommitState is pending" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
@@ -908,7 +908,7 @@ Describe "Watchdog Script" {
         }
 
         It "Pending commitState with successful repair commits commitState but leaves installState installing" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             $testRoot = Join-Path $TestDrive "watchdog-commit-test-$([guid]::NewGuid().ToString('N'))"
@@ -975,7 +975,7 @@ Describe "Watchdog Script" {
         }
 
         It "Committed appControl with installing installState reports degraded status" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
@@ -1038,7 +1038,7 @@ Describe "Watchdog Script" {
         }
 
         It "Legacy config without appControlCommitState migrates to committed when group and boundary are active" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             $testRoot = Join-Path $TestDrive "watchdog-legacy-test-$([guid]::NewGuid().ToString('N'))"
@@ -1096,7 +1096,7 @@ Describe "Watchdog Script" {
         }
 
         It "Legacy config without appControlCommitState and missing boundary reports degraded status and remains uncommitted" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             $testRoot = Join-Path $TestDrive "watchdog-legacy-missing-boundary-$([guid]::NewGuid().ToString('N'))"
@@ -1172,8 +1172,8 @@ Describe "Watchdog Script" {
 
     Context "Captive portal detection" {
         It "Defines admin-only captive portal recovery script with bounded queue processing" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
-            $leafPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $scriptPath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Recover-CaptivePortal.ps1")
+            $leafPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $content = Get-Content $scriptPath -Raw
             $leafContent = Get-Content $leafPath -Raw
 
@@ -1226,9 +1226,9 @@ Describe "Watchdog Script" {
         }
 
         It "Orders recovery observation before enabling portal mode and never uses stale DNS rollback" {
-            $leafPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $leafPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $leafContent = Get-Content $leafPath -Raw
-            $scriptContent = Get-Content (Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1") -Raw
+            $scriptContent = Get-Content ((Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Recover-CaptivePortal.ps1")) -Raw
 
             $leafContent.IndexOf('Update-OpenPathCaptivePortalObservation -DetectedState Portal') |
                 Should -BeLessThan $leafContent.IndexOf('Enable-OpenPathCaptivePortalMode -State Portal')
@@ -1237,8 +1237,8 @@ Describe "Watchdog Script" {
         }
 
         It "Behaviorally includes configured captive portal domains in recovery results" {
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1")
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryTransition.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
 
             $requestPath = Join-Path $TestDrive 'request.json'
             $resultPath = Join-Path $TestDrive 'result'
@@ -1294,9 +1294,9 @@ Describe "Watchdog Script" {
         }
 
         It "W-3: drops attacker-supplied recovery hosts not on the configured/detection allowlist" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1")
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            $modulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryTransition.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $moduleContent = Get-Content $modulePath -Raw
 
             # Load the REAL allowlist filter + its helpers from the module (not a mock).
@@ -1356,7 +1356,7 @@ Describe "Watchdog Script" {
         }
 
         It "W-3: recovery script intersects requested hosts with the allowlist before enabling portal mode" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $scriptPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -1367,7 +1367,7 @@ Describe "Watchdog Script" {
         }
 
         It "W-4: rejects a queue request whose requestId is a path-traversal string" {
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             function Write-OpenPathLog { param([Parameter(ValueFromPipeline = $true)]$Message, $Level) }
 
             $queueDir = Join-Path $TestDrive 'queue-traversal'
@@ -1380,7 +1380,7 @@ Describe "Watchdog Script" {
         }
 
         It "W-4: recovery progress writer refuses to escape the progress directory" {
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
 
             $progressPath = Join-Path $TestDrive 'progress-traversal'
             New-Item -ItemType Directory -Path $progressPath -Force | Out-Null
@@ -1392,7 +1392,7 @@ Describe "Watchdog Script" {
         }
 
         It "Restores protected mode when reconcile request reports authenticated state" {
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
 
             $requestPath = Join-Path $TestDrive 'request-authenticated.json'
             $resultPath = Join-Path $TestDrive 'result-authenticated'
@@ -1447,8 +1447,8 @@ Describe "Watchdog Script" {
         }
 
         It "Detects captive portals and opens only exact recovery hosts without dropping protection" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $scriptContent = Get-Content $scriptPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -1490,7 +1490,7 @@ Describe "Watchdog Script" {
         }
 
         It "Enters bounded passthrough instead of staying protected when watchdog has no exact host" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalMode')
@@ -1511,7 +1511,7 @@ Describe "Watchdog Script" {
         }
 
         It "Promotes an active passthrough marker with a new exact host into limited Acrylic recovery" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalMode')
@@ -1529,7 +1529,7 @@ Describe "Watchdog Script" {
         }
 
         It "Renders exact temporary portal hosts before the default NX block and clears them on exit" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
@@ -1552,8 +1552,8 @@ Describe "Watchdog Script" {
         }
 
         It "Discovers bounded exact captive portal hosts and rejects unsafe host candidates" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
-            $diagnosticsModulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.DiagnosticsDiscovery.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
+            $diagnosticsModulePath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.DiagnosticsDiscovery.ps1"
             $moduleContent = Get-Content $modulePath -Raw
             $diagnosticsModuleContent = Get-Content $diagnosticsModulePath -Raw
 
@@ -1603,7 +1603,7 @@ Describe "Watchdog Script" {
         }
 
         It "Behaviorally returns only exact safe dynamic hosts" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             Import-Module $modulePath -Force
 
             $result = Get-OpenPathCaptivePortalDynamicHosts -SeedUrls @(
@@ -1634,7 +1634,7 @@ Describe "Watchdog Script" {
         }
 
         It "Behaviorally reads only safe configured captive portal domains from config" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $module = Import-Module $modulePath -Force -PassThru
 
             $result = & $module {
@@ -1660,7 +1660,7 @@ Describe "Watchdog Script" {
         }
 
         It "Behaviorally separates bootstrap, redirect, and resource hosts without leaking URLs" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             Import-Module $modulePath -Force
 
             $result = Get-OpenPathCaptivePortalBootstrapHosts -SeedUrls @(
@@ -1695,7 +1695,7 @@ Describe "Watchdog Script" {
         }
 
         It "Classifies fetched redirect-chain hosts by source bucket" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $module = Import-Module $modulePath -Force -PassThru
             $requestFactory = {
                 param([System.Uri]$Uri)
@@ -1738,7 +1738,7 @@ Describe "Watchdog Script" {
         }
 
         It "Does not promote already-rendered secondary seed probes into bootstrap hosts" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $module = Import-Module $modulePath -Force -PassThru
             $requestFactory = {
                 param([System.Uri]$Uri)
@@ -1788,7 +1788,7 @@ Describe "Watchdog Script" {
         }
 
         It "Keeps fetched redirect and resource bootstrap hosts in distinct result fields" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.DiagnosticsDiscovery.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.DiagnosticsDiscovery.ps1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $probeStart = $moduleContent.IndexOf('function Invoke-OpenPathCaptivePortalBootstrapProbe')
@@ -1815,7 +1815,7 @@ Describe "Watchdog Script" {
         }
 
         It "Renders limited Acrylic from declared captive portal hosts before NX block" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
@@ -1845,7 +1845,7 @@ Describe "Watchdog Script" {
         }
 
         It "Behaviorally applies configured captive portal domains in limited mode markers" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $module = Import-Module $modulePath -Force -PassThru
             $statePath = Join-Path $TestDrive "captive-portal-active.json"
             $acrylicPath = Join-Path $TestDrive "Acrylic"
@@ -1895,7 +1895,7 @@ Describe "Watchdog Script" {
         }
 
         It "Renders configured captive portal domains with subdomain coverage in limited mode while keeping discovered hosts exact" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $module = Import-Module $modulePath -Force -PassThru
 
             # 'redirect.example.test' is an auto-discovered recovery host (not admin-configured,
@@ -1920,7 +1920,7 @@ Describe "Watchdog Script" {
         }
 
         It "Performs one limited-mode render without bootstrap discovery promotion" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
@@ -1943,7 +1943,7 @@ Describe "Watchdog Script" {
         }
 
         It "Marks limited mode ready only when declared recovery hosts are rendered" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
@@ -1960,7 +1960,7 @@ Describe "Watchdog Script" {
         }
 
         It "Bounds limited portal Acrylic restart and DNS protection verification inside native host budget" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
@@ -1982,7 +1982,7 @@ Describe "Watchdog Script" {
         }
 
         It "Stays fail-closed and retries instead of downgrading to passthrough when limited DNS verification fails" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
@@ -2002,7 +2002,7 @@ Describe "Watchdog Script" {
         }
 
         It "Reserves the passthrough fallback for the no-recovery-hosts case only" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $passthroughStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalPassthroughMode')
@@ -2024,10 +2024,10 @@ Describe "Watchdog Script" {
         }
 
         It "Keeps connectivity-probe domains resolvable in the limited-mode affinity mask" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
-            $domainsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Domains.ps1"
-            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Domains.Catalog.ps1"
-            $commonPath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
+            $domainsPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Domains.ps1"
+            $catalogPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Domains.Catalog.ps1"
+            $commonPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1"
             $moduleContent = Get-Content $modulePath -Raw
             $domainsContent = Get-Content $domainsPath -Raw
             $catalogContent = Get-Content $catalogPath -Raw
@@ -2052,8 +2052,8 @@ Describe "Watchdog Script" {
         }
 
         It "Routes limited portal Acrylic writes through the shared atomic writer under the policy lock" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
-            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.AcrylicPolicyTransaction.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
+            $policyPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.AcrylicPolicyTransaction.ps1"
             $moduleContent = Get-Content $modulePath -Raw
             $policyContent = Get-Content $policyPath -Raw
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
@@ -2074,8 +2074,8 @@ Describe "Watchdog Script" {
         }
 
         It "Routes Acrylic captive portal changes through named policy transactions" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
-            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.AcrylicPolicyTransaction.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
+            $policyPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.AcrylicPolicyTransaction.ps1"
             $moduleContent = Get-Content $modulePath -Raw
             $policyContent = Get-Content $policyPath -Raw
 
@@ -2097,7 +2097,7 @@ Describe "Watchdog Script" {
         }
 
         It "Falls back when the global Acrylic policy mutex is inaccessible" {
-            $writerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "AcrylicConfigWriter.ps1"
+            $writerPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "AcrylicConfigWriter.ps1"
             $writerContent = Get-Content $writerPath -Raw
 
             Assert-ContentContainsAll -Content $writerContent -Needles @(
@@ -2109,7 +2109,7 @@ Describe "Watchdog Script" {
         }
 
         It "Rebuilds limited mode Acrylic configuration from an empty ini file" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $module = Import-Module $modulePath -Force -PassThru
             $acrylicPath = Join-Path $TestDrive "Acrylic-limited-empty"
             New-Item -ItemType Directory -Path $acrylicPath -Force | Out-Null
@@ -2145,7 +2145,7 @@ Describe "Watchdog Script" {
         }
 
         It "Treats transport failures as captive portal when local IPv4 network evidence exists" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
@@ -2159,8 +2159,8 @@ Describe "Watchdog Script" {
         }
 
         It "Restores DNS protection after captive portal is resolved" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $scriptContent = Get-Content $scriptPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -2185,7 +2185,7 @@ Describe "Watchdog Script" {
         }
 
         It "Does not treat a missing marker as restored while Acrylic remains in portal recovery mode" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
@@ -2203,7 +2203,7 @@ Describe "Watchdog Script" {
         }
 
         It "Verifies limited portal recovery with exact temporary hosts instead of a generic DNS probe" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $protectionStart = $moduleContent.IndexOf('function Test-OpenPathLimitedCaptivePortalProtection')
@@ -2244,7 +2244,7 @@ Describe "Watchdog Script" {
             # plus 'FW >domain' and NO exact 'FW domain' line), so the recovery-host
             # verification must derive its expected lines from the same rule generator or
             # limited mode always rolls back for sslip-based portal fixtures.
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $recoveryHostStart = $moduleContent.IndexOf('function Test-OpenPathLimitedCaptivePortalRecoveryHost')
@@ -2260,8 +2260,8 @@ Describe "Watchdog Script" {
         }
 
         It "Bounds post-auth reconcile protected-mode evidence inside native host budget" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $scriptPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
+            $modulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1")
             $scriptContent = Get-Content $scriptPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -2286,7 +2286,7 @@ Describe "Watchdog Script" {
         }
 
         It "Writes post-auth reconcile success only when protected mode is fully restored" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $scriptPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2304,7 +2304,7 @@ Describe "Watchdog Script" {
         }
 
         It "Retries verified protected-mode restoration before clearing captive portal state" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
@@ -2332,7 +2332,7 @@ Describe "Watchdog Script" {
         }
 
         It "Never keeps a relaxed posture alive over upstream health when closing portal mode" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
@@ -2355,9 +2355,9 @@ Describe "Watchdog Script" {
         }
 
         It "Closes expired captive portal markers from the per-minute watchdog cycle" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
             $helperContent = Get-Content $helperPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
             $scriptContent = Get-Content $scriptPath -Raw
@@ -2380,9 +2380,9 @@ Describe "Watchdog Script" {
         }
 
         It "Closes any active captive portal marker immediately on authenticated detection and preserves the marker when restore fails" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
-            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.CaptivePortalPolicy.ps1"
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
+            $policyPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.CaptivePortalPolicy.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $helperContent = Get-Content $helperPath -Raw
             $policyContent = Get-Content $policyPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
@@ -2407,9 +2407,9 @@ Describe "Watchdog Script" {
         }
 
         It "Refreshes limited portal mode instead of restoring protected mode while the portal is still detected" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
-            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.CaptivePortalPolicy.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
+            $policyPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.CaptivePortalPolicy.ps1"
             $helperContent = Get-Content $helperPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
             $policyContent = Get-Content $policyPath -Raw
@@ -2442,7 +2442,7 @@ Describe "Watchdog Script" {
         }
 
         It "Runs passthrough emergency checks even when protected mode checks are otherwise skipped" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2455,7 +2455,7 @@ Describe "Watchdog Script" {
         }
 
         It "Treats passthrough expiry as an emergency close and verifies full protected-mode restoration before clearing state" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $content = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2479,7 +2479,7 @@ Describe "Watchdog Script" {
             # Test-OpenPathCaptivePortalModeActive must NOT return true (which would
             # leave enforcement bypassed). It must force DNS back to 127.0.0.1 via
             # Set-LocalDNS and return false so the next cycle retries the full disable.
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $content = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2493,8 +2493,8 @@ Describe "Watchdog Script" {
         }
 
         It "Uses hysteresis before entering or exiting captive portal mode" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $helperContent = Get-Content $helperPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -2530,7 +2530,7 @@ Describe "Watchdog Script" {
         }
 
         It "Caps limited mode marker TTL to the bounded post-auth backstop" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
@@ -2541,7 +2541,7 @@ Describe "Watchdog Script" {
 
         It "Clamps expiresAt to since + MaxLifetimeSeconds on re-arm and preserves normal TTL on first creation" {
             # Content assertions: the clamp logic and culture-safe parse must be present.
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $markerFnStart = $moduleContent.IndexOf('function Set-OpenPathCaptivePortalMarker')
@@ -2642,7 +2642,7 @@ Describe "Watchdog Script" {
         }
 
         It "Suppresses autonomous captive-portal entry when split DNS is active" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             # Extract just the Invoke-OpenPathWatchdogPrechecks function body for precise assertions.
@@ -2666,7 +2666,7 @@ Describe "Watchdog Script" {
         }
 
         It "Emits a health event when a captive portal is detected with no declared domains" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2676,7 +2676,7 @@ Describe "Watchdog Script" {
         }
 
         It "Recovery runner leaf dot-sources standalone and rejects traversal request ids" {
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             Get-Command Invoke-OpenPathCaptivePortalRecoveryQueue -ErrorAction Stop | Out-Null
             Test-OpenPathRecoveryRequestId -RequestId '..\..\evil' | Should -BeFalse
             Test-OpenPathRecoveryRequestId -RequestId ([Guid]::NewGuid().ToString('N')) | Should -BeTrue
@@ -2685,7 +2685,7 @@ Describe "Watchdog Script" {
         }
 
         It "Recovery runner leaf never defines the harness-patched state probe" {
-            $leafContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1") -Raw
+            $leafContent = Get-Content (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1") -Raw
             $leafContent | Should -Not -Match 'function Get-OpenPathCaptivePortalRecoveryState'
             $leafContent | Should -Not -Match 'captive-portal-recovery-fixture-state\.json'
             $leafContent | Should -Not -Match 'direct-runner-captive-portal-navigation'
@@ -2755,7 +2755,7 @@ Describe "Watchdog Script" {
 
     Context "Integrity checks" {
         It "Verifies baseline integrity and handles tampering" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2766,7 +2766,7 @@ Describe "Watchdog Script" {
         }
 
         It "Protects runtime and native update helpers in the integrity baseline" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Integrity.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Integrity.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2783,7 +2783,7 @@ Describe "Watchdog Script" {
             # OpenPath-RuntimeDependencyApply and OpenPath-CaptivePortalRecovery.
             # Replacing either script yields SYSTEM execution. Both must be in the
             # integrity baseline so tampering is detected at the next watchdog cycle.
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Integrity.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Integrity.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2798,7 +2798,7 @@ Describe "Watchdog Script" {
             # native-messaging host, and the lib\install\*.ps1 helpers are all dot-sourced
             # under SYSTEM. Replacing any yields SYSTEM execution, so they must be in the
             # integrity baseline.
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Integrity.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Integrity.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -2812,7 +2812,7 @@ Describe "Watchdog Script" {
             @{ Name = 'Defers the integrity check while a self-update holds the agent update lock'; LockAcquired = $false; ExpectedChecks = 0 }
             @{ Name = 'Checks integrity under the agent update lock and releases it afterwards'; LockAcquired = $true; ExpectedChecks = 1 }
         ) {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
 
             $global:OpenPathTestLockAcquired = $LockAcquired
@@ -2878,7 +2878,7 @@ Describe "Watchdog Script" {
 
     Context "Acrylic service start type" {
         It "Repairs a non-automatic Acrylic start type without reporting a health issue" {
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointStateReconciler.ps1")
             $policyState = [pscustomobject]@{ ProtectedModeEligible = $true }
 
             $plan = New-OpenPathWatchdogProtectedModeRepairPlan -PolicyState $policyState -AcrylicServiceAutoStart:$false
@@ -2897,16 +2897,16 @@ Describe "Watchdog Script" {
         }
 
         It "Feeds the Acrylic start type from the service into the watchdog plan" {
-            $content = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1") -Raw
+            $content = Get-Content (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1") -Raw
             $content | Should -Match "-AcrylicServiceAutoStart:\(-not \`$acrylicService -or -not \`$acrylicService\.PSObject\.Properties\['StartType'\] -or \(\[string\]\`$acrylicService\.StartType\) -eq 'Automatic'\)"
         }
     }
 
     Context "Watchdog health states" {
         It "Uses the shared endpoint reconciler for protected DNS and firewall repair ordering" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
-            $stateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointPolicyState.ps1"
-            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
+            $stateHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointPolicyState.ps1"
+            $reconcilerPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointStateReconciler.ps1"
             $helperContent = Get-Content $helperPath -Raw
             $stateContent = Get-Content $stateHelperPath -Raw
             $reconcilerContent = Get-Content $reconcilerPath -Raw
@@ -2935,8 +2935,8 @@ Describe "Watchdog Script" {
         }
 
         It "Reports FAIL_OPEN, STALE_FAILSAFE and CRITICAL states" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $scriptPath -Raw
             $helperContent = Get-Content $helperPath -Raw
 
@@ -2953,8 +2953,8 @@ Describe "Watchdog Script" {
         }
 
         It "Does not repair protected DNS or firewall while the local fail-open marker is active" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $scriptPath -Raw
             $helperContent = Get-Content $helperPath -Raw
 
@@ -2973,8 +2973,8 @@ Describe "Watchdog Script" {
         }
 
         It "Repairs local DNS when any active IPv4 adapter is missing loopback DNS" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
-            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
+            $reconcilerPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointStateReconciler.ps1"
             $helperContent = Get-Content $helperPath -Raw
             $reconcilerContent = Get-Content $reconcilerPath -Raw
 
@@ -2995,7 +2995,7 @@ Describe "Watchdog Script" {
         }
 
         It "Treats loopback behind another resolver as missing local DNS (primary-position check)" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $helperContent = Get-Content $helperPath -Raw
             $start = $helperContent.IndexOf('function Test-OpenPathAdapterDnsLoopbackPrimary')
             $end = $helperContent.IndexOf('function Get-OpenPathActiveIpv4AdaptersMissingLocalDns')
@@ -3013,7 +3013,7 @@ Describe "Watchdog Script" {
 
     Context "Split DNS topology drift" {
         It "Refreshes the split-DNS portal topology when the network resolvers drift" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -3031,8 +3031,8 @@ Describe "Watchdog Script" {
 
     Context "DNS probe selection" {
         It "Relies on the shared DNS probe instead of a hard-coded public domain" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $scriptPath -Raw
             $helperContent = Get-Content $helperPath -Raw
 
@@ -3047,8 +3047,8 @@ Describe "Watchdog Script" {
 
     Context "Checkpoint recovery" {
         It "Attempts checkpoint recovery when watchdog reaches CRITICAL" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $scriptPath -Raw
             $helperContent = Get-Content $helperPath -Raw
 
@@ -3064,7 +3064,7 @@ Describe "Watchdog Script" {
         }
 
         It "Does not let SSE listener failures alone trigger checkpoint rollback" {
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -3079,7 +3079,7 @@ Describe "Watchdog Script" {
 
 Describe "Bridged VM networking neutralization wiring" {
     It "Watchdog detects bridged adapters and routes them through the repair plan when blockBridgedAdapters is set" {
-        $watchdogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+        $watchdogPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
         $content = Get-Content $watchdogPath -Raw
 
         Assert-ContentContainsAll -Content $content -Needles @(
@@ -3091,7 +3091,7 @@ Describe "Bridged VM networking neutralization wiring" {
     }
 
     It "Reconciler maps the bridge-filter detection to the DisableBridgeFilters action and dispatch" {
-        $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+        $reconcilerPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointStateReconciler.ps1"
         $content = Get-Content $reconcilerPath -Raw
 
         Assert-ContentContainsAll -Content $content -Needles @(
@@ -3102,8 +3102,8 @@ Describe "Bridged VM networking neutralization wiring" {
     }
 
     It "Default installer config enables blockBridgedAdapters so bridge enforcement is active out of the box" {
-        $firewallCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Catalog.ps1"
-        $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
+        $firewallCatalogPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Firewall.Catalog.ps1"
+        $configHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "install") "Installer.Config.ps1"
         . $firewallCatalogPath
         . $configHelperPath
 
@@ -3117,7 +3117,7 @@ Describe "Bridged VM networking neutralization wiring" {
 
 Describe "AppControl and watchdog health contract" {
     BeforeAll {
-        $script:watchdogRuntimePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+        $script:watchdogRuntimePath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
     }
 
     It "accepts a SYSTEM Highest recurring watchdog task only when its canonical action is exact" {
@@ -3597,7 +3597,7 @@ Describe "AppControl and watchdog health contract" {
     }
 
     It "passes aggregate reason codes from checks to outcome and the real health report" {
-        $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
+        $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
         $content = Get-Content $scriptPath -Raw
 
         Assert-ContentContainsAll -Content $content -Needles @(
@@ -3688,7 +3688,7 @@ Describe 'AppControl transaction final findings' {
 
 Describe "Watchdog egress floor check" {
     BeforeAll {
-        . (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1")
+        . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")
     }
 
     BeforeEach {
@@ -3746,7 +3746,7 @@ Describe "Watchdog egress floor check" {
 
 Describe "Watchdog committed update journal" {
     BeforeAll {
-        . (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1")
+        . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")
 
         function New-WatchdogJournalRoot {
             param(
@@ -4067,7 +4067,7 @@ Describe "Watchdog committed update journal" {
     }
 
     It "Wires the blocked repair and the unfinished-run guard ahead of the integrity restore" {
-        $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1") -Raw
+        $content = Get-Content -LiteralPath (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1") -Raw
         $reasonStart = $content.IndexOf('Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $OpenPathRoot')
         $repairStart = $content.IndexOf('Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $OpenPathRoot')
         $restoreStart = $content.IndexOf('Restore-OpenPathIntegrity -IntegrityResult')
@@ -4082,7 +4082,7 @@ Describe "Watchdog committed update journal" {
     }
 
     It "Wires the resume attempt ahead of the integrity restore" {
-        $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1") -Raw
+        $content = Get-Content -LiteralPath (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1") -Raw
         $resumeStart = $content.IndexOf('Invoke-OpenPathWatchdogPendingUpdateFinalization -OpenPathRoot $OpenPathRoot')
         $restoreStart = $content.IndexOf('Restore-OpenPathIntegrity -IntegrityResult')
 

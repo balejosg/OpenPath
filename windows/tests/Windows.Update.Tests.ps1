@@ -5,7 +5,7 @@ Describe "Update Script" {
 
     Context "Concurrency guard" {
         It "Update runtime uses a global mutex lock" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $content = Get-Content $runtimePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -22,8 +22,8 @@ Describe "Update Script" {
 
     Context "Module import resilience" {
         It "Uses the shared standalone bootstrap helper from the runtime module" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Update-OpenPath.ps1"
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Update-OpenPath.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $scriptContent = Get-Content $scriptPath -Raw
             $runtimeContent = Get-Content $runtimePath -Raw
 
@@ -49,7 +49,7 @@ Describe "Update Script" {
 
     Context "Startup captive portal reconciliation" {
         It "Synchronizes machine client config before local protected-mode reconciliation" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
 
             Assert-ContentContainsAll -Content $runtimeContent -Needles @(
@@ -69,7 +69,7 @@ Describe "Update Script" {
         }
 
         It "Fetches and persists changed captive portal domains from the machine client-config endpoint" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             Import-Module $runtimePath -Force
 
             InModuleScope Update.Runtime {
@@ -112,7 +112,7 @@ Describe "Update Script" {
         }
 
         It "Runs local protected-mode or portal reconciliation before remote whitelist download" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
 
             Assert-ContentContainsAll -Content $runtimeContent -Needles @(
@@ -137,9 +137,9 @@ Describe "Update Script" {
 
     Context "Rollback system" {
         It "Creates rolling checkpoints before applying new whitelist" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Config.ps1"
-            $whitelistHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Whitelist.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $configHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Config.ps1"
+            $whitelistHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Whitelist.ps1"
             $content = Get-Content $runtimePath -Raw
             $configHelperContent = Get-Content $configHelperPath -Raw
             $commonContent = Get-Content $whitelistHelperPath -Raw
@@ -164,8 +164,8 @@ Describe "Update Script" {
         }
 
         It "Restores checkpoint and falls back to backup on update failure" {
-            $runtimeModulePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Rollback.ps1"
+            $runtimeModulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Rollback.ps1"
             $content = Get-Content $runtimeModulePath -Raw
             $runtimeContent = Get-Content $runtimePath -Raw
 
@@ -183,7 +183,7 @@ Describe "Update Script" {
         }
 
         It "Allows backup rollback when config was never loaded" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Rollback.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Rollback.ps1"
             $runtimeContent = Get-Content $runtimePath -Raw
 
             $runtimeContent | Should -Match '\[AllowNull\(\)\]\s+\[PSCustomObject\]\$Config'
@@ -192,9 +192,9 @@ Describe "Update Script" {
         }
 
         It "Resolves the Windows root from helper while preserving C:\OpenPath as the default" {
-            $rootHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "WindowsRoot.ps1"
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $updateScriptPath = Join-Path $PSScriptRoot ".." "scripts" "Update-OpenPath.ps1"
+            $rootHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "WindowsRoot.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $updateScriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Update-OpenPath.ps1"
             $rootHelperContent = Get-Content $rootHelperPath -Raw
             $runtimeContent = Get-Content $runtimePath -Raw
             $updateScriptContent = Get-Content $updateScriptPath -Raw
@@ -218,8 +218,8 @@ Describe "Update Script" {
 
     Context "Health report" {
         It "Sends health report to API after successful update" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $commonPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Http.Health.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $commonPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Http.Health.ps1"
             $updateContent = Get-Content $runtimePath -Raw
             $commonContent = Get-Content $commonPath -Raw
 
@@ -229,9 +229,9 @@ Describe "Update Script" {
         }
 
         It "Persists update portal-active state and annotates health actions" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
-            $sseScriptPath = Join-Path $PSScriptRoot ".." "scripts" "Start-SSEListener.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $applyHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1"
+            $sseScriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Start-SSEListener.ps1"
             $runtimeContent = Get-Content $runtimePath -Raw
             $applyContent = Get-Content $applyHelperPath -Raw
             $sseContent = Get-Content $sseScriptPath -Raw
@@ -266,8 +266,8 @@ Describe "Update Script" {
 
     Context "Stale whitelist fail-safe" {
         It "Includes stale threshold logic and restores protected mode via shared helper" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1"
             $content = Get-Content $runtimePath -Raw
             $helperContent = Get-Content $helperPath -Raw
 
@@ -288,10 +288,10 @@ Describe "Update Script" {
 
     Context "Protected mode recovery" {
         It "Uses the shared endpoint reconciler for update/apply protected-mode decisions" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
-            $stateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointPolicyState.ps1"
-            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $applyHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1"
+            $stateHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointPolicyState.ps1"
+            $reconcilerPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointStateReconciler.ps1"
             $runtimeContent = Get-Content $runtimePath -Raw
             $applyContent = Get-Content $applyHelperPath -Raw
             $stateContent = Get-Content $stateHelperPath -Raw
@@ -325,9 +325,9 @@ Describe "Update Script" {
         }
 
         It "Restores local DNS and firewall through the shared helper after applying a valid whitelist" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
-            $rollbackHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Rollback.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $applyHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1"
+            $rollbackHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Rollback.ps1"
             $content = Get-Content $runtimePath -Raw
             $applyContent = Get-Content $applyHelperPath -Raw
             $rollbackContent = Get-Content $rollbackHelperPath -Raw
@@ -342,11 +342,11 @@ Describe "Update Script" {
 
         Context "Stale whitelist fail-safe and server confirmation" {
             BeforeEach {
-                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.System.ps1")
-                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Config.ps1")
-                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Redaction.ps1")
-                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Config.ps1")
-                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1")
+                . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.System.ps1")
+                . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Config.ps1")
+                . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Redaction.ps1")
+                . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Config.ps1")
+                . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1")
 
                 $script:dataDir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
                 New-Item -ItemType Directory -Path $script:dataDir | Out-Null
@@ -615,7 +615,7 @@ Describe "Update Script" {
         }
 
         It "Restarts protected DNS when runtime dependency queue changes without a new whitelist" {
-            $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
+            $applyHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1"
             $applyContent = Get-Content $applyHelperPath -Raw
 
             $applyContent | Should -Match "(?s)Handle-OpenPathNotModified.*?\`$runtimeDependencyQueueChanged = \[bool\]\(Invoke-OpenPathUpdateWritersLockScope -Stage 'not-modified-queue-apply'.*?-QueueChanged \`$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan"
@@ -623,9 +623,9 @@ Describe "Update Script" {
         }
 
         It "Logs the Acrylic host update and restart sub-step breakdown (Phase 8g G3)" {
-            $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
-            $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
-            $restartPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Restart.ps1"
+            $configPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "DNS.Acrylic.Config.ps1"
+            $servicePath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "DNS.Acrylic.Service.ps1"
+            $restartPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "DNS.Acrylic.Restart.ps1"
             $configContent = Get-Content $configPath -Raw
             $serviceContent = Get-Content $servicePath -Raw
             $restartContent = Get-Content $restartPath -Raw
@@ -661,7 +661,7 @@ Describe "Update Script" {
         }
 
         It "Keeps runtime dependency queue apply scalar when Acrylic emits helper output" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
 
             $runtimeContent | Should -Match '(?s)function Invoke-OpenPathRuntimeDependencyQueueApply.*?\$acrylicHostWritten = \[bool\]\(Update-AcrylicHost.*?return \[bool\]\$runtimeDependencyQueueResult\.Changed'
@@ -671,8 +671,8 @@ Describe "Update Script" {
         }
 
         It "Provides a queue-only runtime dependency fast apply without remote download" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Apply-RuntimeDependencyQueue.ps1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Apply-RuntimeDependencyQueue.ps1"
             $runtimeContent = Get-Content $runtimePath -Raw
             $scriptContent = Get-Content $scriptPath -Raw
 
@@ -735,7 +735,7 @@ Describe "Update Script" {
         }
 
         It "Stamps the applied generation at the end of every drain iteration" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
             $fastApplyStart = $runtimeContent.IndexOf('function Invoke-OpenPathRuntimeDependencyFastApply')
             $updateCycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
@@ -750,7 +750,7 @@ Describe "Update Script" {
         }
 
         It "Skips the native host mirror sync until the whitelist or config inputs change" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
 
             Assert-ContentContainsAll -Content $runtimeContent -Needles @(
@@ -785,7 +785,7 @@ Describe "Update Script" {
 
     Context "Durable update primitives" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
         }
 
         It "Writes a JSON record durably over a <State> destination" -ForEach @(
@@ -951,7 +951,7 @@ Describe "Update Script" {
                 'windows/scripts/Recover-OpenPathAgentUpdate.ps1',
                 'windows/lib/internal/Common.Integrity.ps1'
             )
-            $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+            $root = (Resolve-Path (Join-Path (Join-Path $PSScriptRoot '..') '..')).Path
             $actual = @()
             foreach ($relativePath in $files) {
                 $actual += Get-NonDurableWriteLocations -Path (Join-Path $root $relativePath)
@@ -971,7 +971,7 @@ Describe "Update Script" {
         }
 
         It "Writes the run manifest, journal, failure record and superseded journal through the durable writer" {
-            $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'lib' 'internal' 'Common.Update.ps1') -Raw
+            $content = Get-Content -LiteralPath (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'lib') 'internal') 'Common.Update.ps1') -Raw
 
             $content | Should -Match 'Write-OpenPathAgentUpdateJsonFile -Path \(Join-Path \$backupRoot ''manifest\.json''\) -Object \$manifest'
             $content | Should -Not -Match 'Set-Content -Path \(Join-Path \$backupRoot ''manifest\.json''\)'
@@ -981,7 +981,7 @@ Describe "Update Script" {
 
     Context "Self-update unchanged files" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
         }
 
         It "Classifies matching files unchanged without a backup and backs up only changed files" {
@@ -1068,7 +1068,7 @@ Describe "Update Script" {
         }
 
         It "Skips unchanged files in the replacement loop but verifies every manifest file afterwards" {
-            $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'lib' 'internal' 'Common.Update.ps1') -Raw
+            $content = Get-Content -LiteralPath (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'lib') 'internal') 'Common.Update.ps1') -Raw
 
             $loopStart = $content.IndexOf('foreach ($download in $downloadedFiles)')
             $unchangedSkip = $content.IndexOf('if ([bool]$download.Unchanged) {', $loopStart)
@@ -1083,11 +1083,11 @@ Describe "Update Script" {
 
     Context "Self-update transactions" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
         }
 
         It "Backs up every existing file into a per-run directory before replacing anything" {
-            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $updateHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1"
             $content = Get-Content $updateHelperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -1216,7 +1216,7 @@ Describe "Update Script" {
 
     Context "Self-update artifact integrity" {
         It "Requires a well-formed sha256 for every manifest file entry before downloading it" {
-            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $updateHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1"
             $content = Get-Content $updateHelperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -1233,7 +1233,7 @@ Describe "Update Script" {
         }
 
         It "Compares the downloaded and post-replacement hashes unconditionally, without an optional-check guard" {
-            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $updateHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1"
             $content = Get-Content $updateHelperPath -Raw
 
             $content | Should -Not -Match 'if \(\$expectedHash\) \{'
@@ -1253,7 +1253,7 @@ Describe "Update Script" {
         It "Refreshes the integrity backup only after the new files are verified, under the update lock" {
             # Saving the backup before the replacement left the old files in it, and a
             # watchdog cycle during the update restored them over the new version.
-            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $updateHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1"
             $content = Get-Content $updateHelperPath -Raw
 
             $lockStart = $content.IndexOf('$updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds')
@@ -1289,7 +1289,7 @@ Describe "Update Script" {
         }
 
         It "Lets only one holder take the agent update lock at a time" {
-            $commonPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1")).Path
+            $commonPath = (Resolve-Path (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1")).Path
             . $commonPath
             $script:OpenPathAgentUpdateLockName = "OpenPathTestLock-$([guid]::NewGuid().ToString('N'))"
             $holderScript = @"
@@ -1299,10 +1299,10 @@ Describe "Update Script" {
 `$null = [Console]::In.ReadLine()
 `$m.ReleaseMutex()
 "@
+            $holderScriptPath = Join-Path $TestDrive ("update-lock-holder-$([guid]::NewGuid().ToString('N')).ps1")
+            Set-Content -LiteralPath $holderScriptPath -Value $holderScript -Encoding UTF8
             $psi = [System.Diagnostics.ProcessStartInfo]::new((Get-Process -Id $PID).Path)
-            $psi.ArgumentList.Add('-NoProfile')
-            $psi.ArgumentList.Add('-Command')
-            $psi.ArgumentList.Add($holderScript)
+            $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$holderScriptPath`""
             $psi.RedirectStandardInput = $true
             $psi.RedirectStandardOutput = $true
             $psi.UseShellExecute = $false
@@ -1333,7 +1333,7 @@ Describe "Update Script" {
         }
 
         It "Gates staged .ps1/.psm1 artifacts behind an opt-in Authenticode signature check" {
-            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $updateHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1"
             $content = Get-Content $updateHelperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -1359,8 +1359,8 @@ Describe "Update Script" {
             # writers scope. A shared helper that is not exported by its module
             # (and not listed as a session requirement) breaks the real install
             # update with "not recognized" (Windows E2E run 37731855999).
-            $dnsPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "lib" "DNS.psm1")).Path
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $dnsPath = (Resolve-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "DNS.psm1")).Path
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $script = "Import-Module '$($dnsPath -replace "'", "''")' -Force -ErrorAction SilentlyContinue; " +
             "if (Get-Command -Name Get-OpenPathRuntimeDependencyOverlayState -ErrorAction SilentlyContinue) { 'resolved' } else { 'missing' }"
             $result = & pwsh -NoProfile -Command $script | Select-Object -Last 1
@@ -1375,7 +1375,7 @@ Describe "Update Script" {
             # The ensure/health entrypoints live in Browser.FirefoxNativeHost.psm1
             # and were private to it, so the self-update retry, the watchdog
             # health report and the installer SAC notice skipped them silently.
-            $browserPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "lib" "Browser.psm1")).Path
+            $browserPath = (Resolve-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.psm1")).Path
             $script = "Import-Module '$($browserPath -replace "'", "''")' -Force -ErrorAction SilentlyContinue; " +
             "if ((Get-Command -Name Invoke-OpenPathFirefoxNativeHostCompiledEnsure -ErrorAction SilentlyContinue) -and " +
             "(Get-Command -Name Get-OpenPathFirefoxNativeHostCompiledHealth -ErrorAction SilentlyContinue)) { 'resolved' } else { 'missing' }"
@@ -1387,7 +1387,7 @@ Describe "Update Script" {
             # The ensure used to run inside the cycle while Global\OpenPathUpdateLock
             # was held; a host whose ping times out (compile + 20 s + 45 s) then
             # made an SSE approval wait and skip its cycle.
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $runtimeContent = Get-Content -LiteralPath $runtimePath -Raw
             $cycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
             $cycleEnd = $runtimeContent.IndexOf('function Write-OpenPathUpdatePortalActiveState')
@@ -1407,7 +1407,7 @@ Describe "Update Script" {
 
     Context "Post-cycle native host ensure (Phase 8c)" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1") -Force
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1") -Force
         }
 
         It "does not run the ensure for SSE cycles" {
@@ -1440,7 +1440,7 @@ Describe "Update Script" {
             # ensure must never hold Global\OpenPathUpdateLock, so another
             # cycle (an SSE approval) can acquire it without waiting.
             $ready = Join-Path $TestDrive ('ensure-running-' + [guid]::NewGuid().ToString('N') + '.marker')
-            $modulePath = (Resolve-Path (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1")).Path
+            $modulePath = (Resolve-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1")).Path
             $slowEnsure = {
                 param($modulePath, $ready)
                 function global:Write-OpenPathLog { param([string]$Message, [string]$Level = 'INFO') }
@@ -1497,7 +1497,7 @@ Describe "Update Script" {
             }
 
             # Shared stubs for the update apply path (Phase 7 P2 stamping tests).
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1")
             function ConvertTo-OpenPathWhitelistFileContent { param($Whitelist, $BlockedSubdomains, $BlockedPaths) 'WHITELIST' }
             function Sync-FirefoxNativeHostMirror { param($Config, $WhitelistPath, [switch]$ClearWhitelist) }
             function Invoke-OpenPathRuntimeDependencyQueueApply {
@@ -1544,7 +1544,7 @@ Describe "Update Script" {
             $handle = $holder.BeginInvoke()
             try {
                 $ready.Wait(5000) | Should -BeTrue
-                Import-Module (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1") -Force
+                Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1") -Force
                 InModuleScope Update.Runtime {
                     # The dependency fast path takes the Acrylic writers lock; the
                     # whole-cycle exclusion lock must not gate it (Phase 7 P2).
@@ -1566,7 +1566,7 @@ Describe "Update Script" {
             $handle = $holder.BeginInvoke()
             try {
                 $ready.Wait(5000) | Should -BeTrue
-                Import-Module (Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1") -Force
+                Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1") -Force
                 InModuleScope Update.Runtime {
                     { Invoke-OpenPathUpdateWritersLockScope -TimeoutSeconds 1 -Action { 'blocked' } } |
                         Should -Throw '*Acrylic writers lock*'
@@ -1580,7 +1580,7 @@ Describe "Update Script" {
         }
 
         It "keeps the shared writers scoped in the update cycle instead of held for the whole cycle" {
-            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
 
             Assert-ContentContainsAll -Content $runtimeContent -Needles @(
@@ -1667,7 +1667,7 @@ Describe "Update Script" {
 
     Context "Self-update staged validation and journal" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
         }
 
         It "Rejects a staged script with a syntax error before replacing any installed file" {
@@ -1778,7 +1778,7 @@ Describe "Update Script" {
                 $updated.phase | Should -Be 'validating'
             }
 
-            $updatePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $updatePath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1"
             $content = Get-Content $updatePath -Raw
             $lockStart = $content.IndexOf('$updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds')
             $backupStart = $content.IndexOf('Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles', $lockStart)
@@ -1802,7 +1802,7 @@ Describe "Update Script" {
 
     Context "Self-update intent and commit marker" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
         }
 
         It "Writes a commit marker for one run and rejects a marker from another run" {
@@ -1965,7 +1965,7 @@ Describe "Update Script" {
 
     Context "Self-update blocked repair" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
 
             function Write-RepairState {
                 param(
@@ -2208,7 +2208,7 @@ Describe "Update Script" {
 
     Context "Self-update health gate and failure backoff" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
         }
 
         It "Rolls back, reports and records the failure when the health gate rejects the new tree" {
@@ -2543,7 +2543,7 @@ Describe "Update Script" {
 
     Context "Self-update finalization" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
         }
 
         It "Keeps the committed journal and does not roll back when finalization fails at <Step>" -ForEach @(
@@ -3039,7 +3039,7 @@ Describe "Update Script" {
 
     Context "Self-update stuck finalization" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
 
             function New-StuckFinalizationFixture {
                 param(
@@ -3778,7 +3778,7 @@ Describe "Update Script" {
 
     Context "Self-update failed-run backup cleanup" {
         BeforeAll {
-            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+            Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
         }
 
         It "Removes the run backup directory when a download fails before the journal is written" {
