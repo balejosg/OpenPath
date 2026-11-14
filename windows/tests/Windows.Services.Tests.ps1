@@ -320,10 +320,16 @@ Describe "Services Module" {
             $content = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'Copy-Item -Path $download.StagedPath -Destination $tempDestinationPath -Force -ErrorAction Stop',
-                'Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop',
+                '$copiedHash = Copy-OpenPathAgentUpdateFileDurable',
+                '-SourcePath $download.StagedPath',
+                '-DestinationPath $tempDestinationPath',
+                'Move-OpenPathAgentUpdateFileIntoPlace `',
+                '-TempPath $tempDestinationPath `',
+                '-DestinationPath $download.DestinationPath',
                 'Register-OpenPathFirefoxNativeHost -Config $Config -PreserveExistingOnNotReady | Out-Null'
             )
+            # The flush-and-swap protocol still copies before it swaps.
+            $content | Should -Match '(?s)\$copiedHash = Copy-OpenPathAgentUpdateFileDurable.*?Move-OpenPathAgentUpdateFileIntoPlace'
         }
 
         It "Reapplies protected DNS mode after applying updated files" {

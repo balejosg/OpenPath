@@ -962,7 +962,6 @@ Describe "Update Script" {
             $allowed = @(
                 'Common.Update.ps1|Save-OpenPathAgentUpdateInstalledFileBackups|Copy-Item',
                 'Common.Update.ps1|Restore-OpenPathAgentUpdateJournalBackups|Copy-Item',
-                'Common.Update.ps1|Invoke-OpenPathAgentSelfUpdate|Copy-Item',
                 'Common.Update.ps1|Test-OpenPathAgentUpdateStagedArtifacts|WriteAllText',
                 'Recover-OpenPathAgentUpdate.ps1|Write-OpenPathRecoveryLog|Add-Content',
                 'Recover-OpenPathAgentUpdate.ps1|Restore-OpenPathRecoveryJournal|Copy-Item',
@@ -1105,7 +1104,9 @@ Describe "Update Script" {
                 'Save-OpenPathAgentUpdateInstalledFileBackups',
                 'manifest.json',
                 '$tempDestinationPath',
-                'Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop',
+                'Move-OpenPathAgentUpdateFileIntoPlace `',
+                '-TempPath $tempDestinationPath `',
+                '-DestinationPath $download.DestinationPath',
                 'Post-replacement checksum mismatch'
             )
 
@@ -1113,7 +1114,7 @@ Describe "Update Script" {
 
             $backupStart = $content.IndexOf('Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles')
             $journalWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot')
-            $firstReplacementStart = $content.IndexOf('Move-Item -Path $tempDestinationPath')
+            $firstReplacementStart = $content.IndexOf('Move-OpenPathAgentUpdateFileIntoPlace', $journalWriteStart)
 
             $backupStart | Should -BeGreaterThan 0
             $backupStart | Should -BeLessThan $journalWriteStart
@@ -1263,7 +1264,7 @@ Describe "Update Script" {
             $content = Get-Content $updateHelperPath -Raw
 
             $lockStart = $content.IndexOf('$updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds')
-            $replaceStart = $content.IndexOf('Move-Item -Path $tempDestinationPath')
+            $replaceStart = $content.IndexOf('Move-OpenPathAgentUpdateFileIntoPlace', $lockStart)
             $verifyStart = $content.IndexOf('Post-replacement checksum mismatch')
             $commitStart = $content.IndexOf("Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot `$script:OpenPathRoot -Journal `$updateJournal -Phase 'committed'")
             $finalizationCall = $content.IndexOf('Complete-OpenPathAgentUpdateFinalization `', $commitStart)
@@ -1352,7 +1353,7 @@ Describe "Update Script" {
 
             # The signature gate must run per downloaded file, before it replaces the live destination file.
             $applyLoopStart = $content.IndexOf('foreach ($download in $downloadedFiles)')
-            $moveStart = $content.IndexOf('Move-Item -Path $tempDestinationPath', $applyLoopStart)
+            $moveStart = $content.IndexOf('Move-OpenPathAgentUpdateFileIntoPlace', $applyLoopStart)
             $sigGateStart = $content.IndexOf('$enforceSignature = ', $applyLoopStart)
             $sigGateStart | Should -BeGreaterThan $applyLoopStart
             $sigGateStart | Should -BeLessThan $moveStart
@@ -1789,7 +1790,7 @@ Describe "Update Script" {
             $lockStart = $content.IndexOf('$updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds')
             $backupStart = $content.IndexOf('Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles', $lockStart)
             $journalWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot', $lockStart)
-            $firstReplacementStart = $content.IndexOf('Move-Item -Path $tempDestinationPath', $lockStart)
+            $firstReplacementStart = $content.IndexOf('Move-OpenPathAgentUpdateFileIntoPlace', $lockStart)
 
             $lockStart | Should -BeGreaterThan 0
             $backupStart | Should -BeGreaterThan $lockStart

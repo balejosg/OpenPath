@@ -1870,6 +1870,7 @@ function Invoke-OpenPathAgentSelfUpdate {
         $stagingRoot = Join-Path $updateRoot ("staging-$targetVersion")
         $backupRoot = New-OpenPathAgentUpdateBackupRoot -OpenPathRoot $script:OpenPathRoot
         $runBackupRoot = $backupRoot
+        $runId = Split-Path -Path $backupRoot -Leaf
 
         if (Test-Path $stagingRoot) {
             Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -2008,9 +2009,17 @@ function Invoke-OpenPathAgentSelfUpdate {
                 }
             }
 
-            $tempDestinationPath = "$($download.DestinationPath).openpath-update-$([guid]::NewGuid()).tmp"
-            Copy-Item -Path $download.StagedPath -Destination $tempDestinationPath -Force -ErrorAction Stop
-            Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop
+            $tempDestinationPath = "$($download.DestinationPath).openpath-update-$runId.tmp"
+            $copiedHash = Copy-OpenPathAgentUpdateFileDurable `
+                -SourcePath $download.StagedPath `
+                -DestinationPath $tempDestinationPath
+            if (-not [string]::Equals($copiedHash, [string]$download.ExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+                Remove-Item -LiteralPath $tempDestinationPath -Force -ErrorAction SilentlyContinue
+                throw "Staged copy checksum mismatch for $($download.RelativePath)"
+            }
+            Move-OpenPathAgentUpdateFileIntoPlace `
+                -TempPath $tempDestinationPath `
+                -DestinationPath $download.DestinationPath
         }
 
         foreach ($download in $downloadedFiles) {
