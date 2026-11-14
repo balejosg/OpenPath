@@ -84,27 +84,13 @@ Do not run `npm run verify:full` manually immediately before every push just to 
 
 ## Hypothesis Validation Order
 
-Do not use broad CI or release workflows as the first signal for a development hypothesis when a cheaper lane can falsify it first.
+Do not use broad CI or release workflows as the first signal for a development hypothesis when a cheaper lane can falsify it first. Default order:
 
-Default order:
+1. Focused local suite or `npm run verify:quick`.
+2. Direct runner connection for Windows-targeted endpoint, browser-policy, or runtime hypotheses: `npm run diagnostics:windows:direct`, or focused Pester / `npm run test:student-policy:windows` on a Windows-capable machine.
+3. Broader CI for integrated evidence.
 
-- focused local suite or `npm run verify:quick`
-- direct runner connection for Windows-targeted endpoint, browser-policy, or runtime hypotheses
-- broader CI for integrated evidence
-
-From the shared workspace, use `../scripts/validate-hypothesis.sh` when choosing the first pass:
-
-- `../scripts/validate-hypothesis.sh openpath local`
-- `../scripts/validate-hypothesis.sh openpath windows-direct`
-- `../scripts/validate-hypothesis.sh openpath windows-gh --integration`
-
-Repo-local fallback when the workspace wrapper is unavailable:
-
-- `npm run verify:quick`
-- `npm run diagnostics:windows:direct`
-- `npm run test:student-policy:windows` on a Windows-capable development machine
-
-On a Windows-capable development environment, prefer focused Pester or `npm run test:student-policy:windows` before waiting on broader workflow fan-out. From the shared Linux workspace, prefer the direct runner lane first; keep `windows-gh --integration` for integration-time verification rather than the default development loop.
+From the shared workspace the same lanes are `../scripts/validate-hypothesis.sh openpath local` and `openpath windows-direct`. Keep `openpath windows-gh --integration` for integration-time verification rather than the default development loop.
 
 ## Repo Map
 
@@ -124,54 +110,31 @@ Start with:
 
 ## Environment And Tooling
 
-- Node.js `>= 20`
-- npm workspaces from repo root
-- `bats` for Bash tests
-- PowerShell/Pester for Windows-oriented validation
-
-Common root commands:
-
-- `npm install`
-- `npm run build --workspaces --if-present`
-- `npm run lint`
-- `npm run typecheck`
-- `npm test`
-- `npm run verify:docs`
-- `npm run verify:agent`
-- `npm run verify:quick`
+Node.js `>= 20` with npm workspaces from the repo root; `bats` for Bash tests; PowerShell/Pester for Windows-oriented validation. Script bodies live in `package.json`: read them there. This section records only what a script name does not tell you.
 
 ### Script Semantics
 
 Script names here do NOT mean the same thing as in ClassroomPath -- do not assume cross-repo symmetry.
 
-| Script                            | What it actually runs                                                                                                                                       | When to use                                                                                                         |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `verify:quick`                    | typecheck + lint + format:check -- **no tests**                                                                                                             | fast feedback on TS/lint changes                                                                                    |
-| `verify:checks`                   | lint:shell, format:check, verify:docs, security:files, test:repo-config, test:repo-test-files, verify:migrations:metadata, check:ps-culture (in parallel)   | catch repo-structure and shell issues                                                                               |
-| `verify:staged`                   | lint-staged (runs on staged files only)                                                                                                                     | manual staged check outside pre-commit hook                                                                         |
-| `verify:full`                     | bash scripts/verify-full.sh -- full suite: static, checks, security, coverage, unit, e2e (e2e path-scoped when the pre-push hook provides the pushed range) | runs automatically as the pre-push hook; [do not run manually before every push](AGENTS.md#hook-behavior)           |
-| `verify:docs`                     | node scripts/verify-docs.mjs -- dead links, non-ASCII, INDEX.md coverage                                                                                    | after editing any markdown doc                                                                                      |
-| `verify:agent`                    | node scripts/agent-verify.js -- picks fastest lane based on what changed                                                                                    | default agent self-check; used by pre-commit hook                                                                   |
-| `verify:affected`                 | verify:quick + tests for workspaces affected by current changes                                                                                             | broader than verify:quick, cheaper than verify:full                                                                 |
-| `verify:migrations:metadata`      | api workspace verify:migrations (tsx scripts/verify-migrations.ts + drizzle-kit check)                                                                      | after editing DB migration files                                                                                    |
-| `test:repo-config`                | node --test tests/repo-config.test.mjs tests/generate-docker-manifests.test.mjs tests/check-ps-datetime-culture.test.mjs                                    | validates repo-level config contracts                                                                               |
-| `test:repo-test-files`            | bash scripts/check-test-files.sh -- enforces every source file has a test file                                                                              | after adding or removing source files                                                                               |
-| `docker:manifests`                | node scripts/generate-docker-manifests.mjs -- writes package.docker.json manifests                                                                          | after changing workspace deps or versions                                                                           |
-| `docker:manifests:check`          | node scripts/generate-docker-manifests.mjs --check -- verifies manifests are up to date                                                                     | CI or pre-push manifest drift check                                                                                 |
-| `check:ps-culture`                | node scripts/check-ps-datetime-culture.mjs -- flags unsafe [DateTime]::Parse calls in .ps1 files                                                            | after editing any PowerShell file                                                                                   |
-| `test:shell`                      | `cd tests && bats *.bats` -- runs all Bash bats test files under tests/                                                                                     | after editing Linux shell scripts or bats fixtures                                                                  |
-| `test:e2e:smoke`                  | npm run test:e2e --workspace=@openpath/react-spa -- --grep @smoke -- Playwright smoke subset                                                                | fast browser smoke check after SPA changes; requires built react-spa/dist and a running API                         |
-| `test:installer:linux`            | bash tests/e2e/ci/run-linux-installer-contracts.sh -- runs Linux installer contract suite in Docker                                                         | after editing linux/ installer scripts or Dockerfiles; requires Docker                                              |
-| `test:installer:apt`              | bash tests/e2e/ci/run-linux-apt-contracts.sh -- runs APT helper contract suite in Docker                                                                    | after editing APT helper scripts or apt-bootstrap.sh; requires Docker                                               |
-| `lint:shell`                      | `shellcheck --severity=warning linux/lib/*.sh linux/scripts/**/*.sh tests/**/*.sh`                                                                          | after editing any Bash shell script                                                                                 |
-| `verify:static`                   | turbo run typecheck lint --parallel -- typechecks and lints all workspaces in parallel                                                                      | faster alternative to verify:quick when you only need type and lint signals across all workspaces                   |
-| `verify:unit`                     | npm run build --workspace=@openpath/shared && npm run test:e2e:helpers && turbo run test --parallel -- full unit suite across all workspaces                | before pushing when you need full unit signal without e2e; used inside verify:full                                  |
-| `security:files`                  | bash scripts/check-sensitive-files.sh -- checks for sensitive file patterns in the repo                                                                     | runs as part of verify:checks; run directly after adding new config or credential-adjacent files                    |
-| `security:secrets`                | secretlint over JS/TS/JSON/YAML/env files -- scans for leaked secrets                                                                                       | runs as part of verify:security; run directly if you added or changed any file with potential secrets               |
-| `security:audit`                  | npm audit --audit-level=high piped through check-npm-audit-critical.mjs -- fails on critical vulnerabilities                                                | runs as part of verify:security; run after changing dependencies                                                    |
-| `size:check`                      | size-limit check on react-spa/dist -- fails if bundle exceeds configured limit (skipped if dist not built)                                                  | after SPA dependency or bundle changes; requires react-spa/dist to be built first                                   |
-| `diagnostics:windows:direct`      | node scripts/run-windows-runner-direct.mjs -- connects to the self-hosted Windows runner over SSH and runs diagnostic modes                                 | Windows-targeted diagnostics; hits a remote runner VM via SSH, takes 10+ min; use for Windows hypothesis validation |
-| `diagnostics:linux-student:local` | node scripts/run-linux-student-policy-local.mjs -- runs the Linux student policy flow locally in Docker                                                     | Linux student-policy hypothesis validation; requires Docker; use for local student-policy flow testing              |
+- `verify:quick`: typecheck + lint + format:check -- **no tests**. Fast feedback on TS/lint changes.
+- `verify:static`: turbo typecheck + lint across all workspaces in parallel; no format check, no tests.
+- `verify:affected`: `verify:quick` plus tests for the workspaces affected by current changes; broader than `verify:quick`, cheaper than `verify:full`.
+- `verify:agent`: picks the fastest lane for what changed; default agent self-check, also what the pre-commit hook runs.
+- `verify:checks`: repo-structure and shell lanes in parallel (shell lint, format, docs, sensitive files, repo-config, test-file coverage, migration metadata, PowerShell culture).
+- `verify:unit`: builds `@openpath/shared`, then the full unit suite across all workspaces; no e2e.
+- `verify:full`: the pre-push hook suite (static, checks, security, coverage, unit, path-scoped e2e). [Do not run it manually before every push](AGENTS.md#hook-behavior).
+- `verify:docs`: dead links, non-ASCII, `docs/INDEX.md` coverage. Run after editing any markdown doc.
+- `verify:migrations:metadata`: run after editing DB migration files.
+- `test:repo-config`: repo-level config contracts; many read sources as raw text.
+- `test:repo-test-files`: enforces that every source file has a test file. Run after adding or removing source files.
+- `docker:manifests` / `docker:manifests:check`: write / verify the `package.docker.json` manifests. Run after changing workspace deps or versions.
+- `check:ps-culture`: flags unsafe `[DateTime]::Parse` calls. Run after editing any `.ps1` file.
+- `lint:shell`: shellcheck at warning severity. Run after editing any Bash script.
+- `security:files`, `security:secrets`, `security:audit`: sensitive file patterns, secretlint, and `npm audit` failing on critical vulnerabilities. Run the relevant one after adding config or credential-adjacent files, or changing dependencies.
+- `size:check`: bundle size limit; silently skipped unless `react-spa/dist` is built.
+- `test:e2e:smoke`: Playwright `@smoke` subset; requires a built `react-spa/dist` and a running API.
+- `test:installer:linux`, `test:installer:apt`, `diagnostics:linux-student:local`: require Docker.
+- `diagnostics:windows:direct`: runs diagnostic modes on the self-hosted Windows runner over SSH; remote and slow (10+ min).
 
 ## Testing Guide
 
@@ -179,75 +142,27 @@ Before renaming files or functions, check [`docs/contract-tests.md`](docs/contra
 
 Use the smallest relevant test surface first.
 
-### API
-
-- curated smoke set (what CI unit lanes, turbo, and pre-push run): `npm test --workspace=@openpath/api`
-- every suite plus uncovered top-level test files: `npm run test:all --workspace=@openpath/api`
-- focused: `npm run test:auth --workspace=@openpath/api`
-- focused: `npm run test:setup --workspace=@openpath/api`
-- focused: `npm run test:e2e --workspace=@openpath/api`
-- focused: `npm run test:security --workspace=@openpath/api`
-
-### Dashboard
-
-- all: `npm test --workspace=@openpath/dashboard`
-
-### React SPA
-
-- unit: `npm test --workspace=@openpath/react-spa`
-- smoke e2e: `npm run test:e2e:smoke`
-- full e2e: `npm run test:e2e`
-
-### Shared
-
-- all: `npm test --workspace=@openpath/shared`
-
-### Firefox Extension
-
-- all: `npm test --workspace=@openpath/firefox-extension`
-
-### Linux Agent Contracts
-
-- shell: `cd tests && bats *.bats`
-- installer contracts: `npm run test:installer:linux`
-- APT contracts: `npm run test:installer:apt`
-- student-policy flow: `npm run test:student-policy:linux`
-
-### Windows Agent Contracts
-
-- student-policy flow: `npm run test:student-policy:windows`
-- broader Windows checks run through the Windows test suites under `windows/tests/`
+- Per workspace: `npm test --workspace=@openpath/<name>` for `api`, `dashboard`, `react-spa`, `shared` and `firefox-extension`.
+- API: `npm test` is the curated smoke set (what CI unit lanes, turbo, and pre-push run); `npm run test:all --workspace=@openpath/api` runs every suite plus uncovered top-level test files. Focused, same workspace: `test:auth`, `test:setup`, `test:e2e`, `test:security`.
+- React SPA e2e: `npm run test:e2e:smoke`, then `npm run test:e2e`.
+- Linux agent contracts: `cd tests && bats *.bats`, `npm run test:installer:linux`, `npm run test:installer:apt`, `npm run test:student-policy:linux`.
+- Windows agent contracts: `npm run test:student-policy:windows`; broader Windows checks run through the suites under `windows/tests/`.
 
 ## Knowledge Graph
 
-A pre-built knowledge graph for OpenPath lives at the workspace root:
+A pre-built knowledge graph for OpenPath lives at the workspace root: `../graphify-out/graph.json` (raw data), `graph.html` (interactive community view) and `GRAPH_REPORT.md` (god nodes, surprises, import cycles).
 
-| File                              | Purpose                                                |
-| --------------------------------- | ------------------------------------------------------ |
-| `../graphify-out/graph.json`      | Raw graph data                                         |
-| `../graphify-out/graph.html`      | Interactive community view -- open in browser          |
-| `../graphify-out/GRAPH_REPORT.md` | Full audit report: god nodes, surprises, import cycles |
-
-For an exact file or known symbol, read it directly or use targeted `rg`.
-Use the graph for unknown relationships or broad navigation; its absence is not a
-blocker and does not authorize a rebuild during read-only work.
-**Query with code identifiers (function/file/symbol names), not prose questions** -- start-node
-matching is literal substring matching on node labels, so a prose question collapses to noise.
-Always pass `--graph` explicitly; the default depends on the current working directory.
+For an exact file or known symbol, read it directly or use targeted `rg`. Use the graph for unknown relationships or broad navigation; its absence is not a blocker and does not authorize a rebuild during read-only work. **Query with code identifiers (function/file/symbol names), not prose questions** -- start-node matching is literal substring matching on node labels, so a prose question collapses to noise. Always pass `--graph` explicitly; the default depends on the current working directory.
 
 ```bash
 # from the workspace root (Whitelist/)
 graphify query "bearerAuth" --graph graphify-out/graph.json
-graphify query "activate_firewall" --graph graphify-out/graph.json
 graphify path "StudentPolicyDriver" "parseTRPC" --graph graphify-out/graph.json
 ```
 
-If results look irrelevant, grep `graph.json` node labels for your term first, then re-query with
-the labels you find. Use `--dfs` to trace a specific path; `--budget 1500` to cap output length.
+If results look irrelevant, grep `graph.json` node labels for your term first, then re-query with the labels you find. Use `--dfs` to trace a specific path; `--budget 1500` to cap output length.
 
-**Rebuild:** a post-commit hook updates the graph automatically in the background after each
-commit (log: `~/.cache/graphify-rebuild.log`). Manual refresh, from the workspace root only
-(plain `graphify update` inside `OpenPath/` would create a divergent `OpenPath/graphify-out/`):
+A post-commit hook rebuilds the graph in the background after each commit (log: `~/.cache/graphify-rebuild.log`). Manual refresh, from the workspace root only (plain `graphify update` inside `OpenPath/` would create a divergent `OpenPath/graphify-out/`):
 
 ```bash
 GRAPHIFY_OUT=../graphify-out graphify update OpenPath
@@ -255,24 +170,17 @@ GRAPHIFY_OUT=../graphify-out graphify update OpenPath
 
 ### God Nodes (highest cross-community coupling -- change with care)
 
-| Symbol                    | Edges | Location                                 |
-| ------------------------- | ----- | ---------------------------------------- |
-| `parseTRPC()`             | 61    | `api/src/`                               |
-| `Write-OpenPathLog()`     | 57    | `windows/lib/internal/Common.System.ps1` |
-| `useT()`                  | 48    | `react-spa/src/`                         |
-| `StudentPolicyDriver`     | 47    | `windows/`                               |
-| `db`                      | 45    | `api/src/db/`                            |
-| `bearerAuth()`            | 43    | `api/src/`                               |
-| `ScheduleWithPermissions` | 39    | `windows/`                               |
+`parseTRPC()` and `bearerAuth()` (`api/src/`), `db` (`api/src/db/`), `useT()` (`react-spa/src/`), `Write-OpenPathLog()` (`windows/lib/internal/Common.System.ps1`), `StudentPolicyDriver` and `ScheduleWithPermissions` (`windows/`). Current edge counts are in `GRAPH_REPORT.md`.
 
 ### Known Import Cycles
 
-- **`groupsViewModelActions.ts`** -- 3-file cycle with `groupsViewModelState.ts` and `useGroupsViewModel.ts` (`react-spa/src/hooks/`)
-- **`useGroupedRulesManager.ts`** -- 2-file cycle with `useGroupedRulesData.ts` (`react-spa/src/hooks/`, type-only imports)
-- **`HierarchicalRulesTable.tsx`** -- 2-file cycle with `rules-table/HierarchicalGroupRow.tsx` (`react-spa/src/components/`, type-only imports)
-- Do not add new edges into these cycles; resolve rather than extend them. The type-only cycles can be broken by extracting shared types to a dedicated types file.
-- Resolved by type extraction (worked examples of the pattern above): the two `firefox-extension/src/lib/config-storage.ts` cycles were broken by moving `RequestConfig` into `config-storage.types.ts`, and the `native-messaging-client.ts` <-> `runtime-dependency-protocol.ts` cycle by moving `NativeResponse` into `native-response.types.ts`. Each original module keeps a type re-export, so consumers are unchanged.
-- Automated guard (ACTIVE): `eslint-plugin-import-x@4.16.2` is installed; `import-x/no-cycle` is enabled at error level for `react-spa/src/**/*.{ts,tsx}` and `firefox-extension/src/**/*.{ts,tsx}` in `eslint.config.js`. `import type` declarations are automatically skipped by the rule (no `ignoreTypeImports` option needed -- it is built-in behaviour in this version). All three remaining cycles listed above produce no lint errors without inline disables, because every back-edge in each cycle is an `import type` statement that the rule skips. If a new runtime (non-type) import is added that closes a cycle, the rule will fire and block `npm run lint`.
+Three cycles remain, each closed only by `import type` back-edges. Do not add new edges into them; resolve rather than extend, by extracting the shared types to a dedicated types file (as `config-storage.types.ts` and `native-response.types.ts` did in `firefox-extension/src/lib/`).
+
+- `groupsViewModelActions.ts`, `groupsViewModelState.ts` and `useGroupsViewModel.ts` (`react-spa/src/hooks/`)
+- `useGroupedRulesManager.ts` and `useGroupedRulesData.ts` (`react-spa/src/hooks/`)
+- `HierarchicalRulesTable.tsx` and `rules-table/HierarchicalGroupRow.tsx` (`react-spa/src/components/`)
+
+`import-x/no-cycle` is enabled at error level for `react-spa/src` and `firefox-extension/src` in `eslint.config.js`. The rule skips `import type`, so these three pass without inline disables; a new runtime (non-type) import that closes a cycle fails `npm run lint`.
 
 ### Key Cross-Community Bridges
 
