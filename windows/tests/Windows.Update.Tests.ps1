@@ -1114,6 +1114,35 @@ Describe "Update Script" {
             $journalWriteStart | Should -BeLessThan $firstReplacementStart
         }
 
+        It "Sweeps temp siblings and staging trees left by an interrupted run" {
+            $root = Join-Path $TestDrive ('update-sweep-' + [guid]::NewGuid().ToString('N'))
+            $lib = Join-Path $root 'lib'
+            $updateRoot = Join-Path $root 'data/agent-update'
+            New-Item -ItemType Directory -Path $lib -Force | Out-Null
+            New-Item -ItemType Directory -Path (Join-Path $updateRoot 'staging-old') -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $lib 'kept.ps1') -Value 'kept' -Encoding ASCII
+            foreach ($name in @('a.ps1.openpath-update-run-x.tmp', 'a.ps1.openpath-update-run-x.tmp.bak', 'a.ps1.openpath-update-recovery-x.tmp')) {
+                Set-Content -LiteralPath (Join-Path $lib $name) -Value 'leftover' -Encoding ASCII
+            }
+            Set-Content -LiteralPath (Join-Path $updateRoot 'staging-old/partial.ps1') -Value 'partial' -Encoding ASCII
+
+            InModuleScope Common -Parameters @{ Root = $root } {
+                Remove-OpenPathAgentUpdateLeftovers -OpenPathRoot $Root
+            }
+
+            @(Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object { $_.Name -match 'openpath-update-' }).Count | Should -Be 0
+            Test-Path -LiteralPath (Join-Path $updateRoot 'staging-old') | Should -BeFalse
+            (Get-Content -LiteralPath (Join-Path $lib 'kept.ps1') -Raw).Trim() | Should -Be 'kept'
+        }
+
+        It "Sweeps leftovers before the download loop" {
+            $content = Get-Content -LiteralPath (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'lib') 'internal') 'Common.Update.ps1') -Raw
+            $sweep = $content.IndexOf('Remove-OpenPathAgentUpdateLeftovers -OpenPathRoot $script:OpenPathRoot')
+            $download = $content.IndexOf('Invoke-WebRequest -Uri $fileUrl')
+            $sweep | Should -BeGreaterThan 0
+            $sweep | Should -BeLessThan $download
+        }
+
         It "Rolls back from this run's backups even when an older run left a backup for the same version" {
             $root = Join-Path $TestDrive ('update-stale-backup-' + [guid]::NewGuid().ToString('N'))
             $destinationA = Join-Path $root 'lib/existing-a.ps1'

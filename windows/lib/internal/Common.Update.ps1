@@ -463,6 +463,43 @@ function Move-OpenPathAgentUpdateFileIntoPlace {
     }
 }
 
+function Remove-OpenPathAgentUpdateLeftovers {
+    <#
+    .SYNOPSIS
+        Removes temp siblings and staging trees left by an earlier interrupted run
+    .DESCRIPTION
+        A run that is killed after writing a temp sibling can leave a file whose
+        data is not part of any installed name. The next run removes those
+        siblings and every staging tree before it downloads anything. A sweep
+        failure is logged and never stops the update.
+    #>
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
+
+    $updateRoot = Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot
+    try {
+        foreach ($pattern in @('*.openpath-update-*.tmp', '*.openpath-update-*.bak', '*.openpath-update-recovery-*.tmp')) {
+            $leftovers = @(Get-ChildItem -LiteralPath $OpenPathRoot -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue)
+            foreach ($leftover in $leftovers) {
+                Remove-Item -LiteralPath $leftover.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        if (Test-Path -LiteralPath $updateRoot) {
+            foreach ($staging in @(Get-ChildItem -LiteralPath $updateRoot -Directory -Filter 'staging-*' -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath $staging.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    catch {
+        try {
+            Write-OpenPathLog "Self-update: could not sweep leftovers from an earlier run: $_" -Level WARN
+        }
+        catch {
+            # A sweep failure must never stop the update.
+        }
+    }
+}
+
 function Write-OpenPathAgentUpdateJsonFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -2236,6 +2273,11 @@ function Invoke-OpenPathAgentSelfUpdate {
         $backupRoot = New-OpenPathAgentUpdateBackupRoot -OpenPathRoot $script:OpenPathRoot
         $runBackupRoot = $backupRoot
         $runId = Split-Path -Path $backupRoot -Leaf
+
+        # A run killed before its first swap can leave flushed temp siblings and
+        # a staging tree. None of them is a visible installed name; remove them
+        # before this run downloads anything.
+        Remove-OpenPathAgentUpdateLeftovers -OpenPathRoot $script:OpenPathRoot
 
         if (Test-Path $stagingRoot) {
             Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
