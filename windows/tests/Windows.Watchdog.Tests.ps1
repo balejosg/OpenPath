@@ -4206,3 +4206,13 @@ Describe "Watchdog committed update journal" {
     }
 }
 
+
+Describe "Watchdog blocked update wiring" {
+    It "exports the recovery-state helpers the watchdog resolves by command name" {
+        Import-Module (Join-Path (Join-Path $PSScriptRoot "..") "lib/Common.psm1") -Force -Global
+        Get-Command -Name 'Read-OpenPathAgentUpdateRecoveryState' -ErrorAction SilentlyContinue |
+            Should -Not -BeNullOrEmpty
+        Get-Command -Name 'Test-OpenPathAgentUpdateRecoveryBlocked' -ErrorAction SilentlyContinue |
+            Should -Not -BeNullOrEmpty
+    }
+}

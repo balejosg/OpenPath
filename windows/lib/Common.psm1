@@ -89,5 +89,7 @@ Export-ModuleMember -Function @(
     'Compare-OpenPathVersion',
     'Test-OpenPathAgentUpdateNeeded',
     'Invoke-OpenPathAgentSelfUpdate',
+    'Read-OpenPathAgentUpdateRecoveryState',
+    'Test-OpenPathAgentUpdateRecoveryBlocked',
     'Send-OpenPathAgentUpdateRecoveryReport'
 )
