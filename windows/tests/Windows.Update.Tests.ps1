@@ -3923,3 +3923,273 @@ Describe "Update Script" {
         }
     }
 }
+
+Describe "Self-update cut matrix" {
+    BeforeAll {
+        $script:WindowsRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+        $script:ModulePath = Join-Path $script:WindowsRoot 'lib/Common.psm1'
+        $script:RecoveryScriptPath = Join-Path $script:WindowsRoot 'scripts/Recover-OpenPathAgentUpdate.ps1'
+        $script:PwshPath = (Get-Process -Id $PID).Path
+
+        $script:ChildUpdater = @'
+param(
+    [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+    [Parameter(Mandatory = $true)][string]$ManifestPath,
+    [Parameter(Mandatory = $true)][string]$StagedRoot,
+    [Parameter(Mandatory = $true)][string]$ModulePath,
+    [string]$CutPoint = 'none'
+)
+$ErrorActionPreference = 'Stop'
+$env:OPENPATH_CUT_ROOT = $OpenPathRoot
+$env:OPENPATH_CUT_MANIFEST = $ManifestPath
+$env:OPENPATH_CUT_STAGED = $StagedRoot
+$env:OPENPATH_CUT_POINT = $CutPoint
+Import-Module $ModulePath -Force
+& (Get-Module Common) {
+    $script:OpenPathRoot = $env:OPENPATH_CUT_ROOT
+    $script:Manifest = Get-Content -LiteralPath $env:OPENPATH_CUT_MANIFEST -Raw | ConvertFrom-Json
+    $script:CutPoint = $env:OPENPATH_CUT_POINT
+
+    Set-Item -Path 'function:script:Cut-Now' -Value { [Environment]::Exit(97) }
+    Set-Item -Path 'function:script:Get-OpenPathConfig' -Value {
+        [PSCustomObject]@{
+            apiUrl       = 'https://api.test'
+            whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+            version      = '9.9.8'
+            agentBuild   = 'build-old'
+        }
+    }
+    Set-Item -Path 'function:script:Get-OpenPathMachineTokenFromWhitelistUrl' -Value { 'token' }
+    Set-Item -Path 'function:script:Invoke-RestMethod' -Value { $script:Manifest }
+    Set-Item -Path 'function:script:Invoke-WebRequest' -Value {
+        param($Uri, $Method, $Headers, $OutFile, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction)
+        $relative = ($Uri -split '/files/')[1]
+        $relative = [System.Uri]::UnescapeDataString($relative)
+        $source = Join-Path $env:OPENPATH_CUT_STAGED (($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar) -replace '\\', [System.IO.Path]::DirectorySeparatorChar)
+        Copy-Item -LiteralPath $source -Destination $OutFile -Force
+    }
+    Set-Item -Path 'function:script:Write-OpenPathLog' -Value { param($Message, $Level) }
+    Set-Item -Path 'function:script:Set-OpenPathConfig' -Value {
+        param($Config)
+        $configPath = Join-Path $env:OPENPATH_CUT_ROOT 'data/config.json'
+        $Config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+        if ($script:CutPoint -eq 'config') { Cut-Now }
+    }
+    Set-Item -Path 'function:script:Save-OpenPathIntegrityBackup' -Value { }
+    Set-Item -Path 'function:script:New-OpenPathIntegrityBaseline' -Value { }
+    Set-Item -Path 'function:script:Restore-OpenPathProtectedMode' -Value { }
+    Set-Item -Path 'function:script:Send-OpenPathHealthReport' -Value { }
+    Set-Item -Path 'function:script:Invoke-OpenPathAgentUpdateHealthGate' -Value {
+        [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false }
+    }
+    foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+        Set-Item -Path "function:script:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+    }
+
+    switch ($script:CutPoint) {
+        'intent' {
+            Set-Item -Path 'function:script:Write-OpenPathAgentUpdateJournal' -Value { param($OpenPathRoot, $Journal) Cut-Now }
+        }
+        'before-swap' {
+            Set-Item -Path 'function:script:Move-OpenPathAgentUpdateFileIntoPlace' -Value { param($TempPath, $DestinationPath) Cut-Now }
+        }
+        'after-first-swap' {
+            Set-Item -Path 'function:script:Move-OpenPathAgentUpdateFileIntoPlace' -Value {
+                param($TempPath, $DestinationPath)
+                if ([System.IO.File]::Exists($DestinationPath)) {
+                    [System.IO.File]::Replace($TempPath, $DestinationPath, "$TempPath.bak", $true)
+                }
+                else {
+                    [System.IO.File]::Move($TempPath, $DestinationPath)
+                }
+                Cut-Now
+            }
+        }
+        'validating' {
+            Set-Item -Path 'function:script:Update-OpenPathAgentUpdateJournalPhase' -Value {
+                param($OpenPathRoot, $Journal, $Phase)
+                if ($Phase -eq 'validating') { Cut-Now }
+                $Journal.phase = $Phase
+                $Journal.updatedAt = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                Write-OpenPathAgentUpdateJournal -OpenPathRoot $OpenPathRoot -Journal $Journal
+            }
+        }
+        'gate' {
+            Set-Item -Path 'function:script:Invoke-OpenPathAgentUpdateHealthGate' -Value { Cut-Now }
+        }
+        'marker' {
+            Set-Item -Path 'function:script:Write-OpenPathAgentUpdateCommittedMarker' -Value { param($BackupRoot, $RunId, $TargetVersion, $TargetBuild) Cut-Now }
+        }
+        'committed' {
+            Set-Item -Path 'function:script:Update-OpenPathAgentUpdateJournalPhase' -Value {
+                param($OpenPathRoot, $Journal, $Phase)
+                $Journal.phase = $Phase
+                $Journal.updatedAt = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                Write-OpenPathAgentUpdateJournal -OpenPathRoot $OpenPathRoot -Journal $Journal
+                if ($Phase -eq 'committed') { Cut-Now }
+            }
+        }
+        'finalization' {
+            Set-Item -Path 'function:script:Complete-OpenPathAgentUpdateFinalization' -Value { param($OpenPathRoot, $Journal, $Config) Cut-Now }
+        }
+        'journal-removal' {
+            Set-Item -Path 'function:script:Remove-OpenPathAgentUpdateJournal' -Value { param($OpenPathRoot) Cut-Now }
+        }
+    }
+
+    Invoke-OpenPathAgentSelfUpdate -Silent | Out-Null
+}
+
+'@
+
+        function New-CutFixture {
+        $root = Join-Path $TestDrive ('cut-' + [guid]::NewGuid().ToString('N'))
+        $stagedRoot = Join-Path $TestDrive ('cut-staged-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $root 'lib') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $root 'data') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $stagedRoot 'lib') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $root 'lib/a.ps1') -Value 'Write-Output "old-a"' -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $root 'lib/b.ps1') -Value 'Write-Output "old-b"' -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $stagedRoot 'lib/a.ps1') -Value 'Write-Output "new-a"' -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $stagedRoot 'lib/b.ps1') -Value 'Write-Output "new-b"' -Encoding ASCII
+        [PSCustomObject]@{
+            version = '9.9.9'
+            build   = 'build-new'
+            files   = @(
+                [PSCustomObject]@{ path = 'lib/a.ps1'; sha256 = (Get-FileHash -LiteralPath (Join-Path $stagedRoot 'lib/a.ps1') -Algorithm SHA256).Hash.ToLowerInvariant() },
+                [PSCustomObject]@{ path = 'lib/b.ps1'; sha256 = (Get-FileHash -LiteralPath (Join-Path $stagedRoot 'lib/b.ps1') -Algorithm SHA256).Hash.ToLowerInvariant() }
+            )
+        } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $root 'manifest.json') -Encoding UTF8
+        [PSCustomObject]@{
+            version    = '9.9.8'
+            agentBuild = 'build-old'
+            apiUrl     = 'https://api.test'
+            whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $root 'data/config.json') -Encoding UTF8
+        return [PSCustomObject]@{ Root = $root; StagedRoot = $stagedRoot; Manifest = (Join-Path $root 'manifest.json') }
+        }
+
+        function Invoke-CutChild {
+        param(
+            [Parameter(Mandatory = $true)]$Fixture,
+            [string]$CutPoint = 'none'
+        )
+
+        $scriptPath = Join-Path $Fixture.Root "cut-$CutPoint.ps1"
+        Set-Content -LiteralPath $scriptPath -Value $script:ChildUpdater -Encoding UTF8
+        $output = & $script:PwshPath -NoProfile -NonInteractive -File $scriptPath `
+            -OpenPathRoot $Fixture.Root `
+            -ManifestPath $Fixture.Manifest `
+            -StagedRoot $Fixture.StagedRoot `
+            -ModulePath $script:ModulePath `
+            -CutPoint $CutPoint 2>&1
+        return [PSCustomObject]@{ ExitCode = $LASTEXITCODE; Output = (@($output) -join [Environment]::NewLine) }
+    }
+
+    function Invoke-RecoveryChild {
+        param([Parameter(Mandatory = $true)]$Fixture)
+
+        $output = & $script:PwshPath -NoProfile -NonInteractive -File $script:RecoveryScriptPath -OpenPathRoot $Fixture.Root 2>&1
+        return [PSCustomObject]@{ ExitCode = $LASTEXITCODE; Output = (@($output) -join [Environment]::NewLine) }
+    }
+
+    function Get-SingleBuild {
+        param([Parameter(Mandatory = $true)]$Fixture)
+
+        $a = (Get-Content -LiteralPath (Join-Path $Fixture.Root 'lib/a.ps1') -Raw).Trim()
+        $b = (Get-Content -LiteralPath (Join-Path $Fixture.Root 'lib/b.ps1') -Raw).Trim()
+        $build = if ($a -match 'old') { 'old' } elseif ($a -match 'new') { 'new' } else { 'invalid' }
+        $matches = if ($build -eq 'old') { ($b -match 'old') } elseif ($build -eq 'new') { ($b -match 'new') } else { $false }
+        return [PSCustomObject]@{ Build = $build; Consistent = [bool]$matches; A = $a; B = $b }
+        }
+    }
+
+    It "Leaves a single-build tree and matching config after a cut at <Point>" -ForEach @(
+        @{ Point = 'intent' }
+        @{ Point = 'before-swap' }
+        @{ Point = 'after-first-swap' }
+        @{ Point = 'validating' }
+        @{ Point = 'gate' }
+        @{ Point = 'marker' }
+        @{ Point = 'committed' }
+        @{ Point = 'finalization' }
+        @{ Point = 'config' }
+        @{ Point = 'journal-removal' }
+    ) {
+        $fixture = New-CutFixture
+        $cut = Invoke-CutChild -Fixture $fixture -CutPoint $Point
+        $cut.ExitCode | Should -Be 97 -Because $cut.Output
+
+        $recovery = Invoke-RecoveryChild -Fixture $fixture
+        $recovery.ExitCode | Should -Be 0 -Because $recovery.Output
+
+        $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+        $statePath = Join-Path $fixture.Root 'data/agent-update/recovery-state.json'
+        $needsFinalization = (Test-Path -LiteralPath $journalPath) -or (Test-Path -LiteralPath $statePath)
+        if ($needsFinalization) {
+            $finish = Invoke-CutChild -Fixture $fixture -CutPoint 'none'
+            $finish.ExitCode | Should -Be 0 -Because $finish.Output
+        }
+
+        $tree = Get-SingleBuild -Fixture $fixture
+        $tree.Consistent | Should -BeTrue -Because "tree was A=$($tree.A) B=$($tree.B)"
+        $config = Get-Content -LiteralPath (Join-Path $fixture.Root 'data/config.json') -Raw | ConvertFrom-Json
+        if ($tree.Build -eq 'new') {
+            $config.version | Should -Be '9.9.9'
+            $config.agentBuild | Should -Be 'build-new'
+        }
+        else {
+            $config.version | Should -Be '9.9.8'
+            $config.agentBuild | Should -Be 'build-old'
+        }
+
+        $updateRoot = Join-Path $fixture.Root 'data/agent-update'
+        Test-Path -LiteralPath (Join-Path $updateRoot 'update-journal.json') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $updateRoot 'recovery-state.json') | Should -BeFalse
+        @(Get-ChildItem -LiteralPath $fixture.Root -Recurse -File -Filter '*.openpath-update-*.tmp' -ErrorAction SilentlyContinue).Count | Should -Be 0
+        @(Get-ChildItem -LiteralPath $fixture.Root -Recurse -File -Filter 'journal-intent.json' -ErrorAction SilentlyContinue).Count | Should -Be 0
+        @(Get-ChildItem -LiteralPath $fixture.Root -Recurse -File -Filter 'committed.marker' -ErrorAction SilentlyContinue).Count | Should -Be 0
+    }
+
+    It "Rolls back from the intent when the journal is zero-filled at full length" {
+        $fixture = New-CutFixture
+        $cut = Invoke-CutChild -Fixture $fixture -CutPoint 'after-first-swap'
+        $cut.ExitCode | Should -Be 97 -Because $cut.Output
+        $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+        [System.IO.File]::WriteAllBytes($journalPath, (New-Object byte[] 47241))
+
+        $recovery = Invoke-RecoveryChild -Fixture $fixture
+        $recovery.ExitCode | Should -Be 0 -Because $recovery.Output
+
+        $tree = Get-SingleBuild -Fixture $fixture
+        $tree.Build | Should -Be 'old'
+        $tree.Consistent | Should -BeTrue
+        $report = Get-Content -LiteralPath (Join-Path $fixture.Root 'data/agent-update/recovery-report.json') -Raw | ConvertFrom-Json
+        $report.reasonCode | Should -Match 'self_update_recovery_rolled_back'
+    }
+
+    It "Repairs to the published build when the journal and the intent are zero-filled" {
+        $fixture = New-CutFixture
+        $cut = Invoke-CutChild -Fixture $fixture -CutPoint 'after-first-swap'
+        $cut.ExitCode | Should -Be 97 -Because $cut.Output
+        $journalPath = Join-Path $fixture.Root 'data/agent-update/update-journal.json'
+        [System.IO.File]::WriteAllBytes($journalPath, (New-Object byte[] 47241))
+        $intentPath = @(Get-ChildItem -LiteralPath (Join-Path $fixture.Root 'data/agent-update/backups') -Recurse -File -Filter 'journal-intent.json')[0].FullName
+        [System.IO.File]::WriteAllBytes($intentPath, (New-Object byte[] 47241))
+
+        $recovery = Invoke-RecoveryChild -Fixture $fixture
+        $recovery.ExitCode | Should -Be 0 -Because $recovery.Output
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/recovery-state.json') | Should -BeTrue
+
+        $repair = Invoke-CutChild -Fixture $fixture -CutPoint 'none'
+        $repair.ExitCode | Should -Be 0 -Because $repair.Output
+
+        $tree = Get-SingleBuild -Fixture $fixture
+        $tree.Build | Should -Be 'new'
+        $tree.Consistent | Should -BeTrue
+        $config = Get-Content -LiteralPath (Join-Path $fixture.Root 'data/config.json') -Raw | ConvertFrom-Json
+        $config.version | Should -Be '9.9.9'
+        $config.agentBuild | Should -Be 'build-new'
+        Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/recovery-state.json') | Should -BeFalse
+    }
+}

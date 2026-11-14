@@ -787,6 +787,24 @@ function Complete-OpenPathRecoveryRun {
     $targetVersion = [string]$Record.targetVersion
     $targetBuild = [string]$Record.targetBuild
     $runBackupRoot = [string]$Record.backupRoot
+    $runId = Get-OpenPathRecoveryRunId -Record $Record
+    if (-not [string]::IsNullOrWhiteSpace($runId)) {
+        foreach ($entry in @($Record.files)) {
+            $relativePath = [string]$entry.relativePath
+            if (-not (Test-OpenPathRecoveryRelativePath -RelativePath $relativePath)) {
+                continue
+            }
+            $nativePath = ConvertTo-OpenPathRecoveryNativePath -RelativePath $relativePath
+            $destinationPath = Join-Path $script:OpenPathRoot $nativePath
+            $tempSibling = "$destinationPath.openpath-update-$runId.tmp"
+            if (Test-Path -LiteralPath $tempSibling -PathType Leaf) {
+                Remove-Item -LiteralPath $tempSibling -Force -ErrorAction SilentlyContinue
+            }
+            if (Test-Path -LiteralPath "$tempSibling.bak" -PathType Leaf) {
+                Remove-Item -LiteralPath "$tempSibling.bak" -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 
     $supersededRestore = Restore-OpenPathRecoverySupersededJournal
     if ($supersededRestore -eq 'failed') {

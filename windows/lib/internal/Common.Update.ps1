@@ -1791,6 +1791,14 @@ function Restore-OpenPathAgentUpdateJournalBackups {
             [void]$errors.Add("Rollback failed for ${relativePath}: $_")
             $complete = $false
         }
+
+        $tempSibling = "$destinationPath.openpath-update-$runId.tmp"
+        if (Test-Path -LiteralPath $tempSibling -PathType Leaf) {
+            Remove-Item -LiteralPath $tempSibling -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath "$tempSibling.bak" -PathType Leaf) {
+            Remove-Item -LiteralPath "$tempSibling.bak" -Force -ErrorAction SilentlyContinue
+        }
     }
 
     return [PSCustomObject]@{
