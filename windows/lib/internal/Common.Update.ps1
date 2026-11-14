@@ -1534,25 +1534,30 @@ function Restore-OpenPathAgentUpdateJournalBackups {
     )
 
     $complete = $true
+    $changed = 0
     $errors = New-Object System.Collections.ArrayList
     $updateRoot = Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot
     $allowedBackupRoot = [System.IO.Path]::GetFullPath((Join-Path $updateRoot 'backups'))
     $allowedBackupPrefix = $allowedBackupRoot.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
     $backupRoot = [string]$Journal.backupRoot
+    $runId = Get-OpenPathAgentUpdateJournalRunId -Journal $Journal
+    if ([string]::IsNullOrWhiteSpace($runId)) {
+        $runId = 'rollback'
+    }
 
     if ([string]::IsNullOrWhiteSpace($backupRoot)) {
-        return [PSCustomObject]@{ Complete = $false; Errors = @('Journal has no backup root') }
+        return [PSCustomObject]@{ Complete = $false; Errors = @('Journal has no backup root'); Changed = 0 }
     }
 
     try {
         $resolvedBackupRoot = [System.IO.Path]::GetFullPath($backupRoot)
     }
     catch {
-        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is not a valid path: $backupRoot") }
+        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is not a valid path: $backupRoot"); Changed = 0 }
     }
 
     if (-not $resolvedBackupRoot.StartsWith($allowedBackupPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is outside the update directory: $backupRoot") }
+        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is outside the update directory: $backupRoot"); Changed = 0 }
     }
 
     foreach ($entry in @($Journal.files)) {
@@ -1601,16 +1606,29 @@ function Restore-OpenPathAgentUpdateJournalBackups {
                 if (-not (Test-Path -LiteralPath $destinationDirectory)) {
                     New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
                 }
-                Copy-Item -LiteralPath $backupPath -Destination $destinationPath -Force -ErrorAction Stop
-                $restoredHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
-                if (-not [string]::Equals($restoredHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    [void]$errors.Add("Restored file does not match the recorded pre-update hash: $relativePath")
-                    $complete = $false
+                $tempPath = "$destinationPath.openpath-update-$runId.tmp"
+                try {
+                    $copiedHash = Copy-OpenPathAgentUpdateFileDurable `
+                        -SourcePath $backupPath `
+                        -DestinationPath $tempPath
+                    if (-not [string]::Equals($copiedHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        [void]$errors.Add("Restored file does not match the recorded pre-update hash: $relativePath")
+                        $complete = $false
+                        continue
+                    }
+                    Move-OpenPathAgentUpdateFileIntoPlace -TempPath $tempPath -DestinationPath $destinationPath
+                    $changed += 1
+                }
+                finally {
+                    if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
+                        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                    }
                 }
             }
             else {
                 if (Test-Path -LiteralPath $destinationPath) {
                     Remove-Item -LiteralPath $destinationPath -Force -ErrorAction Stop
+                    $changed += 1
                 }
                 if (Test-Path -LiteralPath $destinationPath) {
                     [void]$errors.Add("Could not remove new file: $relativePath")
@@ -1627,6 +1645,7 @@ function Restore-OpenPathAgentUpdateJournalBackups {
     return [PSCustomObject]@{
         Complete = $complete
         Errors   = @($errors.ToArray())
+        Changed  = $changed
     }
 }
 

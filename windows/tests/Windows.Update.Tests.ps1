@@ -960,12 +960,7 @@ Describe "Update Script" {
             # Temporary allow-list while the remaining commits convert these
             # paths. Every entry must shrink to the staging validator write.
             $allowed = @(
-                'Common.Update.ps1|Save-OpenPathAgentUpdateInstalledFileBackups|Copy-Item',
-                'Common.Update.ps1|Restore-OpenPathAgentUpdateJournalBackups|Copy-Item',
                 'Common.Update.ps1|Test-OpenPathAgentUpdateStagedArtifacts|WriteAllText',
-                'Recover-OpenPathAgentUpdate.ps1|Write-OpenPathRecoveryLog|Add-Content',
-                'Recover-OpenPathAgentUpdate.ps1|Restore-OpenPathRecoveryJournal|Copy-Item',
-                'Recover-OpenPathAgentUpdate.ps1|Write-OpenPathRecoveryReport|WriteAllText',
                 'Common.Integrity.ps1|Save-OpenPathIntegrityBackup|Copy-Item',
                 'Common.Integrity.ps1|New-OpenPathIntegrityBaseline|Set-Content',
                 'Common.Integrity.ps1|Update-OpenPathIntegrityEntry|Copy-Item',
