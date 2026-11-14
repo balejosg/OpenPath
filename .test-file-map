@@ -297,7 +297,7 @@ windows/lib/internal/Update.Script.Apply.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Update.Script.Rollback.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/WindowsRoot.ps1|windows/tests/Windows.Update.Tests.ps1
 windows/lib/internal/Watchdog.FailCount.ps1|windows/tests/Windows.Tests.ps1
-windows/lib/internal/Watchdog.Runtime.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/Watchdog.Runtime.ps1|windows/tests/Windows.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1,windows/tests/Windows.Update.Recovery.Tests.ps1
 windows/lib/internal/Watchdog.CaptivePortalPolicy.ps1|windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/EndpointPolicyState.ps1|windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/EndpointStateReconciler.ps1|windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
@@ -332,10 +332,10 @@ windows/lib/internal/Common.Redaction.ps1|windows/tests/Windows.Config.Redaction
 windows/lib/internal/Common.Domains.Catalog.ps1|windows/tests/Windows.Common.Core.Tests.ps1
 windows/lib/internal/Common.Domains.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/OpenPathConfig.Model.ps1|windows/tests/Windows.Config.Redaction.Tests.ps1,windows/tests/Windows.SSE.Coalescer.Tests.ps1,tests/repo-config/agent-config-parity-contracts.test.mjs
-windows/lib/internal/Common.Integrity.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/Common.Integrity.ps1|windows/tests/Windows.Tests.ps1,windows/tests/Windows.IntegrityEntry.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/Common.Network.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.System.ps1|windows/tests/Windows.Tests.ps1
-windows/lib/internal/Common.Update.ps1|windows/tests/Windows.Tests.ps1,tests/repo-config/agent-config-parity-contracts.test.mjs
+windows/lib/internal/Common.Update.ps1|windows/tests/Windows.Tests.ps1,windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Update.Recovery.Tests.ps1,tests/repo-config/agent-config-parity-contracts.test.mjs
 windows/lib/internal/Common.Whitelist.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Whitelist.Sections.ps1|windows/tests/Windows.Common.Core.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1
 windows/lib/internal/Common.MachineToken.ps1|windows/tests/Windows.Common.Core.Tests.ps1
