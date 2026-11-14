@@ -420,6 +420,41 @@ function Copy-OpenPathAgentUpdateFileDurable {
     return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
+function Get-OpenPathAgentUpdateFileHash {
+    <#
+    .SYNOPSIS
+        Returns the lowercase SHA-256 of a file without the Get-FileHash wrapper
+    .DESCRIPTION
+        Get-FileHash converts a locked-file IOException into a
+        WriteErrorException with HResult 0x80131501 and no inner exception, so
+        the retry rule cannot see the real sharing violation. This helper opens
+        the file directly, letting the IOException and its HResult surface.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $buffer = New-Object byte[] 1048576
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            [void]$sha.TransformBlock($buffer, 0, $read, $buffer, 0)
+        }
+        $empty = New-Object byte[] 0
+        [void]$sha.TransformFinalBlock($empty, 0, 0)
+        $hashBytes = $sha.Hash
+    }
+    finally {
+        if ($stream) {
+            $stream.Dispose()
+            $stream = $null
+        }
+        $sha.Dispose()
+    }
+
+    return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
 function Test-OpenPathAgentUpdateSharingViolation {
     <#
     .SYNOPSIS
@@ -1895,7 +1930,7 @@ function Restore-OpenPathAgentUpdateJournalBackups {
                 $destinationIsFile = Test-Path -LiteralPath $destinationPath -PathType Leaf
                 if ($destinationIsFile) {
                     $currentHash = Invoke-OpenPathAgentUpdateFileOperationWithRetry -Operation {
-                        (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                        Get-OpenPathAgentUpdateFileHash -Path $destinationPath
                     }
                     if ([string]::Equals($currentHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
                         continue
@@ -1909,7 +1944,7 @@ function Restore-OpenPathAgentUpdateJournalBackups {
                 }
 
                 $backupHash = Invoke-OpenPathAgentUpdateFileOperationWithRetry -Operation {
-                    (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                    Get-OpenPathAgentUpdateFileHash -Path $backupPath
                 }
                 if (-not [string]::Equals($backupHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
                     [void]$errors.Add("Backup hash does not match the recorded pre-update hash: $relativePath")

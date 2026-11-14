@@ -228,6 +228,32 @@ function Copy-OpenPathRecoveryFileDurable {
     return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
+function Get-OpenPathRecoveryFileHash {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $buffer = New-Object byte[] 1048576
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            [void]$sha.TransformBlock($buffer, 0, $read, $buffer, 0)
+        }
+        $empty = New-Object byte[] 0
+        [void]$sha.TransformFinalBlock($empty, 0, 0)
+        $hashBytes = $sha.Hash
+    }
+    finally {
+        if ($stream) {
+            $stream.Dispose()
+            $stream = $null
+        }
+        $sha.Dispose()
+    }
+
+    return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
 function Test-OpenPathRecoverySharingViolation {
     param([Parameter(Mandatory = $true)][object]$ErrorRecord)
 
@@ -709,7 +735,7 @@ function Restore-OpenPathRecoveryJournal {
                 $destinationIsFile = Test-Path -LiteralPath $destinationPath -PathType Leaf
                 if ($destinationIsFile) {
                     $currentHash = Invoke-OpenPathRecoveryFileOperationWithRetry -Operation {
-                        (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                        Get-OpenPathRecoveryFileHash -Path $destinationPath
                     }
                     if ([string]::Equals($currentHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
                         continue
@@ -723,7 +749,7 @@ function Restore-OpenPathRecoveryJournal {
                 }
 
                 $backupHash = Invoke-OpenPathRecoveryFileOperationWithRetry -Operation {
-                    (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                    Get-OpenPathRecoveryFileHash -Path $backupPath
                 }
                 if (-not [string]::Equals($backupHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
                     Write-OpenPathRecoveryLog "Backup hash does not match the recorded pre-update hash: $relativePath"
