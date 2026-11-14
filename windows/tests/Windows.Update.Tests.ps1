@@ -898,6 +898,132 @@ Describe "Update Script" {
             Test-Path -LiteralPath $replacement | Should -BeFalse
             @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -match '\.tmp$|\.bak$' }).Count | Should -Be 0
         }
+
+        It "Retries a sharing or lock violation in the swap primitive (<Hex>) and succeeds on the second attempt" -ForEach @(
+            @{ Hex = '0x80070020'; HResult = -2147024864 }
+            @{ Hex = '0x80070021'; HResult = -2147024863 }
+        ) {
+            $root = Join-Path $TestDrive ('durable-swap-retry-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $temp = Join-Path $root 'replacement.ps1'
+            $destination = Join-Path $root 'existing.ps1'
+            Set-Content -LiteralPath $temp -Value 'replacement-content' -Encoding ASCII
+            Set-Content -LiteralPath $destination -Value 'old-content' -Encoding ASCII
+
+            InModuleScope Common -Parameters @{ Temp = $temp; Destination = $destination; HResult = $HResult } {
+                Mock Start-Sleep { }
+                $script:SwapAttempts = 0
+                Mock Invoke-OpenPathAgentUpdateFileReplace {
+                    param($TempPath, $DestinationPath, $BackupPath)
+                    $script:SwapAttempts += 1
+                    if ($script:SwapAttempts -eq 1) {
+                        throw [System.IO.IOException]::new('being used by another process', [int]$HResult)
+                    }
+                    [System.IO.File]::Replace($TempPath, $DestinationPath, $BackupPath, $true)
+                }
+
+                Move-OpenPathAgentUpdateFileIntoPlace -TempPath $Temp -DestinationPath $Destination
+                $script:SwapAttempts | Should -Be 2
+            }
+
+            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'replacement-content'
+            Test-Path -LiteralPath $temp | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -match '\.tmp$|\.bak$' }).Count | Should -Be 0
+        }
+
+        It "Stops after the bounded attempts when the swap keeps hitting a sharing violation" {
+            $root = Join-Path $TestDrive ('durable-swap-exhaust-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $temp = Join-Path $root 'replacement.ps1'
+            $destination = Join-Path $root 'existing.ps1'
+            Set-Content -LiteralPath $temp -Value 'replacement-content' -Encoding ASCII
+            Set-Content -LiteralPath $destination -Value 'old-content' -Encoding ASCII
+
+            InModuleScope Common -Parameters @{ Temp = $temp; Destination = $destination } {
+                Mock Start-Sleep { }
+                $script:SwapAttempts = 0
+                Mock Invoke-OpenPathAgentUpdateFileReplace {
+                    param($TempPath, $DestinationPath, $BackupPath)
+                    $script:SwapAttempts += 1
+                    throw [System.IO.IOException]::new('being used by another process', [int]-2147024864)
+                }
+
+                { Move-OpenPathAgentUpdateFileIntoPlace -TempPath $Temp -DestinationPath $Destination } | Should -Throw
+                $script:SwapAttempts | Should -Be 5
+            }
+
+            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'old-content'
+            Test-Path -LiteralPath $temp | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -match '\.tmp$|\.bak$' }).Count | Should -Be 0
+        }
+
+        It "Does not retry a swap error that is not a sharing or lock violation" {
+            $root = Join-Path $TestDrive ('durable-swap-no-retry-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $temp = Join-Path $root 'replacement.ps1'
+            $destination = Join-Path $root 'existing.ps1'
+            Set-Content -LiteralPath $temp -Value 'replacement-content' -Encoding ASCII
+            Set-Content -LiteralPath $destination -Value 'old-content' -Encoding ASCII
+
+            InModuleScope Common -Parameters @{ Temp = $temp; Destination = $destination } {
+                Mock Start-Sleep { }
+                $script:SwapAttempts = 0
+                Mock Invoke-OpenPathAgentUpdateFileReplace {
+                    param($TempPath, $DestinationPath, $BackupPath)
+                    $script:SwapAttempts += 1
+                    throw [System.IO.IOException]::new('invalid parameter', [int]-2147024809)
+                }
+
+                { Move-OpenPathAgentUpdateFileIntoPlace -TempPath $Temp -DestinationPath $Destination } | Should -Throw
+                $script:SwapAttempts | Should -Be 1
+            }
+
+            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'old-content'
+        }
+
+        It "Reports the relative path, exception type and HResult when a restore fails definitively" {
+            $root = Join-Path $TestDrive ('durable-restore-failure-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/a.ps1'
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            $backup = Join-Path $backupRoot 'lib/a.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            New-Item -ItemType Directory -Path (Split-Path $backup -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'new-a' -Encoding ASCII
+            Set-Content -LiteralPath $backup -Value 'old-a' -Encoding ASCII
+
+            $journal = [PSCustomObject]@{
+                schemaVersion = 2
+                phase         = 'replacing'
+                backupRoot    = $backupRoot
+                files         = @(
+                    [PSCustomObject]@{
+                        relativePath   = 'lib\a.ps1'
+                        existedBefore  = $true
+                        previousSha256 = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash.ToLowerInvariant()
+                        sha256         = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+                    }
+                )
+            }
+
+            $result = InModuleScope Common -Parameters @{ Root = $root; Journal = $journal } {
+                $script:OpenPathRoot = $Root
+                Mock Start-Sleep { }
+                Mock Move-OpenPathAgentUpdateFileIntoPlace {
+                    param($TempPath, $DestinationPath)
+                    throw [System.IO.IOException]::new('being used by another process', [int]-2147024864)
+                }
+                Restore-OpenPathAgentUpdateJournalBackups -OpenPathRoot $Root -Journal $Journal
+            }
+
+            $result.Complete | Should -BeFalse
+            @($result.Failures).Count | Should -Be 1
+            $result.Failures[0].RelativePath | Should -Be 'lib\a.ps1'
+            $result.Failures[0].ExceptionType | Should -Be 'System.IO.IOException'
+            $result.Failures[0].HResult | Should -Be '0x80070020'
+            ($result.Errors -join "`n") | Should -Match 'lib\\a\.ps1'
+            ($result.Errors -join "`n") | Should -Match 'System\.IO\.IOException'
+            ($result.Errors -join "`n") | Should -Match '0x80070020'
+        }
     }
 
     Context "Durable update write guard" {

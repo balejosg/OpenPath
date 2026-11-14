@@ -45,7 +45,9 @@
 
     A blocked state returns without hashing anything. A retrying state returns
     for ten minutes after its last attempt. Three incomplete rollbacks also set
-    blocked.
+    blocked. A swap or restore retries only a Windows sharing or lock violation
+    for a few seconds; a definitive failure logs the relative path, exception
+    type and HResult and records them in recovery-state.json.
 #>
 
 [CmdletBinding()]
@@ -226,6 +228,98 @@ function Copy-OpenPathRecoveryFileDurable {
     return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
+function Test-OpenPathRecoverySharingViolation {
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+    $exception = $ErrorRecord.Exception
+    while ($exception) {
+        if ($exception -is [System.IO.IOException]) {
+            $hresult = [long]$exception.HResult -band 0xFFFFFFFFL
+            if ($hresult -eq 0x80070020L -or $hresult -eq 0x80070021L) {
+                return $true
+            }
+        }
+        $exception = $exception.InnerException
+    }
+
+    return $false
+}
+
+function Get-OpenPathRecoveryExceptionDetail {
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+    $exception = $ErrorRecord.Exception
+    while ($exception -and $exception.InnerException -and
+        ($exception -is [System.Management.Automation.MethodInvocationException] -or
+         $exception -is [System.Reflection.TargetInvocationException])) {
+        $exception = $exception.InnerException
+    }
+
+    if (-not $exception) {
+        return [PSCustomObject]@{
+            ExceptionType = ''
+            HResult       = '0x00000000'
+            Message       = [string]$ErrorRecord
+        }
+    }
+
+    $hresult = [long]$exception.HResult -band 0xFFFFFFFFL
+    return [PSCustomObject]@{
+        ExceptionType = $exception.GetType().FullName
+        HResult       = ('0x{0:X8}' -f $hresult)
+        Message       = [string]$exception.Message
+    }
+}
+
+function Invoke-OpenPathRecoveryFileOperationWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Operation,
+        [int]$MaxAttempts = 5,
+        [int]$DelayMilliseconds = 1000
+    )
+
+    if ($MaxAttempts -lt 1) {
+        $MaxAttempts = 1
+    }
+    if ($DelayMilliseconds -lt 0) {
+        $DelayMilliseconds = 0
+    }
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            return (& $Operation)
+        }
+        catch {
+            $errorRecord = $_
+            if ($attempt -ge $MaxAttempts -or -not (Test-OpenPathRecoverySharingViolation -ErrorRecord $errorRecord)) {
+                throw
+            }
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+}
+
+function Invoke-OpenPathRecoveryFileReplace {
+    param(
+        [Parameter(Mandatory = $true)][string]$TempPath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath,
+        [Parameter(Mandatory = $true)][string]$BackupPath
+    )
+
+    [System.IO.File]::Replace($TempPath, $DestinationPath, $BackupPath, $true)
+}
+
+function Move-OpenPathRecoveryFileDurable {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+
+    Invoke-OpenPathRecoveryFileOperationWithRetry -Operation {
+        [System.IO.File]::Move($SourcePath, $DestinationPath)
+    }
+}
+
 function Move-OpenPathRecoveryFileIntoPlace {
     param(
         [Parameter(Mandatory = $true)][string]$TempPath,
@@ -235,10 +329,15 @@ function Move-OpenPathRecoveryFileIntoPlace {
     $backupPath = "$TempPath.bak"
     try {
         if ([System.IO.File]::Exists($DestinationPath)) {
-            [System.IO.File]::Replace($TempPath, $DestinationPath, $backupPath, $true)
+            Invoke-OpenPathRecoveryFileOperationWithRetry -Operation {
+                Invoke-OpenPathRecoveryFileReplace `
+                    -TempPath $TempPath `
+                    -DestinationPath $DestinationPath `
+                    -BackupPath $backupPath
+            }
         }
         else {
-            [System.IO.File]::Move($TempPath, $DestinationPath)
+            Move-OpenPathRecoveryFileDurable -SourcePath $TempPath -DestinationPath $DestinationPath
         }
     }
     finally {
@@ -466,7 +565,11 @@ function Write-OpenPathRecoveryState {
         [string]$FirstSeenAt = '',
         [string]$RunId = '',
         [int]$RepairAttempts = 0,
-        [string]$LastRepairAt = ''
+        [string]$LastRepairAt = '',
+        [string]$FailedPath = '',
+        [string]$FailedExceptionType = '',
+        [string]$FailedHResult = '',
+        [string]$FailedMessage = ''
     )
 
     $now = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
@@ -474,15 +577,19 @@ function Write-OpenPathRecoveryState {
         $FirstSeenAt = $now
     }
     $stateRecord = [PSCustomObject]@{
-        schemaVersion  = 1
-        state          = $State
-        reasonCode     = $ReasonCode
-        attempts       = [int]$Attempts
-        firstSeenAt    = $FirstSeenAt
-        lastAttemptAt  = $now
-        repairAttempts = [int]$RepairAttempts
-        lastRepairAt   = $LastRepairAt
-        runId          = $RunId
+        schemaVersion       = 1
+        state               = $State
+        reasonCode          = $ReasonCode
+        attempts            = [int]$Attempts
+        firstSeenAt         = $FirstSeenAt
+        lastAttemptAt       = $now
+        repairAttempts      = [int]$RepairAttempts
+        lastRepairAt        = $LastRepairAt
+        runId               = $RunId
+        lastFailedPath          = $FailedPath
+        lastFailedExceptionType = $FailedExceptionType
+        lastFailedHResult       = $FailedHResult
+        lastFailedMessage       = $FailedMessage
     }
     Write-OpenPathRecoveryJsonFile -Path $script:RecoveryStatePath -Object $stateRecord
     return $stateRecord
@@ -557,10 +664,11 @@ function Restore-OpenPathRecoveryJournal {
     $allowedBackupPrefix = $allowedBackupRoot.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
     $complete = $true
     $changed = 0
+    $failures = @()
 
     if ([string]::IsNullOrWhiteSpace($backupRoot)) {
         Write-OpenPathRecoveryLog 'Journal has no backup root; cannot roll back'
-        return [PSCustomObject]@{ Complete = $false; Errors = @('Journal has no backup root'); Changed = 0 }
+        return [PSCustomObject]@{ Complete = $false; Errors = @('Journal has no backup root'); Changed = 0; Failures = @() }
     }
 
     try {
@@ -568,12 +676,12 @@ function Restore-OpenPathRecoveryJournal {
     }
     catch {
         Write-OpenPathRecoveryLog "Journal backup root is not a valid path: $backupRoot"
-        return [PSCustomObject]@{ Complete = $false; Errors = @('Invalid backup root'); Changed = 0 }
+        return [PSCustomObject]@{ Complete = $false; Errors = @('Invalid backup root'); Changed = 0; Failures = @() }
     }
 
     if (-not $resolvedBackupRoot.StartsWith($allowedBackupPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         Write-OpenPathRecoveryLog "Journal backup root is outside the update backup directory: $backupRoot"
-        return [PSCustomObject]@{ Complete = $false; Errors = @('Backup root outside update directory'); Changed = 0 }
+        return [PSCustomObject]@{ Complete = $false; Errors = @('Backup root outside update directory'); Changed = 0; Failures = @() }
     }
 
     foreach ($entry in @($Journal.files)) {
@@ -600,7 +708,9 @@ function Restore-OpenPathRecoveryJournal {
 
                 $destinationIsFile = Test-Path -LiteralPath $destinationPath -PathType Leaf
                 if ($destinationIsFile) {
-                    $currentHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                    $currentHash = Invoke-OpenPathRecoveryFileOperationWithRetry -Operation {
+                        (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                    }
                     if ([string]::Equals($currentHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
                         continue
                     }
@@ -612,7 +722,9 @@ function Restore-OpenPathRecoveryJournal {
                     continue
                 }
 
-                $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                $backupHash = Invoke-OpenPathRecoveryFileOperationWithRetry -Operation {
+                    (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                }
                 if (-not [string]::Equals($backupHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
                     Write-OpenPathRecoveryLog "Backup hash does not match the recorded pre-update hash: $relativePath"
                     $complete = $false
@@ -642,7 +754,9 @@ function Restore-OpenPathRecoveryJournal {
             }
             else {
                 if (Test-Path -LiteralPath $destinationPath) {
-                    Remove-Item -LiteralPath $destinationPath -Force -ErrorAction Stop
+                    Invoke-OpenPathRecoveryFileOperationWithRetry -Operation {
+                        Remove-Item -LiteralPath $destinationPath -Force -ErrorAction Stop
+                    }
                     $changed += 1
                 }
                 if (Test-Path -LiteralPath $destinationPath) {
@@ -652,12 +766,19 @@ function Restore-OpenPathRecoveryJournal {
             }
         }
         catch {
-            Write-OpenPathRecoveryLog "Rollback failed for ${relativePath}: $_"
+            $detail = Get-OpenPathRecoveryExceptionDetail -ErrorRecord $_
+            Write-OpenPathRecoveryLog "Rollback failed for ${relativePath}: $($detail.ExceptionType) HResult=$($detail.HResult): $($detail.Message)"
+            $failures += [PSCustomObject]@{
+                RelativePath  = $relativePath
+                ExceptionType = $detail.ExceptionType
+                HResult       = $detail.HResult
+                Message       = $detail.Message
+            }
             $complete = $false
         }
     }
 
-    return [PSCustomObject]@{ Complete = $complete; Errors = @(); Changed = $changed }
+    return [PSCustomObject]@{ Complete = $complete; Errors = @(); Changed = $changed; Failures = @($failures) }
 }
 
 function Move-OpenPathRecoveryFileToQuarantine {
@@ -672,7 +793,7 @@ function Move-OpenPathRecoveryFileToQuarantine {
     $quarantinePath = Join-Path $script:UpdateRoot $quarantineName
 
     try {
-        [System.IO.File]::Move($SourcePath, $quarantinePath)
+        Move-OpenPathRecoveryFileDurable -SourcePath $SourcePath -DestinationPath $quarantinePath
     }
     catch {
         Write-OpenPathRecoveryLog "Could not quarantine the unusable update journal: $_"
@@ -777,6 +898,24 @@ function Restore-OpenPathRecoverySupersededJournal {
     }
 }
 
+function Remove-OpenPathRecoveryTempSiblings {
+    <#
+    .SYNOPSIS
+        Removes every update temp sibling under the installed tree
+    .DESCRIPTION
+        A killed updater can leave a flushed but uninstalled temp sibling next
+        to a file that the rollback then finds already at its pre-update hash.
+        The per-entry cleanup only knows the current run id, so a completed
+        recovery sweeps every matching sibling. No installed name uses these
+        patterns and the update lock is held here.
+    #>
+    foreach ($pattern in @('*.openpath-update-*.tmp', '*.openpath-update-*.bak')) {
+        foreach ($leftover in @(Get-ChildItem -LiteralPath $script:OpenPathRoot -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue)) {
+            Remove-Item -LiteralPath $leftover.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Complete-OpenPathRecoveryRun {
     param(
         [Parameter(Mandatory = $true)][object]$Record,
@@ -805,6 +944,7 @@ function Complete-OpenPathRecoveryRun {
             }
         }
     }
+    Remove-OpenPathRecoveryTempSiblings
 
     $supersededRestore = Restore-OpenPathRecoverySupersededJournal
     if ($supersededRestore -eq 'failed') {
@@ -871,7 +1011,8 @@ function Register-OpenPathRecoveryFailure {
     param(
         [Parameter(Mandatory = $true)][object]$Record,
         [Parameter(Mandatory = $true)][string]$ReasonCode,
-        [string]$Detail = ''
+        [string]$Detail = '',
+        [AllowNull()][object]$Failure = $null
     )
 
     $existing = Get-OpenPathRecoveryState
@@ -879,11 +1020,33 @@ function Register-OpenPathRecoveryFailure {
     $firstSeenAt = ''
     $repairAttempts = 0
     $lastRepairAt = ''
+    $failedPath = ''
+    $failedExceptionType = ''
+    $failedHResult = ''
+    $failedMessage = ''
     if ($existing.Present -and -not $existing.Unreadable -and $existing.State) {
         try { $attempts = [int]$existing.State.attempts } catch { $attempts = 0 }
         $firstSeenAt = [string]$existing.State.firstSeenAt
         try { $repairAttempts = [int]$existing.State.repairAttempts } catch { $repairAttempts = 0 }
         $lastRepairAt = [string]$existing.State.lastRepairAt
+        if ($existing.State.PSObject.Properties['lastFailedPath']) {
+            $failedPath = [string]$existing.State.lastFailedPath
+        }
+        if ($existing.State.PSObject.Properties['lastFailedExceptionType']) {
+            $failedExceptionType = [string]$existing.State.lastFailedExceptionType
+        }
+        if ($existing.State.PSObject.Properties['lastFailedHResult']) {
+            $failedHResult = [string]$existing.State.lastFailedHResult
+        }
+        if ($existing.State.PSObject.Properties['lastFailedMessage']) {
+            $failedMessage = [string]$existing.State.lastFailedMessage
+        }
+    }
+    if ($Failure) {
+        $failedPath = [string]$Failure.RelativePath
+        $failedExceptionType = [string]$Failure.ExceptionType
+        $failedHResult = [string]$Failure.HResult
+        $failedMessage = [string]$Failure.Message
     }
     $attempts += 1
     $state = if ($attempts -ge 3) { 'blocked' } else { 'retrying' }
@@ -897,7 +1060,11 @@ function Register-OpenPathRecoveryFailure {
         -FirstSeenAt $firstSeenAt `
         -RunId (Get-OpenPathRecoveryRunId -Record $Record) `
         -RepairAttempts $repairAttempts `
-        -LastRepairAt $lastRepairAt | Out-Null
+        -LastRepairAt $lastRepairAt `
+        -FailedPath $failedPath `
+        -FailedExceptionType $failedExceptionType `
+        -FailedHResult $failedHResult `
+        -FailedMessage $failedMessage | Out-Null
 
     if ($state -eq 'blocked') {
         Write-OpenPathRecoveryReport `
@@ -1035,8 +1202,15 @@ try {
             return
         }
 
-        Register-OpenPathRecoveryFailure -Record $journal -ReasonCode 'self_update_recovery_failed'
-        Write-OpenPathRecoveryLog 'Interrupted update rollback did not complete; keeping the journal for the next attempt'
+        $primaryFailure = @($rollback.Failures)[0]
+        Register-OpenPathRecoveryFailure -Record $journal -ReasonCode 'self_update_recovery_failed' -Failure $primaryFailure
+        $failureText = if ($primaryFailure) {
+            " for $($primaryFailure.RelativePath): $($primaryFailure.ExceptionType) HResult=$($primaryFailure.HResult)"
+        }
+        else {
+            ''
+        }
+        Write-OpenPathRecoveryLog "Interrupted update rollback did not complete${failureText}; keeping the journal for the next attempt"
         throw 'OpenPath agent update recovery did not complete'
     }
 
@@ -1073,8 +1247,15 @@ try {
             return
         }
 
-        Register-OpenPathRecoveryFailure -Record $intent.Record -ReasonCode 'self_update_recovery_failed'
-        Write-OpenPathRecoveryLog "Interrupted update rollback from run $($intent.RunId) did not complete; keeping the journal and intent"
+        $primaryFailure = @($rollback.Failures)[0]
+        Register-OpenPathRecoveryFailure -Record $intent.Record -ReasonCode 'self_update_recovery_failed' -Failure $primaryFailure
+        $failureText = if ($primaryFailure) {
+            " for $($primaryFailure.RelativePath): $($primaryFailure.ExceptionType) HResult=$($primaryFailure.HResult)"
+        }
+        else {
+            ''
+        }
+        Write-OpenPathRecoveryLog "Interrupted update rollback from run $($intent.RunId) did not complete${failureText}; keeping the journal and intent"
         throw 'OpenPath agent update recovery did not complete'
     }
 

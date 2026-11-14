@@ -1054,6 +1054,66 @@ Export-ModuleMember -Function *
             }
         }
 
+        It "Removes leftover update temp siblings after a recovery that succeeds on a later attempt" {
+            $fixture = New-PartialRollbackFixture -Kind partial
+            $root = $fixture.Root
+            $updateRoot = Join-Path $root 'data/agent-update'
+            $statePath = Join-Path $updateRoot 'recovery-state.json'
+            $destination = Join-Path $root 'lib/a.ps1'
+
+            # Make the first attempt fail deterministically, and leave the kind
+            # of temp sibling a killed updater writes next to an installed file.
+            Remove-Item -LiteralPath $destination -Force
+            New-Item -ItemType Directory -Path $destination -Force | Out-Null
+            New-RecoveryFile -Path (Join-Path $root 'lib/a.ps1.openpath-update-run-current.tmp') -Content 'orphan-a'
+            New-RecoveryFile -Path (Join-Path $root 'lib/b.ps1.openpath-update-run-current.tmp') -Content 'orphan-b'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            Test-Path -LiteralPath (Join-Path $updateRoot 'update-journal.json') | Should -BeTrue
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 1
+
+            # Clear the injected failure and let the next attempt run now.
+            Remove-Item -LiteralPath $destination -Recurse -Force
+            New-RecoveryFile -Path $destination -Content 'new-a'
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state.lastAttemptAt = [DateTime]::UtcNow.AddMinutes(-11).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding UTF8
+
+            $second = Invoke-RecoveryScript -Root $root
+            $second.ExitCode | Should -Be 0
+
+            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'old-a'
+            Test-Path -LiteralPath (Join-Path $root 'lib/b.ps1') | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $updateRoot 'update-journal.json') | Should -BeFalse
+            Test-Path -LiteralPath $statePath | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path $fixture.BackupRoot 'journal-intent.json') | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.openpath-update-*.tmp' -ErrorAction SilentlyContinue).Count | Should -Be 0
+            $report = Get-Content -LiteralPath (Join-Path $updateRoot 'recovery-report.json') -Raw | ConvertFrom-Json
+            $report.reasonCode | Should -Match 'self_update_recovery_rolled_back'
+        }
+
+        It "Logs the relative path, exception type and HResult and records them in recovery-state" {
+            $fixture = New-PartialRollbackFixture -Kind partial
+            $root = $fixture.Root
+            $updateRoot = Join-Path $root 'data/agent-update'
+            $destination = Join-Path $root 'lib/a.ps1'
+            Remove-Item -LiteralPath $destination -Force
+            New-Item -ItemType Directory -Path $destination -Force | Out-Null
+
+            $result = Invoke-RecoveryScript -Root $root
+
+            $result.ExitCode | Should -Not -Be 0
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Match 'Rollback failed for lib\\a\.ps1: System\.[A-Za-z.]+Exception HResult=0x[0-9A-F]{8}'
+            $log | Should -Match 'Interrupted update rollback did not complete.*lib\\a\.ps1.*HResult=0x[0-9A-F]{8}'
+
+            $state = Get-Content -LiteralPath (Join-Path $updateRoot 'recovery-state.json') -Raw | ConvertFrom-Json
+            $state.lastFailedPath | Should -Be 'lib\a.ps1'
+            $state.lastFailedExceptionType | Should -Match '^System\.[A-Za-z.]+Exception$'
+            $state.lastFailedHResult | Should -Match '^0x[0-9A-F]{8}$'
+        }
+
         It "Sends a pending recovery report through the common health reporter" {
             $root = New-RecoveryRoot
             $updateRoot = Join-Path $root 'data/agent-update'
@@ -1091,6 +1151,72 @@ Export-ModuleMember -Function *
                 $script:CapturedReport.Actions | Should -Be 'self_update_recovery_rolled_back'
                 (@($script:CapturedReport.ReasonCodes) -join ' ') | Should -Match 'self_update_recovery_rolled_back'
                 Test-Path -LiteralPath (Join-Path $Root 'data/agent-update/recovery-report.json') | Should -BeFalse
+            }
+        }
+    }
+
+    Context "Sharing retry parity" {
+        It "Retries the standalone swap on a <Hex> violation and succeeds on the second attempt" -ForEach @(
+            @{ Hex = '0x80070020'; HResult = -2147024864 }
+            @{ Hex = '0x80070021'; HResult = -2147024863 }
+        ) {
+            $root = New-RecoveryRoot
+            . $script:RecoveryScriptPath -OpenPathRoot $root
+            $temp = Join-Path $root 'replacement.ps1'
+            $destination = Join-Path $root 'existing.ps1'
+            New-RecoveryFile -Path $temp -Content 'replacement-content'
+            New-RecoveryFile -Path $destination -Content 'old-content'
+            $script:RecoverySwapAttempts = 0
+            $script:RecoveryFailureHResult = $HResult
+            Set-Item -Path 'function:Invoke-OpenPathRecoveryFileReplace' -Value {
+                param($TempPath, $DestinationPath, $BackupPath)
+                $script:RecoverySwapAttempts += 1
+                if ($script:RecoverySwapAttempts -eq 1) {
+                    throw [System.IO.IOException]::new('being used by another process', [int]$script:RecoveryFailureHResult)
+                }
+                [System.IO.File]::Replace($TempPath, $DestinationPath, $BackupPath, $true)
+            }
+
+            Move-OpenPathRecoveryFileIntoPlace -TempPath $temp -DestinationPath $destination
+
+            $script:RecoverySwapAttempts | Should -Be 2
+            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'replacement-content'
+            Test-Path -LiteralPath $temp | Should -BeFalse
+        }
+
+        It "Does not retry a standalone swap error that is not a sharing or lock violation" {
+            $root = New-RecoveryRoot
+            . $script:RecoveryScriptPath -OpenPathRoot $root
+            $temp = Join-Path $root 'replacement.ps1'
+            $destination = Join-Path $root 'existing.ps1'
+            New-RecoveryFile -Path $temp -Content 'replacement-content'
+            New-RecoveryFile -Path $destination -Content 'old-content'
+            $script:RecoverySwapAttempts = 0
+            Set-Item -Path 'function:Invoke-OpenPathRecoveryFileReplace' -Value {
+                param($TempPath, $DestinationPath, $BackupPath)
+                $script:RecoverySwapAttempts += 1
+                throw [System.UnauthorizedAccessException]::new('denied')
+            }
+
+            { Move-OpenPathRecoveryFileIntoPlace -TempPath $temp -DestinationPath $destination } | Should -Throw
+            $script:RecoverySwapAttempts | Should -Be 1
+            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'old-content'
+        }
+
+        It "Keeps the same bounded retry rule in the updater and the standalone script" {
+            $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib/internal") 'Common.Update.ps1'
+            $moduleContent = Get-Content -LiteralPath $modulePath -Raw
+            $recoveryContent = Get-Content -LiteralPath $script:RecoveryScriptPath -Raw
+
+            foreach ($needle in @(
+                '$MaxAttempts = 5',
+                '$DelayMilliseconds = 1000',
+                '0x80070020L',
+                '0x80070021L',
+                '[System.IO.IOException]'
+            )) {
+                $moduleContent | Should -Match ([regex]::Escape($needle))
+                $recoveryContent | Should -Match ([regex]::Escape($needle))
             }
         }
     }

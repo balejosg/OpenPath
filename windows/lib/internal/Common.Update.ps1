@@ -420,6 +420,130 @@ function Copy-OpenPathAgentUpdateFileDurable {
     return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
+function Test-OpenPathAgentUpdateSharingViolation {
+    <#
+    .SYNOPSIS
+        Tests whether an error is a Windows sharing or lock violation
+    .DESCRIPTION
+        Only ERROR_SHARING_VIOLATION (0x80070020) and ERROR_LOCK_VIOLATION
+        (0x80070021) are transient. The check uses HResult and never the
+        localized message text. Method invocation wrappers are unwrapped
+        because a .NET call from PowerShell surfaces the IOException as an
+        inner exception.
+    #>
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+    $exception = $ErrorRecord.Exception
+    while ($exception) {
+        if ($exception -is [System.IO.IOException]) {
+            $hresult = [long]$exception.HResult -band 0xFFFFFFFFL
+            if ($hresult -eq 0x80070020L -or $hresult -eq 0x80070021L) {
+                return $true
+            }
+        }
+        $exception = $exception.InnerException
+    }
+
+    return $false
+}
+
+function Get-OpenPathAgentUpdateExceptionDetail {
+    <#
+    .SYNOPSIS
+        Returns the type, HResult and message of the exception that failed an operation
+    #>
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+    $exception = $ErrorRecord.Exception
+    while ($exception -and $exception.InnerException -and
+        ($exception -is [System.Management.Automation.MethodInvocationException] -or
+         $exception -is [System.Reflection.TargetInvocationException])) {
+        $exception = $exception.InnerException
+    }
+
+    if (-not $exception) {
+        return [PSCustomObject]@{
+            ExceptionType = ''
+            HResult       = '0x00000000'
+            Message       = [string]$ErrorRecord
+        }
+    }
+
+    $hresult = [long]$exception.HResult -band 0xFFFFFFFFL
+    return [PSCustomObject]@{
+        ExceptionType = $exception.GetType().FullName
+        HResult       = ('0x{0:X8}' -f $hresult)
+        Message       = [string]$exception.Message
+    }
+}
+
+function Invoke-OpenPathAgentUpdateFileOperationWithRetry {
+    <#
+    .SYNOPSIS
+        Runs one file operation, retrying only a transient sharing or lock violation
+    .DESCRIPTION
+        Four retries at one-second intervals cover the short holds an antivirus
+        scanner, indexer or browser can put on an installed file. The worst case
+        adds four seconds per locked file, well inside the three-minute P3
+        bound. Every other error is rethrown on the first attempt so a damaged
+        file or record is never hidden.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Operation,
+        [int]$MaxAttempts = 5,
+        [int]$DelayMilliseconds = 1000
+    )
+
+    if ($MaxAttempts -lt 1) {
+        $MaxAttempts = 1
+    }
+    if ($DelayMilliseconds -lt 0) {
+        $DelayMilliseconds = 0
+    }
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            return (& $Operation)
+        }
+        catch {
+            $errorRecord = $_
+            if ($attempt -ge $MaxAttempts -or -not (Test-OpenPathAgentUpdateSharingViolation -ErrorRecord $errorRecord)) {
+                throw
+            }
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+}
+
+function Invoke-OpenPathAgentUpdateFileReplace {
+    param(
+        [Parameter(Mandatory = $true)][string]$TempPath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath,
+        [Parameter(Mandatory = $true)][string]$BackupPath
+    )
+
+    if (Get-Command -Name 'Invoke-OpenPathAtomicFileReplace' -ErrorAction SilentlyContinue) {
+        Invoke-OpenPathAtomicFileReplace `
+            -TempPath $TempPath `
+            -DestinationPath $DestinationPath `
+            -BackupPath $BackupPath
+    }
+    else {
+        [System.IO.File]::Replace($TempPath, $DestinationPath, $BackupPath, $true)
+    }
+}
+
+function Move-OpenPathAgentUpdateFileDurable {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+
+    Invoke-OpenPathAgentUpdateFileOperationWithRetry -Operation {
+        [System.IO.File]::Move($SourcePath, $DestinationPath)
+    }
+}
+
 function Move-OpenPathAgentUpdateFileIntoPlace {
     <#
     .SYNOPSIS
@@ -428,7 +552,8 @@ function Move-OpenPathAgentUpdateFileIntoPlace {
         File.Replace is one metadata operation for an existing destination and
         File.Move is one for a new one. Both are used instead of Move-Item -Force,
         whose Windows PowerShell 5.1 implementation is not guaranteed to be a
-        single rename.
+        single rename. A transient sharing or lock violation is retried for a
+        few seconds; any other failure is immediate.
     #>
     [CmdletBinding()]
     param(
@@ -439,18 +564,15 @@ function Move-OpenPathAgentUpdateFileIntoPlace {
     $backupPath = "$TempPath.bak"
     try {
         if ([System.IO.File]::Exists($DestinationPath)) {
-            if (Get-Command -Name 'Invoke-OpenPathAtomicFileReplace' -ErrorAction SilentlyContinue) {
-                Invoke-OpenPathAtomicFileReplace `
+            Invoke-OpenPathAgentUpdateFileOperationWithRetry -Operation {
+                Invoke-OpenPathAgentUpdateFileReplace `
                     -TempPath $TempPath `
                     -DestinationPath $DestinationPath `
                     -BackupPath $backupPath
             }
-            else {
-                [System.IO.File]::Replace($TempPath, $DestinationPath, $backupPath, $true)
-            }
         }
         else {
-            [System.IO.File]::Move($TempPath, $DestinationPath)
+            Move-OpenPathAgentUpdateFileDurable -SourcePath $TempPath -DestinationPath $DestinationPath
         }
     }
     finally {
@@ -645,7 +767,7 @@ function Move-OpenPathAgentUpdateSupersededJournalToQuarantine {
 
     $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ', [Globalization.CultureInfo]::InvariantCulture)
     $quarantinePath = Join-Path $updateRoot ("update-journal.quarantine-{0}-{1}.json" -f $timestamp, [guid]::NewGuid().ToString('N'))
-    Move-Item -LiteralPath $supersededPath -Destination $quarantinePath -Force -ErrorAction Stop
+    Move-OpenPathAgentUpdateFileDurable -SourcePath $supersededPath -DestinationPath $quarantinePath
 
     try {
         $quarantined = @(
@@ -1724,6 +1846,7 @@ function Restore-OpenPathAgentUpdateJournalBackups {
     $complete = $true
     $changed = 0
     $errors = New-Object System.Collections.ArrayList
+    $failures = New-Object System.Collections.ArrayList
     $updateRoot = Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot
     $allowedBackupRoot = [System.IO.Path]::GetFullPath((Join-Path $updateRoot 'backups'))
     $allowedBackupPrefix = $allowedBackupRoot.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
@@ -1734,18 +1857,18 @@ function Restore-OpenPathAgentUpdateJournalBackups {
     }
 
     if ([string]::IsNullOrWhiteSpace($backupRoot)) {
-        return [PSCustomObject]@{ Complete = $false; Errors = @('Journal has no backup root'); Changed = 0 }
+        return [PSCustomObject]@{ Complete = $false; Errors = @('Journal has no backup root'); Changed = 0; Failures = @() }
     }
 
     try {
         $resolvedBackupRoot = [System.IO.Path]::GetFullPath($backupRoot)
     }
     catch {
-        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is not a valid path: $backupRoot"); Changed = 0 }
+        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is not a valid path: $backupRoot"); Changed = 0; Failures = @() }
     }
 
     if (-not $resolvedBackupRoot.StartsWith($allowedBackupPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is outside the update directory: $backupRoot"); Changed = 0 }
+        return [PSCustomObject]@{ Complete = $false; Errors = @("Backup root is outside the update directory: $backupRoot"); Changed = 0; Failures = @() }
     }
 
     foreach ($entry in @($Journal.files)) {
@@ -1771,7 +1894,9 @@ function Restore-OpenPathAgentUpdateJournalBackups {
 
                 $destinationIsFile = Test-Path -LiteralPath $destinationPath -PathType Leaf
                 if ($destinationIsFile) {
-                    $currentHash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                    $currentHash = Invoke-OpenPathAgentUpdateFileOperationWithRetry -Operation {
+                        (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                    }
                     if ([string]::Equals($currentHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
                         continue
                     }
@@ -1783,7 +1908,9 @@ function Restore-OpenPathAgentUpdateJournalBackups {
                     continue
                 }
 
-                $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                $backupHash = Invoke-OpenPathAgentUpdateFileOperationWithRetry -Operation {
+                    (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                }
                 if (-not [string]::Equals($backupHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
                     [void]$errors.Add("Backup hash does not match the recorded pre-update hash: $relativePath")
                     $complete = $false
@@ -1815,7 +1942,9 @@ function Restore-OpenPathAgentUpdateJournalBackups {
             }
             else {
                 if (Test-Path -LiteralPath $destinationPath) {
-                    Remove-Item -LiteralPath $destinationPath -Force -ErrorAction Stop
+                    Invoke-OpenPathAgentUpdateFileOperationWithRetry -Operation {
+                        Remove-Item -LiteralPath $destinationPath -Force -ErrorAction Stop
+                    }
                     $changed += 1
                 }
                 if (Test-Path -LiteralPath $destinationPath) {
@@ -1825,7 +1954,15 @@ function Restore-OpenPathAgentUpdateJournalBackups {
             }
         }
         catch {
-            [void]$errors.Add("Rollback failed for ${relativePath}: $_")
+            $detail = Get-OpenPathAgentUpdateExceptionDetail -ErrorRecord $_
+            $message = "Rollback failed for ${relativePath}: $($detail.ExceptionType) HResult=$($detail.HResult): $($detail.Message)"
+            [void]$errors.Add($message)
+            [void]$failures.Add([PSCustomObject]@{
+                RelativePath  = $relativePath
+                ExceptionType = $detail.ExceptionType
+                HResult       = $detail.HResult
+                Message       = $detail.Message
+            })
             $complete = $false
         }
 
@@ -1842,6 +1979,7 @@ function Restore-OpenPathAgentUpdateJournalBackups {
         Complete = $complete
         Errors   = @($errors.ToArray())
         Changed  = $changed
+        Failures = @($failures.ToArray())
     }
 }
 
