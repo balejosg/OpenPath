@@ -960,12 +960,10 @@ Describe "Update Script" {
             # Temporary allow-list while the remaining commits convert these
             # paths. Every entry must shrink to the staging validator write.
             $allowed = @(
-                'Common.Update.ps1|Test-OpenPathAgentUpdateStagedArtifacts|WriteAllText',
-                'Common.Integrity.ps1|Save-OpenPathIntegrityBackup|Copy-Item',
-                'Common.Integrity.ps1|New-OpenPathIntegrityBaseline|Set-Content',
-                'Common.Integrity.ps1|Update-OpenPathIntegrityEntry|Copy-Item',
-                'Common.Integrity.ps1|Update-OpenPathIntegrityEntry|Set-Content',
-                'Common.Integrity.ps1|Restore-OpenPathIntegrity|Copy-Item'
+                # The staged-artifact validator is a short-lived temp script
+                # outside the installed tree; it is read back only by the same
+                # process and never becomes a name the recovery protocol uses.
+                'Common.Update.ps1|Test-OpenPathAgentUpdateStagedArtifacts|WriteAllText'
             )
 
             $unexpected = @($actual | Where-Object { $_ -notin $allowed } | Sort-Object -Unique)

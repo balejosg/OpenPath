@@ -140,3 +140,94 @@ Describe "Invoke-OpenPathFirefoxNativeHostCompiledEnsure integrity refresh" {
         try { $after.Acquired | Should -BeTrue } finally { Exit-OpenPathAgentUpdateLock -Lock $after }
     }
 }
+
+Describe "Integrity backup restore" {
+    BeforeAll {
+        $modulePath = Join-Path $PSScriptRoot ".." "lib"
+        Import-Module (Join-Path $modulePath "Common.psm1") -Force -Global -ErrorAction Stop
+    }
+
+    BeforeEach {
+        $script:Root = Join-Path $TestDrive ('integrity-restore-' + [guid]::NewGuid().ToString('N'))
+        $script:BaselinePath = Join-Path $script:Root 'data/integrity-baseline.json'
+        $script:BackupPath = Join-Path $script:Root 'data/integrity-backup'
+        $script:FileA = Join-Path $script:Root 'lib/a.ps1'
+        $script:BackupA = Join-Path $script:BackupPath 'lib/a.ps1'
+        New-Item -ItemType Directory -Path (Split-Path $script:FileA -Parent) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Split-Path $script:BackupA -Parent) -Force | Out-Null
+        Set-Content -LiteralPath $script:FileA -Value 'tampered' -Encoding ASCII
+        Set-Content -LiteralPath $script:BackupA -Value 'good' -Encoding ASCII
+        $script:GoodHash = (Get-FileHash -LiteralPath $script:BackupA -Algorithm SHA256).Hash
+        [PSCustomObject]@{
+            generatedAt = '2026-01-01T00:00:00Z'
+            entryCount = 1
+            entries = @([PSCustomObject]@{ path = $script:FileA; hash = $script:GoodHash })
+        } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:BaselinePath -Encoding UTF8
+        $r = $script:Root
+        $bl = $script:BaselinePath
+        $bk = $script:BackupPath
+        InModuleScope Common -Parameters @{ r = $r; bl = $bl; bk = $bk } {
+            $script:OpenPathRoot = $r
+            $script:IntegrityBaselinePath = $bl
+            $script:IntegrityBackupPath = $bk
+        }
+    }
+
+    It "Restores a backup only when its hash matches the baseline entry" {
+        $path = $script:FileA
+        $result = InModuleScope Common -Parameters @{ Path = $path } {
+            Restore-OpenPathIntegrity -IntegrityResult ([PSCustomObject]@{
+                BaselinePresent = $true
+                MissingFiles    = @()
+                TamperedFiles   = @($Path)
+                Errors          = @()
+            })
+        }
+
+        $result.RestoredFiles | Should -Contain $path
+        @($result.PendingFiles).Count | Should -Be 0
+        (Get-Content -LiteralPath $path -Raw).Trim() | Should -Be 'good'
+    }
+
+    It "Leaves a file pending when the backup hash differs from the baseline (<Case>)" -ForEach @(
+        @{ Case = 'different-bytes'; Content = 'corrupt' }
+        @{ Case = 'zero-filled'; Content = $null }
+    ) {
+        if ($null -eq $Content) {
+            [System.IO.File]::WriteAllBytes($script:BackupA, (New-Object byte[] 279))
+        }
+        else {
+            Set-Content -LiteralPath $script:BackupA -Value $Content -Encoding ASCII
+        }
+        $path = $script:FileA
+        $result = InModuleScope Common -Parameters @{ Path = $path } {
+            Restore-OpenPathIntegrity -IntegrityResult ([PSCustomObject]@{
+                BaselinePresent = $true
+                MissingFiles    = @()
+                TamperedFiles   = @($Path)
+                Errors          = @()
+            })
+        }
+
+        $result.RestoredFiles | Should -Not -Contain $path
+        $result.PendingFiles | Should -Contain $path
+        (Get-Content -LiteralPath $path -Raw).Trim() | Should -Be 'tampered'
+    }
+
+    It "Leaves a missing backup pending without touching the file" {
+        Remove-Item -LiteralPath $script:BackupA -Force
+        $path = $script:FileA
+        $result = InModuleScope Common -Parameters @{ Path = $path } {
+            Restore-OpenPathIntegrity -IntegrityResult ([PSCustomObject]@{
+                BaselinePresent = $true
+                MissingFiles    = @()
+                TamperedFiles   = @($Path)
+                Errors          = @()
+            })
+        }
+
+        $result.RestoredFiles | Should -Not -Contain $path
+        $result.PendingFiles | Should -Contain $path
+        (Get-Content -LiteralPath $path -Raw).Trim() | Should -Be 'tampered'
+    }
+}

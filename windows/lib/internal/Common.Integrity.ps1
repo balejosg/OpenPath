@@ -117,7 +117,16 @@ function Save-OpenPathIntegrityBackup {
                 New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
             }
 
-            Copy-Item $file $backupPath -Force
+            $tempPath = "$backupPath.openpath-update-integrity-$([guid]::NewGuid().ToString('N')).tmp"
+            try {
+                Copy-OpenPathAgentUpdateFileDurable -SourcePath $file -DestinationPath $tempPath | Out-Null
+                Move-OpenPathAgentUpdateFileIntoPlace -TempPath $tempPath -DestinationPath $backupPath
+            }
+            finally {
+                if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
+                    Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
 
         Write-OpenPathLog 'Integrity backup saved'
@@ -157,7 +166,7 @@ function New-OpenPathIntegrityBaseline {
             entries = $entries
         }
 
-        $baseline | ConvertTo-Json -Depth 10 | Set-Content $script:IntegrityBaselinePath -Encoding UTF8
+        Write-OpenPathAtomicJsonFile -Path $script:IntegrityBaselinePath -Data $baseline -Depth 10
         Write-OpenPathLog "Integrity baseline generated for $($entries.Count) files"
         return $true
     }
@@ -202,10 +211,19 @@ function Update-OpenPathIntegrityEntry {
         if (-not (Test-Path -LiteralPath $backupDir)) {
             New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
         }
-        Copy-Item -LiteralPath $Path -Destination $backupPath -Force
+        $tempPath = "$backupPath.openpath-update-integrity-$([guid]::NewGuid().ToString('N')).tmp"
+        try {
+            Copy-OpenPathAgentUpdateFileDurable -SourcePath $Path -DestinationPath $tempPath | Out-Null
+            Move-OpenPathAgentUpdateFileIntoPlace -TempPath $tempPath -DestinationPath $backupPath
+        }
+        finally {
+            if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
+                Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+            }
+        }
 
         $entry.hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash
-        $baseline | ConvertTo-Json -Depth 10 | Set-Content $script:IntegrityBaselinePath -Encoding UTF8
+        Write-OpenPathAtomicJsonFile -Path $script:IntegrityBaselinePath -Data $baseline -Depth 10
         Write-OpenPathLog "Integrity entry refreshed for $Path"
         return $true
     }
@@ -308,11 +326,40 @@ function Restore-OpenPathIntegrity {
     $targets = @($IntegrityResult.MissingFiles + $IntegrityResult.TamperedFiles)
     $targets = @($targets | Sort-Object -Unique)
 
+    $baselineEntries = @()
+    try {
+        $baselineForRestore = Get-Content -LiteralPath $script:IntegrityBaselinePath -Raw | ConvertFrom-Json -ErrorAction Stop
+        $baselineEntries = @($baselineForRestore.entries)
+    }
+    catch {
+        $baselineEntries = @()
+    }
+
     foreach ($path in $targets) {
         $relativePath = Get-OpenPathRelativePath -Path $path
         $backupPath = Join-Path $script:IntegrityBackupPath $relativePath
 
+        $baselineEntry = $baselineEntries | Where-Object { [string]$_.path -ieq $path } | Select-Object -First 1
+        $expectedHash = if ($baselineEntry) { [string]$baselineEntry.hash } else { '' }
+        if ([string]::IsNullOrWhiteSpace($expectedHash)) {
+            $pendingFiles += $path
+            continue
+        }
+
         if (-not (Test-Path $backupPath)) {
+            $pendingFiles += $path
+            continue
+        }
+
+        $backupHash = ''
+        try {
+            $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256 -ErrorAction Stop).Hash
+        }
+        catch {
+            $pendingFiles += $path
+            continue
+        }
+        if (-not [string]::Equals($backupHash, $expectedHash, [System.StringComparison]::OrdinalIgnoreCase)) {
             $pendingFiles += $path
             continue
         }
@@ -322,18 +369,29 @@ function Restore-OpenPathIntegrity {
             continue
         }
 
+        $tempPath = "$path.openpath-update-integrity-$([guid]::NewGuid().ToString('N')).tmp"
         try {
             $destinationDir = Split-Path $path -Parent
             if (-not (Test-Path $destinationDir)) {
                 New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
             }
 
-            Copy-Item $backupPath $path -Force
+            $copiedHash = Copy-OpenPathAgentUpdateFileDurable -SourcePath $backupPath -DestinationPath $tempPath
+            if (-not [string]::Equals($copiedHash, $expectedHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $pendingFiles += $path
+                continue
+            }
+            Move-OpenPathAgentUpdateFileIntoPlace -TempPath $tempPath -DestinationPath $path
             $restoredFiles += $path
         }
         catch {
             $pendingFiles += $path
             Write-OpenPathLog "Failed to restore $path : $_" -Level WARN
+        }
+        finally {
+            if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
+                Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 
