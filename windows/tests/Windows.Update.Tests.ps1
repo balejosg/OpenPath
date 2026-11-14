@@ -1113,7 +1113,7 @@ Describe "Update Script" {
             $content | Should -Not -Match '\$replacementBackups'
 
             $backupStart = $content.IndexOf('Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles')
-            $journalWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot')
+            $journalWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot', $backupStart)
             $firstReplacementStart = $content.IndexOf('Move-OpenPathAgentUpdateFileIntoPlace', $journalWriteStart)
 
             $backupStart | Should -BeGreaterThan 0
@@ -1789,14 +1789,184 @@ Describe "Update Script" {
             $content = Get-Content $updatePath -Raw
             $lockStart = $content.IndexOf('$updateLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds')
             $backupStart = $content.IndexOf('Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles', $lockStart)
-            $journalWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot', $lockStart)
+            $intentWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJsonFile -Path $intentPath -Object $updateJournal', $lockStart)
+            $journalWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot', $intentWriteStart)
             $firstReplacementStart = $content.IndexOf('Move-OpenPathAgentUpdateFileIntoPlace', $lockStart)
+            $markerWriteStart = $content.IndexOf('Write-OpenPathAgentUpdateCommittedMarker', $lockStart)
+            $committedPhaseStart = $content.IndexOf("Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot `$script:OpenPathRoot -Journal `$updateJournal -Phase 'committed'", $markerWriteStart)
 
             $lockStart | Should -BeGreaterThan 0
             $backupStart | Should -BeGreaterThan $lockStart
-            $backupStart | Should -BeLessThan $journalWriteStart
+            $backupStart | Should -BeLessThan $intentWriteStart
+            $intentWriteStart | Should -BeGreaterThan $backupStart
+            $intentWriteStart | Should -BeLessThan $journalWriteStart
             $journalWriteStart | Should -BeGreaterThan $lockStart
             $firstReplacementStart | Should -BeGreaterThan $journalWriteStart
+            $markerWriteStart | Should -BeGreaterThan 0
+            $committedPhaseStart | Should -BeGreaterThan $markerWriteStart
+        }
+    }
+
+    Context "Self-update intent and commit marker" {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+        }
+
+        It "Writes a commit marker for one run and rejects a marker from another run" {
+            $root = Join-Path $TestDrive ('update-marker-' + [guid]::NewGuid().ToString('N'))
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+
+            InModuleScope Common -Parameters @{ BackupRoot = $backupRoot } {
+                $markerPath = Write-OpenPathAgentUpdateCommittedMarker `
+                    -BackupRoot $BackupRoot `
+                    -RunId 'run-test' `
+                    -TargetVersion '9.9.9' `
+                    -TargetBuild 'build-new'
+                (Read-OpenPathAgentUpdateCommittedMarker -MarkerPath $markerPath -RunId 'run-test').targetVersion | Should -Be '9.9.9'
+                (Read-OpenPathAgentUpdateCommittedMarker -MarkerPath $markerPath -RunId 'run-test').targetBuild | Should -Be 'build-new'
+                Read-OpenPathAgentUpdateCommittedMarker -MarkerPath $markerPath -RunId 'run-other' | Should -BeNullOrEmpty
+                (Test-OpenPathAgentUpdateCommitEvidence -BackupRoot $BackupRoot) | Should -BeTrue
+            }
+        }
+
+        It "Fails at <Point> with the expected rollback or finalization outcome" -ForEach @(
+            @{ Point = 'marker' }
+            @{ Point = 'committed-journal' }
+        ) {
+            $root = Join-Path $TestDrive ('update-commit-fail-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'Write-Output "old"' -Encoding ASCII
+
+            $stagedSource = Join-Path $TestDrive ('staged-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'Write-Output "new"' -Encoding ASCII
+            $stagedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $stagedHash })
+            }
+
+            InModuleScope Common -Parameters @{
+                Root = $root
+                Manifest = $manifest
+                StagedSource = $stagedSource
+                Point = $Point
+            } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TestStagedSource = $StagedSource
+                $script:FailPoint = $Point
+                $script:FailCommittedWrite = $true
+                $script:Captured = @{ Config = $null }
+                $script:RealJsonWriter = Get-Command -Name Write-OpenPathAgentUpdateJsonFile
+
+                Mock Write-OpenPathAgentUpdateJsonFile {
+                    param($Path, $Object)
+                    if ($script:FailCommittedWrite) {
+                        if ($script:FailPoint -eq 'marker' -and $Path -like '*committed.marker') {
+                            throw 'simulated marker write failure'
+                        }
+                        if ($script:FailPoint -eq 'committed-journal' -and
+                            $Path -like '*update-journal.json' -and
+                            [string]$Object.phase -eq 'committed') {
+                            throw 'simulated committed journal write failure'
+                        }
+                    }
+                    & $script:RealJsonWriter -Path $Path -Object $Object
+                }
+
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.8'
+                        agentBuild   = 'build-old'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest {
+                    param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                    Copy-Item -LiteralPath $script:TestStagedSource -Destination $OutFile -Force
+                }
+                Mock Write-OpenPathLog { }
+                Mock Set-OpenPathConfig { $script:Captured.Config = $Config }
+                Mock Save-OpenPathIntegrityBackup { }
+                Mock New-OpenPathIntegrityBaseline { }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { }
+                Mock Enable-OpenPathTask { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Send-OpenPathHealthReport { }
+                Mock Invoke-OpenPathAgentUpdateHealthGate {
+                    [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false }
+                }
+
+                $result = Invoke-OpenPathAgentSelfUpdate -Silent
+                $result.Success | Should -BeFalse
+
+                $journalPath = Get-OpenPathAgentUpdateJournalPath -OpenPathRoot $Root
+                $backupRoot = @(Get-ChildItem -LiteralPath (Join-Path $Root 'data/agent-update/backups') -Directory -Filter 'run-*' -ErrorAction SilentlyContinue)[0]
+                $markerPath = if ($backupRoot) { Join-Path $backupRoot.FullName 'committed.marker' } else { '' }
+
+                if ($script:FailPoint -eq 'marker') {
+                    (Get-Content -LiteralPath (Join-Path $Root 'lib/existing.ps1') -Raw).Trim() | Should -Be 'Write-Output "old"'
+                    Test-Path -LiteralPath $journalPath | Should -BeFalse
+                    @(Get-ChildItem -LiteralPath (Join-Path $Root 'data/agent-update/backups') -Directory -Filter 'run-*' -ErrorAction SilentlyContinue).Count | Should -Be 0
+                }
+                else {
+                    (Get-Content -LiteralPath (Join-Path $Root 'lib/existing.ps1') -Raw).Trim() | Should -Be 'Write-Output "new"'
+                    Test-Path -LiteralPath $journalPath | Should -BeTrue
+                    Test-Path -LiteralPath $markerPath | Should -BeTrue
+                    $script:Captured.Config | Should -BeNullOrEmpty
+
+                    $script:FailCommittedWrite = $false
+                    $journal = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+                    $final = Complete-OpenPathAgentUpdateFinalization `
+                        -OpenPathRoot $Root `
+                        -Journal $journal `
+                        -Config ([PSCustomObject]@{ version = '9.9.8'; agentBuild = 'build-old' })
+                    $final.Success | Should -BeTrue
+                    Test-Path -LiteralPath $journalPath | Should -BeFalse
+                    Test-Path -LiteralPath $markerPath | Should -BeFalse
+                    $script:Captured.Config.version | Should -Be '9.9.9'
+                    $script:Captured.Config.agentBuild | Should -Be 'build-new'
+                }
+            }
+        }
+
+        It "Writes the journal intent as the same bytes as the first journal" {
+            $root = Join-Path $TestDrive ('update-intent-bytes-' + [guid]::NewGuid().ToString('N'))
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            $journal = [PSCustomObject]@{
+                schemaVersion = 2
+                phase         = 'replacing'
+                runId         = 'run-test'
+                durable       = $true
+                targetVersion = '9.9.9'
+                targetBuild   = 'build-new'
+                backupRoot    = $backupRoot
+                createdAt     = '2026-11-14T10:00:00.0000000Z'
+                updatedAt     = '2026-11-14T10:00:00.0000000Z'
+                files         = @([PSCustomObject]@{ relativePath = 'lib/a.ps1'; existedBefore = $true; previousSha256 = ('a' * 64); sha256 = ('b' * 64); unchanged = $false })
+            }
+            New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+
+            InModuleScope Common -Parameters @{ BackupRoot = $backupRoot; Journal = $journal } {
+                $intentPath = Get-OpenPathAgentUpdateJournalIntentPath -BackupRoot $BackupRoot
+                $journalPath = Join-Path $BackupRoot 'update-journal.json'
+                Write-OpenPathAgentUpdateJsonFile -Path $intentPath -Object $Journal
+                Write-OpenPathAgentUpdateJsonFile -Path $journalPath -Object $Journal
+                [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($intentPath)) |
+                    Should -Be ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($journalPath)))
+            }
         }
     }
 

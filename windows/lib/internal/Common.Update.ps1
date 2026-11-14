@@ -96,6 +96,123 @@ function Get-OpenPathAgentUpdateSupersededJournalPath {
     return (Join-Path (Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot) 'superseded-update-journal.json')
 }
 
+function Get-OpenPathAgentUpdateRecoveryStatePath {
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
+
+    return (Join-Path (Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot) 'recovery-state.json')
+}
+
+function Get-OpenPathAgentUpdateJournalIntentPath {
+    param([Parameter(Mandatory = $true)][string]$BackupRoot)
+
+    return (Join-Path $BackupRoot 'journal-intent.json')
+}
+
+function Get-OpenPathAgentUpdateCommittedMarkerPath {
+    param([Parameter(Mandatory = $true)][string]$BackupRoot)
+
+    return (Join-Path $BackupRoot 'committed.marker')
+}
+
+function Get-OpenPathAgentUpdateJournalRunId {
+    param([AllowNull()][object]$Journal)
+
+    if (-not $Journal) {
+        return ''
+    }
+
+    if ($Journal.PSObject.Properties['runId'] -and -not [string]::IsNullOrWhiteSpace([string]$Journal.runId)) {
+        return [string]$Journal.runId
+    }
+
+    $backupRoot = [string]$Journal.backupRoot
+    if (-not [string]::IsNullOrWhiteSpace($backupRoot)) {
+        return (Split-Path -Path $backupRoot.TrimEnd([char[]]@('\', '/')) -Leaf)
+    }
+
+    return ''
+}
+
+function Write-OpenPathAgentUpdateCommittedMarker {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackupRoot,
+        [Parameter(Mandatory = $true)][string]$RunId,
+        [string]$TargetVersion = '',
+        [string]$TargetBuild = ''
+    )
+
+    $marker = [PSCustomObject]@{
+        schemaVersion = 1
+        runId         = $RunId
+        targetVersion = $TargetVersion
+        targetBuild   = $TargetBuild
+        committedAt   = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+    }
+    $markerPath = Get-OpenPathAgentUpdateCommittedMarkerPath -BackupRoot $BackupRoot
+    Write-OpenPathAgentUpdateJsonFile -Path $markerPath -Object $marker
+    return $markerPath
+}
+
+function Read-OpenPathAgentUpdateCommittedMarker {
+    param(
+        [Parameter(Mandatory = $true)][string]$MarkerPath,
+        [Parameter(Mandatory = $true)][string]$RunId
+    )
+
+    if (-not (Test-Path -LiteralPath $MarkerPath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $MarkerPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $schemaVersion = 0
+        [void][int]::TryParse([string]$marker.schemaVersion, [ref]$schemaVersion)
+        if ($schemaVersion -ne 1) {
+            return $null
+        }
+        if ([string]::IsNullOrWhiteSpace($RunId) -or
+            -not [string]::Equals([string]$marker.runId, $RunId, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $null
+        }
+        return $marker
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-OpenPathAgentUpdateCommitEvidence {
+    param(
+        [AllowNull()][object]$Journal,
+        [string]$BackupRoot = ''
+    )
+
+    if ($Journal -and [string]$Journal.phase -eq 'committed') {
+        return $true
+    }
+
+    $resolvedBackupRoot = if (-not [string]::IsNullOrWhiteSpace($BackupRoot)) {
+        $BackupRoot
+    }
+    elseif ($Journal) {
+        [string]$Journal.backupRoot
+    }
+    else {
+        ''
+    }
+    if ([string]::IsNullOrWhiteSpace($resolvedBackupRoot)) {
+        return $false
+    }
+
+    $runId = if ($Journal) { Get-OpenPathAgentUpdateJournalRunId -Journal $Journal } else { Split-Path -Path $resolvedBackupRoot.TrimEnd([char[]]@('\', '/')) -Leaf }
+    if ([string]::IsNullOrWhiteSpace($runId)) {
+        return $false
+    }
+
+    $markerPath = Get-OpenPathAgentUpdateCommittedMarkerPath -BackupRoot $resolvedBackupRoot
+    return ($null -ne (Read-OpenPathAgentUpdateCommittedMarker -MarkerPath $markerPath -RunId $runId))
+}
+
 function Copy-OpenPathAgentUpdateFileDurable {
     <#
     .SYNOPSIS
@@ -1208,7 +1325,15 @@ function Complete-OpenPathAgentUpdateFinalization {
 
     try {
         if ([string]$Journal.phase -ne 'committed') {
-            throw "Journal phase is not committed: $($Journal.phase)"
+            $journalRunId = Get-OpenPathAgentUpdateJournalRunId -Journal $Journal
+            $markerPath = Get-OpenPathAgentUpdateCommittedMarkerPath -BackupRoot ([string]$Journal.backupRoot)
+            $marker = Read-OpenPathAgentUpdateCommittedMarker -MarkerPath $markerPath -RunId $journalRunId
+            if (-not $marker) {
+                throw "Journal phase is not committed: $($Journal.phase)"
+            }
+            $Journal.phase = 'committed'
+            $Journal.updatedAt = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            Write-OpenPathAgentUpdateJournal -OpenPathRoot $OpenPathRoot -Journal $Journal | Out-Null
         }
 
         # Verify the installed tree before anything else. A hash mismatch must
@@ -1338,6 +1463,18 @@ function Complete-OpenPathAgentUpdateFinalization {
         $step = 'integrity'
         Save-OpenPathIntegrityBackup | Out-Null
         New-OpenPathIntegrityBaseline | Out-Null
+
+        # The intent and marker have served their purpose only after the new
+        # tree is verified and the integrity data describes it.
+        $step = 'update-records-removal'
+        $intentPath = Get-OpenPathAgentUpdateJournalIntentPath -BackupRoot ([string]$Journal.backupRoot)
+        if (Test-Path -LiteralPath $intentPath -PathType Leaf) {
+            Remove-Item -LiteralPath $intentPath -Force -ErrorAction Stop
+        }
+        $markerPath = Get-OpenPathAgentUpdateCommittedMarkerPath -BackupRoot ([string]$Journal.backupRoot)
+        if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+            Remove-Item -LiteralPath $markerPath -Force -ErrorAction Stop
+        }
 
         $step = 'backup-cleanup'
         Remove-OpenPathAgentUpdateBackupDirectories -OpenPathRoot $OpenPathRoot -KeepPath ([string]$Journal.backupRoot)
@@ -1588,7 +1725,16 @@ function Invoke-OpenPathAgentSelfUpdate {
         $pendingJournalTargetBuild = [string]$pendingJournal.targetBuild
     }
 
-    if ($pendingJournal -and [string]$pendingJournal.phase -eq 'committed') {
+    $pendingJournalHasCommitEvidence = $false
+    if ($pendingJournal) {
+        $pendingJournalHasCommitEvidence = Test-OpenPathAgentUpdateCommitEvidence -Journal $pendingJournal
+        if ($pendingJournalHasCommitEvidence) {
+            $pendingJournalTargetVersion = [string]$pendingJournal.targetVersion
+            $pendingJournalTargetBuild = [string]$pendingJournal.targetBuild
+        }
+    }
+
+    if ($pendingJournalHasCommitEvidence) {
         $pendingFinalizationLock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 120000
         if (-not $pendingFinalizationLock.Acquired) {
             $message = 'Another self-update process is already running'
@@ -1603,6 +1749,12 @@ function Invoke-OpenPathAgentSelfUpdate {
         try {
             if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
                 $pendingJournal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                if ([string]$pendingJournal.phase -ne 'committed' -and
+                    (Test-OpenPathAgentUpdateCommitEvidence -Journal $pendingJournal)) {
+                    $pendingJournal.phase = 'committed'
+                    $pendingJournal.updatedAt = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                    Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot -Journal $pendingJournal | Out-Null
+                }
                 if ([string]$pendingJournal.phase -eq 'committed') {
                     $pendingJournalTargetVersion = [string]$pendingJournal.targetVersion
                     $pendingJournalTargetBuild = [string]$pendingJournal.targetBuild
@@ -1969,6 +2121,8 @@ function Invoke-OpenPathAgentSelfUpdate {
         $updateJournal = [PSCustomObject]@{
             schemaVersion   = 2
             phase           = 'replacing'
+            runId           = $runId
+            durable         = $true
             targetVersion   = $targetVersion
             targetBuild     = $targetBuild
             previousVersion = $currentVersion
@@ -1988,6 +2142,11 @@ function Invoke-OpenPathAgentSelfUpdate {
                 }
             )
         }
+        # The intent is written and flushed first. If the journal itself is lost
+        # or zero-filled by a power cut, recovery can still prove which files
+        # this run was about to replace and roll them back.
+        $intentPath = Get-OpenPathAgentUpdateJournalIntentPath -BackupRoot $backupRoot
+        Write-OpenPathAgentUpdateJsonFile -Path $intentPath -Object $updateJournal
         Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot -Journal $updateJournal | Out-Null
 
         $replacementStarted = $true
@@ -2042,10 +2201,15 @@ function Invoke-OpenPathAgentSelfUpdate {
             throw "Self-update health gate failed: $($healthGate.Message)"
         }
 
-        # The gate is the commit point. Write the committed journal at once;
-        # everything after it is finalization and never rolls files back.
-        Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot $script:OpenPathRoot -Journal $updateJournal -Phase 'committed'
+        # The gate is the commit point. Persist the marker first; from here a
+        # failure of the journal write is a finalization failure, not a rollback.
+        $markerPath = Write-OpenPathAgentUpdateCommittedMarker `
+            -BackupRoot $backupRoot `
+            -RunId $runId `
+            -TargetVersion $targetVersion `
+            -TargetBuild $targetBuild
         $updateCommitted = $true
+        Update-OpenPathAgentUpdateJournalPhase -OpenPathRoot $script:OpenPathRoot -Journal $updateJournal -Phase 'committed'
 
         $finalization = Complete-OpenPathAgentUpdateFinalization `
             -OpenPathRoot $script:OpenPathRoot `
@@ -2073,6 +2237,31 @@ function Invoke-OpenPathAgentSelfUpdate {
     }
     catch {
         $failureMessage = [string]$_
+
+        # Commit evidence is on disk, not only in this process: the marker is
+        # written before the committed journal. If it exists for this run, the
+        # tree passed the gate and must never be rolled back.
+        if (-not $updateCommitted -and $runBackupRoot -and $runId) {
+            $markerPath = Get-OpenPathAgentUpdateCommittedMarkerPath -BackupRoot $runBackupRoot
+            $marker = Read-OpenPathAgentUpdateCommittedMarker -MarkerPath $markerPath -RunId $runId
+            if ($marker) {
+                $updateCommitted = $true
+                if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+                    try {
+                        $journalOnDisk = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                        if ([int]$journalOnDisk.schemaVersion -eq 2 -and [string]$journalOnDisk.phase -ne 'committed') {
+                            $journalOnDisk.phase = 'committed'
+                            $journalOnDisk.updatedAt = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                            Write-OpenPathAgentUpdateJournal -OpenPathRoot $script:OpenPathRoot -Journal $journalOnDisk | Out-Null
+                        }
+                    }
+                    catch {
+                        Write-SelfUpdateMessage -Message "Could not promote the journal after finding the commit marker: $_" -Level WARN
+                    }
+                }
+                Write-SelfUpdateMessage -Message 'Commit marker found; files are not rolled back' -Level WARN
+            }
+        }
 
         if ($updateCommitted) {
             # The tree passed the gate. A finalization failure keeps the
