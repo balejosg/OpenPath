@@ -900,6 +900,93 @@ Describe "Update Script" {
         }
     }
 
+    Context "Durable update write guard" {
+        BeforeAll {
+            function Get-NonDurableWriteLocations {
+                param([Parameter(Mandatory = $true)][string]$Path)
+
+                $tokens = $null
+                $parseErrors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$parseErrors)
+                if ($parseErrors.Count -gt 0) {
+                    throw "Parse errors in ${Path}: $($parseErrors[0].Message)"
+                }
+
+                $locations = New-Object System.Collections.ArrayList
+                $commands = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+                foreach ($command in $commands) {
+                    $name = [string]$command.GetCommandName()
+                    if ($name -notin @('Copy-Item', 'Set-Content', 'Add-Content', 'Out-File')) {
+                        continue
+                    }
+                    $owner = $command
+                    while ($owner -and $owner -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) {
+                        $owner = $owner.Parent
+                    }
+                    $functionName = if ($owner) { $owner.Name } else { '<script>' }
+                    [void]$locations.Add(('{0}|{1}|{2}' -f (Split-Path $Path -Leaf), $functionName, $name))
+                }
+
+                $memberCalls = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true)
+                foreach ($memberCall in $memberCalls) {
+                    $name = [string]$memberCall.Member.Value
+                    if ($name -notin @('WriteAllText', 'WriteAllBytes')) {
+                        continue
+                    }
+                    $owner = $memberCall
+                    while ($owner -and $owner -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) {
+                        $owner = $owner.Parent
+                    }
+                    $functionName = if ($owner) { $owner.Name } else { '<script>' }
+                    [void]$locations.Add(('{0}|{1}|{2}' -f (Split-Path $Path -Leaf), $functionName, $name))
+                }
+
+                return @($locations.ToArray())
+            }
+        }
+
+        It "Has no non-durable write outside the explicit allow-list" {
+            $files = @(
+                'windows/lib/internal/Common.Update.ps1',
+                'windows/scripts/Recover-OpenPathAgentUpdate.ps1',
+                'windows/lib/internal/Common.Integrity.ps1'
+            )
+            $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+            $actual = @()
+            foreach ($relativePath in $files) {
+                $actual += Get-NonDurableWriteLocations -Path (Join-Path $root $relativePath)
+            }
+
+            # Temporary allow-list while the remaining commits convert these
+            # paths. Every entry must shrink to the staging validator write.
+            $allowed = @(
+                'Common.Update.ps1|Save-OpenPathAgentUpdateInstalledFileBackups|Copy-Item',
+                'Common.Update.ps1|Restore-OpenPathAgentUpdateJournalBackups|Copy-Item',
+                'Common.Update.ps1|Invoke-OpenPathAgentSelfUpdate|Copy-Item',
+                'Common.Update.ps1|Test-OpenPathAgentUpdateStagedArtifacts|WriteAllText',
+                'Recover-OpenPathAgentUpdate.ps1|Write-OpenPathRecoveryLog|Add-Content',
+                'Recover-OpenPathAgentUpdate.ps1|Restore-OpenPathRecoveryJournal|Copy-Item',
+                'Recover-OpenPathAgentUpdate.ps1|Write-OpenPathRecoveryReport|WriteAllText',
+                'Common.Integrity.ps1|Save-OpenPathIntegrityBackup|Copy-Item',
+                'Common.Integrity.ps1|New-OpenPathIntegrityBaseline|Set-Content',
+                'Common.Integrity.ps1|Update-OpenPathIntegrityEntry|Copy-Item',
+                'Common.Integrity.ps1|Update-OpenPathIntegrityEntry|Set-Content',
+                'Common.Integrity.ps1|Restore-OpenPathIntegrity|Copy-Item'
+            )
+
+            $unexpected = @($actual | Where-Object { $_ -notin $allowed } | Sort-Object -Unique)
+            $unexpected | Should -BeNullOrEmpty
+        }
+
+        It "Writes the run manifest, journal, failure record and superseded journal through the durable writer" {
+            $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'lib' 'internal' 'Common.Update.ps1') -Raw
+
+            $content | Should -Match 'Write-OpenPathAgentUpdateJsonFile -Path \(Join-Path \$backupRoot ''manifest\.json''\) -Object \$manifest'
+            $content | Should -Not -Match 'Set-Content -Path \(Join-Path \$backupRoot ''manifest\.json''\)'
+            $content | Should -Match 'Copy-OpenPathAgentUpdateFileDurable -SourcePath \$JournalPath -DestinationPath \$temporaryPath'
+        }
+    }
+
     Context "Self-update transactions" {
         BeforeAll {
             Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global

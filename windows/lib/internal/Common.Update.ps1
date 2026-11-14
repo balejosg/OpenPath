@@ -300,8 +300,7 @@ function Save-OpenPathAgentUpdateSupersededJournal {
     $supersededPath = Get-OpenPathAgentUpdateSupersededJournalPath -OpenPathRoot $OpenPathRoot
     $temporaryPath = "$supersededPath.$([guid]::NewGuid().ToString('N')).tmp"
     try {
-        $bytes = [System.IO.File]::ReadAllBytes($JournalPath)
-        [System.IO.File]::WriteAllBytes($temporaryPath, $bytes)
+        Copy-OpenPathAgentUpdateFileDurable -SourcePath $JournalPath -DestinationPath $temporaryPath | Out-Null
         if (Test-Path -LiteralPath $supersededPath -PathType Leaf) {
             [System.IO.File]::Replace($temporaryPath, $supersededPath, [NullString]::Value)
         }
@@ -1922,7 +1921,7 @@ function Invoke-OpenPathAgentSelfUpdate {
         # pre-update hash, before the journal exists and before any file
         # changes. Rollback never reads a backup from another run.
         Save-OpenPathAgentUpdateInstalledFileBackups -Files $downloadedFiles
-        $manifest | ConvertTo-Json -Depth 20 | Set-Content -Path (Join-Path $backupRoot 'manifest.json') -Encoding UTF8 -Force
+        Write-OpenPathAgentUpdateJsonFile -Path (Join-Path $backupRoot 'manifest.json') -Object $manifest
 
         # A committed journal on disk belongs to an earlier update that passed
         # the gate but could not finish. Keep it byte-for-byte before this run
