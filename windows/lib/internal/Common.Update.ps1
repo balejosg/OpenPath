@@ -960,8 +960,12 @@ function Save-OpenPathAgentUpdateInstalledFileBackups {
         Copies every installed file that will be replaced into this run's backup directory
     .DESCRIPTION
         Runs before the journal is written and before any installed file changes.
-        Each entry gets the hash of the pre-update file so rollback can prove that
-        a backup belongs to this run and matches the tree it is restoring.
+        A file whose installed hash already equals the target hash is classified
+        unchanged and is neither backed up nor replaced. Every other existing
+        file is copied with the durable single-pass copy, which also returns the
+        hash of the bytes written; the backup is re-read once so the abort still
+        proves what was persisted. Each entry gets the hash of the pre-update
+        file so rollback can prove that a backup belongs to this run.
     #>
     param([Parameter(Mandatory = $true)][object[]]$Files)
 
@@ -971,22 +975,36 @@ function Save-OpenPathAgentUpdateInstalledFileBackups {
 
         if (-not $hadExistingFile) {
             $file | Add-Member -NotePropertyName PreviousSha256 -NotePropertyValue '' -Force
+            $file | Add-Member -NotePropertyName Unchanged -NotePropertyValue $false -Force
             continue
         }
 
         $previousHash = (Get-FileHash -LiteralPath $file.DestinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+        if ([string]::Equals($previousHash, [string]$file.ExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $file | Add-Member -NotePropertyName PreviousSha256 -NotePropertyValue $previousHash -Force
+            $file | Add-Member -NotePropertyName Unchanged -NotePropertyValue $true -Force
+            continue
+        }
+
         $backupDirectory = Split-Path $file.BackupPath -Parent
         if (-not (Test-Path -LiteralPath $backupDirectory)) {
             New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
         }
 
-        Copy-Item -LiteralPath $file.DestinationPath -Destination $file.BackupPath -Force -ErrorAction Stop
+        $copiedHash = Copy-OpenPathAgentUpdateFileDurable `
+            -SourcePath $file.DestinationPath `
+            -DestinationPath $file.BackupPath
+        if (-not [string]::Equals($copiedHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Backup checksum mismatch for $($file.RelativePath)"
+        }
+
         $backupHash = (Get-FileHash -LiteralPath $file.BackupPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
         if (-not [string]::Equals($backupHash, $previousHash, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Backup checksum mismatch for $($file.RelativePath)"
         }
 
         $file | Add-Member -NotePropertyName PreviousSha256 -NotePropertyValue $previousHash -Force
+        $file | Add-Member -NotePropertyName Unchanged -NotePropertyValue $false -Force
     }
 }
 
@@ -1964,6 +1982,7 @@ function Invoke-OpenPathAgentSelfUpdate {
                         existedBefore  = [bool]$_.HadExistingFile
                         previousSha256 = [string]$_.PreviousSha256
                         sha256         = [string]$_.ExpectedSha256
+                        unchanged      = [bool]$_.Unchanged
                     }
                 }
             )
@@ -1972,6 +1991,10 @@ function Invoke-OpenPathAgentSelfUpdate {
 
         $replacementStarted = $true
         foreach ($download in $downloadedFiles) {
+            if ([bool]$download.Unchanged) {
+                continue
+            }
+
             $destinationDir = Split-Path $download.DestinationPath -Parent
             if (-not (Test-Path $destinationDir)) {
                 New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null

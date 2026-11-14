@@ -987,6 +987,108 @@ Describe "Update Script" {
         }
     }
 
+    Context "Self-update unchanged files" {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
+        }
+
+        It "Classifies matching files unchanged without a backup and backs up only changed files" {
+            $root = Join-Path $TestDrive ('update-classify-' + [guid]::NewGuid().ToString('N'))
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            $unchangedPath = Join-Path $root 'lib/unchanged.ps1'
+            $changedPath = Join-Path $root 'lib/changed.ps1'
+            $newPath = Join-Path $root 'lib/new.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $unchangedPath -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $unchangedPath -Value 'same' -Encoding ASCII
+            Set-Content -LiteralPath $changedPath -Value 'old' -Encoding ASCII
+
+            $files = @(
+                [PSCustomObject]@{
+                    RelativePath    = 'lib/unchanged.ps1'
+                    DestinationPath = $unchangedPath
+                    BackupPath      = Join-Path $backupRoot 'lib/unchanged.ps1'
+                    ExpectedSha256  = (Get-FileHash -LiteralPath $unchangedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                },
+                [PSCustomObject]@{
+                    RelativePath    = 'lib/changed.ps1'
+                    DestinationPath = $changedPath
+                    BackupPath      = Join-Path $backupRoot 'lib/changed.ps1'
+                    ExpectedSha256  = ('a' * 64)
+                },
+                [PSCustomObject]@{
+                    RelativePath    = 'lib/new.ps1'
+                    DestinationPath = $newPath
+                    BackupPath      = Join-Path $backupRoot 'lib/new.ps1'
+                    ExpectedSha256  = ('b' * 64)
+                }
+            )
+
+            InModuleScope Common -Parameters @{ Files = $files } {
+                Save-OpenPathAgentUpdateInstalledFileBackups -Files $Files
+            }
+
+            $files[0].Unchanged | Should -BeTrue
+            $files[0].PreviousSha256 | Should -Be $files[0].ExpectedSha256
+            Test-Path -LiteralPath $files[0].BackupPath | Should -BeFalse
+
+            $files[1].Unchanged | Should -BeFalse
+            $files[1].PreviousSha256 | Should -Be (Get-FileHash -LiteralPath $changedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            Test-Path -LiteralPath $files[1].BackupPath | Should -BeTrue
+
+            $files[2].Unchanged | Should -BeFalse
+            $files[2].PreviousSha256 | Should -Be ''
+            Test-Path -LiteralPath $files[2].BackupPath | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $backupRoot -Recurse -File).Count | Should -Be 1
+        }
+
+        It "Aborts when the backup re-read does not match the previous file" {
+            $root = Join-Path $TestDrive ('update-backup-mismatch-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/a.ps1'
+            $backup = Join-Path $root 'data/agent-update/backups/run-test/lib/a.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'old-a' -Encoding ASCII
+
+            $files = @(
+                [PSCustomObject]@{
+                    RelativePath    = 'lib/a.ps1'
+                    DestinationPath = $destination
+                    BackupPath      = $backup
+                    ExpectedSha256  = ('a' * 64)
+                }
+            )
+
+            InModuleScope Common -Parameters @{ Files = $files } {
+                Mock Copy-OpenPathAgentUpdateFileDurable {
+                    param($SourcePath, $DestinationPath, $BufferSize)
+                    $directory = Split-Path $DestinationPath -Parent
+                    if (-not (Test-Path -LiteralPath $directory)) {
+                        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+                    }
+                    [System.IO.File]::WriteAllText($DestinationPath, 'corrupt-backup')
+                    return (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+
+                { Save-OpenPathAgentUpdateInstalledFileBackups -Files $Files } |
+                    Should -Throw '*Backup checksum mismatch*'
+            }
+
+            (Get-Content -LiteralPath $destination -Raw).Trim() | Should -Be 'old-a'
+        }
+
+        It "Skips unchanged files in the replacement loop but verifies every manifest file afterwards" {
+            $content = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'lib' 'internal' 'Common.Update.ps1') -Raw
+
+            $loopStart = $content.IndexOf('foreach ($download in $downloadedFiles)')
+            $unchangedSkip = $content.IndexOf('if ([bool]$download.Unchanged) {', $loopStart)
+            $unchangedSkip | Should -BeGreaterThan $loopStart
+
+            $postCheckStart = $content.IndexOf('Post-replacement checksum mismatch')
+            $unchangedSkip | Should -BeLessThan $postCheckStart
+            $postCheckLoopStart = $content.LastIndexOf('foreach ($download in $downloadedFiles)', $postCheckStart)
+            $postCheckLoopStart | Should -BeGreaterThan $unchangedSkip
+        }
+    }
+
     Context "Self-update transactions" {
         BeforeAll {
             Import-Module (Join-Path $PSScriptRoot ".." "lib" "Common.psm1") -Force -Global
