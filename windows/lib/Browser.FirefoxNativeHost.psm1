@@ -394,6 +394,9 @@ function Invoke-OpenPathFirefoxNativeHostCompiledEnsure {
     return Invoke-OpenPathFirefoxNativeHostEnsureWithLock -Action {
         $nativeRoot = if ($nativeRootOverride) { $nativeRootOverride } else { Get-OpenPathFirefoxNativeHostRoot }
         try { Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null } catch { }
+        # Retired executables from an interrupted or live-host swap are removed
+        # before the next attempt; a still-running image fails and stays.
+        Remove-OpenPathNativeHostRetiredExecutables -NativeRoot $nativeRoot
         $result = $null
         # The compiled exe is integrity-protected: if the watchdog checks between the
         # swap and the baseline refresh it restores the old exe and the next cycle

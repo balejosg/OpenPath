@@ -830,6 +830,71 @@ function Get-OpenPathNativeHostFailureRetryDelayMinutes {
     return (Get-OpenPathNativeHostHealthRetryDelayMinutes -HealthAttempts $streak)
 }
 
+function Remove-OpenPathNativeHostRetiredExecutables {
+    <#
+    .SYNOPSIS
+        Removes the executables left aside by a previous swap.
+    .DESCRIPTION
+        Windows allows renaming a running executable but not deleting it, so a
+        swap leaves <executable>.<guid>.old behind while the previous host is
+        still alive. Cleanup is best-effort: a file that is still the image of
+        a live process fails to delete and is retried by the next ensure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$NativeRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $NativeRoot -PathType Container)) { return }
+    $filter = (Get-OpenPathNativeHostExecutableName) + '.*.old'
+    Get-ChildItem -LiteralPath $NativeRoot -Filter $filter -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+}
+
+function Move-OpenPathNativeHostExecutableIntoPlace {
+    <#
+    .SYNOPSIS
+        Replaces the installed native host executable without deleting a running
+        image.
+    .DESCRIPTION
+        Move-Item -Force deletes the destination first, and Windows refuses to
+        delete an executable that is running. The previous executable is
+        therefore renamed aside in the same directory (a running image can be
+        renamed), the temporary executable takes its place, and the retired
+        file is deleted best-effort. If the second move fails, the previous
+        executable is moved back to the manifest path before the error is
+        rethrown.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$TemporaryExecutable,
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        # Test seam: replaces the two-file move operations.
+        [scriptblock]$MoveInvoker = $null
+    )
+
+    $move = {
+        param([string]$Source, [string]$Destination)
+        Move-Item -LiteralPath $Source -Destination $Destination -Force
+    }
+    if ($MoveInvoker) { $move = $MoveInvoker }
+    $retiredPath = ''
+    if (Test-Path -LiteralPath $ExecutablePath -PathType Leaf) {
+        $retiredPath = "$ExecutablePath.$([guid]::NewGuid().ToString('N')).old"
+        & $move $ExecutablePath $retiredPath
+    }
+    try {
+        & $move $TemporaryExecutable $ExecutablePath
+    }
+    catch {
+        if ($retiredPath -and (Test-Path -LiteralPath $retiredPath -PathType Leaf)) {
+            try { Move-Item -LiteralPath $retiredPath -Destination $ExecutablePath -Force } catch { }
+        }
+        throw
+    }
+    Remove-OpenPathNativeHostRetiredExecutables -NativeRoot (Split-Path -Parent $ExecutablePath)
+}
+
 function Build-OpenPathFirefoxNativeHostExecutable {
     <#
     .SYNOPSIS
@@ -854,6 +919,8 @@ function Build-OpenPathFirefoxNativeHostExecutable {
         [scriptblock]$CompilerInvoker = $null,
         [scriptblock]$ProcessInvoker = $null,
         [scriptblock]$SignatureReader = $null,
+        # Test seam: replaces the executable swap moves.
+        [scriptblock]$MoveInvoker = $null,
         # Phase 8c test seam: replaces the source-hash computation.
         [scriptblock]$HashReader = $null,
         # Test seam: overrides the empty-until-Phase-8.1 publisher pin.
@@ -951,6 +1018,10 @@ function Build-OpenPathFirefoxNativeHostExecutable {
 
     try {
         if (-not (Test-Path -LiteralPath $NativeRoot)) { New-Item -ItemType Directory -Path $NativeRoot -Force | Out-Null }
+        # A swap interrupted between the two moves leaves a retired executable;
+        # a swap that succeeded while the old host was alive leaves one too.
+        # Deleting a live image fails, so this stays best-effort.
+        Remove-OpenPathNativeHostRetiredExecutables -NativeRoot $NativeRoot
         if ([string]::IsNullOrWhiteSpace($SourcePath)) {
             $SourcePath = Get-OpenPathNativeHostInstalledSourcePath -OpenPathRoot $OpenPathRoot -NativeRoot $NativeRoot
         }
@@ -1065,7 +1136,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
                 if (Test-Path -LiteralPath $executablePath -PathType Leaf) { $result.ExecutablePath = $executablePath }
                 return [pscustomobject]$result
             }
-            Move-Item -LiteralPath $temporaryExecutable -Destination $executablePath -Force
+            Move-OpenPathNativeHostExecutableIntoPlace -TemporaryExecutable $temporaryExecutable -ExecutablePath $executablePath -MoveInvoker $MoveInvoker
             $executableHash = Get-OpenPathNativeHostFileSha256 -Path $executablePath
             $result.ExecutablePath = $executablePath
             $result.ExecutableSha256 = $executableHash
@@ -1136,7 +1207,7 @@ function Build-OpenPathFirefoxNativeHostExecutable {
 
         # Atomic swap: the new executable only replaces the previous one after a
         # successful health check, and the manifest is written after the move.
-        Move-Item -LiteralPath $temporaryExecutable -Destination $executablePath -Force
+        Move-OpenPathNativeHostExecutableIntoPlace -TemporaryExecutable $temporaryExecutable -ExecutablePath $executablePath -MoveInvoker $MoveInvoker
         $executableHash = Get-OpenPathNativeHostFileSha256 -Path $executablePath
         $result.ExecutablePath = $executablePath
         $result.ExecutableSha256 = $executableHash
@@ -1210,4 +1281,5 @@ function Remove-OpenPathNativeHostExecutableArtifacts {
     }
     Get-ChildItem -LiteralPath $NativeRoot -Filter ((Get-OpenPathNativeHostExecutableName) + '.*.tmp') -File -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    Remove-OpenPathNativeHostRetiredExecutables -NativeRoot $NativeRoot
 }
