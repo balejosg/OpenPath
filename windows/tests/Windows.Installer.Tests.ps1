@@ -1733,11 +1733,26 @@ exit `$installerExitCode
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$requiredScriptFiles = @(',
                 'Enroll-Machine.ps1',
+                'Recover-OpenPathAgentUpdate.ps1',
+                'Test-OpenPathAgentUpdateHealth.ps1',
                 'Required installer script missing from bootstrap package',
                 'Required installer script was not staged into OpenPath runtime',
                 'Get-ChildItem "$ScriptDir\scripts\*.cmd" -ErrorAction SilentlyContinue',
                 'Copy-Item -Destination "$OpenPathRoot\scripts\" -Force'
             )
+        }
+
+        It "Requires the update recovery and health gate scripts inside the required script list" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $listStart = $content.IndexOf('$requiredScriptFiles = @(')
+            $listEnd = $content.IndexOf(')', $listStart)
+
+            $listStart | Should -BeGreaterThan -1
+            $listEnd | Should -BeGreaterThan $listStart
+            $requiredList = $content.Substring($listStart, $listEnd - $listStart)
+            $requiredList | Should -Match 'Recover-OpenPathAgentUpdate\.ps1'
+            $requiredList | Should -Match 'Test-OpenPathAgentUpdateHealth\.ps1'
         }
 
         It "Stages installer helpers so installed reinstall entrypoints remain runnable" {

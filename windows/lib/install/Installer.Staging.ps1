@@ -147,9 +147,11 @@ function Copy-OpenPathInstallerRuntime {
         'Enroll-Machine.ps1',
         'Pre-Install-Validation.ps1',
         'Recover-CaptivePortal.ps1',
+        'Recover-OpenPathAgentUpdate.ps1',
         'Start-RuntimeDependencyWorker.ps1',
         'Start-SSEListener.ps1',
         'Test-DNSHealth.ps1',
+        'Test-OpenPathAgentUpdateHealth.ps1',
         'Update-OpenPath.ps1'
     )
 
