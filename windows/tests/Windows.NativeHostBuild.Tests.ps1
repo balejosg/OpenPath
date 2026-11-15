@@ -772,7 +772,7 @@ Describe 'Compiled native host (Phase 5)' {
             $buildPath = (Resolve-Path $script:BuildModulePath).Path
             $nativeHostModulePath = (Resolve-Path (Join-Path $PSScriptRoot '..\lib\Browser.FirefoxNativeHost.psm1')).Path
             $childScript = @"
-function global:Get-FileHash { throw [System.Management.Automation.CommandNotFoundException]::new("The term 'Get-FileHash' is not recognized as the name of a cmdlet, function, script file, or operable program.") }
+function global:Get-FileHash { throw [System.Management.Automation.CommandNotFoundException]::new('The term Get-FileHash is not recognized as the name of a cmdlet, function, script file, or operable program.') }
 . '$buildPath'
 `$compiler = { param(`$sourcePath, `$outputPath) Set-Content -LiteralPath `$outputPath -Value 'MZ-fake-executable' -Encoding ASCII; [pscustomobject]@{ ExitCode = 0; Output = '' } }
 `$process = { param(`$executablePath, `$timeoutSeconds) [pscustomobject]@{ Healthy = `$true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 5; Error = '' } }
@@ -1036,6 +1036,173 @@ public static class OpenPathPingNoisyFixture {
             $health = Test-OpenPathNativeHostExecutable -ExecutablePath $script:PingFixtures['noisy'] -TimeoutSeconds 20
             $health.Healthy | Should -BeTrue
             ($health.Stderr.Length -le 2048) | Should -BeTrue
+        }
+    }
+
+    Context 'Running-host executable swap (A-ok-2)' {
+        BeforeEach {
+            . $script:BuildModulePath
+            $script:SwapRoot = Join-Path $TestDrive ('native-swap-' + [guid]::NewGuid().ToString('N'))
+            $script:SwapNative = Join-Path $script:SwapRoot 'browser-extension\firefox\native'
+            New-Item -ItemType Directory -Path $script:SwapNative -Force | Out-Null
+            $script:SwapSource = Join-Path $script:SwapRoot 'OpenPathNativeHost.cs'
+            Set-Content -LiteralPath $script:SwapSource -Value '// fixture source' -Encoding ASCII
+            $swapCompileTracker = [pscustomobject]@{ Calls = 0 }
+            $script:SwapCompileTracker = $swapCompileTracker
+            $script:SwapCompiler = {
+                param($sourcePath, $outputPath)
+                $swapCompileTracker.Calls = $swapCompileTracker.Calls + 1
+                Set-Content -LiteralPath $outputPath -Value 'MZ-fake-executable' -Encoding ASCII
+                [pscustomobject]@{ ExitCode = 0; Output = '' }
+            }.GetNewClosure()
+            $script:SwapHealthyProcess = {
+                param($executablePath)
+                [pscustomobject]@{ Healthy = $true; Version = '9.9.9'; ProtocolVersion = 2; Capabilities = @(); ElapsedMs = 12; Error = '' }
+            }
+        }
+
+        It 'Swaps in the new executable while the previous one is running (Windows only)' {
+            if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') {
+                Set-ItResult -Skipped -Because 'requires a real Windows executable image locked by a running process'
+                return
+            }
+            $executablePath = Join-Path $script:SwapNative 'OpenPath-NativeHost.exe'
+            $manifestPath = Join-Path $script:SwapNative 'OpenPath-NativeHost.manifest.json'
+            Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:SwapNative -OpenPathRoot $script:SwapRoot -SourcePath $script:SwapSource -CompilerInvoker $script:SwapCompiler -ProcessInvoker $script:SwapHealthyProcess | Out-Null
+
+            # A real executable image at the manifest path, held open by a live
+            # process. Renaming it must succeed; deleting or replacing it must not.
+            Copy-Item -LiteralPath $env:ComSpec -Destination $executablePath -Force
+            $previousHash = (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $running = Start-Process -FilePath $executablePath -ArgumentList '/c', 'ping -n 120 127.0.0.1 > nul' -PassThru -WindowStyle Hidden
+            try {
+                $running.Refresh()
+                $running.HasExited | Should -BeFalse
+                Set-Content -LiteralPath $script:SwapSource -Value '// changed while the host is running' -Encoding ASCII
+                $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:SwapNative -OpenPathRoot $script:SwapRoot -SourcePath $script:SwapSource -CompilerInvoker $script:SwapCompiler -ProcessInvoker $script:SwapHealthyProcess
+
+                $result.Status | Should -Be 'Built'
+                $result.BuiltNow | Should -BeTrue
+                (Test-Path -LiteralPath $executablePath -PathType Leaf) | Should -BeTrue
+                (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant() | Should -Be $result.ExecutableSha256
+                $result.ExecutableSha256 | Should -Not -Be $previousHash
+                $running.Refresh()
+                $running.HasExited | Should -BeFalse
+                $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+                $manifest.executable | Should -Be 'OpenPath-NativeHost.exe'
+                $manifest.executableSha256 | Should -Be $result.ExecutableSha256
+                # The live image cannot be deleted, so it stays as a retired
+                # executable until the next ensure after the process exits.
+                @(Get-ChildItem -LiteralPath $script:SwapNative -Filter 'OpenPath-NativeHost.exe.*.old' -File).Count | Should -Be 1
+            }
+            finally {
+                if ($running -and -not $running.HasExited) { Stop-Process -Id $running.Id -Force -ErrorAction SilentlyContinue }
+            }
+        }
+
+        It 'Restores the previous executable when the second move fails' {
+            $executablePath = Join-Path $script:SwapNative 'OpenPath-NativeHost.exe'
+            $temporaryPath = Join-Path $script:SwapNative 'OpenPath-NativeHost.exe.fixture.tmp'
+            Set-Content -LiteralPath $executablePath -Value 'previous-executable' -Encoding ASCII
+            Set-Content -LiteralPath $temporaryPath -Value 'new-executable' -Encoding ASCII
+            $moveState = [pscustomobject]@{ Calls = 0 }
+            $moveInvoker = {
+                param($from, $to)
+                $moveState.Calls = $moveState.Calls + 1
+                if ($moveState.Calls -eq 2) { throw 'fixture: the second move failed' }
+                Move-Item -LiteralPath $from -Destination $to -Force
+            }.GetNewClosure()
+
+            { Move-OpenPathNativeHostExecutableIntoPlace -TemporaryExecutable $temporaryPath -ExecutablePath $executablePath -MoveInvoker $moveInvoker } |
+                Should -Throw '*fixture: the second move failed*'
+
+            (Get-Content -LiteralPath $executablePath -Raw).Trim() | Should -Be 'previous-executable'
+            (Test-Path -LiteralPath $temporaryPath -PathType Leaf) | Should -BeTrue
+            @(Get-ChildItem -LiteralPath $script:SwapNative -Filter 'OpenPath-NativeHost.exe.*.old' -File).Count | Should -Be 0
+        }
+
+        It 'Keeps the previous executable and manifest when the build swap fails' {
+            $executablePath = Join-Path $script:SwapNative 'OpenPath-NativeHost.exe'
+            $manifestPath = Join-Path $script:SwapNative 'OpenPath-NativeHost.manifest.json'
+            Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:SwapNative -OpenPathRoot $script:SwapRoot -SourcePath $script:SwapSource -CompilerInvoker $script:SwapCompiler -ProcessInvoker $script:SwapHealthyProcess | Out-Null
+            $previousHash = (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $previousManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            Set-Content -LiteralPath $script:SwapSource -Value '// changed for a failing swap' -Encoding ASCII
+            $moveState = [pscustomobject]@{ Calls = 0 }
+            $moveInvoker = {
+                param($from, $to)
+                $moveState.Calls = $moveState.Calls + 1
+                if ($moveState.Calls -eq 2) { throw 'fixture: the second move failed' }
+                Move-Item -LiteralPath $from -Destination $to -Force
+            }.GetNewClosure()
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:SwapNative -OpenPathRoot $script:SwapRoot -SourcePath $script:SwapSource -CompilerInvoker $script:SwapCompiler -ProcessInvoker $script:SwapHealthyProcess -MoveInvoker $moveInvoker
+
+            $result.Status | Should -Be 'Fallback'
+            $result.Error | Should -Match 'fixture: the second move failed'
+            $result.ExecutablePath | Should -Be $executablePath
+            (Test-Path -LiteralPath $executablePath -PathType Leaf) | Should -BeTrue
+            (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant() | Should -Be $previousHash
+            $failedManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            $failedManifest.sourceSha256 | Should -Be $previousManifest.sourceSha256
+            $failedManifest.executableSha256 | Should -Be $previousHash
+            ((Get-Content -LiteralPath (Join-Path $script:SwapNative 'OpenPath-NativeHost.build.json') -Raw | ConvertFrom-Json).status) | Should -Be 'Failed'
+        }
+
+        It 'Rebuilds and clears a retired executable left between the two moves' {
+            $executablePath = Join-Path $script:SwapNative 'OpenPath-NativeHost.exe'
+            $retiredPath = "$executablePath.$([guid]::NewGuid().ToString('N')).old"
+            Set-Content -LiteralPath $retiredPath -Value 'previous-executable' -Encoding ASCII
+            (Test-Path -LiteralPath $executablePath) | Should -BeFalse
+
+            $result = Build-OpenPathFirefoxNativeHostExecutable -NativeRoot $script:SwapNative -OpenPathRoot $script:SwapRoot -SourcePath $script:SwapSource -CompilerInvoker $script:SwapCompiler -ProcessInvoker $script:SwapHealthyProcess
+
+            $result.Status | Should -Be 'Built'
+            (Test-Path -LiteralPath $executablePath -PathType Leaf) | Should -BeTrue
+            (Test-Path -LiteralPath $retiredPath) | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $script:SwapNative -Filter 'OpenPath-NativeHost.exe.*.old' -File).Count | Should -Be 0
+        }
+
+        It 'Removes retired executables at the start of an ensure even when the build is skipped' {
+            Import-Module (Join-Path $PSScriptRoot '..\lib\Browser.FirefoxNativeHost.psm1') -Force -Global -ErrorAction Stop
+            $installedSource = Join-Path $script:SwapRoot 'native-host\OpenPathNativeHost.cs'
+            New-Item -ItemType Directory -Path (Split-Path $installedSource -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $installedSource -Value '// fixture source' -Encoding ASCII
+            $executablePath = Join-Path $script:SwapNative 'OpenPath-NativeHost.exe'
+            $manifestPath = Join-Path $script:SwapNative 'whitelist_native_host.json'
+            $first = Invoke-OpenPathFirefoxNativeHostCompiledEnsure -NativeRoot $script:SwapNative -OpenPathRoot $script:SwapRoot -ManifestPath $manifestPath -CompilerInvoker $script:SwapCompiler -ProcessInvoker $script:SwapHealthyProcess
+            $first.Status | Should -Be 'Built'
+            $retiredPath = "$executablePath.$([guid]::NewGuid().ToString('N')).old"
+            Set-Content -LiteralPath $retiredPath -Value 'fingerprint of the previous build' -Encoding ASCII
+
+            $second = Invoke-OpenPathFirefoxNativeHostCompiledEnsure -NativeRoot $script:SwapNative -OpenPathRoot $script:SwapRoot -ManifestPath $manifestPath -CompilerInvoker $script:SwapCompiler -ProcessInvoker $script:SwapHealthyProcess
+
+            $second.Status | Should -Be 'BuildSkipped'
+            (Test-Path -LiteralPath $retiredPath) | Should -BeFalse
+            @(Get-ChildItem -LiteralPath $script:SwapNative -Filter 'OpenPath-NativeHost.exe.*.old' -File).Count | Should -Be 0
+        }
+
+        It 'Does not add retired executables to the integrity critical files' {
+            $integrityPath = Join-Path $PSScriptRoot '..\lib\internal\Common.Integrity.ps1'
+            $root = Join-Path $TestDrive ('integrity-old-' + [guid]::NewGuid().ToString('N'))
+            $native = Join-Path $root 'browser-extension\firefox\native'
+            New-Item -ItemType Directory -Path $native -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $native 'OpenPath-NativeHost.exe') -Value 'MZ' -Encoding ASCII
+            Set-Content -LiteralPath (Join-Path $native 'OpenPath-NativeHost.exe.fixture.old') -Value 'MZ' -Encoding ASCII
+            $scriptBlock = [scriptblock]::Create(@"
+`$script:OpenPathRoot = '$root'
+. '$integrityPath'
+@(Get-OpenPathCriticalFiles | Where-Object { `$_ -like '*OpenPath-NativeHost.exe*' })
+"@)
+            $critical = @(& $scriptBlock)
+            $critical.Count | Should -Be 1
+            (Split-Path -Leaf $critical[0]) | Should -Be 'OpenPath-NativeHost.exe'
+        }
+
+        It 'Uses one shared swap helper for the signed and compiled paths' {
+            $moduleText = Get-Content -LiteralPath $script:BuildModulePath -Raw
+            ([regex]::Matches($moduleText, 'Move-OpenPathNativeHostExecutableIntoPlace -TemporaryExecutable \$temporaryExecutable -ExecutablePath \$executablePath')).Count | Should -Be 2
+            ([regex]::Matches($moduleText, 'Move-Item -LiteralPath \$temporaryExecutable -Destination \$executablePath -Force')).Count | Should -Be 0
         }
     }
 
