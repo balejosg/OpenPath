@@ -88,6 +88,12 @@ function Get-OpenPathAgentUpdateFailureRecordPath {
     return (Join-Path (Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot) 'failed-update.json')
 }
 
+function Get-OpenPathAgentUpdateTimeoutStatePath {
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
+
+    return (Join-Path (Get-OpenPathAgentUpdateRoot -OpenPathRoot $OpenPathRoot) 'timeout-state.json')
+}
+
 function Get-OpenPathAgentUpdateRecoveryReportPath {
     param([string]$OpenPathRoot = $script:OpenPathRoot)
 
@@ -983,6 +989,82 @@ function Clear-OpenPathAgentUpdateFailureRecord {
     }
 }
 
+function Get-OpenPathAgentUpdateTimeoutState {
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
+
+    $statePath = Get-OpenPathAgentUpdateTimeoutStatePath -OpenPathRoot $OpenPathRoot
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        return (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -ErrorAction Stop)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Clear-OpenPathAgentUpdateTimeoutState {
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
+
+    $statePath = Get-OpenPathAgentUpdateTimeoutStatePath -OpenPathRoot $OpenPathRoot
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+        Remove-Item -LiteralPath $statePath -Force -ErrorAction Stop
+    }
+}
+
+function Register-OpenPathAgentUpdateTimeout {
+    <#
+    .SYNOPSIS
+        Counts consecutive gate or validation timeouts for one target build
+    .DESCRIPTION
+        A timeout does not prove the build is bad, so it must not by itself
+        create the seven-day failed-build record. The count is persisted so the
+        third consecutive timeout for the same target can apply the backoff.
+    #>
+    param(
+        [string]$OpenPathRoot = $script:OpenPathRoot,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [string]$Build = '',
+        [Parameter(Mandatory = $true)][string]$Stage,
+        [string]$Message = ''
+    )
+
+    $now = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+    $previous = Get-OpenPathAgentUpdateTimeoutState -OpenPathRoot $OpenPathRoot
+    $count = 1
+    $firstAt = $now
+    if ($previous -and (Test-OpenPathAgentUpdateFailureMatchesTarget -Record $previous -TargetVersion $Version -TargetBuild $Build)) {
+        try {
+            $count = [int]$previous.consecutiveTimeouts + 1
+        }
+        catch {
+            $count = 1
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$previous.firstAt)) {
+            $firstAt = [string]$previous.firstAt
+        }
+    }
+
+    $state = [PSCustomObject]@{
+        schemaVersion        = 1
+        version              = $Version
+        build                = $Build
+        stage                = $Stage
+        message              = $Message
+        consecutiveTimeouts  = $count
+        firstAt              = $firstAt
+        lastAt               = $now
+    }
+    Write-OpenPathAgentUpdateJsonFile -Path (Get-OpenPathAgentUpdateTimeoutStatePath -OpenPathRoot $OpenPathRoot) -Object $state
+
+    return [PSCustomObject]@{
+        Count = $count
+        State = $state
+    }
+}
+
 function Test-OpenPathAgentUpdateFailureMatchesTarget {
     param(
         [AllowNull()][object]$Record,
@@ -1033,7 +1115,19 @@ function Test-OpenPathAgentUpdateFailureBackoffActive {
         return $false
     }
 
-    return (($Now - $failedAt).TotalDays -lt 7)
+    $elapsed = $Now - $failedAt
+    if ($elapsed.TotalSeconds -lt 0) {
+        if ($elapsed.TotalSeconds -lt -$script:OpenPathAgentUpdateRepairClockSkewToleranceSeconds) {
+            # The recorded failure is ahead of this clock: the clock moved
+            # backwards. Treat the backoff as elapsed, like an unreadable
+            # timestamp, instead of blocking until the clock catches up.
+            return $false
+        }
+        # Ordinary timestamp rounding or a small NTP step starts the wait now.
+        $elapsed = [TimeSpan]::Zero
+    }
+
+    return ($elapsed.TotalDays -lt 7)
 }
 
 function Test-OpenPathAgentUpdateTargetsMatch {
@@ -1247,8 +1341,9 @@ exit 0
             if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
                 try { $process.Kill() } catch { }
                 return [PSCustomObject]@{
-                    Healthy = $false
-                    Message = "Staged artifact validation timed out after $TimeoutSeconds seconds"
+                    Healthy  = $false
+                    TimedOut = $true
+                    Message  = "Staged artifact validation timed out after $TimeoutSeconds seconds"
                 }
             }
 
@@ -1261,20 +1356,23 @@ exit 0
                     $firstLine = "validation process exited with code $exitCode"
                 }
                 return [PSCustomObject]@{
-                    Healthy = $false
-                    Message = $firstLine
+                    Healthy  = $false
+                    TimedOut = $false
+                    Message  = $firstLine
                 }
             }
 
             return [PSCustomObject]@{
-                Healthy = $true
-                Message = ''
+                Healthy  = $true
+                TimedOut = $false
+                Message  = ''
             }
         }
         catch {
             return [PSCustomObject]@{
-                Healthy = $false
-                Message = "Staged artifact validation could not run: $_"
+                Healthy  = $false
+                TimedOut = $false
+                Message  = "Staged artifact validation could not run: $_"
             }
         }
         finally {
@@ -1304,14 +1402,16 @@ exit 0
 
     if ($failures.Count -gt 0) {
         return [PSCustomObject]@{
-            Healthy = $false
-            Message = [string]$failures[0]
+            Healthy  = $false
+            TimedOut = $false
+            Message  = [string]$failures[0]
         }
     }
 
     return [PSCustomObject]@{
-        Healthy = $true
-        Message = ''
+        Healthy  = $true
+        TimedOut = $false
+        Message  = ''
     }
 }
 
@@ -2399,6 +2499,7 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
         try {
             Clear-OpenPathAgentUpdateFailureRecord -OpenPathRoot $script:OpenPathRoot
+            Clear-OpenPathAgentUpdateTimeoutState -OpenPathRoot $script:OpenPathRoot
         }
         catch {
             Write-SelfUpdateMessage -Message "Could not clear the failed-build record: $_" -Level WARN
@@ -2407,6 +2508,7 @@ function Invoke-OpenPathAgentSelfUpdate {
     elseif ($failureRecord) {
         try {
             Clear-OpenPathAgentUpdateFailureRecord -OpenPathRoot $script:OpenPathRoot
+            Clear-OpenPathAgentUpdateTimeoutState -OpenPathRoot $script:OpenPathRoot
         }
         catch {
             Write-SelfUpdateMessage -Message "Could not clear the failed-build record: $_" -Level WARN
@@ -2417,6 +2519,7 @@ function Invoke-OpenPathAgentSelfUpdate {
     $updateJournal = $null
     $runBackupRoot = $null
     $failureStage = $null
+    $failureTimedOut = $false
     $updateCommitted = $false
     $replacementStarted = $false
 
@@ -2532,6 +2635,7 @@ function Invoke-OpenPathAgentSelfUpdate {
         $stagedValidation = Test-OpenPathAgentUpdateStagedArtifacts -StagingRoot $stagingRoot
         if (-not $stagedValidation.Healthy) {
             $failureStage = 'validation'
+            $failureTimedOut = [bool]$stagedValidation.TimedOut
             throw "Self-update staged artifact validation failed: $($stagedValidation.Message)"
         }
 
@@ -2645,7 +2749,17 @@ function Invoke-OpenPathAgentSelfUpdate {
         $healthGate = Invoke-OpenPathAgentUpdateHealthGate -OpenPathRoot $script:OpenPathRoot
         if (-not $healthGate.Healthy) {
             $failureStage = 'gate'
+            $failureTimedOut = [bool]$healthGate.TimedOut
             throw "Self-update health gate failed: $($healthGate.Message)"
+        }
+
+        # The new tree passed the gate. Any earlier timeout streak belonged to
+        # an unproven build and must not make a later timeout block this one.
+        try {
+            Clear-OpenPathAgentUpdateTimeoutState -OpenPathRoot $script:OpenPathRoot
+        }
+        catch {
+            Write-SelfUpdateMessage -Message "Could not clear the update timeout state: $_" -Level WARN
         }
 
         # The gate is the commit point. Persist the marker first; from here a
@@ -2793,16 +2907,49 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
 
         if ($failureStage) {
-            try {
-                Save-OpenPathAgentUpdateFailureRecord `
-                    -OpenPathRoot $script:OpenPathRoot `
-                    -Version $targetVersion `
-                    -Build $targetBuild `
-                    -Stage $failureStage `
-                    -Message $failureMessage
+            $recordFailure = $true
+            if ($failureTimedOut) {
+                try {
+                    $timeout = Register-OpenPathAgentUpdateTimeout `
+                        -OpenPathRoot $script:OpenPathRoot `
+                        -Version $targetVersion `
+                        -Build $targetBuild `
+                        -Stage $failureStage `
+                        -Message $failureMessage
+                    $recordFailure = ([int]$timeout.Count -ge 3)
+                    if (-not $recordFailure) {
+                        Write-SelfUpdateMessage -Message "Self-update $failureStage timeout $($timeout.Count) of 3; leaving the build eligible for the next retry" -Level WARN
+                    }
+                }
+                catch {
+                    # A timeout is not proof that the build is bad. If the
+                    # streak cannot be persisted, keep retrying rather than
+                    # turning this attempt into a seven-day block.
+                    $recordFailure = $false
+                    Write-SelfUpdateMessage -Message "Could not record the update timeout streak: $_" -Level WARN
+                }
             }
-            catch {
-                Write-SelfUpdateMessage -Message "Could not record the failed build: $_" -Level WARN
+            else {
+                try {
+                    Clear-OpenPathAgentUpdateTimeoutState -OpenPathRoot $script:OpenPathRoot
+                }
+                catch {
+                    Write-SelfUpdateMessage -Message "Could not clear the update timeout state: $_" -Level WARN
+                }
+            }
+
+            if ($recordFailure) {
+                try {
+                    Save-OpenPathAgentUpdateFailureRecord `
+                        -OpenPathRoot $script:OpenPathRoot `
+                        -Version $targetVersion `
+                        -Build $targetBuild `
+                        -Stage $failureStage `
+                        -Message $failureMessage
+                }
+                catch {
+                    Write-SelfUpdateMessage -Message "Could not record the failed build: $_" -Level WARN
+                }
             }
 
             Send-OpenPathAgentUpdateFailureReport `

@@ -1352,8 +1352,26 @@ function Invoke-OpenPathWatchdogBlockedUpdateRepair {
     }
 
     $requiredMinutes = if ($attempts -ge 3) { $LongRetryMinutes } else { $RetryMinutes }
-    if ($lastRepairAt -ne [DateTimeOffset]::MinValue -and ($Now - $lastRepairAt).TotalMinutes -lt $requiredMinutes) {
-        return $result
+    if ($lastRepairAt -ne [DateTimeOffset]::MinValue) {
+        $toleranceSeconds = 5
+        if ($null -ne $script:OpenPathAgentUpdateRepairClockSkewToleranceSeconds) {
+            $toleranceSeconds = [double]$script:OpenPathAgentUpdateRepairClockSkewToleranceSeconds
+        }
+        $waitedMinutes = ($Now - $lastRepairAt).TotalMinutes
+        if ($waitedMinutes -lt 0) {
+            if ($waitedMinutes -lt -($toleranceSeconds / 60)) {
+                # The last repair is ahead of this clock: the clock moved
+                # backwards. Treat the wait as elapsed, as the updater does.
+                $waitedMinutes = [double]::PositiveInfinity
+            }
+            else {
+                # Small timestamp rounding or clock slew starts the wait now.
+                $waitedMinutes = 0
+            }
+        }
+        if ($waitedMinutes -lt $requiredMinutes) {
+            return $result
+        }
     }
 
     if (-not (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {

@@ -2544,6 +2544,226 @@ Describe "Update Script" {
             }
         }
 
+        It "Treats a failure timestamp ahead of this clock as an elapsed backoff" {
+            InModuleScope Common {
+                $now = [DateTimeOffset]::Parse('2026-11-15T10:00:00Z', [Globalization.CultureInfo]::InvariantCulture)
+                $future = [PSCustomObject]@{
+                    version  = '9.9.9'
+                    build    = 'build-bad'
+                    failedAt = $now.AddHours(1).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                }
+
+                Test-OpenPathAgentUpdateFailureBackoffActive -Record $future -Now $now | Should -BeFalse
+                Test-OpenPathAgentUpdateFailureBackoffActive -Record $future -Now $now.AddDays(8) | Should -BeFalse
+
+                $rounding = [PSCustomObject]@{
+                    version  = '9.9.9'
+                    build    = 'build-bad'
+                    failedAt = $now.AddSeconds(2).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                }
+                Test-OpenPathAgentUpdateFailureBackoffActive -Record $rounding -Now $now | Should -BeTrue
+            }
+        }
+
+        It "Does not apply the seven-day backoff until the health gate times out three times in a row" {
+            $root = Join-Path $TestDrive ('update-gate-timeout-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'Write-Output "old"' -Encoding ASCII
+
+            $stagedSource = Join-Path $TestDrive ('gate-timeout-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'Write-Output "new"' -Encoding ASCII
+            $stagedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $stagedHash })
+            }
+
+            InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest; StagedSource = $stagedSource } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TestStagedSource = $StagedSource
+                $script:Captured = @{ Reports = @(); GateCalls = 0 }
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.8'
+                        agentBuild   = 'build-old'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest {
+                    param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                    Copy-Item -LiteralPath $script:TestStagedSource -Destination $OutFile -Force
+                }
+                Mock Write-OpenPathLog { }
+                Mock Set-OpenPathConfig { }
+                Mock Save-OpenPathIntegrityBackup { }
+                Mock New-OpenPathIntegrityBaseline { }
+                Mock Send-OpenPathHealthReport {
+                    param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions, $Version, $ReasonCodes)
+                    $script:Captured.Reports += [PSCustomObject]@{
+                        Status      = $Status
+                        ReasonCodes = @($ReasonCodes)
+                    }
+                }
+                Mock Invoke-OpenPathAgentUpdateHealthGate {
+                    $script:Captured.GateCalls++
+                    [PSCustomObject]@{ Healthy = $false; TimedOut = $true; ExitCode = -1; Message = 'Health gate timed out after 60 seconds' }
+                }
+
+                $recordPath = Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root
+                $timeoutStatePath = Get-OpenPathAgentUpdateTimeoutStatePath -OpenPathRoot $Root
+
+                for ($attempt = 1; $attempt -le 3; $attempt++) {
+                    $result = Invoke-OpenPathAgentSelfUpdate -Silent
+
+                    $result.Success | Should -BeFalse
+                    (Get-Content -LiteralPath (Join-Path $Root 'lib/existing.ps1') -Raw).Trim() | Should -Be 'Write-Output "old"'
+                    $script:Captured.Reports.Count | Should -Be $attempt
+                    (@($script:Captured.Reports[$attempt - 1].ReasonCodes) -join ' ') | Should -Match 'self_update_health_gate_failed'
+                    $state = Get-Content -LiteralPath $timeoutStatePath -Raw | ConvertFrom-Json
+                    $state.consecutiveTimeouts | Should -Be $attempt
+                    $state.build | Should -Be 'build-new'
+                    $state.stage | Should -Be 'gate'
+
+                    if ($attempt -lt 3) {
+                        Test-Path -LiteralPath $recordPath | Should -BeFalse
+                    }
+                    else {
+                        Test-Path -LiteralPath $recordPath | Should -BeTrue
+                    }
+                }
+
+                $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
+                $record.stage | Should -Be 'gate'
+                $record.build | Should -Be 'build-new'
+            }
+        }
+
+        It "Does not apply the seven-day backoff when staged validation times out" {
+            $root = Join-Path $TestDrive ('update-validation-timeout-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path (Join-Path $root 'data/agent-update') -Force | Out-Null
+            $stagedSource = Join-Path $TestDrive ('validation-timeout-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'Write-Output "new"' -Encoding ASCII
+            $stagedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $stagedHash })
+            }
+
+            InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest; StagedSource = $stagedSource } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TestStagedSource = $StagedSource
+                $script:Captured = @{ Reports = @() }
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.8'
+                        agentBuild   = 'build-old'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest {
+                    param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                    Copy-Item -LiteralPath $script:TestStagedSource -Destination $OutFile -Force
+                }
+                Mock Test-OpenPathAgentUpdateStagedArtifacts {
+                    [PSCustomObject]@{ Healthy = $false; TimedOut = $true; Message = 'Staged artifact validation timed out after 30 seconds' }
+                }
+                Mock Write-OpenPathLog { }
+                Mock Send-OpenPathHealthReport {
+                    param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions, $Version, $ReasonCodes)
+                    $script:Captured.Reports += [PSCustomObject]@{ Status = $Status; ReasonCodes = @($ReasonCodes) }
+                }
+
+                $result = Invoke-OpenPathAgentSelfUpdate -Silent
+
+                $result.Success | Should -BeFalse
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root) | Should -BeFalse
+                $state = Get-Content -LiteralPath (Get-OpenPathAgentUpdateTimeoutStatePath -OpenPathRoot $Root) -Raw | ConvertFrom-Json
+                $state.consecutiveTimeouts | Should -Be 1
+                $state.stage | Should -Be 'validation'
+                $script:Captured.Reports.Count | Should -Be 1
+                (@($script:Captured.Reports[0].ReasonCodes) -join ' ') | Should -Match 'self_update_validation_failed'
+            }
+        }
+
+        It "Clears the timeout streak after a successful health gate" {
+            $root = Join-Path $TestDrive ('update-timeout-clear-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'Write-Output "old"' -Encoding ASCII
+            $stagedSource = Join-Path $TestDrive ('timeout-clear-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $stagedSource -Value 'Write-Output "new"' -Encoding ASCII
+            $stagedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = [PSCustomObject]@{
+                version = '9.9.9'
+                build   = 'build-new'
+                files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $stagedHash })
+            }
+
+            InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest; StagedSource = $stagedSource } {
+                $script:OpenPathRoot = $Root
+                $script:TestManifest = $Manifest
+                $script:TestStagedSource = $StagedSource
+                $script:GateCalls = 0
+                Mock Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        apiUrl       = 'https://api.test'
+                        whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                        version      = '9.9.8'
+                        agentBuild   = 'build-old'
+                    }
+                }
+                Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+                Mock Invoke-RestMethod { $script:TestManifest }
+                Mock Invoke-WebRequest {
+                    param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                    Copy-Item -LiteralPath $script:TestStagedSource -Destination $OutFile -Force
+                }
+                Mock Write-OpenPathLog { }
+                Mock Set-OpenPathConfig { }
+                Mock Save-OpenPathIntegrityBackup { }
+                Mock New-OpenPathIntegrityBaseline { }
+                Mock Send-OpenPathHealthReport { }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { }
+                Mock Enable-OpenPathTask { }
+                Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                Mock Register-OpenPathFirefoxNativeHost { }
+                Mock Start-OpenPathTask { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Invoke-OpenPathAgentUpdateHealthGate {
+                    $script:GateCalls++
+                    if ($script:GateCalls -eq 1) {
+                        return [PSCustomObject]@{ Healthy = $false; TimedOut = $true; ExitCode = -1; Message = 'Health gate timed out' }
+                    }
+                    return [PSCustomObject]@{ Healthy = $true; TimedOut = $false; ExitCode = 0; Message = '' }
+                }
+
+                $first = Invoke-OpenPathAgentSelfUpdate -Silent
+                $first.Success | Should -BeFalse
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateTimeoutStatePath -OpenPathRoot $Root) | Should -BeTrue
+
+                $second = Invoke-OpenPathAgentSelfUpdate -Silent
+                $second.Success | Should -BeTrue
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateTimeoutStatePath -OpenPathRoot $Root) | Should -BeFalse
+                Test-Path -LiteralPath (Get-OpenPathAgentUpdateFailureRecordPath -OpenPathRoot $Root) | Should -BeFalse
+            }
+        }
+
         It "Skips a recently failed target build without downloading files" {
             $root = Join-Path $TestDrive ('update-skip-' + [guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path (Join-Path $root 'data/agent-update') -Force | Out-Null

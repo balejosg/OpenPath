@@ -3798,12 +3798,16 @@ Describe "Watchdog committed update journal" {
                 [Parameter(Mandatory = $true)][string]$Root,
                 [int]$RepairAttempts = 0,
                 [int]$MinutesAgo = -1,
+                [string]$LastRepairAt = '',
                 [string]$State = 'blocked'
             )
 
             $updateRoot = Join-Path $Root 'data/agent-update'
             New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
-            $lastRepairAt = if ($MinutesAgo -ge 0) {
+            $lastRepairAt = if (-not [string]::IsNullOrWhiteSpace($LastRepairAt)) {
+                $LastRepairAt
+            }
+            elseif ($MinutesAgo -ge 0) {
                 [DateTime]::UtcNow.AddMinutes(-$MinutesAgo).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
             }
             else { '' }
@@ -4020,6 +4024,28 @@ Describe "Watchdog committed update journal" {
     It "Does not start a blocked repair before its ten-minute bound" {
         $root = Join-Path $TestDrive ('watchdog-blocked-bound-' + [guid]::NewGuid().ToString('N'))
         Write-WatchdogRecoveryState -Root $root -RepairAttempts 1 -MinutesAgo 5
+
+        $result = Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeFalse
+        @($global:OpenPathTestStartedTasks).Count | Should -Be 0
+    }
+
+    It "Starts the blocked repair when lastRepairAt is ahead of this clock" {
+        $root = Join-Path $TestDrive ('watchdog-blocked-future-' + [guid]::NewGuid().ToString('N'))
+        Write-WatchdogRecoveryState -Root $root -RepairAttempts 1 `
+            -LastRepairAt ([DateTime]::UtcNow.AddHours(1).ToString('o', [Globalization.CultureInfo]::InvariantCulture))
+
+        $result = Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $root
+
+        $result.RetryStarted | Should -BeTrue
+        $global:OpenPathTestStartedTasks | Should -Contain 'OpenPath-AgentUpdate'
+    }
+
+    It "Keeps the blocked repair wait for a timestamp only seconds in the future" {
+        $root = Join-Path $TestDrive ('watchdog-blocked-rounding-' + [guid]::NewGuid().ToString('N'))
+        Write-WatchdogRecoveryState -Root $root -RepairAttempts 1 `
+            -LastRepairAt ([DateTime]::UtcNow.AddSeconds(2).ToString('o', [Globalization.CultureInfo]::InvariantCulture))
 
         $result = Invoke-OpenPathWatchdogBlockedUpdateRepair -OpenPathRoot $root
 
