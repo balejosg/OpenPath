@@ -1760,7 +1760,10 @@ function Invoke-OpenPathWatchdogChecks {
         # A journal left on disk means the previous update did not finish and
         # the entry script could not complete recovery. Restoring from the
         # integrity backup then would restore only the critical subset over a
-        # mixed tree, so defer to the recovery script.
+        # mixed tree, so defer to the recovery script. A recovery-state.json
+        # means recovery is retrying or blocked; the standalone recovery script
+        # owns the 30-second/5-minute retry ladder, and the tree stays
+        # untrusted while the record exists.
         $updateJournalPath = [System.IO.Path]::Combine($OpenPathRoot, 'data', 'agent-update', 'update-journal.json')
         $unfinishedUpdateReason = Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $OpenPathRoot
         if ($unfinishedUpdateReason) {

@@ -44,8 +44,9 @@
     published manifest. A pending health report is left for the watchdog.
 
     A blocked state returns without hashing anything. A retrying state returns
-    for ten minutes after its last attempt. Three incomplete rollbacks also set
-    blocked. A swap or restore retries only a Windows sharing or lock violation
+    for 30 seconds after the first incomplete rollback and for five minutes
+    after the second. Three incomplete rollbacks also set blocked. A swap or
+    restore retries only a Windows sharing or lock violation
     for a few seconds; a definitive failure logs the relative path, exception
     type and HResult and records them in recovery-state.json.
 #>
@@ -449,6 +450,19 @@ function ConvertTo-OpenPathRecoveryDateTimeOffset {
     }
 
     return [DateTimeOffset]::MinValue
+}
+
+function Get-OpenPathRecoveryRetryDelaySeconds {
+    param([int]$Attempts)
+
+    if ($Attempts -le 1) {
+        return 30
+    }
+    if ($Attempts -eq 2) {
+        return 300
+    }
+
+    return 0
 }
 
 function Get-OpenPathRecoveryRunId {
@@ -1161,10 +1175,19 @@ try {
             Write-OpenPathRecoveryLog 'Recovery state is blocked; skipping hashing until the updater repairs the tree'
             return
         }
+        $attempts = 0
+        try { $attempts = [int]$stateInfo.State.attempts } catch { $attempts = 0 }
+        $retryDelaySeconds = Get-OpenPathRecoveryRetryDelaySeconds -Attempts $attempts
         $lastAttemptAt = ConvertTo-OpenPathRecoveryDateTimeOffset -Value $stateInfo.State.lastAttemptAt
-        if ($lastAttemptAt -ne [DateTimeOffset]::MinValue -and
-            ([DateTimeOffset]::UtcNow - $lastAttemptAt).TotalMinutes -lt 10) {
-            Write-OpenPathRecoveryLog 'Recovery is retrying and its ten-minute backoff is still active'
+        if ($lastAttemptAt -ne [DateTimeOffset]::MinValue -and $retryDelaySeconds -gt 0 -and
+            ([DateTimeOffset]::UtcNow - $lastAttemptAt).TotalSeconds -lt $retryDelaySeconds) {
+            $backoffText = if ($retryDelaySeconds -ge 60) {
+                '{0}-minute' -f [int]($retryDelaySeconds / 60)
+            }
+            else {
+                '{0}-second' -f $retryDelaySeconds
+            }
+            Write-OpenPathRecoveryLog ('Recovery is retrying; its {0} backoff after attempt {1} is still active' -f $backoffText, $attempts)
             return
         }
     }
