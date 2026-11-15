@@ -297,6 +297,32 @@ Describe "OpenPath agent update recovery" {
                 Set-Content -LiteralPath (Join-Path $updateRoot 'recovery-state.json') -Encoding UTF8
         }
 
+        function Set-RecoveryStateLastAttempt {
+            param(
+                [Parameter(Mandatory = $true)][string]$Root,
+                [object]$Value = $null,
+                [switch]$Remove
+            )
+
+            $statePath = Join-Path $Root 'data/agent-update/recovery-state.json'
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            if ($Remove) {
+                $state.PSObject.Properties.Remove('lastAttemptAt')
+            }
+            else {
+                if ($Value -is [DateTimeOffset]) {
+                    $state.lastAttemptAt = ([DateTimeOffset]$Value).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                }
+                elseif ($Value -is [DateTime]) {
+                    $state.lastAttemptAt = ([DateTime]$Value).ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                }
+                else {
+                    $state.lastAttemptAt = [string]$Value
+                }
+            }
+            $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding UTF8
+        }
+
         function New-FakeAgentRoot {
             $root = New-RecoveryRoot
             $lib = Join-Path $root 'lib'
@@ -711,6 +737,111 @@ Export-ModuleMember -Function *
             $state = Get-Content -LiteralPath (Join-Path $root 'data/agent-update/recovery-state.json') -Raw | ConvertFrom-Json
             $state.attempts | Should -Be 1
             $state.state | Should -Be 'retrying'
+        }
+
+        It "Does not retry before the 30-second wait after the first incomplete rollback" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $statePath = Join-Path $root 'data/agent-update/recovery-state.json'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 1
+
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow)
+            $second = Invoke-RecoveryScript -Root $root
+
+            $second.ExitCode | Should -Be 0
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state.attempts | Should -Be 1
+            $state.state | Should -Be 'retrying'
+            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeTrue
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Match '30-second backoff after attempt 1'
+        }
+
+        It "Retries after the 30-second wait following the first incomplete rollback" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $statePath = Join-Path $root 'data/agent-update/recovery-state.json'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddSeconds(-31))
+
+            $second = Invoke-RecoveryScript -Root $root
+
+            $second.ExitCode | Should -Not -Be 0
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state.attempts | Should -Be 2
+            $state.state | Should -Be 'retrying'
+        }
+
+        It "Does not retry before the five-minute wait after the second incomplete rollback" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $statePath = Join-Path $root 'data/agent-update/recovery-state.json'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddSeconds(-31))
+            $second = Invoke-RecoveryScript -Root $root
+            $second.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 2
+
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddMinutes(-4))
+            $third = Invoke-RecoveryScript -Root $root
+
+            $third.ExitCode | Should -Be 0
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state.attempts | Should -Be 2
+            $state.state | Should -Be 'retrying'
+            Test-Path -LiteralPath (Join-Path $root 'data/agent-update/update-journal.json') | Should -BeTrue
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Match '5-minute backoff after attempt 2'
+        }
+
+        It "Sets blocked on the third incomplete rollback after the five-minute wait" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $updateRoot = Join-Path $root 'data/agent-update'
+            $statePath = Join-Path $updateRoot 'recovery-state.json'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddSeconds(-31))
+            $second = Invoke-RecoveryScript -Root $root
+            $second.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 2
+
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddMinutes(-5).AddSeconds(-1))
+            $third = Invoke-RecoveryScript -Root $root
+
+            $third.ExitCode | Should -Not -Be 0
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state.attempts | Should -Be 3
+            $state.state | Should -Be 'blocked'
+            Test-Path -LiteralPath (Join-Path $updateRoot 'update-journal.json') | Should -BeTrue
+            $report = Get-Content -LiteralPath (Join-Path $updateRoot 'recovery-report.json') -Raw | ConvertFrom-Json
+            $report.reasonCode | Should -Be 'self_update_recovery_blocked'
+        }
+
+        It "Retries immediately when lastAttemptAt is absent" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $statePath = Join-Path $root 'data/agent-update/recovery-state.json'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 1
+
+            Set-RecoveryStateLastAttempt -Root $root -Remove
+            $second = Invoke-RecoveryScript -Root $root
+
+            $second.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 2
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Not -Match 'backoff after attempt'
         }
 
         It "Stops after three incomplete rollbacks and returns without hashing while blocked" {

@@ -3797,7 +3797,8 @@ Describe "Watchdog committed update journal" {
             param(
                 [Parameter(Mandatory = $true)][string]$Root,
                 [int]$RepairAttempts = 0,
-                [int]$MinutesAgo = -1
+                [int]$MinutesAgo = -1,
+                [string]$State = 'blocked'
             )
 
             $updateRoot = Join-Path $Root 'data/agent-update'
@@ -3808,7 +3809,7 @@ Describe "Watchdog committed update journal" {
             else { '' }
             [PSCustomObject]@{
                 schemaVersion  = 1
-                state          = 'blocked'
+                state          = $State
                 reasonCode     = 'self_update_recovery_journal_unreadable'
                 attempts       = 1
                 firstSeenAt    = [DateTime]::UtcNow.AddHours(-1).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
@@ -4064,6 +4065,13 @@ Describe "Watchdog committed update journal" {
         $emptyRoot = Join-Path $TestDrive ('watchdog-reason-empty-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $emptyRoot -Force | Out-Null
         Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $emptyRoot | Should -Be ''
+    }
+
+    It "Defers integrity while a retrying recovery state exists, not only when blocked" {
+        $retryingRoot = Join-Path $TestDrive ('watchdog-reason-retrying-' + [guid]::NewGuid().ToString('N'))
+        Write-WatchdogRecoveryState -Root $retryingRoot -State 'retrying'
+
+        Get-OpenPathWatchdogUnfinishedUpdateReason -OpenPathRoot $retryingRoot | Should -Be 'blocked'
     }
 
     It "Wires the blocked repair and the unfinished-run guard ahead of the integrity restore" {
