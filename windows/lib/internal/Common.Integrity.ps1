@@ -44,6 +44,10 @@ function Get-OpenPathCriticalFiles {
         # code execution, so they belong in the integrity baseline alongside the other
         # SYSTEM-reachable scripts.
         "$script:OpenPathRoot\lib\internal\WindowsRoot.ps1",
+        # The root launcher is the AgentUpdate task entry point. A zero-filled
+        # or replaced launcher runs SYSTEM code and cannot be recovered by the
+        # watchdog unless the launcher itself is tracked.
+        "$script:OpenPathRoot\OpenPath.ps1",
         "$script:OpenPathRoot\scripts\OpenPath-NativeHost.ps1",
         "$script:OpenPathRoot\scripts\Update-OpenPath.ps1",
         "$script:OpenPathRoot\scripts\Test-DNSHealth.ps1",

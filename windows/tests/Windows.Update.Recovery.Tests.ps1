@@ -1542,11 +1542,12 @@ exit 0
             }
         }
 
-        It "Adds both new SYSTEM scripts to the integrity critical file list" {
+        It "Adds both new SYSTEM scripts and the root launcher to the integrity critical file list" {
             $content = Get-Content -LiteralPath (Join-Path $script:WindowsRoot 'lib/internal/Common.Integrity.ps1') -Raw
 
             $content | Should -Match 'scripts\\Recover-OpenPathAgentUpdate\.ps1'
             $content | Should -Match 'scripts\\Test-OpenPathAgentUpdateHealth\.ps1'
+            $content | Should -Match '\$script:OpenPathRoot\\OpenPath\.ps1'
         }
 
         It "Skips watchdog integrity restore while an update journal exists" {

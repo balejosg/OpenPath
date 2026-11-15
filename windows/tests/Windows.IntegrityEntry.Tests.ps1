@@ -231,3 +231,65 @@ Describe "Integrity backup restore" {
         (Get-Content -LiteralPath $path -Raw).Trim() | Should -Be 'tampered'
     }
 }
+
+Describe "Root launcher integrity coverage" {
+    BeforeAll {
+        $modulePath = Join-Path (Join-Path $PSScriptRoot "..") "lib"
+        Import-Module (Join-Path $modulePath "Common.psm1") -Force -Global -ErrorAction Stop
+    }
+
+    BeforeEach {
+        $script:Root = Join-Path $TestDrive ('launcher-root-' + [guid]::NewGuid().ToString('N'))
+        $script:Launcher = Join-Path $script:Root 'OpenPath.ps1'
+        $script:Tracked = Join-Path $script:Root 'lib/tracked.ps1'
+        New-Item -ItemType Directory -Path (Split-Path $script:Tracked -Parent) -Force | Out-Null
+        Set-Content -LiteralPath $script:Launcher -Value 'Write-Output "launcher"' -Encoding ASCII
+        Set-Content -LiteralPath $script:Tracked -Value 'Write-Output "tracked"' -Encoding ASCII
+        $script:BaselinePath = Join-Path $script:Root 'data/integrity-baseline.json'
+        $script:BackupPath = Join-Path $script:Root 'data/integrity-backup'
+        $r = $script:Root
+        $bl = $script:BaselinePath
+        $bk = $script:BackupPath
+        InModuleScope Common -Parameters @{ r = $r; bl = $bl; bk = $bk } {
+            $script:OpenPathRoot = $r
+            $script:IntegrityBaselinePath = $bl
+            $script:IntegrityBackupPath = $bk
+        }
+    }
+
+    It "Includes the root launcher in the critical file list" {
+        InModuleScope Common {
+            @(Get-OpenPathCriticalFiles | Where-Object { (([string]$_ -split '[\\/]')[-1]) -eq 'OpenPath.ps1' }).Count | Should -Be 1
+        }
+    }
+
+    It "Does not treat a critical file absent from an older baseline as tampered" {
+        New-Item -ItemType Directory -Path (Split-Path $script:BaselinePath -Parent) -Force | Out-Null
+        $trackedHash = (Get-FileHash -LiteralPath $script:Tracked -Algorithm SHA256).Hash
+        [PSCustomObject]@{
+            generatedAt = '2026-01-01T00:00:00Z'
+            entryCount = 1
+            entries = @([PSCustomObject]@{ path = $script:Tracked; hash = $trackedHash })
+        } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:BaselinePath -Encoding UTF8
+
+        $result = InModuleScope Common { Test-OpenPathIntegrity }
+
+        $result.Healthy | Should -BeTrue
+        $result.BaselinePresent | Should -BeTrue
+        $result.CheckedFiles | Should -Be 1
+        @($result.TamperedFiles).Count | Should -Be 0
+        @($result.MissingFiles).Count | Should -Be 0
+    }
+
+    It "Adds the root launcher when the baseline is regenerated" {
+        InModuleScope Common {
+            New-OpenPathIntegrityBaseline | Should -BeTrue
+            $baseline = Get-Content -LiteralPath $script:IntegrityBaselinePath -Raw | ConvertFrom-Json
+            $launcher = Join-Path $script:OpenPathRoot 'OpenPath.ps1'
+            $entry = @($baseline.entries | Where-Object { (([string]$_.path -split '[\\/]')[-1]) -eq 'OpenPath.ps1' })[0]
+
+            $entry | Should -Not -BeNullOrEmpty
+            $entry.hash | Should -Be (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash
+        }
+    }
+}
