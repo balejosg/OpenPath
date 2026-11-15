@@ -4348,3 +4348,72 @@ Import-Module $ModulePath -Force
         Test-Path -LiteralPath (Join-Path $fixture.Root 'data/agent-update/recovery-state.json') | Should -BeFalse
     }
 }
+
+Describe "Self-update repair timing with a backward clock" {
+    BeforeAll {
+        Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Common.psm1") -Force -Global
+    }
+
+    It "Allows the first repair when lastRepairAt is one hour in the future" {
+        InModuleScope Common {
+            $now = [DateTimeOffset]::Parse('2026-11-15T10:00:00Z', [Globalization.CultureInfo]::InvariantCulture)
+            $state = [PSCustomObject]@{
+                repairAttempts = 0
+                lastRepairAt   = $now.AddHours(1).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            }
+
+            $decision = Test-OpenPathAgentUpdateRepairAllowed -State $state -Now $now
+
+            $decision.Allowed | Should -BeTrue
+            $decision.RequiredMinutes | Should -Be 10
+            $decision.WaitedMinutes | Should -Be ([double]::PositiveInfinity)
+        }
+    }
+
+    It "Allows the daily repair when lastRepairAt is one hour in the future after three repairs" {
+        InModuleScope Common {
+            $now = [DateTimeOffset]::Parse('2026-11-15T10:00:00Z', [Globalization.CultureInfo]::InvariantCulture)
+            $state = [PSCustomObject]@{
+                repairAttempts = 3
+                lastRepairAt   = $now.AddHours(1).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            }
+
+            $decision = Test-OpenPathAgentUpdateRepairAllowed -State $state -Now $now
+
+            $decision.Allowed | Should -BeTrue
+            $decision.RequiredMinutes | Should -Be 1440
+            $decision.WaitedMinutes | Should -Be ([double]::PositiveInfinity)
+        }
+    }
+
+    It "Keeps the wait for a timestamp only seconds in the future" {
+        InModuleScope Common {
+            $now = [DateTimeOffset]::Parse('2026-11-15T10:00:00Z', [Globalization.CultureInfo]::InvariantCulture)
+            $state = [PSCustomObject]@{
+                repairAttempts = 0
+                lastRepairAt   = $now.AddSeconds(2).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            }
+
+            $decision = Test-OpenPathAgentUpdateRepairAllowed -State $state -Now $now
+
+            $decision.Allowed | Should -BeFalse
+            $decision.WaitedMinutes | Should -Be 0
+        }
+    }
+
+    It "Keeps the ten-minute wait when the clock stays behind and does not loop" {
+        InModuleScope Common {
+            $slowNow = [DateTimeOffset]::Parse('2026-11-14T10:00:00Z', [Globalization.CultureInfo]::InvariantCulture)
+            $state = [PSCustomObject]@{
+                repairAttempts = 0
+                lastRepairAt   = $slowNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            }
+
+            $early = Test-OpenPathAgentUpdateRepairAllowed -State $state -Now $slowNow.AddMinutes(9)
+            $due = Test-OpenPathAgentUpdateRepairAllowed -State $state -Now $slowNow.AddMinutes(10)
+
+            $early.Allowed | Should -BeFalse
+            $due.Allowed | Should -BeTrue
+        }
+    }
+}

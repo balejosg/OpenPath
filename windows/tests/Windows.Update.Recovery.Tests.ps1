@@ -844,6 +844,67 @@ Export-ModuleMember -Function *
             $log | Should -Not -Match 'backoff after attempt'
         }
 
+        It "Retries immediately when lastAttemptAt is one hour in the future after attempt 1" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $statePath = Join-Path $root 'data/agent-update/recovery-state.json'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 1
+
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddHours(1))
+            $second = Invoke-RecoveryScript -Root $root
+
+            $second.ExitCode | Should -Not -Be 0
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state.attempts | Should -Be 2
+            $state.state | Should -Be 'retrying'
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Not -Match 'backoff after attempt'
+        }
+
+        It "Retries immediately when lastAttemptAt is one hour in the future after attempt 2" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $statePath = Join-Path $root 'data/agent-update/recovery-state.json'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddSeconds(-31))
+            $second = Invoke-RecoveryScript -Root $root
+            $second.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 2
+
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddHours(1))
+            $third = Invoke-RecoveryScript -Root $root
+
+            $third.ExitCode | Should -Not -Be 0
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state.attempts | Should -Be 3
+            $state.state | Should -Be 'blocked'
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Not -Match '5-minute backoff after attempt 2'
+        }
+
+        It "Does not loop when the clock stays behind: a mark written by the slow clock is not future" {
+            $fixture = New-PartialRollbackFixture -Kind corrupt-backup
+            $root = $fixture.Root
+            $statePath = Join-Path $root 'data/agent-update/recovery-state.json'
+
+            $first = Invoke-RecoveryScript -Root $root
+            $first.ExitCode | Should -Not -Be 0
+            # A permanently slow clock writes this mark; the next attempt sees
+            # it an hour in the past, not in the future.
+            Set-RecoveryStateLastAttempt -Root $root -Value ([DateTimeOffset]::UtcNow.AddHours(-1))
+            $second = Invoke-RecoveryScript -Root $root
+
+            $second.ExitCode | Should -Not -Be 0
+            (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).attempts | Should -Be 2
+            $log = Get-Content -LiteralPath (Join-Path $root 'data/logs/openpath.log') -Raw
+            $log | Should -Not -Match 'backoff after attempt'
+        }
+
         It "Stops after three incomplete rollbacks and returns without hashing while blocked" {
             $fixture = New-PartialRollbackFixture -Kind corrupt-backup
             $root = $fixture.Root

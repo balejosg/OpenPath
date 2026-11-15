@@ -1,4 +1,8 @@
 $script:OpenPathAgentUpdateLockName = 'Global\OpenPathAgentUpdateLock'
+# See the matching constant in scripts\Recover-OpenPathAgentUpdate.ps1: a
+# repair timestamp more than a few seconds ahead means the wall clock was
+# corrected backwards, so the repair wait is already satisfied.
+$script:OpenPathAgentUpdateRepairClockSkewToleranceSeconds = 5
 
 function Enter-OpenPathAgentUpdateLock {
     <#
@@ -295,7 +299,22 @@ function Test-OpenPathAgentUpdateRepairAllowed {
         }
     }
 
-    $waitedMinutes = if ($lastRepairAt -eq [DateTimeOffset]::MinValue) { [double]::PositiveInfinity } else { ($Now - $lastRepairAt).TotalMinutes }
+    $waitedMinutes = [double]::PositiveInfinity
+    if ($lastRepairAt -ne [DateTimeOffset]::MinValue) {
+        $waitedMinutes = ($Now - $lastRepairAt).TotalMinutes
+        if ($waitedMinutes -lt 0) {
+            if ($waitedMinutes -lt -($script:OpenPathAgentUpdateRepairClockSkewToleranceSeconds / 60)) {
+                # The last repair is ahead of this clock: the clock moved
+                # backwards. Treat the wait as elapsed, like a missing or
+                # unreadable timestamp.
+                $waitedMinutes = [double]::PositiveInfinity
+            }
+            else {
+                # Small timestamp rounding or clock slew starts the wait now.
+                $waitedMinutes = 0
+            }
+        }
+    }
     return [PSCustomObject]@{
         Allowed        = ($waitedMinutes -ge $requiredMinutes)
         Attempts       = $attempts

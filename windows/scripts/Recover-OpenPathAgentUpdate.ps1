@@ -57,6 +57,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# A timestamp more than a few seconds ahead cannot come from a normal clock
+# read on this machine; it means the wall clock was corrected backwards after
+# the attempt was recorded. Treat it as an elapsed wait so recovery does not
+# stall until the clock catches up. The tolerance keeps ordinary sub-second
+# timestamp rounding and small NTP slew from being mistaken for a clock step.
+$script:OpenPathRecoveryClockSkewToleranceSeconds = 5
 $script:UpdateRoot = ''
 $script:JournalPath = ''
 $script:SupersededJournalPath = ''
@@ -1179,8 +1185,25 @@ try {
         try { $attempts = [int]$stateInfo.State.attempts } catch { $attempts = 0 }
         $retryDelaySeconds = Get-OpenPathRecoveryRetryDelaySeconds -Attempts $attempts
         $lastAttemptAt = ConvertTo-OpenPathRecoveryDateTimeOffset -Value $stateInfo.State.lastAttemptAt
+        $elapsedSeconds = [double]::PositiveInfinity
+        if ($lastAttemptAt -ne [DateTimeOffset]::MinValue) {
+            $elapsedSeconds = ([DateTimeOffset]::UtcNow - $lastAttemptAt).TotalSeconds
+            if ($elapsedSeconds -lt 0) {
+                if ($elapsedSeconds -lt -$script:OpenPathRecoveryClockSkewToleranceSeconds) {
+                    # The recorded attempt is ahead of this clock: the clock
+                    # moved backwards. The wait is already satisfied.
+                    Write-OpenPathRecoveryLog ('Recovery state lastAttemptAt is {0:N0} seconds in the future; treating the wait as elapsed' -f (-$elapsedSeconds))
+                    $elapsedSeconds = [double]::PositiveInfinity
+                }
+                else {
+                    # Ordinary timestamp rounding or a sub-tolerance clock
+                    # slew: start the wait from now instead of subtracting.
+                    $elapsedSeconds = 0
+                }
+            }
+        }
         if ($lastAttemptAt -ne [DateTimeOffset]::MinValue -and $retryDelaySeconds -gt 0 -and
-            ([DateTimeOffset]::UtcNow - $lastAttemptAt).TotalSeconds -lt $retryDelaySeconds) {
+            $elapsedSeconds -lt $retryDelaySeconds) {
             $backoffText = if ($retryDelaySeconds -ge 60) {
                 '{0}-minute' -f [int]($retryDelaySeconds / 60)
             }
