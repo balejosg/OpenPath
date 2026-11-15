@@ -1,18 +1,25 @@
 # OpenPath Windows browser native host tests
 
 Import-Module (Join-Path $PSScriptRoot "TestHelpers.psm1") -Force
-$modulePath = Join-Path $PSScriptRoot ".." "lib"
+$modulePath = (Join-Path (Join-Path $PSScriptRoot "..") "lib")
 Import-Module "$modulePath\Browser.psm1" -Force -Global -ErrorAction Stop
 
 Describe "Browser Module - Native Host" {
     BeforeAll {
-        $browserModulePath = Join-Path (Join-Path $PSScriptRoot ".." "lib") "Browser.psm1"
+        $libPath = if ($PSVersionTable.PSVersion.Major -ge 6) {
+            Join-Path $PSScriptRoot ".." "lib"
+        }
+        else {
+            # Windows PowerShell 5.1 accepts only one child path.
+            Join-Path (Join-Path $PSScriptRoot "..") "lib"
+        }
+        $browserModulePath = Join-Path $libPath "Browser.psm1"
         Import-Module $browserModulePath -Force -Global -ErrorAction Stop
     }
 
     Context "Request setup state projection" {
         BeforeAll {
-            $requestSetupModulePath = Join-Path $PSScriptRoot ".." "lib" "RequestSetup.State.psm1"
+            $requestSetupModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "RequestSetup.State.psm1")
             Import-Module $requestSetupModulePath -Force -Global -ErrorAction Stop
         }
 
@@ -115,13 +122,13 @@ Describe "Browser Module - Native Host" {
 
     Context "Native host manifest parity with the shared contract fixture" {
         BeforeAll {
-            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
+            $nativeHostModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.FirefoxNativeHost.psm1")
             Import-Module $nativeHostModulePath -Force -Global -ErrorAction Stop
         }
 
         It "Builds the manifest from the fixture name, type and allowed extension" {
             $fixture = Get-ContractFixtureJson -FileName 'browser-firefox-native-host.json'
-            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
+            $nativeHostModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.FirefoxNativeHost.psm1")
             $nativeHostContent = Get-Content $nativeHostModulePath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
@@ -151,7 +158,7 @@ Describe "Browser Module - Native Host" {
             (Get-OpenPathFirefoxNativeHostManifestPath) | Should -BeLike "*\$($fixture.manifestFilename)"
             (Get-OpenPathFirefoxNativeHostWrapperPath) | Should -BeLike "*\OpenPath-NativeHost.cmd"
 
-            . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.ArtifactCatalog.ps1")
+            . ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.ArtifactCatalog.ps1"))
             @(Get-OpenPathNativeHostArtifactNames) | Should -Contain 'OpenPath-NativeHost.cmd'
         }
     }
@@ -191,11 +198,15 @@ Describe "Browser Module - Native Host" {
                 $nativeScriptPath = Join-Path $nativeRoot "OpenPath-NativeHost.ps1"
                 $processStart = [System.Diagnostics.ProcessStartInfo]::new()
                 $processStart.FileName = (Get-Process -Id $PID).Path
-                $processStart.ArgumentList.Add("-NoProfile")
-                $processStart.ArgumentList.Add("-ExecutionPolicy")
-                $processStart.ArgumentList.Add("Bypass")
-                $processStart.ArgumentList.Add("-File")
-                $processStart.ArgumentList.Add($nativeScriptPath)
+                $nativeHostArguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $nativeScriptPath)
+                if ($processStart.PSObject.Properties['ArgumentList']) {
+                    foreach ($nativeHostArgument in $nativeHostArguments) { $processStart.ArgumentList.Add($nativeHostArgument) }
+                }
+                else {
+                    # Windows PowerShell 5.1 has no ArgumentList property.
+                    $quotedArguments = @($nativeHostArguments[0..3]) + @("`"$nativeScriptPath`"")
+                    $processStart.Arguments = ($quotedArguments -join ' ')
+                }
                 $processStart.RedirectStandardInput = $true
                 $processStart.RedirectStandardOutput = $true
                 $processStart.RedirectStandardError = $true
@@ -299,7 +310,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Requires complete request setup before native host registration or state sync" {
-            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
+            $nativeHostModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.FirefoxNativeHost.psm1")
             $nativeHostContent = Get-Content $nativeHostModulePath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
@@ -315,9 +326,9 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Preserves an existing native host registration when request setup is incomplete during updates" {
-            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
-            $browserModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.psm1"
-            $updateModulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $nativeHostModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.FirefoxNativeHost.psm1")
+            $browserModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.psm1")
+            $updateModulePath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1")
             $nativeHostContent = Get-Content $nativeHostModulePath -Raw
             $browserContent = Get-Content $browserModulePath -Raw
             $updateContent = Get-Content $updateModulePath -Raw
@@ -339,7 +350,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Stores classroom identity in native host state for request diagnostics" {
-            $requestSetupModulePath = Join-Path $PSScriptRoot ".." "lib" "RequestSetup.State.psm1"
+            $requestSetupModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "RequestSetup.State.psm1")
             $requestSetupContent = Get-Content $requestSetupModulePath -Raw
 
             Assert-ContentContainsAll -Content $requestSetupContent -Needles @(
@@ -350,7 +361,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Accepts only complete classroom request setup for native host registration" {
-            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
+            $nativeHostModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.FirefoxNativeHost.psm1")
             Import-Module $nativeHostModulePath -Force -Global -ErrorAction Stop
 
             $completeConfig = [PSCustomObject]@{
@@ -379,9 +390,9 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Re-stages native host artifacts before writing the Firefox manifest" {
-            $browserModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.psm1"
-            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
-            $artifactCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.ArtifactCatalog.ps1"
+            $browserModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.psm1")
+            $nativeHostModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Browser.FirefoxNativeHost.psm1")
+            $artifactCatalogPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.ArtifactCatalog.ps1")
             $browserContent = Get-Content $browserModulePath -Raw
             $nativeHostContent = Get-Content $nativeHostModulePath -Raw
 
@@ -429,8 +440,8 @@ Describe "Browser Module - Native Host" {
                 'Browser.FirefoxNativeHost\Sync-OpenPathFirefoxNativeHostArtifacts -SourceRoot $SourceRoot'
             )
 
-            $nativeActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw)
+            $nativeActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeActionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Bootstrap.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Shared.ps1")) -Raw)
             Assert-ContentContainsAll -Content $nativeActionsContent -Needles @(
                 'Import-NativeHostRequestSetupStateModule',
                 'RequestSetup.State.psm1',
@@ -444,7 +455,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Native host script prefers staged support files before locked agent internals" {
-            $nativeHostScriptPath = Join-Path $PSScriptRoot ".." "scripts" "OpenPath-NativeHost.ps1"
+            $nativeHostScriptPath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "OpenPath-NativeHost.ps1")
             $nativeHostContent = Get-Content $nativeHostScriptPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
@@ -467,8 +478,8 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Grants standard users read and execute access to the update task" {
-            $servicesModulePath = Join-Path $PSScriptRoot ".." "lib" "Services.psm1"
-            $taskHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
+            $servicesModulePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Services.psm1")
+            $taskHelperPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Services.TaskBuilders.ps1")
             $content = Get-Content $servicesModulePath -Raw
             $taskHelperContent = Get-Content $taskHelperPath -Raw
 
@@ -491,8 +502,8 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Waits for requested update-whitelist domains to reach the native whitelist mirror" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.RuntimeDependency.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeHostActionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Bootstrap.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Shared.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.RuntimeDependency.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.MessageDispatch.ps1")) -Raw)
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
                 'TaskRunner.ps1',
@@ -515,8 +526,8 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Delegates runtime dependency task trigger and wait behavior to TaskRunner" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.RuntimeDependency.ps1") -Raw)
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeHostActionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Shared.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.RuntimeDependency.ps1")) -Raw)
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
                 'function Get-NativeHostTaskRunner',
@@ -538,12 +549,12 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Returns blocked subdomains from the native whitelist mirror" {
-            $nativeStatePath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1"
-            $nativeActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeStatePath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.State.ps1")
+            $nativeActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             $stateContent = Get-Content $nativeStatePath -Raw
-            $actionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)
+            $actionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Shared.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.MessageDispatch.ps1")) -Raw)
 
-            $whitelistSectionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Whitelist.Sections.ps1") -Raw
+            $whitelistSectionsContent = Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Whitelist.Sections.ps1")) -Raw
             Assert-ContentContainsAll -Content $stateContent -Needles @(
                 '[System.IO.File]::ReadAllBytes($script:WhitelistPath)',
                 'Get-OpenPathWhitelistSectionsFromLines'
@@ -562,12 +573,12 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Returns allowed paths from the native whitelist mirror via get-allowed-paths action" {
-            $nativeStatePath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1"
+            $nativeStatePath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.State.ps1")
             $stateContent = Get-Content $nativeStatePath -Raw
-            $actionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)
+            $actionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Shared.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.MessageDispatch.ps1")) -Raw)
 
             # The shared owner parser must declare and populate AllowedPaths
-            $whitelistSectionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Whitelist.Sections.ps1") -Raw
+            $whitelistSectionsContent = Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Whitelist.Sections.ps1")) -Raw
             Assert-ContentContainsAll -Content $stateContent -Needles @(
                 '[System.IO.File]::ReadAllBytes($script:WhitelistPath)',
                 'Get-OpenPathWhitelistSectionsFromLines'
@@ -592,17 +603,17 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Supports local runtime dependency overlay action without full URL fields" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.RuntimeDependency.ps1") -Raw)
-            $runtimeDependencyProtocolPath = Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Protocol.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeHostActionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Bootstrap.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.RuntimeDependency.ps1")) -Raw)
+            $runtimeDependencyProtocolPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "RuntimeDependency.Protocol.ps1")
             $runtimeDependencyProtocolContent = Get-Content $runtimeDependencyProtocolPath -Raw
-            $runtimeDependencyQueuePath = Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Queue.ps1"
+            $runtimeDependencyQueuePath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "RuntimeDependency.Queue.ps1")
             $runtimeDependencyQueueContent = Get-Content $runtimeDependencyQueuePath -Raw
-            $runtimeDependencyOverlayPath = Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Overlay.ps1"
+            $runtimeDependencyOverlayPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "RuntimeDependency.Overlay.ps1")
             $runtimeDependencyOverlayContent = Get-Content $runtimeDependencyOverlayPath -Raw
-            $installerStagingPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $installerStagingPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "install") "Installer.Staging.ps1")
             $installerStagingContent = Get-Content $installerStagingPath -Raw
-            $updateRuntimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $updateRuntimePath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1")
             $updateRuntimeContent = Get-Content $updateRuntimePath -Raw
 
             Assert-ContentContainsAll -Content $runtimeDependencyProtocolContent -Needles @(
@@ -691,12 +702,12 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Supports captive portal recovery without URL fields or whitelist/runtime overlay mutation" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)
-            $recoveryQueueAdapterPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.CaptivePortalRecoveryQueue.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeHostActionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Bootstrap.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Shared.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.CaptivePortal.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.MessageDispatch.ps1")) -Raw)
+            $recoveryQueueAdapterPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.CaptivePortalRecoveryQueue.ps1")
             $recoveryQueueAdapterContent = Get-Content $recoveryQueueAdapterPath -Raw
             $nativeHostRecoveryContent = "$nativeHostActionsContent`n$recoveryQueueAdapterContent"
-            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $scriptPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $scriptContent = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostRecoveryContent -Needles @(
@@ -758,10 +769,10 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Centralizes captive portal Task Scheduler queue classification in a native host adapter" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $adapterPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.CaptivePortalRecoveryQueue.ps1"
-            $artifactCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.ArtifactCatalog.ps1"
-            $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw)
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $adapterPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.CaptivePortalRecoveryQueue.ps1")
+            $artifactCatalogPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.ArtifactCatalog.ps1")
+            $nativeHostActionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Bootstrap.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.CaptivePortal.ps1")) -Raw)
             $adapterContent = Get-Content $adapterPath -Raw
             $artifactCatalogContent = Get-Content $artifactCatalogPath -Raw
 
@@ -786,7 +797,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Rejects invalid captive portal trigger hosts before queueing or triggering tasks" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $script:capturedTaskNames = @()
@@ -807,7 +818,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Queues valid captive portal recovery and triggers only the recovery task" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -891,7 +902,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Reports open success when a late recovery task closes an authenticated marker" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -947,7 +958,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Does not report open success when exact recovery host evidence is missing" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -996,7 +1007,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Queues captive portal reconcile without requiring a trigger host" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -1057,7 +1068,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Triggers proactive reconcile during check when an active marker is already authenticated" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -1146,7 +1157,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Does not report reconcile success when protected mode evidence is false" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -1202,7 +1213,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Returns recent captive portal recovery success without triggering the elevated task again" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -1250,7 +1261,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Does not treat an active passthrough marker as terminal success even for the same trigger host" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
@@ -1320,7 +1331,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Does not reuse recent scheduled-task success when Acrylic update evidence is missing" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -1383,10 +1394,10 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Does not treat a recent passthrough marker as terminal success when a new trigger host arrives" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $scriptPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $content = Get-Content $scriptPath -Raw
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw)
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Bootstrap.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.CaptivePortal.ps1")) -Raw)
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 'recentSuccessSource',
@@ -1406,7 +1417,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Ignores stale captive portal recovery results with a different request id" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -1446,11 +1457,11 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Surfaces captive portal limited-mode readiness fields through native host responses" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeHostActionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw
-            $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeHostActionsContent = Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.CaptivePortal.ps1")) -Raw
+            $transitionPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryTransition.ps1")
             $transitionContent = Get-Content $transitionPath -Raw
-            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $scriptPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $scriptContent = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
@@ -1492,11 +1503,11 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Centralizes captive portal recovery transition decisions in the shared internal helper" {
-            $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $transitionPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryTransition.ps1")
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $scriptPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $transitionContent = Get-Content $transitionPath -Raw
-            $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw)
+            $nativeHostActionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Bootstrap.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.CaptivePortal.ps1")) -Raw)
             $scriptContent = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $transitionContent -Needles @(
@@ -1522,11 +1533,11 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Requires limitedModeReady and non-passthrough mode for recent captive portal success eligibility" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeHostActionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw
-            $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeHostActionsContent = Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.CaptivePortal.ps1")) -Raw
+            $transitionPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryTransition.ps1")
             $transitionContent = Get-Content $transitionPath -Raw
-            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $scriptPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")
             $scriptContent = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
@@ -1551,7 +1562,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Behaviorally treats dynamic discovery fields as diagnostics for RecentSuccess" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $missingReady = [PSCustomObject]@{
@@ -1612,7 +1623,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Behaviorally rejects RecentSuccess unless configured captive portal domains are applied" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             try {
@@ -1662,7 +1673,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Returns task and storage diagnostics when captive portal recovery times out" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -1728,7 +1739,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Returns clean non-portal captive portal recovery fallback" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
 
             $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
@@ -1771,7 +1782,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Skips DNS resolution and reports active policy for denied native checks" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
             $script:ResolveDomainIpCallCount = 0
 
@@ -1804,7 +1815,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Allows static connectivity hosts through native policy when the mirrored whitelist omits them" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
             $script:ResolveDomainIpCallCount = 0
 
@@ -1837,7 +1848,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Exposes portal recovery eligibility in native check results" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
             $script:NativeHostPortalProbeCache = @{}
 
@@ -1880,7 +1891,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Ignores expired captive portal markers and stale observations in native check results" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
             $script:NativeHostPortalProbeCache = @{}
 
@@ -1925,7 +1936,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Caches bounded sync probes for native portal eligibility" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
             . $nativeHostActionsPath
             $script:NativeHostPortalProbeCache = @{}
             $script:portalProbeCount = 0
@@ -1969,7 +1980,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Rejects system and browser update hosts as runtime dependencies" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             . $nativeHostActionsPath
 
@@ -2012,7 +2023,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Reports runtime dependency readiness only after the overlay generation is applied" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-runtime-ready-" + [Guid]::NewGuid().ToString("N"))
@@ -2079,7 +2090,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Answers runtime dependency enqueue mode immediately with the per-entry state" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-enqueue-" + [Guid]::NewGuid().ToString("N"))
@@ -2133,7 +2144,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Answers runtime dependency check batches per entry and echoes the correlation id" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $previousStatePath = if (Get-Variable -Name StatePath -Scope Script -ErrorAction SilentlyContinue) { $script:StatePath } else { $null }
@@ -2178,7 +2189,7 @@ Describe "Browser Module - Native Host" {
                 $script:StatePath = Join-Path $tempRoot 'native-state.json'
                 $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
                 Set-Content -Path $script:WhitelistPath -Value '## WHITELIST'
-                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+                $null = . ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.State.ps1"))
                 $ping = Handle-Message -Message ([PSCustomObject]@{ action = 'ping'; id = 'port-9' })
                 $ping.success | Should -BeTrue
                 $ping.id | Should -Be 'port-9'
@@ -2196,7 +2207,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Treats a recent worker busy mark as alive during long batches" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-busy-" + [Guid]::NewGuid().ToString("N"))
@@ -2234,7 +2245,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Announces the persistent transport protocol and capabilities, honoring the retirement switch" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-capabilities-" + [Guid]::NewGuid().ToString("N"))
@@ -2245,7 +2256,7 @@ Describe "Browser Module - Native Host" {
                 $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
                 Set-Content -Path $script:WhitelistPath -Value '## WHITELIST' -Encoding ASCII
                 . $nativeHostActionsPath
-                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+                $null = . ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.State.ps1"))
 
                 $ping = Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })
                 $ping.success | Should -BeTrue
@@ -2280,7 +2291,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Announces the extension-diagnostics capability and honors its own switch" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-diag-capabilities-" + [Guid]::NewGuid().ToString("N"))
@@ -2291,7 +2302,7 @@ Describe "Browser Module - Native Host" {
                 $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
                 Set-Content -Path $script:WhitelistPath -Value '## WHITELIST' -Encoding ASCII
                 . $nativeHostActionsPath
-                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+                $null = . ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.State.ps1"))
 
                 $ping = Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })
                 @($ping.capabilities) | Should -Contain 'extension-diagnostics'
@@ -2318,7 +2329,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Writes sanitized stage=extension-diagnostic lines and caps the batch at 50" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $global:CapturedExtensionDiagnosticLines = @()
             function Write-NativeHostLog {
@@ -2372,7 +2383,7 @@ Describe "Browser Module - Native Host" {
             # Phase 3A G0: the 2E tests called the handler directly. This test
             # spawns the real host process and speaks the native-messaging
             # framing over stdin/stdout: ping, then a 50-event diagnostics batch.
-            $nativeHostScriptPath = Join-Path $PSScriptRoot ".." "scripts" "OpenPath-NativeHost.ps1"
+            $nativeHostScriptPath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "OpenPath-NativeHost.ps1")
 
             $engines = [System.Collections.Generic.List[string]]::new()
             if ($env:SystemRoot) {
@@ -2493,7 +2504,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Picks up whitelist changes between messages of one persistent process" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }
@@ -2505,7 +2516,7 @@ Describe "Browser Module - Native Host" {
                 $script:WhitelistPath = Join-Path $tempRoot 'native-whitelist.txt'
                 Set-Content -Path $script:WhitelistPath -Value "## WHITELIST$([Environment]::NewLine)allowed.example" -Encoding ASCII
                 . $nativeHostActionsPath
-                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+                $null = . ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.State.ps1"))
 
                 # First message: the anchor is not in the mirror yet.
                 $before = Handle-Message -Message ([PSCustomObject]@{
@@ -2543,7 +2554,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Logs ready transitions and aggregates instead of one line per poll" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }
@@ -2562,7 +2573,7 @@ Describe "Browser Module - Native Host" {
                 # test writes the whitelist mirror first, so create the root.
                 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
                 . $nativeHostActionsPath
-                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+                $null = . ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.State.ps1"))
                 $script:StatePath = Join-Path $tempRoot 'native-state.json'
                 $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
                 Set-Content -Path $script:WhitelistPath -Value '## WHITELIST' -Encoding ASCII
@@ -2604,10 +2615,10 @@ Describe "Browser Module - Native Host" {
                 ($global:openPathCapturedNativeHostLogs | Where-Object { $_ -match 'action=check-local-runtime-dependency' }).Count | Should -Be 0
 
                 # The source contract keeps the main loop from logging every poll.
-                $hostScriptContent = Get-Content (Join-Path $PSScriptRoot ".." "scripts" "OpenPath-NativeHost.ps1") -Raw
+                $hostScriptContent = Get-Content ((Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "OpenPath-NativeHost.ps1")) -Raw
                 $hostScriptContent | Should -Match 'Test-NativeHostChattyAction -Action \$messageAction'
                 $hostScriptContent | Should -Match 'Write-NativeHostChattyActionLog -Action \$messageAction'
-                $dispatchContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw
+                $dispatchContent = Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.MessageDispatch.ps1")) -Raw
                 $dispatchContent | Should -Match 'Test-NativeHostChattyAction -Action \$action'
             }
             finally {
@@ -2620,7 +2631,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Measures hot in-process latency for the actions served over the port" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
             $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }
@@ -2632,7 +2643,7 @@ Describe "Browser Module - Native Host" {
                 $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
                 Set-Content -Path $script:WhitelistPath -Value "## WHITELIST$([Environment]::NewLine)allowed.example" -Encoding ASCII
                 . $nativeHostActionsPath
-                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+                $null = . ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.State.ps1"))
 
                 $overlayPath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $tempRoot
                 New-Item -ItemType Directory -Path (Split-Path $overlayPath -Parent) -Force | Out-Null
@@ -2692,8 +2703,8 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Logs native action evidence without depending on downstream wrappers" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.RuntimeDependency.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
+            $nativeHostActionsContent = (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Bootstrap.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.Shared.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.RuntimeDependency.ps1")) -Raw) + "`n" + (Get-Content ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.MessageDispatch.ps1")) -Raw)
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
                 'Common.Redaction.ps1',
@@ -2717,7 +2728,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Uses shared redaction for native host action log values" {
-            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
 
             function Get-WhitelistSections {
                 return [PSCustomObject]@{
@@ -2734,9 +2745,9 @@ Describe "Browser Module - Native Host" {
             $script:NativeRoot = Join-Path $TestDrive "native"
             $script:MaxDomains = 50
             New-Item -ItemType Directory -Path $script:NativeRoot -Force | Out-Null
-            Copy-Item (Join-Path $PSScriptRoot ".." "lib" "RequestSetup.State.psm1") -Destination (Join-Path $script:NativeRoot "RequestSetup.State.psm1") -Force
-            Copy-Item (Join-Path $PSScriptRoot ".." "lib" "internal" "CapabilityStorage.ps1") -Destination (Join-Path $script:NativeRoot "CapabilityStorage.ps1") -Force
-            Copy-Item (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Redaction.ps1") -Destination (Join-Path $script:NativeRoot "Common.Redaction.ps1") -Force
+            Copy-Item ((Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "RequestSetup.State.psm1")) -Destination (Join-Path $script:NativeRoot "RequestSetup.State.psm1") -Force
+            Copy-Item ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CapabilityStorage.ps1")) -Destination (Join-Path $script:NativeRoot "CapabilityStorage.ps1") -Force
+            Copy-Item ((Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Redaction.ps1")) -Destination (Join-Path $script:NativeRoot "Common.Redaction.ps1") -Force
 
             . $nativeHostActionsPath
 
@@ -2761,7 +2772,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Writes native host logs with shared file access and retry tolerance" {
-            $nativeHostScriptPath = Join-Path $PSScriptRoot ".." "scripts" "OpenPath-NativeHost.ps1"
+            $nativeHostScriptPath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "OpenPath-NativeHost.ps1")
             $nativeHostScriptContent = Get-Content $nativeHostScriptPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostScriptContent -Needles @(
@@ -2777,7 +2788,7 @@ Describe "Browser Module - Native Host" {
 
         Context "Explicit native policy verdict" {
             BeforeEach {
-                $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+                $nativeHostActionsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "NativeHost.Actions.ps1")
                 . $nativeHostActionsPath
                 function Resolve-DomainIp { param([string]$Domain) return '203.0.113.10' }
                 function Get-NativeHostPortalRecoverySignal { param([string]$Domain, [object]$Message) return 'none' }
@@ -2859,7 +2870,7 @@ Describe "Browser Module - Native Host" {
 
 Describe "Phase 2D native host startup profile and hot path" {
     It "Records a once-per-process startup profile in the native host log" {
-        $nativeHostScriptPath = Join-Path $PSScriptRoot ".." "scripts" "OpenPath-NativeHost.ps1"
+        $nativeHostScriptPath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "OpenPath-NativeHost.ps1")
         $nativeHostContent = Get-Content $nativeHostScriptPath -Raw
 
         Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
@@ -2956,9 +2967,9 @@ Initialize-NativeHostCaptivePortalSupportFiles
 
 Describe "Compiled native host health (Phase 5.2 D3)" {
     BeforeAll {
-        $browserModulePath = Join-Path (Join-Path $PSScriptRoot ".." "lib") "Browser.psm1"
+        $browserModulePath = Join-Path ((Join-Path (Join-Path $PSScriptRoot "..") "lib")) "Browser.psm1"
         Import-Module $browserModulePath -Force -Global -ErrorAction Stop
-        $nativeHostModulePath = Join-Path (Join-Path $PSScriptRoot ".." "lib") "Browser.FirefoxNativeHost.psm1"
+        $nativeHostModulePath = Join-Path ((Join-Path (Join-Path $PSScriptRoot "..") "lib")) "Browser.FirefoxNativeHost.psm1"
         Import-Module $nativeHostModulePath -Force -Global -ErrorAction Stop
     }
 
