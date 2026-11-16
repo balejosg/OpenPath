@@ -665,17 +665,20 @@ function Invoke-OpenPathNegativeHealthProbes {
     }
 
     # The watchdog task runs every minute and attempts its own AppControl
-    # repair. During the AppControl fault-injection probes that repair races the
+    # repair. The update and agent-update tasks can reconcile protected mode
+    # too. During the AppControl fault-injection probes those repairs race the
     # harness restores and can leave an uncommitted effective policy behind, so
-    # quiesce the task while the probes own the policy; it is restored before
-    # the final health check.
-    $watchdogQuiescedForAppControlProbes = $false
-    try {
-        Disable-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop | Out-Null
-        $watchdogQuiescedForAppControlProbes = $true
-    }
-    catch {
-        # Already disabled (or unavailable); the probes below do not require it.
+    # quiesce the tasks while the probes own the policy; they are restored
+    # before the final health check.
+    $appControlProbeQuiescedTasks = @()
+    foreach ($taskName in @('OpenPath-Watchdog', 'OpenPath-Update', 'OpenPath-AgentUpdate')) {
+        try {
+            Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+            $appControlProbeQuiescedTasks += $taskName
+        }
+        catch {
+            # Already disabled (or unavailable); the probes below do not require it.
+        }
     }
 
     # Negative probe 2: remove every rule from an exact local-policy snapshot.
@@ -882,8 +885,10 @@ function Invoke-OpenPathNegativeHealthProbes {
         Remove-Item -LiteralPath $repairOriginalPolicyPath -Force -ErrorAction SilentlyContinue
     }
 
-    if ($watchdogQuiescedForAppControlProbes) {
-        Enable-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction SilentlyContinue | Out-Null
+    if ($appControlProbeQuiescedTasks.Count -gt 0) {
+        foreach ($taskName in $appControlProbeQuiescedTasks) {
+            Enable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
+        }
         Start-Sleep -Seconds 5
     }
 
