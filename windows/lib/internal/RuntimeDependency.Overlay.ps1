@@ -31,22 +31,139 @@ function Get-OpenPathRuntimeDependencyOverlayPath {
 }
 
 function Get-OpenPathRuntimeDependencyOverlaySettings {
-    # returns ttl and capacity for the overlay, reading env overrides OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS and _CAPACITY
+    # returns ttl, capacity, per-anchor limit, machine-wide rate limit, and audit path for the overlay, reading env overrides
     [CmdletBinding()]
     param()
 
     $ttlDays = 7
     $capacity = 300
+    # 32 live dependencies per anchor: five times the maximum of 6 observed in
+    # the first-visit lane fixture logs (three Windows lab runs).
+    $maxPerAnchor = 32
+    # 60 new dependencies per 5 minutes machine-wide: three times the 20-entry
+    # synthetic fan-out already exercised by the Phase 2B lab burst.
+    $rateLimit = 60
+    $rateWindowMinutes = 5
     if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) {
         try { $ttlDays = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) } catch { $ttlDays = 7 }
     }
     if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_CAPACITY) {
         try { $capacity = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_CAPACITY) } catch { $capacity = 300 }
     }
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_MAX_PER_ANCHOR) {
+        try { $maxPerAnchor = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_MAX_PER_ANCHOR) } catch { $maxPerAnchor = 32 }
+    }
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_RATE_LIMIT) {
+        try { $rateLimit = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_RATE_LIMIT) } catch { $rateLimit = 60 }
+    }
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_RATE_WINDOW_MINUTES) {
+        try { $rateWindowMinutes = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_RATE_WINDOW_MINUTES) } catch { $rateWindowMinutes = 5 }
+    }
+
+    $auditPath = [string]$env:OPENPATH_RUNTIME_DEPENDENCY_AUDIT_PATH
+    if (-not $auditPath) {
+        try {
+            $auditPath = Join-Path (Split-Path (Get-OpenPathRuntimeDependencyOverlayPath) -Parent) 'runtime-dependency-audit.log'
+        }
+        catch {
+            $auditPath = ''
+        }
+    }
 
     return [PSCustomObject]@{
         TtlDays = $ttlDays
         Capacity = $capacity
+        MaxPerAnchor = $maxPerAnchor
+        RateLimit = $rateLimit
+        RateWindowMinutes = $rateWindowMinutes
+        AuditPath = $auditPath
+    }
+}
+
+function Get-OpenPathRuntimeDependencyEntryFirstSeenUtc {
+    # parses an entry firstSeen timestamp with invariant culture; returns DateTimeOffset.MinValue when absent or malformed
+    [CmdletBinding()]
+    param([AllowNull()][object]$Entry)
+
+    if ($null -eq $Entry) { return [DateTimeOffset]::MinValue }
+    $rawValue = if ($Entry.PSObject.Properties['firstSeen']) { $Entry.firstSeen } else { $null }
+    if ($null -eq $rawValue) { return [DateTimeOffset]::MinValue }
+    if ($rawValue -is [DateTimeOffset]) { return $rawValue }
+    if ($rawValue -is [DateTime]) { return [DateTimeOffset]$rawValue }
+    $value = [string]$rawValue
+    if (-not $value) { return [DateTimeOffset]::MinValue }
+    try {
+        # ps-culture-allow: invariant culture and round-trip kind are supplied on the continued arguments
+        return [DateTimeOffset]::Parse(
+            $value,
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::RoundtripKind
+        )
+    }
+    catch {
+        return [DateTimeOffset]::MinValue
+    }
+}
+
+function Write-OpenPathRuntimeDependencyAuditEntry {
+    <#
+    .SYNOPSIS
+    Appends one accepted or limit-rejected runtime dependency event to the SYSTEM/Administrators-only audit log.
+    .DESCRIPTION
+    The audit file lives under the restricted data root and receives the shared
+    RestrictedRoot ACL profile (SYSTEM and Administrators SIDs, no inherited
+    user access). Timestamps are UTC and formatted with invariant culture.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('accepted', 'rejected')][string]$Event,
+        [Parameter(Mandatory = $true)][string]$AnchorHost,
+        [Parameter(Mandatory = $true)][string]$DependencyHost,
+        [Parameter(Mandatory = $true)][string]$RequestType,
+        [Parameter(Mandatory = $true)][string]$Reason,
+        [string]$Path = ''
+    )
+
+    if (-not $Path) { return $false }
+
+    try {
+        $directory = Split-Path $Path -Parent
+        if ($directory -and -not (Test-Path -LiteralPath $directory -ErrorAction SilentlyContinue)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+
+        $timestamp = [DateTime]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+        $line = '{0} event={1} anchor={2} dependency={3} type={4} reason={5}' -f `
+            $timestamp,
+            $Event,
+            $AnchorHost,
+            $DependencyHost,
+            $RequestType,
+            $Reason
+
+        if (-not (Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue)) {
+            New-Item -ItemType File -Path $Path -Force | Out-Null
+        }
+
+        if (Get-Command -Name 'Set-OpenPathCapabilityStorageAcl' -ErrorAction SilentlyContinue) {
+            try {
+                Set-OpenPathCapabilityStorageAcl -Path $Path -Profile RestrictedRoot
+            }
+            catch {
+                if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
+                    Write-OpenPathLog "Failed to restrict runtime dependency audit log ACL: $_" -Level WARN
+                }
+            }
+        }
+
+        Add-Content -LiteralPath $Path -Value $line -Encoding UTF8
+        return $true
+    }
+    catch {
+        if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
+            Write-OpenPathLog "Failed to write runtime dependency audit log: $_" -Level WARN
+        }
+        return $false
     }
 }
 
@@ -306,7 +423,7 @@ function Clear-OpenPathRuntimeDependencyOverlay {
 }
 
 function Update-OpenPathRuntimeDependencyOverlay {
-    # merges new requests into existing entries, evicts expired/invalid/protected/blocked entries, bounds to Capacity; returns Entries, Processed, Rejected, Changed
+    # merges new requests into existing entries, evicts expired/invalid/protected/blocked entries, enforces the per-anchor and machine-wide rate limits, bounds to Capacity; returns Entries, Processed, Rejected, LimitRejected, Rejections, Changed
     [CmdletBinding()]
     param(
         [object[]]$Entries = @(),
@@ -314,7 +431,11 @@ function Update-OpenPathRuntimeDependencyOverlay {
         [string[]]$WhitelistedDomains = @(),
         [string[]]$BlockedSubdomains = @(),
         [int]$Capacity = 300,
-        [int]$TtlDays = 7
+        [int]$TtlDays = 7,
+        [int]$MaxPerAnchor = 32,
+        [int]$RateLimit = 60,
+        [int]$RateWindowMinutes = 5,
+        [string]$AuditPath = ''
     )
 
     $whitelistSet = New-OpenPathRuntimeDependencyWhitelistSet -WhitelistedDomains $WhitelistedDomains
@@ -322,6 +443,10 @@ function Update-OpenPathRuntimeDependencyOverlay {
     $blockedSubdomainSet = New-OpenPathRuntimeDependencyBlockedSubdomainSet -BlockedSubdomains $BlockedSubdomains
     $now = (Get-Date).ToUniversalTime()
     $expiresAt = $now.AddDays([Math]::Max(1, $TtlDays))
+    $effectiveMaxPerAnchor = [Math]::Max(1, $MaxPerAnchor)
+    $effectiveRateLimit = [Math]::Max(1, $RateLimit)
+    $effectiveRateWindowMinutes = [Math]::Max(1, $RateWindowMinutes)
+    $rateWindowStart = $now.AddMinutes(-$effectiveRateWindowMinutes)
     $keptEntries = @()
 
     foreach ($entry in @($Entries)) {
@@ -349,8 +474,31 @@ function Update-OpenPathRuntimeDependencyOverlay {
         $keptEntries += $entry
     }
 
+    # Count live entries per anchor and net-new entries inside the sliding rate
+    # window before accepting anything from this batch.
+    $anchorEntryCounts = [System.Collections.Generic.Dictionary[string, int]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $recentNewCount = 0
+    foreach ($keptEntry in @($keptEntries)) {
+        $keptAnchor = if ($keptEntry.PSObject.Properties['anchorHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $keptEntry.anchorHost } else { '' }
+        if ($keptAnchor) {
+            if ($anchorEntryCounts.ContainsKey($keptAnchor)) {
+                $anchorEntryCounts[$keptAnchor] = $anchorEntryCounts[$keptAnchor] + 1
+            }
+            else {
+                $anchorEntryCounts[$keptAnchor] = 1
+            }
+        }
+
+        $firstSeen = Get-OpenPathRuntimeDependencyEntryFirstSeenUtc -Entry $keptEntry
+        if ($firstSeen -ne [DateTimeOffset]::MinValue -and $firstSeen.UtcDateTime -ge $rateWindowStart) {
+            $recentNewCount += 1
+        }
+    }
+
     $processed = 0
     $rejected = 0
+    $limitRejected = 0
+    $rejections = @()
     foreach ($request in @($Requests)) {
         $candidate = Test-OpenPathRuntimeDependencyCandidate `
             -Message $request `
@@ -381,6 +529,39 @@ function Update-OpenPathRuntimeDependencyOverlay {
         }
 
         if (-not $updated) {
+            $currentAnchorCount = if ($anchorEntryCounts.ContainsKey($candidate.AnchorHost)) { $anchorEntryCounts[$candidate.AnchorHost] } else { 0 }
+            $rejectionReason = ''
+            $rejectionError = ''
+            if ($currentAnchorCount -ge $effectiveMaxPerAnchor) {
+                $rejectionReason = 'anchor-capacity'
+                $rejectionError = "Anchor dependency capacity exceeded for '$($candidate.AnchorHost)': $currentAnchorCount live dependencies, maximum $effectiveMaxPerAnchor"
+            }
+            elseif ($recentNewCount -ge $effectiveRateLimit) {
+                $rejectionReason = 'rate-limit'
+                $rejectionError = "Runtime dependency rate limit exceeded: $recentNewCount new dependencies in the last $effectiveRateWindowMinutes minute(s), maximum $effectiveRateLimit"
+            }
+
+            if ($rejectionReason) {
+                $rejected += 1
+                $limitRejected += 1
+                $rejections += [PSCustomObject]@{
+                    AnchorHost = $candidate.AnchorHost
+                    DependencyHost = $candidate.DependencyHost
+                    RequestType = $candidate.RequestType
+                    Reason = $rejectionReason
+                    Error = $rejectionError
+                }
+                Write-OpenPathRuntimeDependencyAuditEntry `
+                    -Event rejected `
+                    -AnchorHost $candidate.AnchorHost `
+                    -DependencyHost $candidate.DependencyHost `
+                    -RequestType $candidate.RequestType `
+                    -Reason $rejectionReason `
+                    -Path $AuditPath | Out-Null
+                Write-OpenPathLog "runtime-dependency rejected: reason=$rejectionReason anchor=$($candidate.AnchorHost) dependency=$($candidate.DependencyHost) type=$($candidate.RequestType) detail=$rejectionError" -Level WARN
+                continue
+            }
+
             $keptEntries += [PSCustomObject]@{
                 dependencyHost = $candidate.DependencyHost
                 anchorHost = $candidate.AnchorHost
@@ -390,9 +571,18 @@ function Update-OpenPathRuntimeDependencyOverlay {
                 expiresAt = $expiresAt.ToString('o')
                 source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
             }
+            $anchorEntryCounts[$candidate.AnchorHost] = $currentAnchorCount + 1
+            $recentNewCount += 1
             # Auditability: every NET-NEW auto-allow makes a domain newly resolvable. Log it so
             # teachers/operators can review runtime-dependency grants and detect queue abuse
             # (the queue is user-writable and self-asserted; see red-team F2).
+            Write-OpenPathRuntimeDependencyAuditEntry `
+                -Event accepted `
+                -AnchorHost $candidate.AnchorHost `
+                -DependencyHost $candidate.DependencyHost `
+                -RequestType $candidate.RequestType `
+                -Reason 'new-dependency' `
+                -Path $AuditPath | Out-Null
             Write-OpenPathLog "runtime-dependency auto-allow: anchor=$($candidate.AnchorHost) dependency=$($candidate.DependencyHost) type=$($candidate.RequestType)" -Level INFO
         }
         $processed += 1
@@ -408,6 +598,8 @@ function Update-OpenPathRuntimeDependencyOverlay {
         Entries = $boundedEntries
         Processed = $processed
         Rejected = $rejected
+        LimitRejected = $limitRejected
+        Rejections = @($rejections)
         Changed = ($processed -gt 0)
     }
 }

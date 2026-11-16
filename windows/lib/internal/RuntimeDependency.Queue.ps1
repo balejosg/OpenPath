@@ -116,7 +116,7 @@ function Remove-OpenPathRuntimeDependencyQueueRequest {
 }
 
 function Invoke-OpenPathRuntimeDependencyQueue {
-    # drains all queue files, merges them into the overlay via update, and persists the overlay when changed; returns Changed, Processed, Rejected, OverlayWriteMs
+    # drains all queue files, merges them into the overlay via update, and persists the overlay when changed; returns Changed, Processed, Rejected, LimitRejected, Rejections, OverlayWriteMs
     [CmdletBinding()]
     param(
         [string[]]$WhitelistedDomains = @(),
@@ -128,6 +128,8 @@ function Invoke-OpenPathRuntimeDependencyQueue {
         Changed = $false
         Processed = 0
         Rejected = 0
+        LimitRejected = 0
+        Rejections = @()
         OverlayWriteMs = 0
         QueuePath = $QueuePath
     }
@@ -159,10 +161,16 @@ function Invoke-OpenPathRuntimeDependencyQueue {
         -WhitelistedDomains $WhitelistedDomains `
         -BlockedSubdomains $BlockedSubdomains `
         -Capacity $settings.Capacity `
-        -TtlDays $settings.TtlDays
+        -TtlDays $settings.TtlDays `
+        -MaxPerAnchor $settings.MaxPerAnchor `
+        -RateLimit $settings.RateLimit `
+        -RateWindowMinutes $settings.RateWindowMinutes `
+        -AuditPath $settings.AuditPath
 
     $result['Processed'] = [int]$overlayResult.Processed
     $result['Rejected'] = [int]$result['Rejected'] + [int]$overlayResult.Rejected
+    $result['LimitRejected'] = [int]$overlayResult.LimitRejected
+    $result['Rejections'] = @($overlayResult.Rejections)
     $result['Changed'] = [bool]$overlayResult.Changed
 
     if ($result['Changed']) {
