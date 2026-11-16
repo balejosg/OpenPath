@@ -1,18 +1,43 @@
 {
   "auditReportVersion": 2,
   "vulnerabilities": {
-    "@devicefarmer/adbkit": {
-      "name": "@devicefarmer/adbkit",
-      "severity": "high",
+    "@eslint/config-array": {
+      "name": "@eslint/config-array",
+      "severity": "moderate",
       "isDirect": false,
-      "via": ["node-forge"],
-      "effects": ["web-ext"],
-      "range": "*",
-      "nodes": ["node_modules/@devicefarmer/adbkit"],
+      "via": ["minimatch"],
+      "effects": [],
+      "range": "0.23.0 - 0.23.5",
+      "nodes": [
+        "dashboard/node_modules/@eslint/config-array",
+        "node_modules/@eslint/config-array",
+        "node_modules/addons-linter/node_modules/@eslint/config-array",
+        "shared/node_modules/@eslint/config-array"
+      ],
+      "fixAvailable": true
+    },
+    "@eslint/eslintrc": {
+      "name": "@eslint/eslintrc",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["minimatch"],
+      "effects": [],
+      "range": "",
+      "nodes": ["node_modules/@eslint/eslintrc"],
+      "fixAvailable": true
+    },
+    "@eslint/js": {
+      "name": "@eslint/js",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["eslint"],
+      "effects": [],
+      "range": ">=10.0.1",
+      "nodes": ["node_modules/@eslint/js"],
       "fixAvailable": {
-        "name": "web-ext",
-        "version": "10.7.0",
-        "isSemVerMajor": false
+        "name": "@eslint/js",
+        "version": "9.39.5",
+        "isSemVerMajor": true
       }
     },
     "@humanfs/node": {
@@ -48,7 +73,11 @@
       "effects": ["find-chrome-bin", "puppeteer-core"],
       "range": "*",
       "nodes": ["node_modules/@puppeteer/browsers"],
-      "fixAvailable": true
+      "fixAvailable": {
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
+        "isSemVerMajor": true
+      }
     },
     "@size-limit/preset-app": {
       "name": "@size-limit/preset-app",
@@ -78,6 +107,89 @@
         "isSemVerMajor": true
       }
     },
+    "@stryker-mutator/core": {
+      "name": "@stryker-mutator/core",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["minimatch"],
+      "effects": ["@stryker-mutator/typescript-checker"],
+      "range": ">=6.4.2",
+      "nodes": ["api/node_modules/@stryker-mutator/core"],
+      "fixAvailable": {
+        "name": "@stryker-mutator/core",
+        "version": "6.4.1",
+        "isSemVerMajor": true
+      }
+    },
+    "@stryker-mutator/typescript-checker": {
+      "name": "@stryker-mutator/typescript-checker",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["@stryker-mutator/core"],
+      "effects": [],
+      "range": ">=7.0.1",
+      "nodes": ["api/node_modules/@stryker-mutator/typescript-checker"],
+      "fixAvailable": {
+        "name": "@stryker-mutator/typescript-checker",
+        "version": "7.0.0",
+        "isSemVerMajor": true
+      }
+    },
+    "@typescript-eslint/eslint-plugin": {
+      "name": "@typescript-eslint/eslint-plugin",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["@typescript-eslint/type-utils", "@typescript-eslint/utils"],
+      "effects": [],
+      "range": "6.16.0 - 8.72.2",
+      "nodes": ["node_modules/@typescript-eslint/eslint-plugin"],
+      "fixAvailable": true
+    },
+    "@typescript-eslint/parser": {
+      "name": "@typescript-eslint/parser",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["@typescript-eslint/typescript-estree"],
+      "effects": ["typescript-eslint"],
+      "range": "6.16.0 - 8.72.2",
+      "nodes": ["node_modules/@typescript-eslint/parser"],
+      "fixAvailable": true
+    },
+    "@typescript-eslint/type-utils": {
+      "name": "@typescript-eslint/type-utils",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["@typescript-eslint/typescript-estree", "@typescript-eslint/utils"],
+      "effects": [],
+      "range": "6.16.0 - 8.72.2",
+      "nodes": ["node_modules/@typescript-eslint/type-utils"],
+      "fixAvailable": true
+    },
+    "@typescript-eslint/typescript-estree": {
+      "name": "@typescript-eslint/typescript-estree",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["minimatch"],
+      "effects": [
+        "@typescript-eslint/parser",
+        "@typescript-eslint/type-utils",
+        "@typescript-eslint/utils",
+        "typescript-eslint"
+      ],
+      "range": "6.16.0 - 8.72.2",
+      "nodes": ["node_modules/@typescript-eslint/typescript-estree"],
+      "fixAvailable": true
+    },
+    "@typescript-eslint/utils": {
+      "name": "@typescript-eslint/utils",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["@typescript-eslint/typescript-estree"],
+      "effects": ["@typescript-eslint/eslint-plugin", "typescript-eslint"],
+      "range": "6.16.0 - 8.72.2",
+      "nodes": ["node_modules/@typescript-eslint/utils"],
+      "fixAvailable": true
+    },
     "@vitest/coverage-v8": {
       "name": "@vitest/coverage-v8",
       "severity": "moderate",
@@ -106,10 +218,24 @@
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
           },
           "range": ">=2.1.0 <4.1.11"
+        },
+        {
+          "source": 1242767,
+          "name": "@vitest/mocker",
+          "dependency": "@vitest/mocker",
+          "title": "Vitest: Code injection via unauthenticated manual mock registration",
+          "url": "https://github.com/advisories/GHSA-qxg6-89mg-rqv8",
+          "severity": "moderate",
+          "cwe": ["CWE-94", "CWE-116", "CWE-306"],
+          "cvss": {
+            "score": 4.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
+          },
+          "range": ">=2.1.0-beta.7 <4.1.12"
         }
       ],
       "effects": ["vitest"],
-      "range": "2.1.0 - 4.1.10",
+      "range": "<=4.1.11",
       "nodes": ["react-spa/node_modules/vitest/node_modules/@vitest/mocker"],
       "fixAvailable": true
     },
@@ -117,13 +243,13 @@
       "name": "addons-linter",
       "severity": "high",
       "isDirect": false,
-      "via": ["image-size"],
+      "via": ["deepmerge", "eslint", "image-size"],
       "effects": ["web-ext"],
-      "range": "7.8.0 - 10.12.0",
+      "range": ">=1.15.2",
       "nodes": ["node_modules/addons-linter"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.7.0",
+        "version": "10.8.0",
         "isSemVerMajor": false
       }
     },
@@ -250,7 +376,7 @@
       "nodes": ["node_modules/adm-zip"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.7.0",
+        "version": "10.8.0",
         "isSemVerMajor": false
       }
     },
@@ -297,16 +423,48 @@
             "vectorString": null
           },
           "range": "<=6.2.0"
+        },
+        {
+          "source": 1246355,
+          "name": "basic-ftp",
+          "dependency": "basic-ftp",
+          "title": "basic-ftp: Uncaught TypeError in MLSD directory-listing parser via __proto__ fact name causes DoS in Client.list()",
+          "url": "https://github.com/advisories/GHSA-5pm8-86m8-9m6r",
+          "severity": "moderate",
+          "cwe": ["CWE-248", "CWE-1321"],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": "<=6.2.3"
+        },
+        {
+          "source": 1246367,
+          "name": "basic-ftp",
+          "dependency": "basic-ftp",
+          "title": "basic-ftp: Uncaught exception crashes the Node.js process when a password (or resumed-download path) contains CR/LF",
+          "url": "https://github.com/advisories/GHSA-r4jh-29pc-gfqr",
+          "severity": "moderate",
+          "cwe": ["CWE-248", "CWE-755"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=6.2.2"
         }
       ],
       "effects": ["get-uri"],
-      "range": "<=6.2.0",
+      "range": "<=6.2.3",
       "nodes": ["node_modules/basic-ftp"],
-      "fixAvailable": true
+      "fixAvailable": {
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
+        "isSemVerMajor": true
+      }
     },
     "body-parser": {
       "name": "body-parser",
-      "severity": "low",
+      "severity": "high",
       "isDirect": false,
       "via": [
         {
@@ -322,10 +480,24 @@
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
           },
           "range": ">=2.0.0 <2.3.0"
+        },
+        {
+          "source": 1243074,
+          "name": "body-parser",
+          "dependency": "body-parser",
+          "title": "body-parser vulnerable to Denial of Service via trailing bytes after a compressed request body",
+          "url": "https://github.com/advisories/GHSA-27r3-jxmh-p828",
+          "severity": "high",
+          "cwe": ["CWE-248"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=2.0.0 <2.4.0"
         }
       ],
       "effects": [],
-      "range": "2.0.0 - 2.2.2",
+      "range": "2.0.0 - 2.3.0",
       "nodes": ["node_modules/body-parser"],
       "fixAvailable": true
     },
@@ -410,35 +582,6 @@
       "nodes": ["node_modules/brace-expansion"],
       "fixAvailable": true
     },
-    "braces": {
-      "name": "braces",
-      "severity": "high",
-      "isDirect": false,
-      "via": [
-        {
-          "source": 1240992,
-          "name": "braces",
-          "dependency": "braces",
-          "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
-          "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
-          "severity": "high",
-          "cwe": ["CWE-674"],
-          "cvss": {
-            "score": 7.5,
-            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-          },
-          "range": "<=3.0.3"
-        }
-      ],
-      "effects": ["micromatch"],
-      "range": "*",
-      "nodes": ["node_modules/braces"],
-      "fixAvailable": {
-        "name": "patch-package",
-        "version": "6.0.7",
-        "isSemVerMajor": true
-      }
-    },
     "browserslist": {
       "name": "browserslist",
       "severity": "high",
@@ -478,14 +621,115 @@
       "nodes": ["node_modules/browserslist"],
       "fixAvailable": true
     },
-    "concurrently": {
-      "name": "concurrently",
+    "c8": {
+      "name": "c8",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["test-exclude"],
+      "effects": [],
+      "range": ">=10.0.0",
+      "nodes": ["node_modules/c8"],
+      "fixAvailable": {
+        "name": "c8",
+        "version": "9.1.0",
+        "isSemVerMajor": true
+      }
+    },
+    "chromium-bidi": {
+      "name": "chromium-bidi",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["zod"],
+      "effects": ["puppeteer-core"],
+      "range": "0.5.13 - 157.0.8081-0",
+      "nodes": ["node_modules/chromium-bidi"],
+      "fixAvailable": {
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
+        "isSemVerMajor": true
+      }
+    },
+    "compression": {
+      "name": "compression",
       "severity": "high",
       "isDirect": true,
-      "via": ["shell-quote"],
+      "via": [
+        {
+          "source": 1241221,
+          "name": "compression",
+          "dependency": "compression",
+          "title": "compression vulnerable to Denial of Service via memory leak on premature response close",
+          "url": "https://github.com/advisories/GHSA-vc2v-76pw-4v95",
+          "severity": "high",
+          "cwe": ["CWE-401", "CWE-459"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<1.8.2"
+        }
+      ],
       "effects": [],
-      "range": "9.2.1 - 9.2.3 || 10.0.0 - 10.0.3",
-      "nodes": ["node_modules/concurrently"],
+      "range": "<1.8.2",
+      "nodes": ["node_modules/compression"],
+      "fixAvailable": true
+    },
+    "deepmerge": {
+      "name": "deepmerge",
+      "severity": "low",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1243505,
+          "name": "deepmerge",
+          "dependency": "deepmerge",
+          "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
+          "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4",
+          "severity": "low",
+          "cwe": ["CWE-1321"],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": ">=4.2.0 <=4.3.1"
+        }
+      ],
+      "effects": ["addons-linter"],
+      "range": ">=4.2.0",
+      "nodes": ["node_modules/deepmerge"],
+      "fixAvailable": {
+        "name": "web-ext",
+        "version": "10.8.0",
+        "isSemVerMajor": false
+      }
+    },
+    "eslint": {
+      "name": "eslint",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["@eslint/config-array", "minimatch"],
+      "effects": ["@eslint/js", "addons-linter"],
+      "range": "10.0.0-alpha.0 - 10.14.0",
+      "nodes": [
+        "dashboard/node_modules/eslint",
+        "node_modules/addons-linter/node_modules/eslint",
+        "node_modules/eslint",
+        "shared/node_modules/eslint"
+      ],
+      "fixAvailable": {
+        "name": "@eslint/js",
+        "version": "9.39.5",
+        "isSemVerMajor": true
+      }
+    },
+    "eslint-plugin-import-x": {
+      "name": "eslint-plugin-import-x",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["minimatch"],
+      "effects": [],
+      "range": "0.2.0 - 4.7.2 || 4.9.1 - 4.17.1",
+      "nodes": ["node_modules/eslint-plugin-import-x"],
       "fixAvailable": true
     },
     "estimo": {
@@ -539,19 +783,9 @@
       "effects": ["@puppeteer/browsers"],
       "range": "*",
       "nodes": ["node_modules/extract-zip"],
-      "fixAvailable": true
-    },
-    "fast-glob": {
-      "name": "fast-glob",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["micromatch"],
-      "effects": ["globby"],
-      "range": "*",
-      "nodes": ["node_modules/fast-glob"],
       "fixAvailable": {
-        "name": "secretlint",
-        "version": "13.0.7",
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
         "isSemVerMajor": true
       }
     },
@@ -671,10 +905,52 @@
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
           },
           "range": ">=3.0.0 <3.1.8"
+        },
+        {
+          "source": 1243098,
+          "name": "fast-uri",
+          "dependency": "fast-uri",
+          "title": "fast-uri vulnerable to URI scheme spoofing via percent-encoded scheme decoding",
+          "url": "https://github.com/advisories/GHSA-w74x-v6f9-j3xg",
+          "severity": "moderate",
+          "cwe": ["CWE-172", "CWE-180"],
+          "cvss": {
+            "score": 6.1,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+          },
+          "range": ">=3.0.0 <3.1.9"
+        },
+        {
+          "source": 1243101,
+          "name": "fast-uri",
+          "dependency": "fast-uri",
+          "title": "fast-uri vulnerable to improper path equivalence in relative reference normalization",
+          "url": "https://github.com/advisories/GHSA-xhq7-xmqj-769h",
+          "severity": "low",
+          "cwe": ["CWE-41"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": ">=3.0.0 <3.1.9"
+        },
+        {
+          "source": 1243107,
+          "name": "fast-uri",
+          "dependency": "fast-uri",
+          "title": "fast-uri vulnerable to scheme injection via an unescaped first-segment colon in suffix references",
+          "url": "https://github.com/advisories/GHSA-333x-w4r6-6crp",
+          "severity": "low",
+          "cwe": ["CWE-41", "CWE-116"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": ">=3.0.0 <3.1.9"
         }
       ],
       "effects": [],
-      "range": "3.0.0 - 3.1.7",
+      "range": "3.0.0 - 3.1.8",
       "nodes": ["node_modules/fast-uri"],
       "fixAvailable": true
     },
@@ -688,20 +964,6 @@
       "nodes": ["node_modules/find-chrome-bin"],
       "fixAvailable": true
     },
-    "find-yarn-workspace-root": {
-      "name": "find-yarn-workspace-root",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["micromatch"],
-      "effects": ["patch-package"],
-      "range": "*",
-      "nodes": ["node_modules/find-yarn-workspace-root"],
-      "fixAvailable": {
-        "name": "patch-package",
-        "version": "6.0.7",
-        "isSemVerMajor": true
-      }
-    },
     "firefox-profile": {
       "name": "firefox-profile",
       "severity": "high",
@@ -712,21 +974,7 @@
       "nodes": ["node_modules/firefox-profile"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.7.0",
-        "isSemVerMajor": false
-      }
-    },
-    "fx-runner": {
-      "name": "fx-runner",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["shell-quote"],
-      "effects": ["web-ext"],
-      "range": "1.0.5 - 1.5.0",
-      "nodes": ["node_modules/fx-runner"],
-      "fixAvailable": {
-        "name": "web-ext",
-        "version": "10.7.0",
+        "version": "10.8.0",
         "isSemVerMajor": false
       }
     },
@@ -738,19 +986,39 @@
       "effects": ["pac-proxy-agent"],
       "range": ">=5.0.0",
       "nodes": ["node_modules/get-uri"],
-      "fixAvailable": true
-    },
-    "globby": {
-      "name": "globby",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["fast-glob"],
-      "effects": ["secretlint"],
-      "range": ">=8.0.0",
-      "nodes": ["node_modules/globby"],
       "fixAvailable": {
-        "name": "secretlint",
-        "version": "13.0.7",
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
+        "isSemVerMajor": true
+      }
+    },
+    "glob": {
+      "name": "glob",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1244013,
+          "name": "glob",
+          "dependency": "glob",
+          "title": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal",
+          "url": "https://github.com/advisories/GHSA-3g3m-2fjr-6pw4",
+          "severity": "moderate",
+          "cwe": ["CWE-400"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=9.0.0 <=14.0.1"
+        },
+        "minimatch"
+      ],
+      "effects": ["swagger-jsdoc", "test-exclude"],
+      "range": "9.0.0 - 14.0.1",
+      "nodes": ["node_modules/glob", "node_modules/test-exclude/node_modules/glob"],
+      "fixAvailable": {
+        "name": "c8",
+        "version": "9.1.0",
         "isSemVerMajor": true
       }
     },
@@ -793,7 +1061,7 @@
       "nodes": ["node_modules/image-size"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.7.0",
+        "version": "10.8.0",
         "isSemVerMajor": false
       }
     },
@@ -899,10 +1167,24 @@
             "vectorString": null
           },
           "range": "<=10.7.0"
+        },
+        {
+          "source": 1242883,
+          "name": "ip-address",
+          "dependency": "ip-address",
+          "title": "ip-address: Address6 matches a zone identifier in quadratic time ahead of its length limit, allowing a single long string to stall the process",
+          "url": "https://github.com/advisories/GHSA-rxp7-6hxx-x8q5",
+          "severity": "moderate",
+          "cwe": ["CWE-1333"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": "<=10.7.3"
         }
       ],
       "effects": [],
-      "range": "<=10.7.0",
+      "range": "<=10.7.3",
       "nodes": ["node_modules/ip-address"],
       "fixAvailable": true
     },
@@ -945,28 +1227,56 @@
       "nodes": ["node_modules/js-yaml"],
       "fixAvailable": true
     },
-    "lint-staged": {
-      "name": "lint-staged",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["micromatch"],
-      "effects": [],
-      "range": "7.0.0 - 16.3.4",
-      "nodes": ["node_modules/lint-staged"],
-      "fixAvailable": true
-    },
-    "micromatch": {
-      "name": "micromatch",
-      "severity": "high",
+    "minimatch": {
+      "name": "minimatch",
+      "severity": "moderate",
       "isDirect": false,
-      "via": ["braces"],
-      "effects": ["fast-glob", "find-yarn-workspace-root", "lint-staged"],
-      "range": ">=0.2.0",
-      "nodes": ["node_modules/micromatch"],
+      "via": [
+        {
+          "source": 1244623,
+          "name": "minimatch",
+          "dependency": "minimatch",
+          "title": "minimatch has potential denial of service via globparts amplification",
+          "url": "https://github.com/advisories/GHSA-g3hv-75wg-m249",
+          "severity": "moderate",
+          "cwe": ["CWE-405"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0 <11.0.1"
+        }
+      ],
+      "effects": [
+        "@eslint/config-array",
+        "@eslint/eslintrc",
+        "@stryker-mutator/core",
+        "@typescript-eslint/typescript-estree",
+        "eslint",
+        "eslint-plugin-import-x",
+        "glob",
+        "multimatch"
+      ],
+      "range": "7.0.0 - 11.0.0",
+      "nodes": ["node_modules/minimatch"],
       "fixAvailable": {
-        "name": "patch-package",
-        "version": "6.0.7",
+        "name": "@stryker-mutator/core",
+        "version": "6.4.1",
         "isSemVerMajor": true
+      }
+    },
+    "multimatch": {
+      "name": "multimatch",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["minimatch"],
+      "effects": ["web-ext"],
+      "range": ">=7.0.0",
+      "nodes": ["node_modules/multimatch"],
+      "fixAvailable": {
+        "name": "web-ext",
+        "version": "10.8.0",
+        "isSemVerMajor": false
       }
     },
     "nanoid": {
@@ -1086,16 +1396,292 @@
             "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
           },
           "range": "<=1.4.0"
+        },
+        {
+          "source": 1244014,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: ASN.1 OID first arc truncation in asn1.oidToDer",
+          "url": "https://github.com/advisories/GHSA-4642-5mcj-2rqw",
+          "severity": "low",
+          "cwe": ["CWE-190"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244015,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: Prototype Pollution in forge.http cookie handling via a malicious Set-Cookie",
+          "url": "https://github.com/advisories/GHSA-6wvx-3r32-xmcg",
+          "severity": "moderate",
+          "cwe": ["CWE-1321"],
+          "cvss": {
+            "score": 4.8,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244016,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: TLS client crash when the server sends no certificate",
+          "url": "https://github.com/advisories/GHSA-525v-9gp9-w22h",
+          "severity": "moderate",
+          "cwe": ["CWE-476"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244017,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: Regular expression denial of service in PEM decoding (pem.decode)",
+          "url": "https://github.com/advisories/GHSA-7wch-p9px-956x",
+          "severity": "high",
+          "cwe": ["CWE-400", "CWE-1333"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244018,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: Denial of Service via infinite loop in BigInteger.modInverse() with negative input (incomplete fix of CVE-2026-33891)",
+          "url": "https://github.com/advisories/GHSA-h6cr-wjv9-3cpp",
+          "severity": "low",
+          "cwe": ["CWE-835"],
+          "cvss": {
+            "score": 2.9,
+            "vectorString": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244019,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: verifyCertificateChain() removes trusted CA certificates with the same subject from the CA store",
+          "url": "https://github.com/advisories/GHSA-4487-j8r4-4g2f",
+          "severity": "low",
+          "cwe": ["CWE-295", "CWE-471"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244020,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: AES-GCM authentication bypass via unvalidated tagLength option",
+          "url": "https://github.com/advisories/GHSA-5cwg-6vw7-rj6p",
+          "severity": "moderate",
+          "cwe": ["CWE-354", "CWE-1284"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244021,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: PKCS#12 MAC forgery and constant-key PBE via zero iteration count",
+          "url": "https://github.com/advisories/GHSA-jc66-7q78-782g",
+          "severity": "high",
+          "cwe": ["CWE-354", "CWE-1284"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244022,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: Denial of service in TLS record processing via a record interleaved with a fragmented handshake message",
+          "url": "https://github.com/advisories/GHSA-8hrf-8g6f-7xwp",
+          "severity": "high",
+          "cwe": ["CWE-248", "CWE-476"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244023,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: Denial of service in TLS record processing via call stack exhaustion",
+          "url": "https://github.com/advisories/GHSA-hqq3-7jhf-c5jx",
+          "severity": "high",
+          "cwe": ["CWE-674"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1244024,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: X.509 basicConstraints bypass in verifyCertificateChain() via deprecated extension OIDs 2.5.29.10 and 2.5.29.13",
+          "url": "https://github.com/advisories/GHSA-5x38-2vff-x55p",
+          "severity": "high",
+          "cwe": ["CWE-295", "CWE-436"],
+          "cvss": {
+            "score": 7.4,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1245925,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: Certificate signature verified with the issuer's RSA signature scheme",
+          "url": "https://github.com/advisories/GHSA-9wg5-mj3p-v49q",
+          "severity": "low",
+          "cwe": ["CWE-347"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1245926,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: Incomplete PKCS#7 padding validation in AES/DES CBC and ECB decryption",
+          "url": "https://github.com/advisories/GHSA-2vgq-wchc-25w7",
+          "severity": "low",
+          "cwe": ["CWE-20", "CWE-354"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1245927,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: X.509 pathLenConstraint not enforced by verifyCertificateChain() for CA certificates without keyUsage",
+          "url": "https://github.com/advisories/GHSA-h46v-rmh6-fq4f",
+          "severity": "moderate",
+          "cwe": ["CWE-295"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1245928,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: ASN.1 resource exhaustion via BIT STRING decoding in asn1.fromDer",
+          "url": "https://github.com/advisories/GHSA-rhr8-3pm8-cq29",
+          "severity": "high",
+          "cwe": ["CWE-400", "CWE-674"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1245929,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: RSA PKCS#1 v1.5 signature forgery via non-canonical DigestInfo encoding",
+          "url": "https://github.com/advisories/GHSA-6qrw-m8cv-hcxf",
+          "severity": "high",
+          "cwe": ["CWE-347"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": "<=1.4.0"
+        },
+        {
+          "source": 1246031,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: Ed25519 signature verification accepts small-order public keys",
+          "url": "https://github.com/advisories/GHSA-6889-vf6x-f3g5",
+          "severity": "low",
+          "cwe": ["CWE-347"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": "<=1.4.2"
+        },
+        {
+          "source": 1246032,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: TLS client crash on an unsupported ServerHello compression method",
+          "url": "https://github.com/advisories/GHSA-w4xr-hqv8-ch44",
+          "severity": "moderate",
+          "cwe": ["CWE-20", "CWE-248"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=1.4.2"
+        },
+        {
+          "source": 1246033,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: ReDoS in forge.http response header and cookie trimming",
+          "url": "https://github.com/advisories/GHSA-6cv4-p8m7-4r25",
+          "severity": "moderate",
+          "cwe": ["CWE-1333"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=0.1.2 <=1.4.2"
+        },
+        {
+          "source": 1246034,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Forge: TLS client crash on a handshake record received without a session",
+          "url": "https://github.com/advisories/GHSA-j8rw-jp99-435v",
+          "severity": "moderate",
+          "cwe": ["CWE-476"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=1.4.2"
         }
       ],
-      "effects": ["@devicefarmer/adbkit"],
-      "range": "*",
+      "effects": [],
+      "range": "<=1.4.2",
       "nodes": ["node_modules/node-forge"],
-      "fixAvailable": {
-        "name": "web-ext",
-        "version": "10.7.0",
-        "isSemVerMajor": false
-      }
+      "fixAvailable": true
     },
     "pac-proxy-agent": {
       "name": "pac-proxy-agent",
@@ -1105,19 +1691,9 @@
       "effects": ["proxy-agent"],
       "range": ">=6.0.0",
       "nodes": ["node_modules/pac-proxy-agent"],
-      "fixAvailable": true
-    },
-    "patch-package": {
-      "name": "patch-package",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["find-yarn-workspace-root"],
-      "effects": [],
-      "range": ">=6.1.0-0",
-      "nodes": ["node_modules/patch-package"],
       "fixAvailable": {
-        "name": "patch-package",
-        "version": "6.0.7",
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
         "isSemVerMajor": true
       }
     },
@@ -1168,17 +1744,25 @@
       "effects": ["@puppeteer/browsers"],
       "range": ">=6.0.0",
       "nodes": ["node_modules/proxy-agent"],
-      "fixAvailable": true
+      "fixAvailable": {
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
+        "isSemVerMajor": true
+      }
     },
     "puppeteer-core": {
       "name": "puppeteer-core",
       "severity": "high",
       "isDirect": false,
-      "via": ["@puppeteer/browsers"],
-      "effects": [],
-      "range": "19.8.4 - 24.43.1",
+      "via": ["@puppeteer/browsers", "chromium-bidi"],
+      "effects": ["estimo"],
+      "range": "19.8.4 - 25.12.0",
       "nodes": ["node_modules/puppeteer-core"],
-      "fixAvailable": true
+      "fixAvailable": {
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
+        "isSemVerMajor": true
+      }
     },
     "qs": {
       "name": "qs",
@@ -1212,55 +1796,90 @@
             "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
           },
           "range": ">=2.2.5 <6.16.0"
+        },
+        {
+          "source": 1243687,
+          "name": "qs",
+          "dependency": "qs",
+          "title": "qs : qs.stringify with arrayFormat 'comma' throws an uncaught TypeError on array elements carrying a non-callable own toString (DoS)",
+          "url": "https://github.com/advisories/GHSA-6pq8-jhm2-2vcw",
+          "severity": "moderate",
+          "cwe": ["CWE-248", "CWE-704"],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": ">=6.7.0 <=6.16.0"
         }
       ],
       "effects": [],
-      "range": "2.2.5 - 6.15.3",
+      "range": "2.2.5 - 6.16.0",
       "nodes": ["node_modules/qs"],
       "fixAvailable": true
     },
-    "secretlint": {
-      "name": "secretlint",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["globby"],
-      "effects": [],
-      "range": "<=12.3.1",
-      "nodes": ["node_modules/secretlint"],
-      "fixAvailable": {
-        "name": "secretlint",
-        "version": "13.0.7",
-        "isSemVerMajor": true
-      }
-    },
-    "shell-quote": {
-      "name": "shell-quote",
+    "source-map-js": {
+      "name": "source-map-js",
       "severity": "high",
       "isDirect": false,
       "via": [
         {
-          "source": 1123944,
-          "name": "shell-quote",
-          "dependency": "shell-quote",
-          "title": "shell-quote: Quadratic-complexity Denial of Service in `parse()` (CWE-407)",
-          "url": "https://github.com/advisories/GHSA-395f-4hp3-45gv",
+          "source": 1241209,
+          "name": "source-map-js",
+          "dependency": "source-map-js",
+          "title": "source-map-js allows event-loop denial of service through indexed source-map section offsets",
+          "url": "https://github.com/advisories/GHSA-68fv-2mgg-jv7q",
           "severity": "high",
-          "cwe": ["CWE-407"],
+          "cwe": ["CWE-1284"],
           "cvss": {
             "score": 7.5,
             "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
           },
-          "range": "<=1.8.4"
+          "range": ">=1.0.0 <1.2.2"
         }
       ],
-      "effects": ["concurrently", "fx-runner"],
-      "range": "<=1.8.4",
-      "nodes": ["node_modules/shell-quote"],
+      "effects": [],
+      "range": "1.0.0 - 1.2.1",
+      "nodes": ["node_modules/source-map-js"],
+      "fixAvailable": true
+    },
+    "swagger-jsdoc": {
+      "name": "swagger-jsdoc",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["glob"],
+      "effects": [],
+      "range": "6.3.0",
+      "nodes": ["node_modules/swagger-jsdoc"],
+      "fixAvailable": true
+    },
+    "test-exclude": {
+      "name": "test-exclude",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["glob", "minimatch"],
+      "effects": ["c8"],
+      "range": ">=7.0.0",
+      "nodes": ["node_modules/test-exclude"],
       "fixAvailable": {
-        "name": "web-ext",
-        "version": "10.7.0",
-        "isSemVerMajor": false
+        "name": "c8",
+        "version": "9.1.0",
+        "isSemVerMajor": true
       }
+    },
+    "typescript-eslint": {
+      "name": "typescript-eslint",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@typescript-eslint/eslint-plugin",
+        "@typescript-eslint/parser",
+        "@typescript-eslint/typescript-estree",
+        "@typescript-eslint/utils"
+      ],
+      "effects": [],
+      "range": "<=8.72.2",
+      "nodes": ["node_modules/typescript-eslint"],
+      "fixAvailable": true
     },
     "undici": {
       "name": "undici",
@@ -1476,11 +2095,204 @@
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
           },
           "range": ">=7.0.0 <7.29.1"
+        },
+        {
+          "source": 1243078,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to Denial of Service via unbounded memory in the EventSource parser",
+          "url": "https://github.com/advisories/GHSA-4qv8-2p9j-2685",
+          "severity": "moderate",
+          "cwe": ["CWE-770"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=7.0.0 <7.30.1"
+        },
+        {
+          "source": 1243081,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to Subresource Integrity bypass via non-lowercase algorithm tokens",
+          "url": "https://github.com/advisories/GHSA-f72v-6w45-q472",
+          "severity": "moderate",
+          "cwe": ["CWE-178"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": ">=7.15.0 <7.30.1"
+        },
+        {
+          "source": 1243113,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to Denial of Service via unhandled error on excessive content-encodings",
+          "url": "https://github.com/advisories/GHSA-xjj6-f33q-929c",
+          "severity": "high",
+          "cwe": ["CWE-248", "CWE-459"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=7.18.0 <7.30.1"
+        },
+        {
+          "source": 1243473,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to cache poisoning and cross-user disclosure via cross-origin redirects",
+          "url": "https://github.com/advisories/GHSA-4w7w-5xrc-9h26",
+          "severity": "high",
+          "cwe": ["CWE-346", "CWE-524"],
+          "cvss": {
+            "score": 7.4,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          },
+          "range": ">=7.0.0 <7.30.1"
+        },
+        {
+          "source": 1243475,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to TLS certificate validation bypass via dropped tls options in Agent",
+          "url": "https://github.com/advisories/GHSA-2m5v-pch6-74hx",
+          "severity": "high",
+          "cwe": ["CWE-295"],
+          "cvss": {
+            "score": 7.4,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          },
+          "range": ">=7.0.0 <7.30.1"
+        },
+        {
+          "source": 1243478,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to Denial of Service via TLS 1.2 certificate-changing renegotiation",
+          "url": "https://github.com/advisories/GHSA-qrxm-fqhp-jwvm",
+          "severity": "high",
+          "cwe": ["CWE-248", "CWE-617"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=7.0.0 <7.30.1"
+        },
+        {
+          "source": 1243481,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici WebSocket client vulnerable to Denial of Service via unbounded automatic PONG buffering",
+          "url": "https://github.com/advisories/GHSA-9fm3-97px-rjf6",
+          "severity": "moderate",
+          "cwe": ["CWE-400", "CWE-405", "CWE-770"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=7.0.0 <7.30.1"
+        },
+        {
+          "source": 1243484,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to Denial of Service via unhandled exception in the decompress interceptor",
+          "url": "https://github.com/advisories/GHSA-55wc-3pg8-jfw6",
+          "severity": "moderate",
+          "cwe": ["CWE-248"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=7.15.0 <7.30.1"
         }
       ],
       "effects": [],
-      "range": "7.0.0 - 7.29.0",
+      "range": "7.0.0 - 7.30.0",
       "nodes": ["node_modules/undici"],
+      "fixAvailable": true
+    },
+    "vite": {
+      "name": "vite",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        {
+          "source": 1242623,
+          "name": "vite",
+          "dependency": "vite",
+          "title": "launch-editor: escapeCmdArgs() omits % escaping on Windows",
+          "url": "https://github.com/advisories/GHSA-698v-4r3x-3vcv",
+          "severity": "moderate",
+          "cwe": ["CWE-78"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0 <=7.3.6"
+        },
+        {
+          "source": 1242652,
+          "name": "vite",
+          "dependency": "vite",
+          "title": "launch-editor: Editor CLI flag misinterpretation causing arbitrary command execution for some editors",
+          "url": "https://github.com/advisories/GHSA-r825-w8mm-5pxw",
+          "severity": "moderate",
+          "cwe": ["CWE-88"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0 <=7.3.6"
+        },
+        {
+          "source": 1242659,
+          "name": "vite",
+          "dependency": "vite",
+          "title": "launch-editor: `fs.existsSync()` existence check can be bypassed on Windows",
+          "url": "https://github.com/advisories/GHSA-587h-7wmj-h5pm",
+          "severity": "high",
+          "cwe": ["CWE-77"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0 <=7.3.6"
+        },
+        {
+          "source": 1242725,
+          "name": "vite",
+          "dependency": "vite",
+          "title": "Vite: Cross origin script execution through Vite custom middleware",
+          "url": "https://github.com/advisories/GHSA-9jrq-w75r-8gcw",
+          "severity": "low",
+          "cwe": ["CWE-80"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0 <=7.3.6"
+        },
+        {
+          "source": 1242731,
+          "name": "vite",
+          "dependency": "vite",
+          "title": "Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine",
+          "url": "https://github.com/advisories/GHSA-rq7h-c2jc-7f22",
+          "severity": "moderate",
+          "cwe": ["CWE-22", "CWE-284"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0 <=7.3.6"
+        }
+      ],
+      "effects": [],
+      "range": "7.0.0 - 7.3.6",
+      "nodes": ["node_modules/vite"],
       "fixAvailable": true
     },
     "vitest": {
@@ -1514,14 +2326,43 @@
       "name": "web-ext",
       "severity": "high",
       "isDirect": true,
-      "via": ["@devicefarmer/adbkit", "addons-linter", "firefox-profile", "fx-runner"],
+      "via": ["addons-linter", "firefox-profile", "multimatch"],
       "effects": [],
       "range": ">=1.0.0",
       "nodes": ["node_modules/web-ext"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.7.0",
+        "version": "10.8.0",
         "isSemVerMajor": false
+      }
+    },
+    "zod": {
+      "name": "zod",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        {
+          "source": 1243066,
+          "name": "zod",
+          "dependency": "zod",
+          "title": "Zod can exhaust memory while validating oversized constrained collections",
+          "url": "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5",
+          "severity": "high",
+          "cwe": ["CWE-770"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<4.6.6"
+        }
+      ],
+      "effects": ["chromium-bidi"],
+      "range": "<4.6.6",
+      "nodes": ["node_modules/chromium-bidi/node_modules/zod", "node_modules/zod"],
+      "fixAvailable": {
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
+        "isSemVerMajor": true
       }
     }
   },
@@ -1529,10 +2370,10 @@
     "vulnerabilities": {
       "info": 0,
       "low": 1,
-      "moderate": 6,
-      "high": 37,
+      "moderate": 25,
+      "high": 31,
       "critical": 0,
-      "total": 44
+      "total": 57
     },
     "dependencies": {
       "prod": 273,
