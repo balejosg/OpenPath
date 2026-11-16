@@ -895,6 +895,17 @@ function Invoke-OpenPathNegativeHealthProbes {
         foreach ($taskName in $appControlProbeQuiescedTasks) {
             Enable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
         }
+        # The update task owns the protected-mode reconcile. Start it as soon as
+        # the fault-injection window closes so restoration does not depend on
+        # the five-minute trigger.
+        if ($appControlProbeQuiescedTasks -contains 'OpenPath-Update') {
+            try {
+                Start-ScheduledTask -TaskName 'OpenPath-Update' -ErrorAction SilentlyContinue | Out-Null
+            }
+            catch {
+                # The health restoration below still reports a real failure.
+            }
+        }
         Start-Sleep -Seconds 5
     }
 
