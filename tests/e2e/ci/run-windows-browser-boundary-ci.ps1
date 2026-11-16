@@ -674,11 +674,17 @@ function Invoke-OpenPathNegativeHealthProbes {
     foreach ($taskName in @('OpenPath-Watchdog', 'OpenPath-Update', 'OpenPath-AgentUpdate')) {
         try {
             Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+            Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
             $appControlProbeQuiescedTasks += $taskName
         }
         catch {
             # Already disabled (or unavailable); the probes below do not require it.
         }
+    }
+    # Give a running task instance a moment to exit before the probes mutate
+    # the policy it may try to reconcile.
+    if ($appControlProbeQuiescedTasks.Count -gt 0) {
+        Start-Sleep -Seconds 2
     }
 
     # Negative probe 2: remove every rule from an exact local-policy snapshot.
