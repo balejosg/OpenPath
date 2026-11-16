@@ -21,6 +21,7 @@ on:
       - 'package-lock.json'
       - 'docker-compose.test.yml'
       - 'scripts/require-release-quality-gate.mjs'
+      - 'scripts/select-e2e-tests-diff-base.mjs'
       - 'scripts/select-windows-student-policy-sse-group.mjs'
       - '.github/actions/setup-node/**'
       - '.github/actions/build-workspaces/**'
@@ -72,6 +73,9 @@ jobs:
   detect-relevant-changes:
     name: Detect Relevant Changes
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     outputs:
       release_infra_only: ${{ steps.filter.outputs.release_infra_only }}
       linux_e2e: ${{ steps.filter.outputs.linux_e2e }}
@@ -91,9 +95,25 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Resolve push diff base
+        id: diff-base
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/select-e2e-tests-diff-base.mjs \
+            --head-sha "${{ github.sha }}" \
+            --repo "${{ github.repository }}" \
+            --output "$GITHUB_OUTPUT"
+
       - name: Detect changed paths
         id: filter
         shell: bash
+        env:
+          PUSH_DIFF_BASE_SHA: ${{ steps.diff-base.outputs.base_sha }}
+          PUSH_DIFF_BASE_REASON: ${{ steps.diff-base.outputs.base_reason }}
         run: |
           set -euo pipefail
 
@@ -166,19 +186,29 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
             head_sha="${{ github.event.pull_request.head.sha }}"
+            diff_base_reason="pull_request base"
           else
-            base_sha="${{ github.event.before }}"
+            base_sha="${PUSH_DIFF_BASE_SHA:-}"
             head_sha="${{ github.sha }}"
+            diff_base_reason="${PUSH_DIFF_BASE_REASON:-push diff base was not resolved}"
           fi
 
-          changed_files="$(git diff --name-only "$base_sha" "$head_sha" || true)"
-          if [ -z "$changed_files" ]; then
-            changed_files="$(git show --pretty='' --name-only "$head_sha")"
+          select_all_lanes=false
+          changed_files=""
+          if [ -z "$base_sha" ]; then
+            select_all_lanes=true
+          else
+            changed_files="$(git diff --name-only "$base_sha" "$head_sha" || true)"
+            if [ -z "$changed_files" ]; then
+              changed_files="$(git show --pretty='' --name-only "$head_sha")"
+            fi
           fi
 
           echo "Changed files:"
           if [ -n "$changed_files" ]; then
             echo "$changed_files"
+          elif [ "$select_all_lanes" = "true" ]; then
+            echo "(all E2E lanes selected because the push diff base is unavailable)"
           else
             echo "(none)"
           fi
@@ -240,6 +270,18 @@ jobs:
             windows_contract_scenarios=true
           fi
 
+          if [ "$select_all_lanes" = "true" ]; then
+            linux_e2e=true
+            windows_e2e=true
+            linux_student_policy=true
+            windows_student_policy=true
+            windows_captive_portal=true
+            linux_contract_scenarios=true
+            windows_contract_scenarios=true
+            windows_student_policy_sse_group=full
+            windows_student_policy_sse_reason="Push diff base unavailable ($diff_base_reason); selecting every E2E lane for full coverage."
+          fi
+
           echo "release_infra_only=$release_infra_only" >> "$GITHUB_OUTPUT"
           echo "linux_e2e=$linux_e2e" >> "$GITHUB_OUTPUT"
           echo "windows_e2e=$windows_e2e" >> "$GITHUB_OUTPUT"
@@ -257,6 +299,8 @@ jobs:
             if [ "$release_infra_only" = "true" ]; then
               echo "- Release-infrastructure-only diff: target-platform lanes skipped by contract."
             fi
+            echo "- Diff base: ${base_sha:-none}"
+            echo "- Diff base reason: $diff_base_reason"
             echo "- Linux E2E selected: $linux_e2e"
             echo "- Windows E2E selected: $windows_e2e"
             echo "- Linux Student Policy selected: $linux_student_policy"

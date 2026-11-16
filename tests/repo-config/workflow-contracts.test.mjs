@@ -2020,6 +2020,54 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   );
 });
 
+test('E2E push diff base recovers coverage from the last successful main push run', () => {
+  const e2eWorkflow = readText('.github/workflows/e2e-tests.yml');
+  const detectBlock = extractWorkflowJobBlock(e2eWorkflow, 'detect-relevant-changes');
+
+  assert.match(
+    detectBlock,
+    /permissions:\n\s+actions: read\n\s+contents: read/,
+    'push run-history lookup needs actions: read while checkout keeps contents: read'
+  );
+  assert.ok(
+    detectBlock.includes('name: Resolve push diff base') &&
+      detectBlock.includes("if: github.event_name == 'push'") &&
+      detectBlock.includes('scripts/select-e2e-tests-diff-base.mjs') &&
+      detectBlock.includes('--head-sha "${{ github.sha }}"') &&
+      detectBlock.includes('--repo "${{ github.repository }}"') &&
+      detectBlock.includes('--output "$GITHUB_OUTPUT"'),
+    'push lane selection should resolve the diff base from the workflow run history before reading changed paths'
+  );
+  assert.ok(
+    detectBlock.includes('PUSH_DIFF_BASE_SHA: ${{ steps.diff-base.outputs.base_sha }}') &&
+      detectBlock.includes('PUSH_DIFF_BASE_REASON: ${{ steps.diff-base.outputs.base_reason }}'),
+    'changed-path detection should consume the resolved diff base and its reason'
+  );
+  assert.ok(
+    !e2eWorkflow.includes('github.event.before'),
+    'push lane selection must not fall back to the previous push SHA, which drops coverage after cancelled or failed runs'
+  );
+  assert.ok(
+    detectBlock.includes('base_sha="${{ github.event.pull_request.base.sha }}"') &&
+      detectBlock.includes('if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then'),
+    'pull_request and workflow_dispatch routing must stay unchanged'
+  );
+  assert.match(
+    detectBlock,
+    /if \[ "\$select_all_lanes" = "true" \]; then[\s\S]*linux_e2e=true[\s\S]*windows_e2e=true[\s\S]*linux_student_policy=true[\s\S]*windows_student_policy=true[\s\S]*windows_captive_portal=true[\s\S]*linux_contract_scenarios=true[\s\S]*windows_contract_scenarios=true[\s\S]*windows_student_policy_sse_group=full[\s\S]*Push diff base unavailable \(\$diff_base_reason\); selecting every E2E lane for full coverage\./,
+    'an unresolvable push diff base should select every E2E lane with full SSE coverage'
+  );
+  assert.ok(
+    e2eWorkflow.includes('echo "- Diff base: ${base_sha:-none}"') &&
+      e2eWorkflow.includes('echo "- Diff base reason: $diff_base_reason"'),
+    'E2E route summary should print the diff base and why it was selected'
+  );
+  assert.ok(
+    e2eWorkflow.includes("'scripts/select-e2e-tests-diff-base.mjs'"),
+    'pushes that change the diff-base resolver should trigger the E2E workflow'
+  );
+});
+
 test('Firefox runtime extension changes exercise platform readiness gates before release evidence', () => {
   const e2eWorkflow = readText('.github/workflows/e2e-tests.yml');
   const linuxStudentPolicyBlock = extractWorkflowJobBlock(e2eWorkflow, 'linux-student-policy');
