@@ -334,7 +334,7 @@ Describe "Browser Module - Native Host" {
             )
 
             Assert-ContentContainsAll -Content $updateContent -Needles @(
-                'Register-OpenPathFirefoxNativeHost -Config $config -PreserveExistingOnNotReady'
+                'Register-OpenPathFirefoxNativeHost -Config $Config -PreserveExistingOnNotReady'
             )
         }
 

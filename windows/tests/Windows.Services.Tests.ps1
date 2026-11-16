@@ -322,7 +322,7 @@ Describe "Services Module" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 'Copy-Item -Path $download.StagedPath -Destination $tempDestinationPath -Force -ErrorAction Stop',
                 'Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop',
-                'Register-OpenPathFirefoxNativeHost -Config $config -PreserveExistingOnNotReady | Out-Null'
+                'Register-OpenPathFirefoxNativeHost -Config $Config -PreserveExistingOnNotReady | Out-Null'
             )
         }
 
@@ -330,7 +330,7 @@ Describe "Services Module" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
             $content = Get-Content $modulePath -Raw
 
-            $content | Should -Match '(?s)Register-OpenPathTask -OpenPathRoot \$script:OpenPathRoot.*?Enable-OpenPathTask.*?Register-OpenPathFirefoxNativeHost.*?Restore-OpenPathProtectedMode -Config \$config.*?Start-OpenPathTask -TaskType SSE'
+            $content | Should -Match '(?s)Register-OpenPathTask -OpenPathRoot \$OpenPathRoot.*?Enable-OpenPathTask.*?Register-OpenPathFirefoxNativeHost -Config \$Config -PreserveExistingOnNotReady.*?Restore-OpenPathProtectedMode -Config \$Config.*?Start-OpenPathTask -TaskType SSE'
         }
     }
 
