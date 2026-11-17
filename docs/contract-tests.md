@@ -63,6 +63,8 @@ Guards `.github/workflows/ci.yml`, `.github/workflows/e2e-tests.yml`, and a wide
 | `README.md`                                                               | Codecov badge URL fragment                                                                                                                                                                                                                                                                                                                                                                                               | Same as above.                                                                                         |
 | `docs/testing/wedu-captive-portal-lab.md`                                 | Two specific documentation phrases                                                                                                                                                                                                                                                                                                                                                                                       | Keep phrases intact or update test.                                                                    |
 
+The `release-scripts.yml` row also covers the personalized HTTP evidence validator: it must run before the evidence upload, and the upload must be gated on validator success.
+
 **Dangerous needle kinds in this test:**
 
 - **Exact step and job names** (hundreds of `includes()` calls): renaming a workflow step breaks the contract silently outside of tests.
@@ -176,6 +178,18 @@ Assertions that only duplicated failures already produced by the `windows-offlin
 | `api/Dockerfile`                                                     | Readiness healthcheck and private artifact-volume permissions                                                                                                                                                                                     | Keep readiness and permissions or update the test.                                                                                          |
 | `docs/windows-offline-installer.md`                                  | Docker Compose, provision-before-traffic, read-only/persistent volume phrases                                                                                                                                                                     | Keep the documented operational contract in sync with the workflow.                                                                         |
 | `tests/e2e/ci/run-windows-policy-converter-contrast.ps1`             | Environment variable names, Unicode base64 encoded command, absent direct executable path in `ArgumentList`                                                                                                                                       | Keep child paths out of argument lists or update the transport test.                                                                        |
+
+---
+
+### tests/windows-personalized-offline-installer-evidence.test.mjs
+
+Imports the pure evidence-leak validator and exercises its CLI with synthetic success, failure, and forbidden-category fixtures.
+
+| Source files read                                                      | Needle kinds                                                                                                                                                                               | Before renaming or editing                                                           |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `scripts/lib/windows-personalized-offline-installer-evidence.mjs`      | Leak categories (`credential-field`, `bearer-scheme`, `token-value`, `log-path`, `log-content`, `exception-message`), key-path reporting, synthetic fixtures, and no detected-value output | Keep the category names and key paths stable with the workflow validator invocation. |
+| `scripts/validate-windows-personalized-offline-installer-evidence.mjs` | `--evidence`, strict argument handling, valid-JSON success text, invalid-JSON rejection without echoing file contents                                                                      | Update this test with any CLI or output change.                                      |
+| `.github/workflows/release-scripts.yml`                                | Validator step before the evidence upload and upload gating on validator success                                                                                                           | Keep the validator before the upload and gated on its outcome.                       |
 
 ---
 

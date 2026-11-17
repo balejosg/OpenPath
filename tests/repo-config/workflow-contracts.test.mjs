@@ -2304,6 +2304,37 @@ test('release scripts workflow triggers for every packaged installer input', () 
   }
 });
 
+test('personalized HTTP evidence is validated before upload even after lane failure', () => {
+  const workflow = readText('.github/workflows/release-scripts.yml');
+  const job = extractWorkflowJobBlock(workflow, 'windows-personalized-http-e2e');
+  const validateStart = job.indexOf('- name: Validate personalized HTTP-to-EXE E2E evidence');
+  const uploadStart = job.indexOf('- name: Upload personalized HTTP-to-EXE E2E evidence');
+  assert.ok(validateStart >= 0, 'the personalized HTTP job should validate its evidence');
+  assert.ok(uploadStart > validateStart, 'evidence validation must run before artifact upload');
+
+  const validateStep = job.slice(validateStart, uploadStart);
+  assert.match(validateStep, /id: validate-personalized-evidence/);
+  assert.match(validateStep, /if: always\(\)/);
+  assert.match(validateStep, /windows-personalized-offline-installer-evidence\.json/);
+  assert.match(
+    validateStep,
+    /node scripts\/validate-windows-personalized-offline-installer-evidence\.mjs/,
+    'the job should run the standalone evidence validator'
+  );
+
+  const candidateStart = job.indexOf('- name: Upload exact HTTP-generated candidate', uploadStart);
+  assert.ok(
+    candidateStart > uploadStart,
+    'the evidence upload should stay before the candidate upload'
+  );
+  const uploadStep = job.slice(uploadStart, candidateStart);
+  assert.match(
+    uploadStep,
+    /if: always\(\) && steps\.validate-personalized-evidence\.outcome == 'success'/,
+    'invalid evidence must not be uploaded even when the lane failed'
+  );
+});
+
 test('E2E release evidence is not cancelled by newer pushes on the same branch', () => {
   const e2eWorkflow = readText('.github/workflows/e2e-tests.yml');
 

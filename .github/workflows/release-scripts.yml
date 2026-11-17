@@ -396,8 +396,16 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Upload personalized HTTP-to-EXE E2E evidence
+      - name: Validate personalized HTTP-to-EXE E2E evidence
+        id: validate-personalized-evidence
         if: always()
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP 'openpath-windows-personalized-offline-installer-e2e/windows-personalized-offline-installer-evidence.json'
+          node scripts/validate-windows-personalized-offline-installer-evidence.mjs --evidence $evidence
+
+      - name: Upload personalized HTTP-to-EXE E2E evidence
+        if: always() && steps.validate-personalized-evidence.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: windows-personalized-offline-installer-e2e-evidence

@@ -22,6 +22,7 @@ import './repo-config/native-host-manifest-contracts.test.mjs';
 import './repo-config/native-host-signing-contracts.test.mjs';
 import './windows-desktop-survival-evidence.test.mjs';
 import './windows-desktop-survival-cli.test.mjs';
+import './windows-personalized-offline-installer-evidence.test.mjs';
 import './windows-policy-converter-contrast-evidence.test.mjs';
 import './openpath-promotion-contract.test.mjs';
 import './openpath-release-inputs.test.mjs';

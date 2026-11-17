@@ -603,14 +603,6 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     /downloadSha256[\s\S]*Get-FileHash[\s\S]*downloadSize/,
     'the lane must verify the persisted download bytes independently'
   );
-  const safeEvidenceStart = lane.indexOf('$success =');
-  const safeEvidenceEnd = lane.indexOf('Write-SafeEvidence -Payload $success');
-  assert.ok(safeEvidenceStart >= 0 && safeEvidenceEnd > safeEvidenceStart);
-  assert.doesNotMatch(
-    lane.slice(safeEvidenceStart, safeEvidenceEnd),
-    /(?:OPENPATH_CANARY_ACCESS_TOKEN|enrollmentToken|Bearer)/i,
-    'personalized HTTP-to-EXE evidence must not persist authentication material'
-  );
   assert.match(
     lane,
     /failureCode\s*=\s*\$failureCode/,
@@ -630,11 +622,6 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     lane,
     /Wait-ForApi[\s\S]*FailureLogPaths[\s\S]*Get-SafeApiFailureCode/,
     'API readiness failures must use bounded diagnostics from the private child logs'
-  );
-  assert.doesNotMatch(
-    lane.slice(safeEvidenceStart, safeEvidenceEnd),
-    /api\.log|api\.err\.log/,
-    'API child logs must never be persisted as evidence'
   );
 
   const workflow = readText('.github/workflows/release-scripts.yml');
