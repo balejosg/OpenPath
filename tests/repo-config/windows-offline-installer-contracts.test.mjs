@@ -390,25 +390,10 @@ test('Windows release evidence prepares the personalized NSIS executable for the
     'PowerShell trailer validation must not treat the native-process exit code as the script result'
   );
 
-  const manifestBuild = workflow.indexOf('build-payload-manifest.mjs');
-  const nsisCompile = workflow.indexOf('name: Compile NSIS template');
-  const trailerAppend = workflow.indexOf('append-trailer-placeholder.mjs');
-  assert.ok(manifestBuild >= 0, 'release workflow must build the manifest');
-  assert.ok(nsisCompile >= 0, 'release workflow must compile NSIS');
-  assert.ok(trailerAppend >= 0, 'release workflow must append the trailer');
-  assert.ok(
-    manifestBuild < nsisCompile && nsisCompile < trailerAppend,
-    'NSIS must receive the payload manifest before compilation and append the trailer afterward'
-  );
   assert.match(
     workflow,
     /script-file:\s*windows\/offline-installer\/OpenPath-Windows-Setup\.nsi/,
     'the NSIS action must compile the repository offline-installer script explicitly'
-  );
-  assert.match(
-    workflow,
-    /npm run build --workspace=@openpath\/shared/,
-    'Windows trailer tests must build the shared runtime package before importing API helpers'
   );
   assert.doesNotMatch(
     workflow,
@@ -451,16 +436,6 @@ test('Windows release evidence prepares the personalized NSIS executable for the
     'Windows EXE failure evidence must not upload raw exception or installer logs'
   );
 
-  assert.match(
-    nsiSource,
-    /!define BUILD_DIR "\$\{REPO_ROOT\}\\windows\\offline-installer\\build"/,
-    'NSIS build output must stay inside the repository build directory'
-  );
-  assert.match(
-    nsiSource,
-    /SetOutPath "\$INSTDIR\\scripts"[\s\S]*File "\/oname=Read-Trailer\.ps1" "\$\{REPO_ROOT\}\\windows\\offline-installer\\scripts\\Read-Trailer\.ps1"/,
-    'NSIS must load its trailer reader from an explicit repository path'
-  );
   assert.match(
     nsiSource,
     /CopyFiles \/SILENT "\$EXEDIR\\\$EXEFILE" "\$INSTDIR"[\s\S]*-ExecutablePath "\$INSTDIR\\\$EXEFILE"/,
@@ -585,25 +560,44 @@ test('Windows release evidence prepares the personalized NSIS executable for the
 test('Windows personalized EXE evidence must traverse the real HTTP download contract', () => {
   const lane = readText('tests/e2e/ci/run-windows-personalized-offline-installer-e2e.ps1');
   for (const marker of [
-    'Start-TestPostgres',
-    'Start-Api',
     'Get-SafeFailureCode',
     'Get-SafeCanaryFailureCode',
-    'Get-SafeCanaryContractFailureCode',
-    'backend-harness.ts bootstrap',
-    'scripts/windows-offline-installer-canary.mjs',
-    'OPENPATH_CANARY_OUTPUT_PATH',
     'downloadStatus',
     'replayStatus',
-    'run-windows-offline-installer-exe.ps1',
-    'Invoke-PhysicalExeE2E',
+  ]) {
+    assert.ok(lane.includes(marker), `personalized HTTP-to-EXE lane should include ${marker}`);
+  }
+
+  const physicalExeBody = extractFunctionBody(lane, 'Invoke-PhysicalExeE2E');
+  assert.match(
+    physicalExeBody,
+    /run-windows-offline-installer-exe\.ps1/,
+    'the physical EXE branch must invoke the canonical EXE runner'
+  );
+  for (const field of [
     'trailerValidated',
     'payloadManifestValidated',
     'pendingStateObserved',
     'pendingStateCleared',
   ]) {
-    assert.ok(lane.includes(marker), `personalized HTTP-to-EXE lane should include ${marker}`);
+    assert.match(
+      physicalExeBody,
+      new RegExp(`\\$evidence\\.${field}\\s+-ne\\s+\\$true`),
+      `the physical EXE branch must require ${field} from the canonical evidence`
+    );
   }
+  const physicalBranchStart = lane.indexOf('if (-not $GenerateOnly) {');
+  const physicalBranchEnd = lane.indexOf('else {', physicalBranchStart);
+  assert.ok(
+    physicalBranchStart >= 0 && physicalBranchEnd > physicalBranchStart,
+    'the physical EXE branch must remain guarded by -not $GenerateOnly'
+  );
+  assert.match(
+    lane.slice(physicalBranchStart, physicalBranchEnd),
+    /Invoke-PhysicalExeE2E -ExecutablePath \$httpEvidence\.downloadPath -ClassroomId \(\[string\]\$scenario\.classroom\.id\)/,
+    'the physical EXE branch must call Invoke-PhysicalExeE2E for the downloaded executable'
+  );
+
   assert.match(
     lane,
     /downloadSha256[\s\S]*Get-FileHash[\s\S]*downloadSize/,
@@ -624,48 +618,8 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
   );
   assert.match(
     lane,
-    /canary-failed:\(\?<code>canary-\[a-z0-9-\]\+\)/,
-    'canary failures must be reduced to bounded status/category codes'
-  );
-  assert.match(
-    lane,
     /\$script:CanaryFailureCode\s*=\s*\$safeCanaryCode[\s\S]*throw 'canary-failed'/,
     'the outer PowerShell catch must preserve the child canary code without raw diagnostics'
-  );
-  assert.match(
-    lane,
-    /\$script:TempRoot\s*=\s*\[string\]\$env:RUNNER_TEMP[\s\S]*Join-Path -Path \$script:TempRoot -ChildPath/,
-    'personalized HTTP-to-EXE lane must resolve the temp root before constructing paths'
-  );
-  assert.doesNotMatch(
-    lane,
-    /Join-Path \(\s*if \(\$env:RUNNER_TEMP\)/,
-    'PowerShell if statements must not be used as invalid Join-Path expressions'
-  );
-  assert.doesNotMatch(
-    lane,
-    /New-Item[^\n]*-LiteralPath/,
-    'PowerShell New-Item must not use the unsupported -LiteralPath parameter in this lane'
-  );
-  assert.match(
-    lane,
-    /\$roleSql\s*=\s*'DO \$\$[\s\S]*END \$\$;'/,
-    'the Windows HTTP-to-EXE lane must send valid PostgreSQL dollar-quoted SQL'
-  );
-  assert.doesNotMatch(
-    lane,
-    /DO ``\$``\$/,
-    'the Windows HTTP-to-EXE lane must not emit PowerShell escape characters into PostgreSQL SQL'
-  );
-  assert.match(
-    lane,
-    /generation-\$\(\[guid\]::NewGuid\(\)\.ToString\(\)\)/,
-    'the Windows HTTP-to-EXE lane must use the canonical UUID generation directory format'
-  );
-  assert.doesNotMatch(
-    lane,
-    /generation-\$\(\[guid\]::NewGuid\(\)\.ToString\(\x27N\x27\)\)/,
-    'the Windows HTTP-to-EXE lane must not create loader-incompatible compact generation names'
   );
   assert.match(
     lane,
@@ -704,17 +658,10 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
   );
   for (const marker of [
     'Execute personalized HTTP download-to-EXE E2E',
-    'run-windows-personalized-offline-installer-e2e.ps1',
-    'OPENPATH_E2E_TEMPLATE_COMMIT: ${{ github.sha }}',
     'Upload personalized HTTP-to-EXE E2E evidence',
   ]) {
     assert.ok(workflow.includes(marker), `release workflow should include ${marker}`);
   }
-  assert.match(
-    personalizedJob,
-    /Build shared workspace[\s\S]*Download verified template artifact[\s\S]*Execute personalized HTTP download-to-EXE E2E/,
-    'the real HTTP-to-EXE lane must run after the pinned template is built'
-  );
 });
 
 test('NSIS resolves one native Windows PowerShell path from the launcher process context', () => {

@@ -125,7 +125,6 @@ function Get-SafeFailureCode {
         'administrator-required' { return 'administrator-required' }
         'windows-only-lane' { return 'windows-only-lane' }
         'api-exited-before-ready:(?<code>api-[a-z0-9-]+)' { return $Matches['code'] }
-        'canary-failed:(?<code>canary-[a-z0-9-]+)' { return $Matches['code'] }
         'Access is denied|UnauthorizedAccess' { return 'access-denied' }
         'cannot find the path|does not exist' { return 'path-not-found' }
         'parameter cannot be found' { return 'command-parameter-error' }
