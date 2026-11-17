@@ -1074,13 +1074,16 @@ test('required Windows CI runs Pester in an untracked child host without success
     'ci.yml should route Linux code and Linux-specific tests to the Linux lane without treating every tests/ change as Linux-bound'
   );
   assert.ok(
-    ciWorkflow.includes('tests/e2e/ci/run-windows-[^/]+\\.ps1') &&
+    ciWorkflow.includes(
+      'tests/e2e/ci/DisposableWindowsTarget\\.psm1|tests/e2e/ci/run-windows-[^/]+\\.ps1'
+    ) &&
+      ciWorkflow.includes('tests/e2e/ci/run-windows-[^/]+\\.ps1') &&
       ciWorkflow.includes('tests/windows-(desktop-survival|policy-converter-contrast)-') &&
       ciWorkflow.includes('tests/e2e/ci/desktop-survival/') &&
       ciWorkflow.includes(
         'scripts/(lib/windows-desktop-survival-evidence|validate-windows-(desktop-survival|policy-converter-contrast)-evidence)\\.mjs'
       ),
-    'ci.yml should route Windows code and every Windows evidence helper to the Windows lane'
+    'ci.yml should route Windows code, the disposable target helper, and every Windows evidence helper to the Windows lane'
   );
   assert.ok(
     ciWorkflow.includes(WINDOWS_OFFLINE_INSTALLER_PATH_PATTERN) &&

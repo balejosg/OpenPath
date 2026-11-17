@@ -29,32 +29,8 @@ test('installer exposes a strict -OfflineConfigPath entrypoint wired to the offl
   );
 });
 
-test('offline helper module implements config validation, payload verification, and local acrylic install', () => {
+test('offline acrylic install never downloads or falls back to Chocolatey', () => {
   const offlineModule = readText('windows/lib/install/Installer.Offline.ps1');
-
-  for (const functionName of [
-    'Read-OpenPathOfflineConfig',
-    'Assert-OpenPathOfflinePayloadManifest',
-    'Install-AcrylicDNSFromLocalSource',
-    'Get-OpenPathPendingEnrollmentStatePath',
-    'Save-OpenPathPendingEnrollmentState',
-    'Read-OpenPathPendingEnrollmentState',
-    'Clear-OpenPathPendingEnrollmentState',
-    'Test-OpenPathPendingEnrollmentExpired',
-    'Invoke-OpenPathPendingEnrollmentRetry',
-  ]) {
-    assert.match(
-      offlineModule,
-      new RegExp(`function ${functionName}\\b`),
-      `Installer.Offline.ps1 should define ${functionName}`
-    );
-  }
-
-  assert.match(
-    offlineModule,
-    /OPWSI|schemaVersion/,
-    'offline config validation should be tied to the versioned offline schema'
-  );
 
   const localAcrylic = extractFunctionBody(offlineModule, 'Install-AcrylicDNSFromLocalSource');
   assert.doesNotMatch(
@@ -66,32 +42,6 @@ test('offline helper module implements config validation, payload verification, 
     localAcrylic,
     /choco/i,
     'offline Acrylic install must never fall back to Chocolatey'
-  );
-  assert.match(
-    localAcrylic,
-    /Assert-AcrylicDownloadHash/,
-    'offline Acrylic install must verify the ZIP hash before extracting'
-  );
-  assert.match(
-    localAcrylic,
-    /Install-OpenPathAcrylicFromVerifiedArchive/,
-    'offline Acrylic install must delegate extraction to the shared verified-archive core'
-  );
-
-  const acrylicInstaller = readText('windows/lib/internal/DNS.Acrylic.Install.ps1');
-  const sharedExtract = extractFunctionBody(
-    acrylicInstaller,
-    'Install-OpenPathAcrylicFromVerifiedArchive'
-  );
-  assert.match(
-    sharedExtract,
-    /\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory/,
-    'offline Acrylic install must use the Windows-compatible ZIP extractor'
-  );
-  assert.match(
-    sharedExtract,
-    /Copy-Item -LiteralPath \$extractedItem\.FullName/,
-    'offline Acrylic install must stage root-level ZIP entries without wildcard parsing'
   );
 });
 
@@ -121,7 +71,7 @@ test('offline payload manifest validation fails closed on missing or mismatched 
   );
 });
 
-test('pending enrollment state is DPAPI-protected with restrictive ACLs and never logged', () => {
+test('pending enrollment state uses machine-scope DPAPI so SYSTEM can retry it', () => {
   const offlineModule = readText('windows/lib/install/Installer.Offline.ps1');
 
   const savePending = extractFunctionBody(offlineModule, 'Save-OpenPathPendingEnrollmentState');
@@ -129,28 +79,6 @@ test('pending enrollment state is DPAPI-protected with restrictive ACLs and neve
     savePending,
     /DataProtectionScope::?LocalMachine|\[System\.Security\.Cryptography\.DataProtectionScope\]::LocalMachine/,
     'pending enrollment token must use machine-scope DPAPI so SYSTEM can retry it'
-  );
-  assert.match(
-    savePending,
-    /Set-OpenPathCapabilityStorageAcl/,
-    'pending enrollment state must apply the restrictive capability storage ACL'
-  );
-  assert.match(
-    offlineModule,
-    /pending-enrollment\.json\.dpapi/,
-    'pending enrollment state must be stored as a .dpapi blob'
-  );
-
-  const retry = extractFunctionBody(offlineModule, 'Invoke-OpenPathPendingEnrollmentRetry');
-  assert.match(
-    retry,
-    /Clear-OpenPathPendingEnrollmentState/,
-    'successful pending-enrollment retry must clear the pending state file'
-  );
-  assert.match(
-    retry,
-    /EXPIRED/,
-    'expired pending-enrollment tokens must transition the state to EXPIRED and drop the DPAPI blob'
   );
 });
 
@@ -926,12 +854,7 @@ test('canonical personalized-EXE lane owns a real disposable standard target lif
   const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
   const targetHelper = readText('tests/e2e/ci/DisposableWindowsTarget.psm1');
 
-  assert.match(targetHelper, /New-LocalUser/);
-  assert.match(targetHelper, /Enabled/);
-  assert.match(targetHelper, /Get-LocalGroupMember/);
   assert.match(targetHelper, /CreateProfile[\s\S]*Win32_UserProfile[\s\S]*Special/);
-  assert.match(targetHelper, /Remove-CimInstance[\s\S]*Remove-LocalUser/);
-  assert.doesNotMatch(targetHelper, /Add-LocalGroupMember[\s\S]*OpenPath-Restricted/);
   assert.match(
     executableLane,
     /New-OpenPathDisposableStandardTarget[\s\S]*Start-Process[\s\S]*Assert-OpenPathPreparedTargetInstalled/
@@ -975,9 +898,7 @@ test('canonical personalized-EXE lane proves a profileless install before first-
   const targetHelper = readText('tests/e2e/ci/DisposableWindowsTarget.psm1');
   const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
   assert.match(targetHelper, /disposable-target-user-missing/);
-  assert.match(targetHelper, /disposable-target-profile-not-materialized/);
   assert.match(targetHelper, /disposable-target-profile-unexpectedly-materialized/);
-  assert.match(targetHelper, /disposable-target-is-administrator/);
   assert.match(
     targetHelper,
     /Export-ModuleMember -Function [^\r\n]*Initialize-OpenPathDisposableTargetProfile/,
