@@ -1495,18 +1495,18 @@ describe('repository verification contract', () => {
     );
     assert.match(
       acrylicHostsModel,
-      /\$domainEntries = if \(\$hasBlockedDescendant\) \{ @\(\$normalizedDomain\) \} else \{ @\(\$normalizedDomain, "\*\.\$normalizedDomain"\) \}/,
-      'Get-AcrylicAffinityMaskEntries should keep declared static sslip fixture hosts resolvable while omitting wildcard affinity when descendants are blocked'
+      /\$domainEntries\.Add\("\^\$normalizedSubdomain"\)[\s\S]*?\$domainEntries\.Add\("\^\*\.\$normalizedSubdomain"\)/,
+      'Get-AcrylicAffinityMaskEntries should exclude blocked descendants from the upstream with negated entries'
     );
     assert.match(
       acrylicHostsModel,
-      /\$domainEntries = if \(\$hasBlockedDescendant\) \{ @\(\$normalizedDomain\) \} else \{ @\(\$normalizedDomain, "\*\.\$normalizedDomain"\) \}/,
-      'Get-AcrylicAffinityMaskEntries should omit the parent wildcard when a blocked descendant would otherwise resolve upstream'
+      /\$domainEntries\.Add\(\$normalizedDomain\)\s+\$domainEntries\.Add\("\*\.\$normalizedDomain"\)/,
+      'Get-AcrylicAffinityMaskEntries should always keep the parent wildcard so allowed sibling subdomains can resolve'
     );
     assert.match(
       acrylicHostsModel,
-      /\$domainEntries = if \(\$hasBlockedDescendant\)/,
-      'Get-AcrylicAffinityMaskEntries should detect blocked descendants before emitting the parent wildcard'
+      /function Get-AcrylicOrderedAffinityMaskEntries[\s\S]*?return @\(\$negations \+ \$positives\)/,
+      'Acrylic affinity masks should place negated entries ahead of every positive entry'
     );
     assert.doesNotMatch(
       dnsConfigModule,

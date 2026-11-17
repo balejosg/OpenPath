@@ -75,6 +75,16 @@ function Get-AcrylicEssentialDomainGroups {
     return @(Get-OpenPathAlwaysAllowedDomainGroups)
 }
 
+function Get-AcrylicOrderedAffinityMaskEntries {
+    # returns the mask entries with every negation ("^entry") ahead of the positive entries; Acrylic evaluates a mask in order, so an exclusion only works before the wildcard it carves out.
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][string[]]$Entries = @())
+
+    $negations = @($Entries | Where-Object { $_ -and $_.StartsWith('^') })
+    $positives = @($Entries | Where-Object { $_ -and -not $_.StartsWith('^') })
+    return @($negations + $positives)
+}
+
 function Get-AcrylicAffinityMaskEntries {
     # returns deduplicated bare and wildcard mask entries for each domain, used to build the upstream dns affinity mask string.
     [CmdletBinding()]
@@ -91,24 +101,29 @@ function Get-AcrylicAffinityMaskEntries {
         if ($normalizedDomain.StartsWith('*.')) { $normalizedDomain = $normalizedDomain.Substring(2) }
         if (-not $normalizedDomain) { continue }
 
-        $hasBlockedDescendant = $false
+        # A blocked descendant must not reach the upstream, but its allowed
+        # siblings (www.<domain>) still need the parent wildcard: without it no
+        # upstream matches them and the whole site stops resolving. Exclude only
+        # the blocked descendants, as negations.
+        $domainEntries = [System.Collections.Generic.List[string]]::new()
         foreach ($subdomain in @($BlockedSubdomains)) {
             $normalizedSubdomain = ([string]$subdomain).Trim().TrimEnd('.')
             if (-not $normalizedSubdomain) { continue }
             if ($normalizedSubdomain.Length -le ($normalizedDomain.Length + 1)) { continue }
             if ($normalizedSubdomain.EndsWith(".$normalizedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
-                $hasBlockedDescendant = $true
-                break
+                $domainEntries.Add("^$normalizedSubdomain")
+                $domainEntries.Add("^*.$normalizedSubdomain")
             }
         }
+        $domainEntries.Add($normalizedDomain)
+        $domainEntries.Add("*.$normalizedDomain")
 
-        $domainEntries = if ($hasBlockedDescendant) { @($normalizedDomain) } else { @($normalizedDomain, "*.$normalizedDomain") }
         foreach ($entry in $domainEntries) {
             if ($seenEntries.Add($entry)) { [void]$entries.Add($entry) }
         }
     }
 
-    return $entries.ToArray()
+    return @(Get-AcrylicOrderedAffinityMaskEntries -Entries $entries.ToArray())
 }
 
 function Get-AcrylicExactAffinityMaskEntries {
@@ -243,6 +258,7 @@ function New-AcrylicHostsDefinition {
         Get-AcrylicExactAffinityMaskEntries -Domains @($effectiveRuntimeDependencyDomains)
         Get-AcrylicAffinityMaskEntries -Domains @($effectiveCaptivePortalDomains) -BlockedSubdomains $BlockedSubdomains
     ) | Select-Object -Unique
+    $affinityMaskEntries = @(Get-AcrylicOrderedAffinityMaskEntries -Entries $affinityMaskEntries)
 
     return [PSCustomObject]@{
         UpstreamDNS = $DnsSettings.PrimaryDNS

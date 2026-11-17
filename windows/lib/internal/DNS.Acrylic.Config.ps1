@@ -251,6 +251,7 @@ function Set-AcrylicConfiguration {
         Get-AcrylicExactAffinityMaskEntries -Domains (Get-AcrylicAllowedRuntimeDependencyDomains -Domains $RuntimeDependencyDomains -BlockedSubdomains $BlockedSubdomains)
         Get-AcrylicExactAffinityMaskEntries -Domains $CaptivePortalDomains
     ) | Select-Object -Unique
+    $affinityMaskEntries = @(Get-AcrylicOrderedAffinityMaskEntries -Entries $affinityMaskEntries)
     $domainAffinityMask = ($affinityMaskEntries -join ';')
 
     # Permanent split DNS for the admin-declared captive-portal domains: they are
