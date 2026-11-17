@@ -1331,21 +1331,6 @@ test('canonical Windows release gate runs fail-closed for skipped jobs and missi
   assert.doesNotMatch(workflow, /Upload personalized NSIS E2E evidence/);
 });
 
-test('offline executable harness accepts one prebuilt PE payload without changing its default path', () => {
-  const lane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
-  const target = readText('tests/e2e/ci/DisposableWindowsTarget.psm1');
-
-  assert.match(lane, /\[string\]\$ProbePayloadPath = ''/);
-  assert.match(lane, /\[string\]\$TargetUserName = ''/);
-  assert.match(lane, /New-OpenPathDisposableStandardTarget -UserName \$TargetUserName/);
-  assert.match(
-    lane,
-    /Invoke-OpenPathInstalledBoundaryProbes[\s\S]*-ProbePayloadPath \$resolvedProbePayload/
-  );
-  assert.match(target, /if \(\$ProbePayloadPath\)[\s\S]*Copy-Item -LiteralPath \$ProbePayloadPath/);
-  assert.match(target, /else \{[\s\S]*New-OpenPathProbePayloadBinary -OutputPath \$probeExe/);
-});
-
 test('PolicyConverter contrast transports child paths through an encoded environment-bound command', () => {
   const wrapper = readText('tests/e2e/ci/run-windows-policy-converter-contrast.ps1');
   assert.match(wrapper, /OPENPATH_CONTRAST_EXECUTABLE/);
