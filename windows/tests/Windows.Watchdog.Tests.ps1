@@ -2690,6 +2690,67 @@ Describe "Watchdog Script" {
             $leafContent | Should -Not -Match 'captive-portal-recovery-fixture-state\.json'
             $leafContent | Should -Not -Match 'direct-runner-captive-portal-navigation'
         }
+
+        It "W-4: recovery result writer refuses to escape the result directory" {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+
+            $resultPath = Join-Path $TestDrive 'result-writer-traversal'
+            New-Item -ItemType Directory -Path $resultPath -Force | Out-Null
+            $escaped = Join-Path (Split-Path $resultPath -Parent) 'evil-result.json'
+
+            { Write-OpenPathCaptivePortalRecoveryResult -ResultPath $resultPath -RequestId '..\evil-result' -Payload @{ success = $false } } |
+                Should -Throw
+            Test-Path $escaped | Should -BeFalse
+        }
+
+        It "Stamps requestId and ISO-8601 completedAt into recovery results" {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+
+            $resultPath = Join-Path $TestDrive 'result-stamping'
+            $written = Write-OpenPathCaptivePortalRecoveryResult -ResultPath $resultPath -RequestId 'stamp-check' -Payload @{ success = $true }
+            $payload = Get-Content $written -Raw | ConvertFrom-Json
+            $payload.requestId | Should -Be 'stamp-check'
+            { [DateTimeOffset]::Parse([string]$payload.completedAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } |
+                Should -Not -Throw
+        }
+
+        It "Rejects requests older than MaxRequestAgeSeconds with a StaleRequest result and removes the request file" {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            function Write-OpenPathLog { param([Parameter(ValueFromPipeline = $true)]$Message, $Level) }
+            function Select-OpenPathCaptivePortalAllowedRecoveryHosts { param([string[]]$RequestedHosts = @()) @() }
+
+            $requestPath = Join-Path $TestDrive 'request-stale.json'
+            $resultPath = Join-Path $TestDrive 'result-stale'
+            $progressPath = Join-Path $TestDrive 'progress-stale'
+            @{ requestId = 'stale-request'; createdAtUtc = ([DateTime]::UtcNow.AddSeconds(-120)).ToString('o') } |
+                ConvertTo-Json -Depth 4 | Set-Content -Path $requestPath -Encoding UTF8
+
+            $envelope = [PSCustomObject]@{
+                File = Get-Item $requestPath
+                Request = (Get-Content $requestPath -Raw | ConvertFrom-Json)
+            }
+
+            Invoke-OpenPathCaptivePortalRecoveryRequest -RequestEnvelope $envelope -ResultPath $resultPath -ProgressPath $progressPath -NowUtc ([DateTime]::UtcNow)
+
+            $result = Get-Content (Join-Path $resultPath 'stale-request.json') -Raw | ConvertFrom-Json
+            $result.success | Should -BeFalse
+            $result.state | Should -Be 'StaleRequest'
+            Test-Path $requestPath | Should -BeFalse
+        }
+
+        It "Logs a warning and returns when the recovery queue is empty" {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            $script:CapturedRecoveryLogs = @()
+            function Write-OpenPathLog { param([Parameter(ValueFromPipeline = $true)]$Message, $Level) $script:CapturedRecoveryLogs += [string]$Message }
+            function Get-OpenPathCapabilityStoragePath {
+                param([string]$Name, [string]$OpenPathRoot)
+                Join-Path $TestDrive "empty-queue-$Name"
+            }
+
+            Invoke-OpenPathCaptivePortalRecoveryQueue -OpenPathRoot $TestDrive
+
+            @($script:CapturedRecoveryLogs) | Should -Contain 'Captive portal recovery: no pending request found'
+        }
     }
 
     Context "Integrity checks" {
