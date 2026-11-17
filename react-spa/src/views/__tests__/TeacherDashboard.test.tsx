@@ -218,6 +218,7 @@ function makeClassroom(overrides: Partial<MockClassroomListItem> = {}): MockClas
     defaultGroupId: 'group-1',
     defaultGroupDisplayName: 'Investigacion',
     activeGroupId: null,
+    activeGroupUnrestricted: false,
     createdAt: '2026-04-01T00:00:00.000Z',
     updatedAt: '2026-04-01T00:00:00.000Z',
     currentGroupId: 'group-1',
@@ -750,6 +751,23 @@ describe('TeacherDashboard', () => {
     });
   });
 
+  it('applies free browsing as an unrestricted manual override', async () => {
+    await renderTeacherDashboardReady();
+    const [classroomSelect, groupSelect] = await screen.findAllByRole('combobox');
+
+    fireEvent.change(classroomSelect, { target: { value: 'classroom-1' } });
+    fireEvent.change(groupSelect, { target: { value: '__free_browsing__' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+
+    await waitFor(() => {
+      expect(mockSetActiveGroup).toHaveBeenCalledWith({
+        id: 'classroom-1',
+        groupId: null,
+        unrestricted: true,
+      });
+    });
+  });
+
   it('closes the manual replacement dialog without applying the change', async () => {
     primeDashboardData({
       classrooms: [
@@ -812,13 +830,14 @@ describe('TeacherDashboard', () => {
     expect(mockSchedulesDelete).not.toHaveBeenCalled();
   });
 
-  it('shows the create-oriented classroom control hint for teachers', async () => {
+  it('keeps free browsing available for teachers without policies', async () => {
     mockGroupsListQuery.mockResolvedValue([]);
     await renderTeacherDashboardReady();
 
     expect(
-      await screen.findByText('You have no policies. Go to "My Policies" to create one.')
+      await screen.findByText('You have no policies. Free browsing is still available.')
     ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Free browsing (no group)' })).toBeInTheDocument();
   });
 
   it('shows retry UI when classroom loading fails and triggers a refetch', async () => {

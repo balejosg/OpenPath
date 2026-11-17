@@ -127,6 +127,7 @@ export const classroomStorage: IClassroomStorage = {
           displayName: classroom.displayName,
           defaultGroupId: classroom.defaultGroupId,
           activeGroupId: classroom.activeGroupId,
+          activeUnrestricted: classroom.activeUnrestricted,
           captivePortalDomains: classroom.captivePortalDomains,
           createdAt: classroom.createdAt,
           updatedAt: classroom.updatedAt,

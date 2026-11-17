@@ -5,6 +5,7 @@ import {
   selectClassroomControlConfirmation,
 } from '../lib/classroom-selectors';
 import { reportError } from '../lib/reportError';
+import { CLASSROOM_UNRESTRICTED_SELECT_VALUE } from '../components/groups/GroupLabel';
 import { useT } from '../i18n/product-i18n';
 import { useAllowedGroups } from './useAllowedGroups';
 import { useClassroomListModelsQuery } from './useClassroomsList';
@@ -47,6 +48,7 @@ export function useTeacherDashboardViewModel() {
   const [controlConfirm, setControlConfirm] = useState<{
     classroomId: string;
     nextGroupId: string | null;
+    nextUnrestricted: boolean;
     currentName: string;
     nextName: string;
   } | null>(null);
@@ -73,13 +75,14 @@ export function useTeacherDashboardViewModel() {
   }, [groupById]);
 
   const applyControlChange = useCallback(
-    async (classroomId: string, nextGroupId: string | null) => {
+    async (classroomId: string, nextGroupId: string | null, nextUnrestricted = false) => {
       setControlLoading(true);
       setControlError(null);
       try {
         await trpc.classrooms.setActiveGroup.mutate({
           id: classroomId,
           groupId: nextGroupId,
+          ...(nextUnrestricted ? { unrestricted: true } : {}),
         });
         await refetchClassrooms();
         setSelectedClassroomForControl('');
@@ -99,12 +102,15 @@ export function useTeacherDashboardViewModel() {
   const handleTakeControl = useCallback(() => {
     if (!selectedClassroomForControl) return;
 
-    const nextGroupId = selectedGroupForControl || null;
+    const nextUnrestricted = selectedGroupForControl === CLASSROOM_UNRESTRICTED_SELECT_VALUE;
+    const nextGroupId =
+      nextUnrestricted || selectedGroupForControl === '' ? null : selectedGroupForControl;
     const confirmation = selectClassroomControlConfirmation({
       classrooms,
       groupById,
       classroomId: selectedClassroomForControl,
       nextGroupId,
+      nextUnrestricted,
       t,
     });
 
@@ -113,7 +119,7 @@ export function useTeacherDashboardViewModel() {
       return;
     }
 
-    void applyControlChange(selectedClassroomForControl, nextGroupId);
+    void applyControlChange(selectedClassroomForControl, nextGroupId, nextUnrestricted);
   }, [
     applyControlChange,
     classrooms,

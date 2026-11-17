@@ -18,6 +18,7 @@ export async function getAllClassrooms(): Promise<ClassroomWithCount[]> {
       displayName: classrooms.displayName,
       defaultGroupId: classrooms.defaultGroupId,
       activeGroupId: classrooms.activeGroupId,
+      activeUnrestricted: classrooms.activeUnrestricted,
       captivePortalDomains: classrooms.captivePortalDomains,
       createdAt: classrooms.createdAt,
       updatedAt: classrooms.updatedAt,
@@ -34,6 +35,7 @@ export async function getAllClassrooms(): Promise<ClassroomWithCount[]> {
     displayName: row.displayName,
     defaultGroupId: row.defaultGroupId,
     activeGroupId: row.activeGroupId,
+    activeUnrestricted: row.activeUnrestricted,
     captivePortalDomains: row.captivePortalDomains,
     createdAt: row.createdAt ?? new Date(),
     updatedAt: row.updatedAt ?? new Date(),
@@ -92,7 +94,7 @@ export async function createClassroom(
 
 export async function updateClassroom(
   id: string,
-  updates: UpdateClassroomData & { defaultGroupId?: string }
+  updates: UpdateClassroomData
 ): Promise<DBClassroom | null> {
   const updateValues: Partial<typeof classrooms.$inferInsert> = {};
 
@@ -121,11 +123,13 @@ export async function updateClassroom(
 
 export async function setActiveGroup(
   id: string,
-  groupId: string | null
+  groupId: string | null,
+  options: { unrestricted?: boolean | undefined } = {}
 ): Promise<DBClassroom | null> {
+  const activeUnrestricted = groupId === null && options.unrestricted === true;
   const [result] = await db
     .update(classrooms)
-    .set({ activeGroupId: groupId })
+    .set({ activeGroupId: groupId, activeUnrestricted })
     .where(eq(classrooms.id, id))
     .returning();
 
@@ -135,6 +139,7 @@ export async function setActiveGroup(
 export async function getCurrentGroupId(id: string): Promise<string | null> {
   const classroom = await getClassroomById(id);
   if (!classroom) return null;
+  if (classroom.activeUnrestricted) return null;
   return classroom.activeGroupId ?? classroom.defaultGroupId;
 }
 
@@ -146,9 +151,10 @@ export async function getStats(): Promise<ClassroomStats> {
   const classroomResult = await db
     .select({
       total: count(),
-      active: sql<number>`COUNT(*) FILTER (WHERE ${classrooms.activeGroupId} IS NOT NULL)`.as(
-        'active'
-      ),
+      active:
+        sql<number>`COUNT(*) FILTER (WHERE ${classrooms.activeGroupId} IS NOT NULL OR ${classrooms.activeUnrestricted})`.as(
+          'active'
+        ),
     })
     .from(classrooms);
 

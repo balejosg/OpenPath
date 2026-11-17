@@ -33,7 +33,7 @@ export function toUpdateClassroomData(input: {
 }): UpdateClassroomData {
   return {
     ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
-    ...(typeof input.defaultGroupId === 'string' ? { defaultGroupId: input.defaultGroupId } : {}),
+    ...(input.defaultGroupId !== undefined ? { defaultGroupId: input.defaultGroupId } : {}),
     ...(input.captivePortalDomains !== undefined
       ? { captivePortalDomains: input.captivePortalDomains }
       : {}),

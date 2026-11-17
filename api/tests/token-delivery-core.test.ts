@@ -3,6 +3,7 @@ import assert from 'node:assert';
 
 import { CANONICAL_GROUP_IDS, createFixtureClassroom } from './fixtures.js';
 import { db } from '../src/db/index.js';
+import * as classroomStorage from '../src/lib/classroom-storage.js';
 import {
   createBlockedSubdomainRule,
   extractMachineToken,
@@ -247,9 +248,13 @@ void describe('Token delivery core flows', { timeout: 30000 }, async () => {
 
   await describe('GET /w/:machineToken/whitelist.txt', async () => {
     let machineToken = '';
+    let whitelistClassroomId = '';
 
     before(async () => {
-      await createFixtureClassroom({ name: 'WhitelistETagClassroom', groupId: 'etag-group' });
+      whitelistClassroomId = await createFixtureClassroom({
+        name: 'WhitelistETagClassroom',
+        groupId: 'etag-group',
+      });
 
       const registerResponse = await fetch(`${harness.apiUrl}/api/machines/register`, {
         method: 'POST',
@@ -347,6 +352,32 @@ void describe('Token delivery core flows', { timeout: 30000 }, async () => {
       const response = await fetch(`${harness.apiUrl}/w/whitelist.txt`);
       const text = await response.text();
       assert.ok(text.includes('#DESACTIVADO') || response.status !== 200);
+    });
+
+    await test('should serve the unrestricted static etag for manual free browsing', async () => {
+      const grouped = await fetch(`${harness.apiUrl}/w/${machineToken}/whitelist.txt`);
+      const groupedEtag = grouped.headers.get('etag');
+      assert.ok(groupedEtag);
+
+      try {
+        await classroomStorage.setActiveGroup(whitelistClassroomId, null, {
+          unrestricted: true,
+        });
+
+        const unrestricted = await fetch(`${harness.apiUrl}/w/${machineToken}/whitelist.txt`);
+        assert.strictEqual(unrestricted.status, 200);
+        const unrestrictedEtag = unrestricted.headers.get('etag');
+        assert.ok(unrestrictedEtag);
+        assert.notStrictEqual(unrestrictedEtag, groupedEtag);
+        assert.ok((await unrestricted.text()).includes('#DESACTIVADO'));
+
+        const notModified = await fetch(`${harness.apiUrl}/w/${machineToken}/whitelist.txt`, {
+          headers: { 'If-None-Match': unrestrictedEtag },
+        });
+        assert.strictEqual(notModified.status, 304);
+      } finally {
+        await classroomStorage.setActiveGroup(whitelistClassroomId, 'etag-group');
+      }
     });
   });
 

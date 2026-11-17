@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle, Trash2 } from 'lucide-react';
 import type { Classroom, CurrentGroupSource } from '../../types';
 import {
+  CLASSROOM_UNRESTRICTED_SELECT_VALUE,
   GroupLabel,
   resolveGroupDisplayNameFromLookup,
   resolveGroupLike,
@@ -117,6 +118,12 @@ export default function ClassroomConfigCard({
             groups={allowedGroups}
             includeNoneOption
             noneLabel={t('classrooms.detail.noActiveGroup')}
+            extraOptions={[
+              {
+                value: CLASSROOM_UNRESTRICTED_SELECT_VALUE,
+                label: t('classrooms.detail.freeBrowsing'),
+              },
+            ]}
             inactiveBehavior="hide"
             unknownValueLabel={
               !admin && activeGroupSelectValue && !groupById.get(activeGroupSelectValue)

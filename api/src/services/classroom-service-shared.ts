@@ -41,6 +41,7 @@ export interface ClassroomWithMachines {
   displayName: string;
   defaultGroupId: string | null;
   activeGroupId: string | null;
+  activeGroupUnrestricted: boolean;
   captivePortalDomains: string[];
   createdAt: string;
   updatedAt: string;
@@ -65,8 +66,8 @@ export interface ClassroomAccessScope {
 export interface UpdateClassroomData {
   name?: string;
   displayName?: string;
-  defaultGroupId?: string;
-  activeGroupId?: string;
+  defaultGroupId?: string | null;
+  activeGroupId?: string | null;
   captivePortalDomains?: string[];
 }
 
@@ -80,6 +81,7 @@ export interface CreateClassroomInput {
 export interface SetActiveGroupInput {
   id: string;
   groupId: string | null;
+  unrestricted?: boolean | undefined;
 }
 
 export interface CreateMachineExemptionInput {
@@ -175,6 +177,8 @@ export function buildClassroomWithMachines(
     displayName: string;
     defaultGroupId: string | null;
     activeGroupId: string | null;
+    activeGroupUnrestricted?: boolean | null;
+    activeUnrestricted?: boolean | null;
     captivePortalDomains?: string[] | null;
     createdAt?: Date | null;
     updatedAt?: Date | null;
@@ -205,6 +209,8 @@ export function buildClassroomWithMachines(
     displayName: classroom.displayName,
     defaultGroupId: classroom.defaultGroupId,
     activeGroupId: classroom.activeGroupId,
+    activeGroupUnrestricted:
+      classroom.activeGroupUnrestricted ?? classroom.activeUnrestricted ?? false,
     captivePortalDomains: classroom.captivePortalDomains ?? [],
     createdAt: (classroom.createdAt ?? new Date()).toISOString(),
     updatedAt: (classroom.updatedAt ?? new Date()).toISOString(),

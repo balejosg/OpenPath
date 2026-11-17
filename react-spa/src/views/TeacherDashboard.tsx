@@ -137,7 +137,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
         isOpen={viewModel.controlConfirm !== null}
         title={t('teacher.control.confirmChangeTitle')}
         confirmLabel={
-          viewModel.controlConfirm?.nextGroupId
+          viewModel.controlConfirm?.nextGroupId || viewModel.controlConfirm?.nextUnrestricted
             ? t('classrooms.dialog.replaceActiveGroup.confirm')
             : t('teacher.control.releaseClassroom')
         }
@@ -152,7 +152,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
           if (!viewModel.controlConfirm) return;
           const ok = await viewModel.applyControlChange(
             viewModel.controlConfirm.classroomId,
-            viewModel.controlConfirm.nextGroupId
+            viewModel.controlConfirm.nextGroupId,
+            viewModel.controlConfirm.nextUnrestricted
           );
           if (!ok) return;
           viewModel.setControlConfirm(null);
@@ -163,7 +164,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
           <strong>{viewModel.controlConfirm?.currentName}</strong>).
         </p>
         <p className="text-sm text-slate-600">
-          {viewModel.controlConfirm?.nextGroupId
+          {viewModel.controlConfirm?.nextGroupId || viewModel.controlConfirm?.nextUnrestricted
             ? t('teacher.control.confirmBodyReplaceWith')
             : t('teacher.control.confirmBodyRelease')}
           : <strong>{viewModel.controlConfirm?.nextName}</strong>?

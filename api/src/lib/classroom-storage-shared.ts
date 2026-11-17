@@ -13,6 +13,7 @@ export interface ClassroomWithCount {
   displayName: string;
   defaultGroupId: string | null;
   activeGroupId: string | null;
+  activeUnrestricted: boolean;
   captivePortalDomains: string[];
   createdAt: Date;
   updatedAt: Date;
@@ -25,6 +26,7 @@ export interface ClassroomPolicyScopeSource {
   displayName: string;
   defaultGroupId: string | null;
   activeGroupId: string | null;
+  activeUnrestricted: boolean;
 }
 
 export interface WhitelistUrlResult {
@@ -55,6 +57,7 @@ export interface ClassroomPolicyScope {
   classroomDisplayName: string;
   defaultGroupId: string | null;
   activeGroupId: string | null;
+  activeUnrestricted: boolean;
   currentGroupId: string | null;
   currentGroupSource: CurrentGroupSource;
   mode: EffectivePolicyContextMode;
@@ -116,6 +119,7 @@ export function buildClassroomPolicyScope(
 ): ClassroomPolicyScope {
   const currentGroup = resolveCurrentGroup({
     activeGroupId: classroom.activeGroupId,
+    activeUnrestricted: classroom.activeUnrestricted,
     scheduleGroupId,
     defaultGroupId: classroom.defaultGroupId,
   });
@@ -126,6 +130,7 @@ export function buildClassroomPolicyScope(
     classroomDisplayName: classroom.displayName,
     defaultGroupId: classroom.defaultGroupId,
     activeGroupId: classroom.activeGroupId,
+    activeUnrestricted: classroom.activeUnrestricted,
     currentGroupId: currentGroup.id,
     currentGroupSource: currentGroup.source,
     mode: currentGroup.id === null ? 'unrestricted' : 'grouped',
@@ -172,5 +177,6 @@ export function toClassroomType(classroom: DBClassroom, machineList: DBMachine[]
     updatedAt: classroom.updatedAt?.toISOString() ?? new Date().toISOString(),
     defaultGroupId: classroom.defaultGroupId,
     activeGroupId: classroom.activeGroupId,
+    activeGroupUnrestricted: classroom.activeUnrestricted,
   };
 }

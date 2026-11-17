@@ -133,4 +133,68 @@ await describe('classroom effective policy context', async () => {
     assert.strictEqual(enroll.data.currentGroupId, null);
     assert.strictEqual(enroll.data.currentGroupSource, 'none');
   });
+
+  await test('manual free browsing overrides default and schedule until cleared', async () => {
+    const defaultGroupId = `policy-free-default-${Date.now().toString()}`;
+    const scheduleGroupId = `policy-free-schedule-${Date.now().toString()}`;
+    await ensureWhitelistGroup(defaultGroupId);
+    await ensureWhitelistGroup(scheduleGroupId);
+
+    const classroom = await classroomStorage.createClassroom({
+      name: `policy-room-free-${Date.now().toString()}`,
+      displayName: 'Policy Room Free',
+      defaultGroupId,
+    });
+
+    await scheduleStorage.createSchedule({
+      classroomId: classroom.id,
+      teacherId: 'legacy_admin',
+      groupId: scheduleGroupId,
+      dayOfWeek: 1,
+      startTime: '09:00',
+      endTime: '10:00',
+    });
+
+    const now = new Date(2026, 1, 23, 9, 15, 0);
+    await classroomStorage.setActiveGroup(classroom.id, null, { unrestricted: true });
+
+    const freeContext = await classroomStorage.resolveEffectiveClassroomPolicyContext(
+      classroom.id,
+      now
+    );
+    assert.ok(freeContext);
+    assert.strictEqual(freeContext.mode, 'unrestricted');
+    assert.strictEqual(freeContext.reason, 'manual');
+    assert.strictEqual(freeContext.groupId, null);
+
+    const freeRow = await classroomStorage.getClassroomById(classroom.id);
+    assert.ok(freeRow, 'Expected classroom row');
+    assert.strictEqual(freeRow.activeGroupId, null);
+    assert.strictEqual(freeRow.activeUnrestricted, true);
+    assert.strictEqual(await classroomStorage.getCurrentGroupId(classroom.id), null);
+
+    await classroomStorage.setActiveGroup(classroom.id, null);
+    const scheduledContext = await classroomStorage.resolveEffectiveClassroomPolicyContext(
+      classroom.id,
+      now
+    );
+    assert.ok(scheduledContext);
+    assert.strictEqual(scheduledContext.mode, 'grouped');
+    assert.strictEqual(scheduledContext.reason, 'schedule');
+    assert.strictEqual(scheduledContext.groupId, scheduleGroupId);
+
+    await classroomStorage.setActiveGroup(classroom.id, scheduleGroupId);
+    const manualContext = await classroomStorage.resolveEffectiveClassroomPolicyContext(
+      classroom.id,
+      now
+    );
+    assert.ok(manualContext);
+    assert.strictEqual(manualContext.mode, 'grouped');
+    assert.strictEqual(manualContext.reason, 'manual');
+    assert.strictEqual(manualContext.groupId, scheduleGroupId);
+
+    const manualRow = await classroomStorage.getClassroomById(classroom.id);
+    assert.ok(manualRow, 'Expected classroom row');
+    assert.strictEqual(manualRow.activeUnrestricted, false);
+  });
 });

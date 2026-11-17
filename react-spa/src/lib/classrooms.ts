@@ -20,6 +20,7 @@ export interface ClassroomControlState {
   defaultGroupId: string | null;
   defaultGroupDisplayName: string | null;
   activeGroupId: string | null;
+  activeGroupUnrestricted?: boolean;
   currentGroupId: string | null;
   currentGroupDisplayName: string | null;
   currentGroupSource: CurrentGroupSource | null;
@@ -33,6 +34,7 @@ export interface ClassroomListModel {
   defaultGroupDisplayName: string | null;
   machineCount: number;
   activeGroupId: string | null;
+  activeGroupUnrestricted?: boolean;
   currentGroupId: string | null;
   currentGroupDisplayName: string | null;
   currentGroupSource: CurrentGroupSource | null;
@@ -49,6 +51,7 @@ export interface ActiveClassroomRow {
   group: GroupLike | null;
   source: CurrentGroupSource;
   hasManualOverride: boolean;
+  unrestricted: boolean;
 }
 
 function readOptionalStringField(item: unknown, key: keyof ClassroomListMetadata): string | null {
@@ -78,6 +81,7 @@ export function toClassroomListModel(item: ClassroomListItem): ClassroomListMode
     defaultGroupDisplayName: metadata.defaultGroupDisplayName,
     machineCount: item.machineCount,
     activeGroupId: item.activeGroupId ?? null,
+    activeGroupUnrestricted: item.activeGroupUnrestricted,
     currentGroupId: item.currentGroupId ?? null,
     currentGroupDisplayName: metadata.currentGroupDisplayName,
     currentGroupSource: item.currentGroupSource,
@@ -101,6 +105,7 @@ export function toClassroomFromModel(model: ClassroomListModel): Classroom {
     defaultGroupDisplayName: model.defaultGroupDisplayName,
     computerCount: model.machineCount,
     activeGroup: model.activeGroupId,
+    activeGroupUnrestricted: model.activeGroupUnrestricted ?? false,
     currentGroupId: model.currentGroupId,
     currentGroupDisplayName: model.currentGroupDisplayName,
     currentGroupSource: model.currentGroupSource ?? undefined,
@@ -131,6 +136,7 @@ export function toClassroomControlStateFromModel(model: ClassroomListModel): Cla
     defaultGroupId: model.defaultGroupId,
     defaultGroupDisplayName: model.defaultGroupDisplayName,
     activeGroupId: model.activeGroupId,
+    activeGroupUnrestricted: model.activeGroupUnrestricted,
     currentGroupId: model.currentGroupId,
     currentGroupDisplayName: model.currentGroupDisplayName,
     currentGroupSource: model.currentGroupSource,
@@ -160,14 +166,15 @@ export function toActiveClassroomRows(
   return classrooms
     .map((classroom) => {
       const groupId = classroom.currentGroupId;
-      if (!groupId) {
+      const unrestricted = classroom.activeGroupUnrestricted === true && !groupId;
+      if (!groupId && !unrestricted) {
         return null;
       }
 
       return {
         classroomId: classroom.id,
         classroomName: classroom.displayName || classroom.name,
-        groupId,
+        groupId: groupId ?? '',
         group: resolveGroupLike({
           groupId,
           groupById,
@@ -176,10 +183,12 @@ export function toActiveClassroomRows(
         source: inferGroupSource({
           currentGroupSource: classroom.currentGroupSource,
           activeGroupId: classroom.activeGroupId,
+          activeGroupUnrestricted: classroom.activeGroupUnrestricted,
           currentGroupId: classroom.currentGroupId,
           defaultGroupId: classroom.defaultGroupId,
         }),
-        hasManualOverride: !!classroom.activeGroupId,
+        hasManualOverride: !!classroom.activeGroupId || classroom.activeGroupUnrestricted === true,
+        unrestricted,
       };
     })
     .filter((row): row is ActiveClassroomRow => row !== null)

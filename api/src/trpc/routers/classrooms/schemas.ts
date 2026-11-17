@@ -20,10 +20,16 @@ export const updateClassroomInputSchema = z.object({
   captivePortalDomains: z.array(z.string()).optional(),
 });
 
-export const setActiveGroupInputSchema = z.object({
-  id: z.string(),
-  groupId: z.string().nullable(),
-});
+export const setActiveGroupInputSchema = z
+  .object({
+    id: z.string(),
+    groupId: z.string().nullable(),
+    unrestricted: z.boolean().optional(),
+  })
+  .refine((input) => !(input.unrestricted === true && input.groupId !== null), {
+    message: 'unrestricted cannot be combined with a groupId',
+    path: ['unrestricted'],
+  });
 
 export const createClassroomExemptionInputSchema = z.object({
   machineId: z.string().min(1),

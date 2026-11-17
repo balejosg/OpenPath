@@ -13,6 +13,7 @@ export interface GroupSelectProps {
 
   includeNoneOption?: boolean;
   noneLabel?: string;
+  extraOptions?: readonly { value: string; label: string }[];
 
   inactiveBehavior?: InactiveBehavior;
 
@@ -32,6 +33,7 @@ export const GroupSelect: React.FC<GroupSelectProps> = ({
   groups,
   includeNoneOption = true,
   noneLabel,
+  extraOptions,
   inactiveBehavior = 'hide',
   unknownValueLabel,
   unknownValueDisabled = true,
@@ -50,7 +52,16 @@ export const GroupSelect: React.FC<GroupSelectProps> = ({
       opts.push({ value: '', label: resolvedNoneLabel });
     }
 
-    if (value && !groupIds.has(value)) {
+    if (extraOptions) {
+      opts.push(...extraOptions.map((option) => ({ value: option.value, label: option.label })));
+    }
+
+    if (
+      value &&
+      value !== '' &&
+      !groupIds.has(value) &&
+      !extraOptions?.some((o) => o.value === value)
+    ) {
       opts.push({
         value,
         label: unknownValueLabel ?? value,
@@ -84,6 +95,7 @@ export const GroupSelect: React.FC<GroupSelectProps> = ({
   }, [
     groups,
     includeNoneOption,
+    extraOptions,
     resolvedNoneLabel,
     inactiveBehavior,
     value,

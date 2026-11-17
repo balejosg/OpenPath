@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Classroom } from '../../types';
+import { CLASSROOM_UNRESTRICTED_SELECT_VALUE } from '../../components/groups/GroupLabel';
 import { useClassroomConfigActions } from '../useClassroomConfigActions';
 
 const mockUpdateMutate = vi.fn();
@@ -71,6 +72,28 @@ describe('useClassroomConfigActions', () => {
     );
   });
 
+  it('maps the free browsing option to unrestricted with no group', async () => {
+    mockSetActiveGroupMutate.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() =>
+      useClassroomConfigActions({
+        selectedClassroom,
+        refetchClassrooms,
+        setSelectedClassroom,
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleGroupChange(CLASSROOM_UNRESTRICTED_SELECT_VALUE);
+    });
+
+    expect(mockSetActiveGroupMutate).toHaveBeenCalledWith({
+      id: 'classroom-1',
+      groupId: null,
+      unrestricted: true,
+    });
+  });
+
   it('normalizes empty active group changes to null', async () => {
     mockSetActiveGroupMutate.mockResolvedValue(undefined);
 
@@ -132,7 +155,7 @@ describe('useClassroomConfigActions', () => {
     });
 
     expect(result.current.classroomConfigError).toBe(
-      'You cannot leave the classroom without a default group while no valid active group exists.'
+      'Unable to update the default group. Try again.'
     );
   });
 

@@ -142,6 +142,8 @@ export interface IRoleStorage {
 export interface UpdateClassroomData {
   name?: string | undefined;
   displayName?: string | undefined;
+  defaultGroupId?: string | null | undefined;
+  activeGroupId?: string | null | undefined;
   captivePortalDomains?: string[] | undefined;
 }
 

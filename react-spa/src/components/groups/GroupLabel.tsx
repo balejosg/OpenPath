@@ -4,6 +4,8 @@ import { cn } from '../../lib/utils';
 import { isGroupEnabledLike } from '../../lib/groups';
 import { useT, type ProductT } from '../../i18n/product-i18n';
 
+export const CLASSROOM_UNRESTRICTED_SELECT_VALUE = '__free_browsing__';
+
 export interface GroupLike {
   id: string;
   name: string;
@@ -43,10 +45,12 @@ export function isGroupEnabled(group: GroupLike): boolean {
 export function inferGroupSource(input: {
   currentGroupSource?: CurrentGroupSource | null;
   activeGroupId?: string | null;
+  activeGroupUnrestricted?: boolean | null;
   currentGroupId?: string | null;
   defaultGroupId?: string | null;
 }): CurrentGroupSource {
   if (input.currentGroupSource) return input.currentGroupSource;
+  if (input.activeGroupUnrestricted) return 'manual';
   if (input.activeGroupId) return 'manual';
   if (!input.currentGroupId) return 'none';
   if (input.defaultGroupId && input.currentGroupId === input.defaultGroupId) return 'default';
@@ -55,6 +59,7 @@ export function inferGroupSource(input: {
 
 export interface ClassroomGroupSelectInput {
   activeGroup: string | null;
+  activeGroupUnrestricted?: boolean;
   currentGroupId: string | null;
   currentGroupSource?: CurrentGroupSource;
   defaultGroupId: string | null;
@@ -83,11 +88,14 @@ export function resolveClassroomGroupSelectState(params: {
   const source = inferGroupSource({
     currentGroupSource: classroom.currentGroupSource ?? null,
     activeGroupId: classroom.activeGroup,
+    activeGroupUnrestricted: classroom.activeGroupUnrestricted,
     currentGroupId: classroom.currentGroupId,
     defaultGroupId: classroom.defaultGroupId,
   });
 
-  let activeGroupValue = classroom.activeGroup ?? '';
+  let activeGroupValue = classroom.activeGroupUnrestricted
+    ? CLASSROOM_UNRESTRICTED_SELECT_VALUE
+    : (classroom.activeGroup ?? '');
   if (!activeGroupValue && !admin && source === 'manual' && classroom.currentGroupId) {
     activeGroupValue = classroom.currentGroupId;
   }
@@ -121,7 +129,10 @@ export function resolveGroupDisplayName(params: {
 }): string {
   const { groupId, group, source, revealUnknownId, noneLabel, t } = params;
 
-  if (!groupId) return noneLabel ?? t('groups.label.noGroup');
+  if (!groupId) {
+    if (noneLabel) return noneLabel;
+    return source === 'manual' ? t('groups.label.unrestricted') : t('groups.label.noGroup');
+  }
   if (group) return group.displayName ?? group.name;
   if (revealUnknownId) return groupId;
 

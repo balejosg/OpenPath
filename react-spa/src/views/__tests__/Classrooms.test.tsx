@@ -478,7 +478,7 @@ describe('Classrooms', () => {
     });
   });
 
-  it('shows actionable feedback when clearing default group fails with 4xx', async () => {
+  it('shows actionable feedback when updating the default group fails with 4xx', async () => {
     mockClassroomsListQuery.mockResolvedValue([
       {
         id: 'classroom-1',
@@ -502,9 +502,7 @@ describe('Classrooms', () => {
     fireEvent.change(defaultGroupSelect, { target: { value: '' } });
 
     expect(
-      await screen.findByText(
-        'You cannot leave the classroom without a default group while no valid active group exists.'
-      )
+      await screen.findByText('Unable to update the default group. Try again.')
     ).toBeInTheDocument();
   });
 

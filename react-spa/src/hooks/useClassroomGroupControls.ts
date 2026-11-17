@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { Classroom } from '../types';
 import {
+  CLASSROOM_UNRESTRICTED_SELECT_VALUE,
   resolveClassroomGroupSelectState,
   resolveGroupDisplayName,
   resolveGroupLike,
@@ -51,23 +52,25 @@ export function useClassroomGroupControls(params: {
 
   const resolveGroupName = useCallback(
     (groupId: string | null) =>
-      resolveGroupDisplayName({
-        groupId,
-        group:
-          selectedClassroom?.currentGroupId === groupId
-            ? resolveGroupLike({
-                groupId,
-                groupById,
-                displayName: selectedClassroom.currentGroupDisplayName,
-              })
-            : groupId
-              ? (groupById.get(groupId) ?? null)
-              : null,
-        source: groupId ? 'manual' : 'none',
-        revealUnknownId: admin,
-        noneLabel: t('classroomGroupControls.noActiveGroup'),
-        t,
-      }),
+      groupId === CLASSROOM_UNRESTRICTED_SELECT_VALUE
+        ? t('groups.label.unrestricted')
+        : resolveGroupDisplayName({
+            groupId,
+            group:
+              selectedClassroom?.currentGroupId === groupId
+                ? resolveGroupLike({
+                    groupId,
+                    groupById,
+                    displayName: selectedClassroom.currentGroupDisplayName,
+                  })
+                : groupId
+                  ? (groupById.get(groupId) ?? null)
+                  : null,
+            source: groupId ? 'manual' : 'none',
+            revealUnknownId: admin,
+            noneLabel: t('classroomGroupControls.noActiveGroup'),
+            t,
+          }),
     [admin, groupById, selectedClassroom, t]
   );
 

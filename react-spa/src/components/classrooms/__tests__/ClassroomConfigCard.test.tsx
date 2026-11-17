@@ -81,6 +81,18 @@ describe('ClassroomConfigCard', () => {
     ).toBeInTheDocument();
   });
 
+  it('offers free browsing as an active group option', () => {
+    const props = buildProps({ activeGroupSelectValue: '__free_browsing__' });
+    render(<ClassroomConfigCard {...props} />);
+
+    const activeSelect = screen.getByLabelText('Active Group');
+    expect(activeSelect).toHaveValue('__free_browsing__');
+    expect(screen.getByRole('option', { name: 'Free browsing (no group)' })).toBeInTheDocument();
+
+    fireEvent.change(activeSelect, { target: { value: '__free_browsing__' } });
+    expect(props.onRequestActiveGroupChange).toHaveBeenCalledWith('__free_browsing__');
+  });
+
   it('renders and edits captive portal domain settings', () => {
     const props = buildProps({
       classroom: buildClassroom({ captivePortalDomains: ['login.example.test'] }),

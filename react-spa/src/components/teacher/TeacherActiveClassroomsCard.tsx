@@ -52,14 +52,16 @@ export const TeacherActiveClassroomsCard: React.FC<TeacherActiveClassroomsCardPr
                   />
                 </p>
               </div>
-              {c.hasManualOverride && c.source === 'manual' && groupById.has(c.groupId) && (
-                <button
-                  onClick={() => void handleReleaseClass(c.classroomId)}
-                  className="text-xs bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg transition-colors font-medium shadow-sm"
-                >
-                  {t('teacher.activeClassrooms.endClass')}
-                </button>
-              )}
+              {c.hasManualOverride &&
+                c.source === 'manual' &&
+                (c.unrestricted || groupById.has(c.groupId)) && (
+                  <button
+                    onClick={() => void handleReleaseClass(c.classroomId)}
+                    className="text-xs bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg transition-colors font-medium shadow-sm"
+                  >
+                    {t('teacher.activeClassrooms.endClass')}
+                  </button>
+                )}
             </div>
           ))
         )}

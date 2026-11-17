@@ -3,6 +3,7 @@ import { Loader2, MonitorPlay } from 'lucide-react';
 import type { useTeacherDashboardViewModel } from '../../hooks/useTeacherDashboardViewModel';
 import { useT } from '../../i18n/product-i18n';
 import { GroupSelect } from '../groups/GroupSelect';
+import { CLASSROOM_UNRESTRICTED_SELECT_VALUE } from '../groups/GroupLabel';
 
 type TeacherDashboardViewModel = ReturnType<typeof useTeacherDashboardViewModel>;
 
@@ -67,10 +68,16 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
             className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 outline-none"
             value={selectedGroupForControl}
             onChange={setSelectedGroupForControl}
-            disabled={groupsLoading || !!groupsError || groups.length === 0}
+            disabled={groupsLoading || !!groupsError}
             groups={groups}
             includeNoneOption
             noneLabel={t('teacher.control.restoreDefault')}
+            extraOptions={[
+              {
+                value: CLASSROOM_UNRESTRICTED_SELECT_VALUE,
+                label: t('teacher.control.freeBrowsing'),
+              },
+            ]}
             inactiveBehavior="hide"
           />
 

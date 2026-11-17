@@ -150,7 +150,10 @@ export function useClassroomExemptions({
 
   useScheduleBoundaryInvalidation({
     schedules: scheduleBoundarySources,
-    enabled: !!selectedClassroom && !selectedClassroom.activeGroup,
+    enabled:
+      !!selectedClassroom &&
+      !selectedClassroom.activeGroup &&
+      !selectedClassroom.activeGroupUnrestricted,
     onBoundary: () => {
       void refetchClassrooms();
       if (selectedClassroom) {

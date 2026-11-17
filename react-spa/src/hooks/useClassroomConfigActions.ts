@@ -3,6 +3,7 @@ import type { Classroom } from '../types';
 import { trpc } from '../lib/trpc';
 import { resolveTrpcErrorMessage } from '../lib/error-utils';
 import { reportError } from '../lib/reportError';
+import { CLASSROOM_UNRESTRICTED_SELECT_VALUE } from '../components/groups/GroupLabel';
 
 interface UseClassroomConfigActionsParams {
   selectedClassroom: Classroom | null;
@@ -28,11 +29,13 @@ export const useClassroomConfigActions = ({
       try {
         setClassroomConfigError('');
 
-        const nextGroupId = groupId === '' ? null : groupId;
+        const unrestricted = groupId === CLASSROOM_UNRESTRICTED_SELECT_VALUE;
+        const nextGroupId = unrestricted || groupId === '' ? null : groupId;
 
         await trpc.classrooms.setActiveGroup.mutate({
           id: selectedClassroom.id,
           groupId: nextGroupId,
+          ...(unrestricted ? { unrestricted: true } : {}),
         });
         const updatedClassrooms = await refetchClassrooms();
         const updated = updatedClassrooms.find((c) => c.id === selectedClassroom.id);
@@ -63,18 +66,12 @@ export const useClassroomConfigActions = ({
         }
       } catch (err) {
         reportError('Failed to update default group:', err);
-        const fallback =
-          groupId === ''
-            ? 'You cannot leave the classroom without a default group while no valid active group exists.'
-            : 'Unable to update the default group. Try again.';
-
         setClassroomConfigError(
           resolveTrpcErrorMessage(err, {
-            badRequest:
-              'You cannot leave the classroom without a default group while no valid active group exists.',
-            forbidden: fallback,
-            unauthorized: fallback,
-            fallback,
+            badRequest: 'Unable to update the default group. Try again.',
+            forbidden: 'Unable to update the default group. Try again.',
+            unauthorized: 'Unable to update the default group. Try again.',
+            fallback: 'Unable to update the default group. Try again.',
           })
         );
       }

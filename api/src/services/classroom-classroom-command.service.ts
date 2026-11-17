@@ -88,6 +88,13 @@ export async function setClassroomActiveGroup(
     return access;
   }
 
+  if (input.unrestricted === true && input.groupId !== null) {
+    return {
+      ok: false,
+      error: { code: 'BAD_REQUEST', message: 'unrestricted cannot be combined with a groupId' },
+    };
+  }
+
   if (
     input.groupId !== null &&
     !auth.isAdminToken(user) &&
@@ -100,7 +107,9 @@ export async function setClassroomActiveGroup(
   }
 
   const updated = await DomainEventsService.withQueuedEvents(async (events) => {
-    const refreshed = await classroomStorage.setActiveGroup(input.id, input.groupId);
+    const refreshed = await classroomStorage.setActiveGroup(input.id, input.groupId, {
+      unrestricted: input.unrestricted,
+    });
     if (refreshed) {
       events.publishClassroomChanged(refreshed.id);
     }

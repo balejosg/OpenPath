@@ -41,11 +41,15 @@ export type CurrentGroupSource = z.infer<typeof CurrentGroupSource>;
 
 export function resolveCurrentGroup(params: {
   activeGroupId: string | null;
+  activeUnrestricted?: boolean;
   scheduleGroupId: string | null;
   defaultGroupId: string | null;
 }): { id: string | null; source: CurrentGroupSource } {
-  const { activeGroupId, scheduleGroupId, defaultGroupId } = params;
+  const { activeGroupId, activeUnrestricted = false, scheduleGroupId, defaultGroupId } = params;
 
+  if (activeUnrestricted) {
+    return { id: null, source: 'manual' };
+  }
   if (activeGroupId !== null && activeGroupId.length > 0) {
     return { id: activeGroupId, source: 'manual' };
   }

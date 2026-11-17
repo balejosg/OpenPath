@@ -59,6 +59,7 @@ const classrooms: Classroom[] = [
     defaultGroupDisplayName: 'Plan Base',
     computerCount: 10,
     activeGroup: 'grupo-manual',
+    activeGroupUnrestricted: false,
     currentGroupId: 'group-manual',
     currentGroupDisplayName: 'Plan Manual',
     currentGroupSource: 'manual',
@@ -75,6 +76,7 @@ const classrooms: Classroom[] = [
     defaultGroupDisplayName: 'Plan Base',
     computerCount: 8,
     activeGroup: null,
+    activeGroupUnrestricted: false,
     currentGroupId: 'group-default',
     currentGroupDisplayName: 'Plan Base',
     currentGroupSource: 'default',
@@ -128,6 +130,7 @@ describe('classroom-selectors', () => {
         group: groupById.get('group-manual'),
         source: 'manual',
         hasManualOverride: true,
+        unrestricted: false,
       },
       {
         classroomId: 'classroom-2',
@@ -136,6 +139,7 @@ describe('classroom-selectors', () => {
         group: groupById.get('group-default'),
         source: 'default',
         hasManualOverride: false,
+        unrestricted: false,
       },
     ]);
   });
@@ -152,6 +156,7 @@ describe('classroom-selectors', () => {
     ).toEqual({
       classroomId: 'classroom-1',
       nextGroupId: 'group-default',
+      nextUnrestricted: false,
       currentName: 'Grupo Manual',
       nextName: 'Grupo Base',
     });

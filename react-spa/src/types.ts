@@ -35,6 +35,7 @@ export interface Classroom {
   defaultGroupDisplayName?: string | null;
   computerCount: number;
   activeGroup: string | null;
+  activeGroupUnrestricted?: boolean;
   currentGroupId: string | null;
   currentGroupDisplayName?: string | null;
   currentGroupSource?: CurrentGroupSource;

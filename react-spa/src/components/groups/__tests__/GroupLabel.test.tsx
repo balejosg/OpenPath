@@ -125,6 +125,28 @@ describe('resolveClassroomGroupSelectState', () => {
     expect(state.defaultGroupValue).toBe('group-hidden-default');
   });
 
+  it('selects the free browsing option for an unrestricted manual override', () => {
+    const state = resolveClassroomGroupSelectState({
+      classroom: {
+        activeGroup: null,
+        activeGroupUnrestricted: true,
+        currentGroupId: null,
+        currentGroupSource: 'manual',
+        defaultGroupId: 'group-default',
+      },
+      admin: true,
+    });
+
+    expect(state.source).toBe('manual');
+    expect(state.activeGroupValue).toBe('__free_browsing__');
+    expect(state.defaultGroupValue).toBe('group-default');
+  });
+
+  it('labels a manual override without a group as free browsing', () => {
+    const name = resolveGroupDisplayName({ groupId: null, source: 'manual', t });
+    expect(name).toBe('Free browsing');
+  });
+
   it('does not backfill hidden values for admins', () => {
     const state = resolveClassroomGroupSelectState({
       classroom: {

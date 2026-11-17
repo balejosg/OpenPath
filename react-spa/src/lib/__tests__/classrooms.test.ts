@@ -32,6 +32,7 @@ describe('classrooms adapter', () => {
       defaultGroupDisplayName: 'Plan Norte',
       machineCount: 12,
       activeGroupId: 'group-2',
+      activeGroupUnrestricted: false,
       currentGroupId: 'group-2',
       currentGroupDisplayName: 'Plan Manual',
       currentGroupSource: 'manual',
@@ -56,6 +57,7 @@ describe('classrooms adapter', () => {
       defaultGroupDisplayName: 'Plan Norte',
       computerCount: 12,
       activeGroup: 'group-2',
+      activeGroupUnrestricted: false,
       currentGroupId: 'group-2',
       currentGroupDisplayName: 'Plan Manual',
       currentGroupSource: 'manual',
@@ -78,6 +80,7 @@ describe('classrooms adapter', () => {
       defaultGroupId: null,
       machineCount: 0,
       activeGroupId: null,
+      activeGroupUnrestricted: false,
       currentGroupId: null,
       currentGroupSource: 'none',
       status: 'operational',
@@ -100,6 +103,7 @@ describe('classrooms adapter', () => {
       currentGroupId: 'group-1',
       currentGroupSource: 'default',
       activeGroupId: null,
+      activeGroupUnrestricted: false,
       defaultGroupDisplayName: 'Plan Aula 3',
       currentGroupDisplayName: 'Plan Aula 3',
       machineCount: 8,
@@ -120,6 +124,7 @@ describe('classrooms adapter', () => {
       defaultGroupId: 'group-1',
       defaultGroupDisplayName: 'Plan Aula 3',
       activeGroupId: null,
+      activeGroupUnrestricted: false,
       currentGroupId: 'group-1',
       currentGroupDisplayName: 'Plan Aula 3',
       currentGroupSource: 'default',
@@ -167,6 +172,39 @@ describe('classrooms adapter', () => {
         },
         source: 'manual',
         hasManualOverride: true,
+        unrestricted: false,
+      },
+    ]);
+  });
+
+  it('includes free browsing manual overrides as active classrooms', () => {
+    const rows = toActiveClassroomRows(
+      [
+        {
+          id: 'classroom-free',
+          name: 'Aula Libre',
+          displayName: 'Aula Libre',
+          defaultGroupId: 'group-default',
+          defaultGroupDisplayName: 'Grupo Default',
+          activeGroupId: null,
+          activeGroupUnrestricted: true,
+          currentGroupId: null,
+          currentGroupDisplayName: null,
+          currentGroupSource: 'manual',
+        },
+      ],
+      new Map()
+    );
+
+    expect(rows).toEqual([
+      {
+        classroomId: 'classroom-free',
+        classroomName: 'Aula Libre',
+        groupId: '',
+        group: null,
+        source: 'manual',
+        hasManualOverride: true,
+        unrestricted: true,
       },
     ]);
   });

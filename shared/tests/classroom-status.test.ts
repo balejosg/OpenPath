@@ -102,6 +102,18 @@ void describe('classroom-status', () => {
       );
     });
 
+    it('returns manual unrestricted before schedule and default fallbacks', () => {
+      assert.deepStrictEqual(
+        resolveCurrentGroup({
+          activeGroupId: null,
+          activeUnrestricted: true,
+          scheduleGroupId: 'g-schedule',
+          defaultGroupId: 'g-default',
+        }),
+        { id: null, source: 'manual' }
+      );
+    });
+
     it('uses scheduleGroupId when no activeGroupId is set', () => {
       assert.deepStrictEqual(
         resolveCurrentGroup({

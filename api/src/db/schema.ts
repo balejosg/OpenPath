@@ -103,23 +103,36 @@ export const requests = pgTable(
 // Classrooms Table
 // =============================================================================
 
-export const classrooms = pgTable('classrooms', {
-  id: varchar('id', { length: 50 }).primaryKey(),
-  name: varchar('name', { length: 100 }).unique().notNull(),
-  displayName: varchar('display_name', { length: 255 }).notNull(),
-  defaultGroupId: varchar('default_group_id', { length: 50 }).references(() => whitelistGroups.id, {
-    onDelete: 'set null',
-  }),
-  activeGroupId: varchar('active_group_id', { length: 50 }).references(() => whitelistGroups.id, {
-    onDelete: 'set null',
-  }),
-  captivePortalDomains: text('captive_portal_domains')
-    .array()
-    .default(sql`'{}'::text[]`)
-    .notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
-});
+export const classrooms = pgTable(
+  'classrooms',
+  {
+    id: varchar('id', { length: 50 }).primaryKey(),
+    name: varchar('name', { length: 100 }).unique().notNull(),
+    displayName: varchar('display_name', { length: 255 }).notNull(),
+    defaultGroupId: varchar('default_group_id', { length: 50 }).references(
+      () => whitelistGroups.id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+    activeGroupId: varchar('active_group_id', { length: 50 }).references(() => whitelistGroups.id, {
+      onDelete: 'set null',
+    }),
+    activeUnrestricted: boolean('active_unrestricted').default(false).notNull(),
+    captivePortalDomains: text('captive_portal_domains')
+      .array()
+      .default(sql`'{}'::text[]`)
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+  },
+  (table) => [
+    check(
+      'classrooms_active_unrestricted_check',
+      sql`NOT ${table.activeUnrestricted} OR ${table.activeGroupId} IS NULL`
+    ),
+  ]
+);
 
 // =============================================================================
 // Machines Table

@@ -91,6 +91,7 @@ export const Classroom = z.object({
   displayName: z.string(),
   defaultGroupId: z.string().nullable(),
   activeGroupId: z.string().nullable(),
+  activeGroupUnrestricted: z.boolean().default(false),
   captivePortalDomains: z.array(z.string()).default([]),
   currentGroupId: z.string().nullable().optional(),
   createdAt: z.string(),

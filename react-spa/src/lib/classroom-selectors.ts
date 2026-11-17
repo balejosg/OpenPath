@@ -12,6 +12,7 @@ import { normalizeSearchTerm } from './search';
 export interface ClassroomControlConfirmation {
   classroomId: string;
   nextGroupId: string | null;
+  nextUnrestricted: boolean;
   currentName: string;
   nextName: string;
 }
@@ -52,6 +53,7 @@ export function selectClassroomControlConfirmation(params: {
   groupById: ReadonlyMap<string, GroupLike>;
   classroomId: string;
   nextGroupId: string | null;
+  nextUnrestricted?: boolean;
   t: ProductT;
 }): ClassroomControlConfirmation | null {
   const classroom = params.classrooms.find((item) => item.id === params.classroomId);
@@ -64,9 +66,12 @@ export function selectClassroomControlConfirmation(params: {
   const currentGroup = params.groupById.get(currentActiveGroupId);
   const nextGroup = params.nextGroupId ? params.groupById.get(params.nextGroupId) : null;
 
+  const nextUnrestricted = params.nextUnrestricted === true;
+
   return {
     classroomId: params.classroomId,
     nextGroupId: params.nextGroupId,
+    nextUnrestricted,
     currentName: resolveGroupDisplayName({
       groupId: currentActiveGroupId,
       group: currentGroup ?? null,
@@ -74,13 +79,15 @@ export function selectClassroomControlConfirmation(params: {
       revealUnknownId: false,
       t: params.t,
     }),
-    nextName: resolveGroupDisplayName({
-      groupId: params.nextGroupId,
-      group: nextGroup ?? null,
-      source: 'manual',
-      noneLabel: params.t('groups.label.noGroup'),
-      revealUnknownId: true,
-      t: params.t,
-    }),
+    nextName: nextUnrestricted
+      ? params.t('groups.label.unrestricted')
+      : resolveGroupDisplayName({
+          groupId: params.nextGroupId,
+          group: nextGroup ?? null,
+          source: 'manual',
+          noneLabel: params.t('groups.label.noGroup'),
+          revealUnknownId: true,
+          t: params.t,
+        }),
   };
 }
