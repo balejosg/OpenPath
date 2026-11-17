@@ -438,6 +438,11 @@ test('Windows release evidence prepares the personalized NSIS executable for the
 
   assert.match(
     nsiSource,
+    /SetOutPath "\$INSTDIR\\scripts"[\s\S]*File "\/oname=Read-Trailer\.ps1" "\$\{REPO_ROOT\}\\windows\\offline-installer\\scripts\\Read-Trailer\.ps1"/,
+    'NSIS must load its trailer reader from an explicit repository path'
+  );
+  assert.match(
+    nsiSource,
     /CopyFiles \/SILENT "\$EXEDIR\\\$EXEFILE" "\$INSTDIR"[\s\S]*-ExecutablePath "\$INSTDIR\\\$EXEFILE"/,
     'NSIS must pass an exact temporary copy of the running executable to the trailer reader'
   );
