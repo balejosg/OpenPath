@@ -17,6 +17,7 @@ OPENPATH_CONTRACT_SECTION_ALLOWED_PATHS='## ALLOWED-PATHS'
 get_openpath_contract_captive_portal_probe_domains() {
     cat <<'EOF'
 detectportal.firefox.com
+firefox-portal-detection.com
 connectivity-check.ubuntu.com
 captive.apple.com
 www.msftconnecttest.com

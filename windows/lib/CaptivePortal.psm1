@@ -1826,8 +1826,9 @@ function Get-OpenPathCaptivePortalDetectionHosts {
         Test-OpenPathCaptivePortalState.
     .DESCRIPTION
         W-3: these are the only non-configured hosts that recovery may legitimately open.
-        They are kept in lock-step with the probe URLs in Test-OpenPathCaptivePortalState.
-        Returned normalised via Get-OpenPathCaptivePortalAllowedHosts.
+        They are the browser/OS connectivity-probe roots that must stay reachable during
+        a captive-portal episode, including every current and legacy Firefox detection
+        host. Returned normalised via Get-OpenPathCaptivePortalAllowedHosts.
     .OUTPUTS
         String[]
     #>
@@ -1838,6 +1839,7 @@ function Get-OpenPathCaptivePortalDetectionHosts {
             'www.msftconnecttest.com',
             'msftconnecttest.com',
             'detectportal.firefox.com',
+            'firefox-portal-detection.com',
             'clients3.google.com'
         ))
 }

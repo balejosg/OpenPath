@@ -44,7 +44,7 @@ Describe 'Contract constants sync-guard (whitelist-format.contract.json)' {
             $actual = @(Get-OpenPathCaptivePortalProbeDomains)
             $expected = @($script:Contract.captivePortalProbeDomains.windows)
             ($actual -join '|') | Should -BeExactly ($expected -join '|')
-            $actual.Count | Should -Be 6
+            $actual.Count | Should -Be 7
         }
     }
 
@@ -53,7 +53,7 @@ Describe 'Contract constants sync-guard (whitelist-format.contract.json)' {
             $actual = @(Get-OpenPathCaptivePortalDetectionHosts)
             $expected = @($script:Contract.captivePortalProbeDomains.windowsDetectionHosts)
             ($actual -join '|') | Should -BeExactly ($expected -join '|')
-            $actual.Count | Should -Be 4
+            $actual.Count | Should -Be 5
         }
     }
 

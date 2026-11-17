@@ -779,6 +779,7 @@ Describe "Common Module" {
         It "Pins the captive portal probe domain list" {
             InModuleScope Common { Get-OpenPathCaptivePortalProbeDomains } | Should -Be @(
                 'detectportal.firefox.com',
+                'firefox-portal-detection.com',
                 'connectivity-check.ubuntu.com',
                 'captive.apple.com',
                 'www.msftconnecttest.com',
@@ -802,21 +803,21 @@ Describe "Common Module" {
             $domains | Should -Contain 'clients2.googleusercontent.com'
         }
 
-        It "Pins the standalone runtime-dependency protected floor at 58 hosts" {
+        It "Pins the standalone runtime-dependency protected floor at 59 hosts" {
             # Fresh pwsh so no Common export leaks into the Get-Command guards inside
             # Get-OpenPathRuntimeDependencyProtectedHosts (this reproduces the native
             # host context, where only the Policy floor applies).
             $policyPath = Join-Path $PSScriptRoot '..' 'lib' 'internal' 'RuntimeDependency.Policy.ps1'
             $script = "`$ErrorActionPreference='Stop'; . '$policyPath'; `$h = @(Get-OpenPathRuntimeDependencyProtectedHosts); `$h.Count"
             $count = & pwsh -NoProfile -Command $script
-            [int]($count | Select-Object -Last 1) | Should -Be 58
+            [int]($count | Select-Object -Last 1) | Should -Be 59
         }
 
         It "Standalone protected floor covers the probe, Microsoft, Firefox, and NTP anchors" {
             $policyPath = Join-Path $PSScriptRoot '..' 'lib' 'internal' 'RuntimeDependency.Policy.ps1'
             $script = "`$ErrorActionPreference='Stop'; . '$policyPath'; @(Get-OpenPathRuntimeDependencyProtectedHosts) -join ','"
             $joined = (& pwsh -NoProfile -Command $script | Select-Object -Last 1)
-            foreach ($expected in @('detectportal.firefox.com', 'msftconnecttest.com', 'windowsupdate.com', 'graph.microsoft.com', 'blob.core.windows.net', 'aus5.mozilla.org', 'clients2.googleusercontent.com', 'time.windows.com')) {
+            foreach ($expected in @('detectportal.firefox.com', 'firefox-portal-detection.com', 'msftconnecttest.com', 'windowsupdate.com', 'graph.microsoft.com', 'blob.core.windows.net', 'aus5.mozilla.org', 'clients2.googleusercontent.com', 'time.windows.com')) {
                 $joined | Should -Match ([regex]::Escape($expected))
             }
         }

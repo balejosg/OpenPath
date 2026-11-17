@@ -1122,7 +1122,7 @@ namespace OpenPathNativeHost
 
         private static readonly string[] CaptivePortalProbeDomains = new string[]
         {
-            "detectportal.firefox.com", "connectivity-check.ubuntu.com", "captive.apple.com",
+            "detectportal.firefox.com", "firefox-portal-detection.com", "connectivity-check.ubuntu.com", "captive.apple.com",
             "www.msftconnecttest.com", "msftconnecttest.com", "clients3.google.com"
         };
 

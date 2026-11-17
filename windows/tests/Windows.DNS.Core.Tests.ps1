@@ -2003,6 +2003,22 @@ Describe "DNS Module" {
             $dnsModuleContent | Should -Match "'Test-OpenPathSplitDnsTopologyDrift',"
         }
 
+        It "Keeps the Firefox portal-detection hosts on the configured upstreams, not the split-DNS network resolver" {
+            $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Domains.Catalog.ps1"
+            $configContent = Get-Content $configPath -Raw
+            $catalogContent = Get-Content $catalogPath -Raw
+
+            # Both the legacy Firefox host and the Firefox 159 host are probe
+            # domains, so they must never be added to the tertiary (network
+            # resolver) affinity mask.
+            $catalogContent | Should -Match "'detectportal\.firefox\.com'"
+            $catalogContent | Should -Match "'firefox-portal-detection\.com'"
+            $portalUpstreamMaskExpr = [regex]::Match($configContent, '\$portalUpstreamMask = if \(\$splitDnsActive\) \{[\s\S]*?\n    \}').Value
+            $portalUpstreamMaskExpr | Should -Not -Match 'Get-OpenPathCaptivePortalProbeDomains'
+            $portalUpstreamMaskExpr | Should -Match 'Get-AcrylicAffinityMaskEntries -Domains \$normalizedPortalDomains'
+        }
+
         It "Keeps declared portal domains off the configured upstreams when split DNS is active" {
             $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
             $configContent = Get-Content $configPath -Raw

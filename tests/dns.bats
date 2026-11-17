@@ -804,6 +804,7 @@ PY
     grep -q "ipset=/example.org/openpath-allow-dst,openpath-allow-dst6" "$DNSMASQ_CONF"
     # Captive portal probes are reached over HTTP/80 and must also be in the set.
     grep -q "ipset=/detectportal.firefox.com/openpath-allow-dst,openpath-allow-dst6" "$DNSMASQ_CONF"
+    grep -q "ipset=/firefox-portal-detection.com/openpath-allow-dst,openpath-allow-dst6" "$DNSMASQ_CONF"
 }
 
 @test "generate_dnsmasq_config omits ipset= directives when name-aware egress disabled" {

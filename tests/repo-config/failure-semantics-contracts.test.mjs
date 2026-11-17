@@ -108,6 +108,27 @@ describe('ADR 0011: unified failure semantics — both platforms implement prote
       domains.includes('connectivity-check.ubuntu.com'),
       'linux/lib/common-protected-domains.sh must include connectivity-check.ubuntu.com'
     );
+    assert.ok(
+      domains.includes('firefox-portal-detection.com'),
+      'linux/lib/common-protected-domains.sh must include the Firefox 159 portal-detection host'
+    );
+  });
+
+  test('Native-host protected policy lists include both Firefox portal-detection hosts', () => {
+    for (const sourcePath of [
+      'windows/native-host/OpenPathNativeHost.cs',
+      'firefox-extension/native/openpath-native-host.py',
+    ]) {
+      const source = readText(sourcePath);
+      assert.ok(
+        source.includes('detectportal.firefox.com'),
+        `${sourcePath} must keep the legacy Firefox portal-detection host`
+      );
+      assert.ok(
+        source.includes('firefox-portal-detection.com'),
+        `${sourcePath} must include the Firefox 159 portal-detection host`
+      );
+    }
   });
 
   test('Linux common-protected-domains.sh includes OS/system domains in the protected set', () => {

@@ -14,6 +14,7 @@ export const WHITELIST_SECTION_HEADERS = {
 /** Captive-portal probe domains the Linux agent must keep resolvable. */
 export const LINUX_CAPTIVE_PORTAL_PROBE_DOMAINS = [
   'detectportal.firefox.com',
+  'firefox-portal-detection.com',
   'connectivity-check.ubuntu.com',
   'captive.apple.com',
   'www.msftconnecttest.com',
@@ -23,6 +24,7 @@ export const LINUX_CAPTIVE_PORTAL_PROBE_DOMAINS = [
 /** Captive-portal probe domains the Windows agent must keep resolvable. */
 export const WINDOWS_CAPTIVE_PORTAL_PROBE_DOMAINS = [
   'detectportal.firefox.com',
+  'firefox-portal-detection.com',
   'connectivity-check.ubuntu.com',
   'captive.apple.com',
   'www.msftconnecttest.com',
@@ -35,5 +37,6 @@ export const WINDOWS_CAPTIVE_PORTAL_DETECTION_HOSTS = [
   'www.msftconnecttest.com',
   'msftconnecttest.com',
   'detectportal.firefox.com',
+  'firefox-portal-detection.com',
   'clients3.google.com',
 ] as const;

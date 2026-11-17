@@ -25,9 +25,10 @@ setup() {
     run get_openpath_contract_captive_portal_probe_domains
     [ "$status" -eq 0 ]
     [ "${lines[0]}" = "detectportal.firefox.com" ]
-    [ "${lines[1]}" = "connectivity-check.ubuntu.com" ]
-    [ "${lines[2]}" = "captive.apple.com" ]
-    [ "${lines[3]}" = "www.msftconnecttest.com" ]
-    [ "${lines[4]}" = "clients3.google.com" ]
-    [ "${#lines[@]}" -eq 5 ]
+    [ "${lines[1]}" = "firefox-portal-detection.com" ]
+    [ "${lines[2]}" = "connectivity-check.ubuntu.com" ]
+    [ "${lines[3]}" = "captive.apple.com" ]
+    [ "${lines[4]}" = "www.msftconnecttest.com" ]
+    [ "${lines[5]}" = "clients3.google.com" ]
+    [ "${#lines[@]}" -eq 6 ]
 }

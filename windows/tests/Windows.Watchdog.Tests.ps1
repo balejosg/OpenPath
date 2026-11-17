@@ -1472,6 +1472,7 @@ Describe "Watchdog Script" {
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
                 'msftconnecttest.com',
                 'detectportal.firefox.com',
+                'firefox-portal-detection.com',
                 'clients3.google.com',
                 'captive-portal-active.json',
                 'Captive portal detected',

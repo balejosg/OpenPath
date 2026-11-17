@@ -48,6 +48,7 @@ append_unique_openpath_domain() {
 get_openpath_captive_portal_probe_domains() {
     cat <<'EOF'
 detectportal.firefox.com
+firefox-portal-detection.com
 connectivity-check.ubuntu.com
 captive.apple.com
 www.msftconnecttest.com

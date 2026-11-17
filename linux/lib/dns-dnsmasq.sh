@@ -191,6 +191,7 @@ EOF
     local captive_probe_domain
     for captive_probe_domain in \
         detectportal.firefox.com \
+        firefox-portal-detection.com \
         connectivity-check.ubuntu.com \
         captive.apple.com \
         www.msftconnecttest.com \

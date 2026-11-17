@@ -43,7 +43,7 @@ runtime_dependency_is_protected_host() {
         [ -n "$protected" ] || continue
         [ "$host" = "$protected" ] && return 0
         [[ "$host" == *".$protected" ]] && return 0
-    done < <(get_openpath_protected_domains; printf '%s\n' detectportal.firefox.com connectivity-check.ubuntu.com captive.apple.com clients3.google.com time.google.com)
+    done < <(get_openpath_protected_domains; printf '%s\n' detectportal.firefox.com firefox-portal-detection.com connectivity-check.ubuntu.com captive.apple.com clients3.google.com time.google.com)
     return 1
 }
 

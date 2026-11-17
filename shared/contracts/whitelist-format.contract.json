@@ -10,6 +10,7 @@
   "captivePortalProbeDomains": {
     "linux": [
       "detectportal.firefox.com",
+      "firefox-portal-detection.com",
       "connectivity-check.ubuntu.com",
       "captive.apple.com",
       "www.msftconnecttest.com",
@@ -17,6 +18,7 @@
     ],
     "windows": [
       "detectportal.firefox.com",
+      "firefox-portal-detection.com",
       "connectivity-check.ubuntu.com",
       "captive.apple.com",
       "www.msftconnecttest.com",
@@ -27,6 +29,7 @@
       "www.msftconnecttest.com",
       "msftconnecttest.com",
       "detectportal.firefox.com",
+      "firefox-portal-detection.com",
       "clients3.google.com"
     ]
   }

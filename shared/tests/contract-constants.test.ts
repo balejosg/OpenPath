@@ -25,6 +25,13 @@ describe('contract-constants', () => {
     );
   });
 
+  it('keeps the legacy and current Firefox portal-detection hosts probeable', () => {
+    assert.ok(LINUX_CAPTIVE_PORTAL_PROBE_DOMAINS.includes('detectportal.firefox.com'));
+    assert.ok(LINUX_CAPTIVE_PORTAL_PROBE_DOMAINS.includes('firefox-portal-detection.com'));
+    assert.ok(WINDOWS_CAPTIVE_PORTAL_PROBE_DOMAINS.includes('detectportal.firefox.com'));
+    assert.ok(WINDOWS_CAPTIVE_PORTAL_PROBE_DOMAINS.includes('firefox-portal-detection.com'));
+  });
+
   it('keeps the linux probe list a subset of the windows probe list', () => {
     for (const domain of LINUX_CAPTIVE_PORTAL_PROBE_DOMAINS) {
       assert.ok(

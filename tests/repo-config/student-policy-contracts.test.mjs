@@ -1531,6 +1531,40 @@ describe('repository verification contract', () => {
     );
   });
 
+  test('windows Acrylic keeps both Firefox portal-detection hosts on the configured upstreams', () => {
+    const acrylicHostsModel = readText('windows/lib/internal/AcrylicHostsModel.ps1');
+    const dnsConfigModule = readText('windows/lib/internal/DNS.Acrylic.Config.ps1');
+    const domainCatalog = readText('windows/lib/internal/Common.Domains.Catalog.ps1');
+
+    assert.ok(
+      domainCatalog.includes("'detectportal.firefox.com'"),
+      'Windows probe catalog must keep the legacy Firefox portal-detection host'
+    );
+    assert.ok(
+      domainCatalog.includes("'firefox-portal-detection.com'"),
+      'Windows probe catalog must include the Firefox 159 portal-detection host'
+    );
+    // Essential groups are forwarded unconditionally, so probe domains keep
+    // resolving while a classroom blocks descendants elsewhere.
+    assert.match(
+      acrylicHostsModel,
+      /\$groupLines \+= @\(Get-AcrylicForwardRules -Domain \$normalizedDomain\)/,
+      'Probe domains must stay in the unconditional essential forwarding group'
+    );
+    // Split DNS reserves the tertiary (network resolver) mask for admin-declared
+    // portal domains only; probe domains must not be routed there.
+    const portalUpstreamMask =
+      /\$portalUpstreamMask = if \(\$splitDnsActive\) \{[\s\S]*?\n {4}\}/.exec(
+        dnsConfigModule
+      )?.[0] ?? '';
+    assert.ok(portalUpstreamMask.length > 0, 'split-DNS portal upstream mask should exist');
+    assert.doesNotMatch(portalUpstreamMask, /Get-OpenPathCaptivePortalProbeDomains/);
+    assert.match(
+      portalUpstreamMask,
+      /Get-AcrylicAffinityMaskEntries -Domains \$normalizedPortalDomains/
+    );
+  });
+
   test('windows DNS renderer never emits a wildcard NX entry that would shadow every mapping', () => {
     const acrylicHostsModel = readText('windows/lib/internal/AcrylicHostsModel.ps1');
 
