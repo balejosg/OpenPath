@@ -31,7 +31,7 @@ export interface CaptivePortalRecoveryController {
 }
 
 export interface CaptivePortalRecoveryControllerDeps {
-  getCanonicalUrl?: () => string | null | undefined;
+  getCanonicalUrl?: () => Promise<string | null | undefined>;
   getPortalState: () => Promise<string | null | undefined>;
   isNativePortalRecoveryEligible?: (
     context: CaptivePortalRecoveryNavigationContext
@@ -101,17 +101,25 @@ export function createCaptivePortalRecoveryController(
     // cannot open two tabs for the same portal episode.
     portalEpisodeHandled = true;
 
-    const canonicalUrl = deps.getCanonicalUrl?.()?.trim() ?? '';
-    if (canonicalUrl.length === 0) {
-      return;
-    }
-
+    let canonicalUrl = '';
     try {
+      const canonicalUrlValue = await deps.getCanonicalUrl?.();
+      canonicalUrl = typeof canonicalUrlValue === 'string' ? canonicalUrlValue.trim() : '';
+      if (canonicalUrl.length === 0) {
+        // Firefox may not expose the canonical URL yet. Leave the episode
+        // unclaimed so a later locked_portal state change can retry.
+        portalEpisodeHandled = false;
+        return;
+      }
       if ((await deps.isPortalTabOpen?.(canonicalUrl)) === true) {
         return;
       }
       await deps.openPortalTab?.(canonicalUrl);
     } catch (error) {
+      if (canonicalUrl.length === 0) {
+        // Reading the canonical URL failed before we had anything to open.
+        portalEpisodeHandled = false;
+      }
       logger.info('[Monitor] No se pudo abrir la página del portal cautivo', {
         url: canonicalUrl,
         error: getErrorMessage(error),

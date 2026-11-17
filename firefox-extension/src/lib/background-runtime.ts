@@ -69,7 +69,9 @@ interface ConfirmBlockedScreenContext extends BlockedScreenContext {
 }
 
 interface CaptivePortalBrowserApi {
-  canonicalURL?: string;
+  canonicalURL?: {
+    get: (details: object) => Promise<{ value?: unknown }>;
+  };
   getState?: () => Promise<string>;
   onConnectivityAvailable?: {
     addListener: (listener: () => void) => void;
@@ -159,7 +161,14 @@ export function createBackgroundRuntime(
       })) as NativeAllowedPathsResponse,
   });
   const captivePortalRecoveryController = createCaptivePortalRecoveryController({
-    getCanonicalUrl: () => getCaptivePortalApi()?.canonicalURL,
+    getCanonicalUrl: async () => {
+      const canonicalUrl = getCaptivePortalApi()?.canonicalURL;
+      if (canonicalUrl === undefined) {
+        return null;
+      }
+      const { value } = await canonicalUrl.get({});
+      return typeof value === 'string' && value.trim().length > 0 ? value : null;
+    },
     getPortalState: async () => getCaptivePortalApi()?.getState?.(),
     isNativePortalRecoveryEligible: ({ hostname }) =>
       Promise.resolve(portalRecoveryEligibleByHost.get(hostname.trim().toLowerCase()) === true),
@@ -305,7 +314,7 @@ export function createBackgroundRuntime(
     return await captivePortalRecoveryController.recoverNavigation(context, options);
   }
 
-  function registerCaptivePortalListeners(): void {
+  async function registerCaptivePortalListeners(): Promise<void> {
     const captivePortal = getCaptivePortalApi();
     captivePortal?.onConnectivityAvailable?.addListener(() => {
       void captivePortalRecoveryController.handleConnectivityAvailable();
@@ -313,6 +322,20 @@ export function createBackgroundRuntime(
     captivePortal?.onStateChanged?.addListener((details) => {
       void captivePortalRecoveryController.handlePortalStateChanged(details.state);
     });
+
+    if (captivePortal?.getState === undefined) {
+      return;
+    }
+    try {
+      const state = await captivePortal.getState();
+      if (state === 'locked_portal') {
+        await captivePortalRecoveryController.handlePortalStateChanged(state);
+      }
+    } catch (error) {
+      logger.info('[Monitor] Captive portal state unavailable', {
+        error: getErrorMessage(error),
+      });
+    }
   }
 
   async function isNativeHostAvailable(): Promise<boolean> {
@@ -579,7 +602,7 @@ export function createBackgroundRuntime(
     nativeMessagingClient.onRuntimeDependencyApplied((input) => {
       runtimeDependencyAutoReload.noteDependencyReady(input);
     });
-    registerCaptivePortalListeners();
+    await registerCaptivePortalListeners();
     await blockedPathRulesController.init();
     await blockedSubdomainRulesController.init();
     await allowedPathRulesController.init();

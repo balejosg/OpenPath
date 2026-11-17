@@ -89,8 +89,14 @@ function createRuntimeHarnessWithOptions(options: {
       setBadgeText: () => Promise.resolve(),
     },
     captivePortal: {
-      canonicalURL:
-        options.captivePortalCanonicalUrl ?? 'http://firefox-portal-detection.com/generate_204',
+      canonicalURL: {
+        get: () =>
+          Promise.resolve({
+            value:
+              options.captivePortalCanonicalUrl ??
+              'http://firefox-portal-detection.com/generate_204',
+          }),
+      },
       getState: () => Promise.resolve(options.captivePortalState ?? 'locked_portal'),
       onConnectivityAvailable: {
         addListener: (listener: () => void) => {
@@ -465,6 +471,104 @@ void test('background runtime opens the captive portal tab once per locked-porta
     harness.captivePortalStateChangedListener({ state: 'locked_portal' });
     await waitForAsyncRuntime();
     assert.equal(harness.createdTabs.length, 2);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime reads the canonical portal URL from the Firefox setting', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalState: 'not_captive',
+  });
+  (
+    harness.browser as unknown as {
+      captivePortal: { canonicalURL: { get: () => Promise<{ value: string }> } };
+    }
+  ).captivePortal.canonicalURL = {
+    get: (): Promise<{ value: string }> =>
+      Promise.resolve({ value: 'http://portal.example/login' }),
+  };
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.captivePortalStateChangedListener);
+
+    harness.captivePortalStateChangedListener({ state: 'locked_portal' });
+    await waitForAsyncRuntime();
+
+    assert.deepEqual(harness.createdTabs, [{ url: 'http://portal.example/login' }]);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime logs a canonical portal URL read failure and retries on a later locked portal', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalState: 'not_captive',
+  });
+  let rejectCanonicalUrl = true;
+  (
+    harness.browser as unknown as {
+      captivePortal: { canonicalURL: { get: () => Promise<{ value?: unknown }> } };
+    }
+  ).captivePortal.canonicalURL = {
+    get: (): Promise<{ value?: unknown }> =>
+      rejectCanonicalUrl
+        ? Promise.reject(new Error('canonical URL unavailable'))
+        : Promise.resolve({ value: 'http://portal.example/login' }),
+  };
+  const logged: string[] = [];
+  const originalConsoleInfo = console.info;
+  console.info = (message?: unknown, ...args: unknown[]): void => {
+    logged.push([message, ...args].map(String).join(' '));
+  };
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.captivePortalStateChangedListener);
+
+    harness.captivePortalStateChangedListener({ state: 'locked_portal' });
+    await waitForAsyncRuntime();
+
+    assert.deepEqual(harness.createdTabs, []);
+    assert.ok(logged.some((entry) => entry.includes('canonical URL unavailable')));
+
+    rejectCanonicalUrl = false;
+    harness.captivePortalStateChangedListener({ state: 'locked_portal' });
+    await waitForAsyncRuntime();
+
+    assert.deepEqual(harness.createdTabs, [{ url: 'http://portal.example/login' }]);
+  } finally {
+    console.info = originalConsoleInfo;
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime opens the portal tab when Firefox starts already locked', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalCanonicalUrl: 'http://portal.example/login',
+    captivePortalState: 'locked_portal',
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+
+    assert.deepEqual(harness.createdTabs, [{ url: 'http://portal.example/login' }]);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime does not open a portal tab when Firefox starts not captive', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalCanonicalUrl: 'http://portal.example/login',
+    captivePortalState: 'not_captive',
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+
+    assert.deepEqual(harness.createdTabs, []);
   } finally {
     harness.restoreGlobals();
   }

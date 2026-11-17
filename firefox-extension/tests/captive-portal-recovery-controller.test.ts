@@ -393,7 +393,7 @@ void test('captive portal state change opens the canonical portal URL once per l
   let canonicalUrl = 'http://firefox-portal-detection.com/generate_204';
   const opened: string[] = [];
   const controller = createCaptivePortalRecoveryController({
-    getCanonicalUrl: () => canonicalUrl,
+    getCanonicalUrl: () => Promise.resolve(canonicalUrl),
     getPortalState: () => Promise.resolve('locked_portal'),
     logger: { info: () => undefined },
     openPortalTab: (url) => {
@@ -422,7 +422,7 @@ void test('captive portal state change opens the canonical portal URL once per l
 void test('captive portal state change does not open a tab in the unknown state', async () => {
   const opened: string[] = [];
   const controller = createCaptivePortalRecoveryController({
-    getCanonicalUrl: () => 'http://firefox-portal-detection.com/generate_204',
+    getCanonicalUrl: () => Promise.resolve('http://firefox-portal-detection.com/generate_204'),
     getPortalState: () => Promise.resolve('unknown'),
     openPortalTab: (url) => {
       opened.push(url);
@@ -442,7 +442,7 @@ void test('captive portal state change reuses an existing canonical URL tab', as
   let portalTabOpen = true;
   const opened: string[] = [];
   const controller = createCaptivePortalRecoveryController({
-    getCanonicalUrl: () => 'http://firefox-portal-detection.com/generate_204',
+    getCanonicalUrl: () => Promise.resolve('http://firefox-portal-detection.com/generate_204'),
     getPortalState: () => Promise.resolve('locked_portal'),
     isPortalTabOpen: () => Promise.resolve(portalTabOpen),
     openPortalTab: (url) => {
@@ -467,7 +467,7 @@ void test('captive portal state change skips an empty canonical URL and logs ope
   const logged: Record<string, unknown>[] = [];
   let canonicalUrl = '   ';
   const controller = createCaptivePortalRecoveryController({
-    getCanonicalUrl: () => canonicalUrl,
+    getCanonicalUrl: () => Promise.resolve(canonicalUrl),
     getPortalState: () => Promise.resolve('locked_portal'),
     logger: {
       info: (_message, context) => {
