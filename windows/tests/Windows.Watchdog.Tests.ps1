@@ -1173,12 +1173,24 @@ Describe "Watchdog Script" {
     Context "Captive portal detection" {
         It "Defines admin-only captive portal recovery script with bounded queue processing" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $leafPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $content = Get-Content $scriptPath -Raw
+            $leafContent = Get-Content $leafPath -Raw
 
+            # Shim contract: admin task, standard bootstrap, harness-patchable
+            # state probe, delegation to the runner leaf.
             Assert-ContentContainsAll -Content $content -Needles @(
                 '#Requires -RunAsAdministrator',
                 'Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force',
                 "-DependentModules @('DNS', 'Firewall', 'CaptivePortal')",
+                'CaptivePortal.RecoveryRunner.ps1',
+                'function Get-OpenPathCaptivePortalRecoveryState',
+                'Test-OpenPathCaptivePortalState -TimeoutSec 3',
+                'Invoke-OpenPathCaptivePortalRecoveryQueue -OpenPathRoot $OpenPathRoot'
+            )
+
+            # Runner-leaf contract: everything that used to be pinned in the script body.
+            Assert-ContentContainsAll -Content $leafContent -Needles @(
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue',
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult',
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress',
@@ -1195,7 +1207,6 @@ Describe "Watchdog Script" {
                 '''disable''',
                 '''write-result''',
                 '''error''',
-                'Test-OpenPathCaptivePortalState -TimeoutSec 3',
                 'Update-OpenPathCaptivePortalObservation -DetectedState Portal',
                 'Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains',
                 'Disable-OpenPathCaptivePortalMode',
@@ -1207,27 +1218,27 @@ Describe "Watchdog Script" {
                 'ConvertTo-Json -Depth 6'
             )
 
-            $content | Should -Not -Match 'captive-portal-recovery-fixture-state\.json'
-            $content | Should -Not -Match 'direct-runner-captive-portal-navigation'
-            $content | Should -Not -Match 'Get-OpenPathCaptivePortalRecoveryFixtureState'
+            foreach ($body in @($content, $leafContent)) {
+                $body | Should -Not -Match 'captive-portal-recovery-fixture-state\.json'
+                $body | Should -Not -Match 'direct-runner-captive-portal-navigation'
+                $body | Should -Not -Match 'Get-OpenPathCaptivePortalRecoveryFixtureState'
+            }
         }
 
         It "Orders recovery observation before enabling portal mode and never uses stale DNS rollback" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
-            $content = Get-Content $scriptPath -Raw
+            $leafPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
+            $leafContent = Get-Content $leafPath -Raw
+            $scriptContent = Get-Content (Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1") -Raw
 
-            $content.IndexOf('Update-OpenPathCaptivePortalObservation -DetectedState Portal') |
-                Should -BeLessThan $content.IndexOf('Enable-OpenPathCaptivePortalMode -State Portal')
-            $content | Should -Not -Match 'Restore-OriginalDNS'
+            $leafContent.IndexOf('Update-OpenPathCaptivePortalObservation -DetectedState Portal') |
+                Should -BeLessThan $leafContent.IndexOf('Enable-OpenPathCaptivePortalMode -State Portal')
+            $leafContent | Should -Not -Match 'Restore-OriginalDNS'
+            $scriptContent | Should -Not -Match 'Restore-OriginalDNS'
         }
 
         It "Behaviorally includes configured captive portal domains in recovery results" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1")
-            $content = Get-Content $scriptPath -Raw
-            $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
-            $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
-            . ([scriptblock]::Create($content.Substring($start, $end - $start)))
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
 
             $requestPath = Join-Path $TestDrive 'request.json'
             $resultPath = Join-Path $TestDrive 'result'
@@ -1283,16 +1294,10 @@ Describe "Watchdog Script" {
         }
 
         It "W-3: drops attacker-supplied recovery hosts not on the configured/detection allowlist" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1")
-            $scriptContent = Get-Content $scriptPath -Raw
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
             $moduleContent = Get-Content $modulePath -Raw
-
-            # Load the recovery-request handler function block.
-            $start = $scriptContent.IndexOf('function Get-OpenPathRecoveryUtcNow')
-            $end = $scriptContent.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
-            . ([scriptblock]::Create($scriptContent.Substring($start, $end - $start)))
 
             # Load the REAL allowlist filter + its helpers from the module (not a mock).
             foreach ($fnName in @(
@@ -1351,7 +1356,7 @@ Describe "Watchdog Script" {
         }
 
         It "W-3: recovery script intersects requested hosts with the allowlist before enabling portal mode" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
@@ -1362,11 +1367,7 @@ Describe "Watchdog Script" {
         }
 
         It "W-4: rejects a queue request whose requestId is a path-traversal string" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
-            $content = Get-Content $scriptPath -Raw
-            $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
-            $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
-            . ([scriptblock]::Create($content.Substring($start, $end - $start)))
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
             function Write-OpenPathLog { param([Parameter(ValueFromPipeline = $true)]$Message, $Level) }
 
             $queueDir = Join-Path $TestDrive 'queue-traversal'
@@ -1379,11 +1380,7 @@ Describe "Watchdog Script" {
         }
 
         It "W-4: recovery progress writer refuses to escape the progress directory" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
-            $content = Get-Content $scriptPath -Raw
-            $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
-            $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
-            . ([scriptblock]::Create($content.Substring($start, $end - $start)))
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
 
             $progressPath = Join-Path $TestDrive 'progress-traversal'
             New-Item -ItemType Directory -Path $progressPath -Force | Out-Null
@@ -1395,11 +1392,7 @@ Describe "Watchdog Script" {
         }
 
         It "Restores protected mode when reconcile request reports authenticated state" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
-            $content = Get-Content $scriptPath -Raw
-            $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
-            $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
-            . ([scriptblock]::Create($content.Substring($start, $end - $start)))
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
 
             $requestPath = Join-Path $TestDrive 'request-authenticated.json'
             $resultPath = Join-Path $TestDrive 'result-authenticated'
@@ -2267,7 +2260,7 @@ Describe "Watchdog Script" {
         }
 
         It "Bounds post-auth reconcile protected-mode evidence inside native host budget" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $scriptContent = Get-Content $scriptPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
@@ -2293,7 +2286,7 @@ Describe "Watchdog Script" {
         }
 
         It "Writes post-auth reconcile success only when protected mode is fully restored" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(

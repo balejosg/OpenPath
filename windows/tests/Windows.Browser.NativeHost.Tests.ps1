@@ -696,7 +696,7 @@ Describe "Browser Module - Native Host" {
             $recoveryQueueAdapterPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.CaptivePortalRecoveryQueue.ps1"
             $recoveryQueueAdapterContent = Get-Content $recoveryQueueAdapterPath -Raw
             $nativeHostRecoveryContent = "$nativeHostActionsContent`n$recoveryQueueAdapterContent"
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $scriptContent = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostRecoveryContent -Needles @(
@@ -1383,7 +1383,7 @@ Describe "Browser Module - Native Host" {
         }
 
         It "Does not treat a recent passthrough marker as terminal success when a new trigger host arrives" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $content = Get-Content $scriptPath -Raw
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw)
@@ -1450,7 +1450,7 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw
             $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
             $transitionContent = Get-Content $transitionPath -Raw
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $scriptContent = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
@@ -1494,7 +1494,7 @@ Describe "Browser Module - Native Host" {
         It "Centralizes captive portal recovery transition decisions in the shared internal helper" {
             $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $transitionContent = Get-Content $transitionPath -Raw
             $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw)
             $scriptContent = Get-Content $scriptPath -Raw
@@ -1526,7 +1526,7 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.CaptivePortal.ps1") -Raw
             $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
             $transitionContent = Get-Content $transitionPath -Raw
-            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1"
             $scriptContent = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
