@@ -389,6 +389,112 @@ void test('captive portal recovery allows unknown Firefox state only with native
   assert.deepEqual(retries, [{ tabId: 11, url: 'https://portal.example/login' }]);
 });
 
+void test('captive portal state change opens the canonical portal URL once per locked episode', async () => {
+  let canonicalUrl = 'http://firefox-portal-detection.com/generate_204';
+  const opened: string[] = [];
+  const controller = createCaptivePortalRecoveryController({
+    getCanonicalUrl: () => canonicalUrl,
+    getPortalState: () => Promise.resolve('locked_portal'),
+    logger: { info: () => undefined },
+    openPortalTab: (url) => {
+      opened.push(url);
+      return Promise.resolve();
+    },
+    recoverCaptivePortalNavigation: () => Promise.resolve({ success: true }),
+    retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
+  });
+
+  await controller.handlePortalStateChanged('locked_portal');
+  await controller.handlePortalStateChanged('locked_portal');
+  assert.deepEqual(opened, ['http://firefox-portal-detection.com/generate_204']);
+
+  await controller.handlePortalStateChanged('unlocked_portal');
+  await controller.handlePortalStateChanged('locked_portal');
+  assert.equal(opened.length, 2);
+
+  canonicalUrl = 'http://portal.example/login';
+  await controller.handlePortalStateChanged('not_captive');
+  await controller.handlePortalStateChanged('locked_portal');
+  assert.deepEqual(opened.slice(2), ['http://portal.example/login']);
+});
+
+void test('captive portal state change does not open a tab in the unknown state', async () => {
+  const opened: string[] = [];
+  const controller = createCaptivePortalRecoveryController({
+    getCanonicalUrl: () => 'http://firefox-portal-detection.com/generate_204',
+    getPortalState: () => Promise.resolve('unknown'),
+    openPortalTab: (url) => {
+      opened.push(url);
+      return Promise.resolve();
+    },
+    recoverCaptivePortalNavigation: () => Promise.resolve({ success: true }),
+    retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
+  });
+
+  await controller.handlePortalStateChanged('unknown');
+
+  assert.deepEqual(opened, []);
+});
+
+void test('captive portal state change reuses an existing canonical URL tab', async () => {
+  let portalTabOpen = true;
+  const opened: string[] = [];
+  const controller = createCaptivePortalRecoveryController({
+    getCanonicalUrl: () => 'http://firefox-portal-detection.com/generate_204',
+    getPortalState: () => Promise.resolve('locked_portal'),
+    isPortalTabOpen: () => Promise.resolve(portalTabOpen),
+    openPortalTab: (url) => {
+      opened.push(url);
+      return Promise.resolve();
+    },
+    recoverCaptivePortalNavigation: () => Promise.resolve({ success: true }),
+    retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
+  });
+
+  await controller.handlePortalStateChanged('locked_portal');
+  assert.deepEqual(opened, []);
+
+  portalTabOpen = false;
+  await controller.handlePortalStateChanged('unlocked_portal');
+  await controller.handlePortalStateChanged('locked_portal');
+  assert.deepEqual(opened, ['http://firefox-portal-detection.com/generate_204']);
+});
+
+void test('captive portal state change skips an empty canonical URL and logs open failures', async () => {
+  const logged: Record<string, unknown>[] = [];
+  let canonicalUrl = '   ';
+  const controller = createCaptivePortalRecoveryController({
+    getCanonicalUrl: () => canonicalUrl,
+    getPortalState: () => Promise.resolve('locked_portal'),
+    logger: {
+      info: (_message, context) => {
+        logged.push(context ?? {});
+      },
+    },
+    openPortalTab: () => Promise.reject(new Error('tabs.create failed')),
+    recoverCaptivePortalNavigation: () => Promise.resolve({ success: true }),
+    retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
+  });
+
+  await controller.handlePortalStateChanged('locked_portal');
+  assert.deepEqual(logged, []);
+
+  canonicalUrl = 'http://firefox-portal-detection.com/generate_204';
+  await controller.handlePortalStateChanged('unlocked_portal');
+  await controller.handlePortalStateChanged('locked_portal');
+
+  assert.deepEqual(logged, [
+    {
+      url: 'http://firefox-portal-detection.com/generate_204',
+      error: 'tabs.create failed',
+    },
+  ]);
+});
+
 void test('captive portal recovery reconciles only unlocked portal state changes', async () => {
   const operations: CaptivePortalRecoveryInput[] = [];
   const controller = createCaptivePortalRecoveryController({

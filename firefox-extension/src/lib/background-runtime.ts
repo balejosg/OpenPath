@@ -69,6 +69,7 @@ interface ConfirmBlockedScreenContext extends BlockedScreenContext {
 }
 
 interface CaptivePortalBrowserApi {
+  canonicalURL?: string;
   getState?: () => Promise<string>;
   onConnectivityAvailable?: {
     addListener: (listener: () => void) => void;
@@ -158,10 +159,18 @@ export function createBackgroundRuntime(
       })) as NativeAllowedPathsResponse,
   });
   const captivePortalRecoveryController = createCaptivePortalRecoveryController({
+    getCanonicalUrl: () => getCaptivePortalApi()?.canonicalURL,
     getPortalState: async () => getCaptivePortalApi()?.getState?.(),
     isNativePortalRecoveryEligible: ({ hostname }) =>
       Promise.resolve(portalRecoveryEligibleByHost.get(hostname.trim().toLowerCase()) === true),
+    isPortalTabOpen: async (url) => {
+      const openTabs = await browser.tabs.query({});
+      return openTabs.some((tab) => tab.url === url);
+    },
     logger,
+    openPortalTab: async (url) => {
+      await browser.tabs.create({ active: true, url });
+    },
     recoverCaptivePortalNavigation: (input) =>
       nativeMessagingClient.recoverCaptivePortalNavigation(input),
     retryNavigation: async (tabId, url) => {

@@ -43,11 +43,13 @@ function createRuntimeHarness(): {
 
 function createRuntimeHarnessWithOptions(options: {
   blockedPaths?: string[];
+  captivePortalCanonicalUrl?: string;
   captivePortalState?: string;
   nativeMessageResponder?: (message: unknown) => unknown;
   openTabs?: { id: number; url: string }[];
 }): {
   browser: Browser;
+  createdTabs: { url: string }[];
   fetchBodies: unknown[];
   nativeMessages: unknown[];
   pathRuleRefreshes: number;
@@ -65,6 +67,7 @@ function createRuntimeHarnessWithOptions(options: {
   const nativeMessages: unknown[] = [];
   const fetchBodies: unknown[] = [];
   const responses: unknown[] = [];
+  const createdTabs: { url: string }[] = [];
   const tabUpdates: { tabId: number; update: { url?: string } }[] = [];
   const tabUrls = new Map<number, string>(
     (options.openTabs ?? []).map((tab) => [tab.id, tab.url] as const)
@@ -86,6 +89,8 @@ function createRuntimeHarnessWithOptions(options: {
       setBadgeText: () => Promise.resolve(),
     },
     captivePortal: {
+      canonicalURL:
+        options.captivePortalCanonicalUrl ?? 'http://firefox-portal-detection.com/generate_204',
       getState: () => Promise.resolve(options.captivePortalState ?? 'locked_portal'),
       onConnectivityAvailable: {
         addListener: (listener: () => void) => {
@@ -187,6 +192,11 @@ function createRuntimeHarnessWithOptions(options: {
       },
     },
     tabs: {
+      create: (createProperties: { url?: string }) => {
+        const url = createProperties.url ?? '';
+        createdTabs.push({ url });
+        return Promise.resolve({ id: 1000 + createdTabs.length, url });
+      },
       get: (tabId: number) =>
         Promise.resolve({ id: tabId, url: tabUrls.get(tabId) ?? 'http://portal.example/app' }),
       query: () => Promise.resolve(options.openTabs ?? []),
@@ -243,6 +253,7 @@ function createRuntimeHarnessWithOptions(options: {
 
   return {
     browser,
+    createdTabs,
     fetchBodies,
     nativeMessages,
     get pathRuleRefreshes(): number {
@@ -427,6 +438,36 @@ void test('captive portal recovery controller gates native open on locked portal
     { tabId: 5, url: 'https://portal.example/login' },
     { tabId: 5, url: 'https://portal.example/login' },
   ]);
+});
+
+void test('background runtime opens the captive portal tab once per locked-portal episode', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalCanonicalUrl: 'http://firefox-portal-detection.com/generate_204',
+    captivePortalState: 'locked_portal',
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.captivePortalStateChangedListener);
+
+    harness.captivePortalStateChangedListener({ state: 'locked_portal' });
+    await waitForAsyncRuntime();
+    assert.deepEqual(harness.createdTabs, [
+      { url: 'http://firefox-portal-detection.com/generate_204' },
+    ]);
+
+    harness.captivePortalStateChangedListener({ state: 'locked_portal' });
+    await waitForAsyncRuntime();
+    assert.equal(harness.createdTabs.length, 1);
+
+    harness.captivePortalStateChangedListener({ state: 'unlocked_portal' });
+    await waitForAsyncRuntime();
+    harness.captivePortalStateChangedListener({ state: 'locked_portal' });
+    await waitForAsyncRuntime();
+    assert.equal(harness.createdTabs.length, 2);
+  } finally {
+    harness.restoreGlobals();
+  }
 });
 
 void test('background runtime leaves allowed unknown-host navigations on the browser network page', async () => {

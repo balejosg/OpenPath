@@ -31,12 +31,15 @@ export interface CaptivePortalRecoveryController {
 }
 
 export interface CaptivePortalRecoveryControllerDeps {
+  getCanonicalUrl?: () => string | null | undefined;
   getPortalState: () => Promise<string | null | undefined>;
   isNativePortalRecoveryEligible?: (
     context: CaptivePortalRecoveryNavigationContext
   ) => Promise<boolean>;
+  isPortalTabOpen?: (url: string) => Promise<boolean>;
   logger?: CaptivePortalRecoveryLogger;
   now?: () => number;
+  openPortalTab?: (url: string) => Promise<void>;
   recoverCaptivePortalNavigation: (
     input: CaptivePortalRecoveryInput
   ) => Promise<CaptivePortalRecoveryResponse>;
@@ -84,9 +87,36 @@ export function createCaptivePortalRecoveryController(
     { attemptedAt: number; hosts: Set<string> }
   >();
   const delayedReconcileTimeoutByTab = new Map<number, ReturnType<typeof setTimeout>>();
+  let portalEpisodeHandled = false;
 
   function clearLimiter(): void {
     recoveryAttemptByTabAndHost.clear();
+  }
+
+  async function openPortalTabForLockedEpisode(): Promise<void> {
+    if (portalEpisodeHandled) {
+      return;
+    }
+    // Claim the episode before the first await so concurrent state-change events
+    // cannot open two tabs for the same portal episode.
+    portalEpisodeHandled = true;
+
+    const canonicalUrl = deps.getCanonicalUrl?.()?.trim() ?? '';
+    if (canonicalUrl.length === 0) {
+      return;
+    }
+
+    try {
+      if ((await deps.isPortalTabOpen?.(canonicalUrl)) === true) {
+        return;
+      }
+      await deps.openPortalTab?.(canonicalUrl);
+    } catch (error) {
+      logger.info('[Monitor] No se pudo abrir la página del portal cautivo', {
+        url: canonicalUrl,
+        error: getErrorMessage(error),
+      });
+    }
   }
 
   async function reconcileCaptivePortalRecovery(input: {
@@ -234,9 +264,14 @@ export function createCaptivePortalRecoveryController(
     },
     handlePortalStateChanged: async (state): Promise<void> => {
       clearLimiter();
-      if (state !== 'locked_portal') {
-        await reconcileCaptivePortalRecovery({ reason: 'state-changed', state });
+      if (state === 'locked_portal') {
+        await openPortalTabForLockedEpisode();
+        return;
       }
+      if (state === 'unlocked_portal' || state === 'not_captive') {
+        portalEpisodeHandled = false;
+      }
+      await reconcileCaptivePortalRecovery({ reason: 'state-changed', state });
     },
     recoverNavigation,
   };
