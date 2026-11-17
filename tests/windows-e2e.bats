@@ -315,10 +315,10 @@ load 'test_helper'
 }
 
 @test "windows installer keeps Acrylic on the modern portable release track" {
-    run grep -nF '$installerVersion = "2.2.1"' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Install.ps1"
+    run grep -nF "\$version = '2.2.1'" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Install.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF 'Acrylic/$installerVersion/Acrylic-Portable.zip/download' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Install.ps1"
+    run grep -nF 'Acrylic/$version/Acrylic-Portable.zip/download' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Install.ps1"
     [ "$status" -eq 0 ]
 }
 
