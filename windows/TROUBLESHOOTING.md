@@ -783,8 +783,9 @@ purgeMs=... startMs=... runningWaitMs=...` (WARN above 3 s), and a slow host
 # Check watchdog fail counter
 Get-Content "C:\OpenPath\data\watchdog-fails.txt" -ErrorAction SilentlyContinue
 
-# Check for stale failsafe state
+# Check for stale failsafe state and the pending failure run
 Test-Path "C:\OpenPath\data\stale-failsafe-state.json"
+Get-Content "C:\OpenPath\data\whitelist-download-failures.json" -ErrorAction SilentlyContinue
 
 # Check integrity baseline
 Test-Path "C:\OpenPath\data\integrity-baseline.json"
@@ -795,7 +796,7 @@ Get-Content "C:\OpenPath\data\logs\openpath.log" |
     Select-Object -Last 30
 ```
 
-A `STALE_FAILSAFE` status means the cached whitelist is stale and the agent has fallen back to a saved safe state. Freshness counts from the last time the whitelist changed or the server confirmed it unchanged (HTTP 304, recorded in `whitelist.verified`), and the next successful download or 304 leaves the fail-safe. Run a forced update to recover:
+A `STALE_FAILSAFE` status means the cached whitelist is stale and the agent has fallen back to a saved safe state. Freshness counts from the last time the whitelist changed or the server confirmed it unchanged (HTTP 304, recorded in `whitelist.verified`). The fail-safe is entered only after `staleFailsafeMinConsecutiveFailures` counted download failures (default 6); counted failures must be at least four minutes apart, so a single failed boot-time download does not enter it. While the cached whitelist is old but the threshold is not reached, the health action stays `download_failed_cached_whitelist` and adds `stale_failsafe_progress=<count>/<threshold>`. A successful download (HTTP 200), a 304, or the remote-disable answer resets the run; a reboot does not. The next successful download or 304 leaves the fail-safe. Run a forced update to recover:
 
 ```powershell
 .\OpenPath.ps1 update
@@ -857,6 +858,7 @@ Get-ChildItem "C:\OpenPath\data\agent-update\update-journal.quarantine-*.json"
 - `C:\OpenPath\data\logs\openpath.log` - agent log
 - `C:\OpenPath\data\watchdog-fails.txt` - watchdog consecutive fail counter
 - `C:\OpenPath\data\stale-failsafe-state.json` - present when stale failsafe is active
+- `C:\OpenPath\data\whitelist-download-failures.json` - persisted run of counted whitelist download failures
 - `C:\OpenPath\data\whitelist.verified` - last time the server confirmed the cached whitelist is current
 - `C:\OpenPath\data\integrity-baseline.json` - integrity hashes for critical files
 - `C:\OpenPath\data\integrity-backup\` - backup copies used for integrity restoration

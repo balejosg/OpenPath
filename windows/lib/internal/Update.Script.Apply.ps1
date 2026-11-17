@@ -1,5 +1,5 @@
 function Get-OpenPathWhitelistDownloadResult {
-    # fetches the whitelist from whitelistUrl and returns DownloadFailed and Whitelist fields; sets DownloadFailed on any exception
+    # fetches the whitelist from whitelistUrl and returns DownloadFailed, Whitelist, and ErrorText fields; sets DownloadFailed on any exception
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config
@@ -8,6 +8,7 @@ function Get-OpenPathWhitelistDownloadResult {
     $result = [ordered]@{
         DownloadFailed = $false
         Whitelist = $null
+        ErrorText = ''
     }
 
     try {
@@ -15,10 +16,220 @@ function Get-OpenPathWhitelistDownloadResult {
     }
     catch {
         $result.DownloadFailed = $true
+        $result.ErrorText = [string]$_
         Write-OpenPathLog "Whitelist download failed: $_" -Level WARN
     }
 
     return [PSCustomObject]$result
+}
+
+function Get-OpenPathWhitelistDownloadFailureState {
+    # reads the persisted run of failed whitelist downloads; missing, unreadable, or unknown-schema state counts as zero
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StatePath
+    )
+
+    $emptyState = [PSCustomObject][ordered]@{
+        SchemaVersion       = 1
+        ConsecutiveFailures = 0
+        LastFailureUtc      = $null
+        LastError           = ''
+    }
+
+    if (-not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
+        return $emptyState
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $StatePath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return $emptyState
+        }
+
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $parsed -or -not $parsed.PSObject.Properties['schemaVersion']) {
+            return $emptyState
+        }
+
+        $schemaVersion = 0
+        try {
+            $schemaVersion = [int]$parsed.schemaVersion
+        }
+        catch {
+            return $emptyState
+        }
+        if ($schemaVersion -ne 1) {
+            return $emptyState
+        }
+
+        $consecutiveFailures = 0
+        if ($parsed.PSObject.Properties['consecutiveFailures']) {
+            try {
+                $consecutiveFailures = [int]$parsed.consecutiveFailures
+            }
+            catch {
+                $consecutiveFailures = 0
+            }
+        }
+        if ($consecutiveFailures -lt 0) {
+            $consecutiveFailures = 0
+        }
+
+        $lastFailureUtc = $null
+        if ($parsed.PSObject.Properties['lastFailureUtc'] -and $parsed.lastFailureUtc) {
+            try {
+                $parsedLastFailure = $parsed.lastFailureUtc
+                if ($parsedLastFailure -is [datetime]) {
+                    $parsedLastFailureDate = [datetime]$parsedLastFailure
+                    if ($parsedLastFailureDate.Kind -eq [System.DateTimeKind]::Unspecified) {
+                        $lastFailureUtc = [datetime]::SpecifyKind($parsedLastFailureDate, [System.DateTimeKind]::Utc)
+                    }
+                    else {
+                        $lastFailureUtc = $parsedLastFailureDate.ToUniversalTime()
+                    }
+                }
+                else {
+                    $parsedLastFailureDate = [datetime]::Parse([string]$parsedLastFailure, [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind)
+                    if ($parsedLastFailureDate.Kind -eq [System.DateTimeKind]::Unspecified) {
+                        $parsedLastFailureDate = [datetime]::SpecifyKind($parsedLastFailureDate, [System.DateTimeKind]::Utc)
+                    }
+                    $lastFailureUtc = $parsedLastFailureDate.ToUniversalTime()
+                }
+            }
+            catch {
+                $lastFailureUtc = $null
+            }
+        }
+
+        $lastError = ''
+        if ($parsed.PSObject.Properties['lastError']) {
+            $lastError = [string]$parsed.lastError
+        }
+
+        return [PSCustomObject]@{
+            SchemaVersion       = 1
+            ConsecutiveFailures = $consecutiveFailures
+            LastFailureUtc      = $lastFailureUtc
+            LastError           = $lastError
+        }
+    }
+    catch {
+        return $emptyState
+    }
+}
+
+function Save-OpenPathWhitelistDownloadFailureState {
+    # persists the failed-download run with the shared atomic JSON helper
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StatePath,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ConsecutiveFailures,
+
+        [AllowNull()]
+        [object]$LastFailureUtc = $null,
+
+        [string]$LastError = ''
+    )
+
+    $lastFailureValue = $null
+    if ($LastFailureUtc) {
+        $lastFailureValue = ([datetime]$LastFailureUtc).ToUniversalTime().ToString('o')
+    }
+
+    Write-OpenPathAtomicJsonFile -Path $StatePath -Data ([ordered]@{
+            schemaVersion       = 1
+            consecutiveFailures = [Math]::Max([int]$ConsecutiveFailures, 0)
+            lastFailureUtc      = $lastFailureValue
+            lastError           = [string]$LastError
+        }) -Depth 4
+}
+
+function Register-OpenPathWhitelistDownloadFailure {
+    # counts a failed whitelist download when it is the first of a run or at least four minutes after the last counted failure
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StatePath,
+
+        [string]$ErrorText = '',
+
+        [datetime]$Now = (Get-Date).ToUniversalTime()
+    )
+
+    $nowUtc = $Now
+    if ($nowUtc.Kind -ne [System.DateTimeKind]::Utc) {
+        $nowUtc = $nowUtc.ToUniversalTime()
+    }
+
+    $state = Get-OpenPathWhitelistDownloadFailureState -StatePath $StatePath
+    $consecutiveFailures = [int]$state.ConsecutiveFailures
+    $lastFailureUtc = $state.LastFailureUtc
+    $shouldCount = $true
+
+    if ($consecutiveFailures -gt 0 -and $lastFailureUtc) {
+        if ($lastFailureUtc -le $nowUtc -and ($nowUtc - $lastFailureUtc).TotalMinutes -lt 4) {
+            $shouldCount = $false
+        }
+    }
+
+    if ($shouldCount) {
+        $consecutiveFailures += 1
+        $lastFailureUtc = $nowUtc
+    }
+
+    $redactedError = ConvertTo-OpenPathRedactedValue -Value ([string]$ErrorText)
+    if ($null -eq $redactedError) {
+        $redactedError = ''
+    }
+    $redactedError = [string]$redactedError
+    if ($redactedError.Length -gt 200) {
+        $redactedError = $redactedError.Substring(0, 200)
+    }
+
+    try {
+        Save-OpenPathWhitelistDownloadFailureState `
+            -StatePath $StatePath `
+            -ConsecutiveFailures $consecutiveFailures `
+            -LastFailureUtc $lastFailureUtc `
+            -LastError $redactedError
+    }
+    catch {
+        Write-OpenPathLog "Could not persist the whitelist download failure run: $_" -Level WARN
+    }
+
+    return [PSCustomObject]@{
+        ConsecutiveFailures = $consecutiveFailures
+        LastFailureUtc      = $lastFailureUtc
+        LastError           = $redactedError
+    }
+}
+
+function Reset-OpenPathWhitelistDownloadFailureState {
+    # clears the failed-download run after any successful contact with the server
+    param(
+        [string]$StatePath = ''
+    )
+
+    if (-not $StatePath) {
+        return
+    }
+
+    if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+        try {
+            Save-OpenPathWhitelistDownloadFailureState `
+                -StatePath $StatePath `
+                -ConsecutiveFailures 0 `
+                -LastFailureUtc $null `
+                -LastError ''
+        }
+        catch {
+            Write-OpenPathLog "Could not reset the whitelist download failure run: $_" -Level WARN
+        }
+    }
 }
 
 function Join-OpenPathUpdateHealthActions {
@@ -77,7 +288,7 @@ function Get-OpenPathCachedWhitelistAgeHours {
 }
 
 function Handle-OpenPathDownloadFailure {
-    # applies the cached whitelist when a download fails; triggers stale-failsafe when age exceeds the threshold; always sends a health report
+    # applies the cached whitelist when a download fails; counts consecutive failures and enters the stale fail-safe only after the configured threshold; always sends a health report
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config,
@@ -94,12 +305,32 @@ function Handle-OpenPathDownloadFailure {
         [Parameter(Mandatory = $true)]
         [bool]$EnableStaleFailsafe,
 
+        [int]$StaleFailsafeMinConsecutiveFailures = 6,
+
+        [string]$DownloadFailureStatePath = '',
+
+        [string]$DownloadErrorText = '',
+
+        [datetime]$Now = (Get-Date).ToUniversalTime(),
+
         [string]$HealthActionSuffix = ''
     )
 
     if (-not (Test-Path $WhitelistPath)) {
         throw "No local whitelist available and download failed"
     }
+
+    if (-not $DownloadFailureStatePath) {
+        $DownloadFailureStatePath = Join-Path (Split-Path $StaleFailsafeStatePath -Parent) 'whitelist-download-failures.json'
+    }
+
+    $failureState = Register-OpenPathWhitelistDownloadFailure `
+        -StatePath $DownloadFailureStatePath `
+        -ErrorText $DownloadErrorText `
+        -Now $Now
+    $consecutiveFailures = [int]$failureState.ConsecutiveFailures
+    $failureThreshold = [Math]::Max([int]$StaleFailsafeMinConsecutiveFailures, 1)
+    $staleFailsafeCurrentlyActive = Test-Path -LiteralPath $StaleFailsafeStatePath
 
     # Phase 7 P2: the queue apply writes the overlay and AcrylicHosts.txt; it runs
     # inside the Acrylic writers lock so the dependency fast path (which waits on
@@ -117,7 +348,9 @@ function Handle-OpenPathDownloadFailure {
     Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
 
     $cachedAgeHours = Get-OpenPathCachedWhitelistAgeHours -WhitelistPath $WhitelistPath
-    if ($EnableStaleFailsafe -and $StaleWhitelistMaxAgeHours -gt 0 -and $cachedAgeHours -ge $StaleWhitelistMaxAgeHours) {
+    $ageThresholdReached = $EnableStaleFailsafe -and $StaleWhitelistMaxAgeHours -gt 0 -and $cachedAgeHours -ge $StaleWhitelistMaxAgeHours
+    $failureThresholdReached = $consecutiveFailures -ge $failureThreshold
+    if ($ageThresholdReached -and ($staleFailsafeCurrentlyActive -or $failureThresholdReached)) {
         Enter-StaleWhitelistFailsafe -Config $Config -WhitelistAgeHours $cachedAgeHours -StaleFailsafeStatePath $StaleFailsafeStatePath
         $runtimeHealth = Get-OpenPathRuntimeHealth
         Send-OpenPathHealthReport -Status 'STALE_FAILSAFE' `
@@ -125,8 +358,13 @@ function Handle-OpenPathDownloadFailure {
             -DnsResolving $runtimeHealth.DnsResolving `
             -FailCount 0 `
             -Actions (Join-OpenPathUpdateHealthActions -Action "stale_whitelist_failsafe age=${cachedAgeHours}h" -Suffix $HealthActionSuffix) | Out-Null
-        Write-OpenPathLog "Stale fail-safe activated after download failure (age=$cachedAgeHours h)" -Level WARN
+        Write-OpenPathLog "Stale fail-safe activated after download failure (age=$cachedAgeHours h, failures=$consecutiveFailures/$failureThreshold)" -Level WARN
         return
+    }
+
+    $healthAction = 'download_failed_cached_whitelist'
+    if ($ageThresholdReached -and -not $staleFailsafeCurrentlyActive) {
+        $healthAction = "$healthAction; stale_failsafe_progress=$consecutiveFailures/$failureThreshold"
     }
 
     $runtimeHealth = Get-OpenPathRuntimeHealth
@@ -134,8 +372,8 @@ function Handle-OpenPathDownloadFailure {
         -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
         -DnsResolving $runtimeHealth.DnsResolving `
         -FailCount 0 `
-        -Actions (Join-OpenPathUpdateHealthActions -Action 'download_failed_cached_whitelist' -Suffix $HealthActionSuffix) | Out-Null
-    Write-OpenPathLog "Using cached whitelist (age=$cachedAgeHours h) until next successful download" -Level WARN
+        -Actions (Join-OpenPathUpdateHealthActions -Action $healthAction -Suffix $HealthActionSuffix) | Out-Null
+    Write-OpenPathLog "Using cached whitelist (age=$cachedAgeHours h, failures=$consecutiveFailures/$failureThreshold) until next successful download" -Level WARN
 }
 
 function Handle-OpenPathNotModified {
@@ -149,9 +387,13 @@ function Handle-OpenPathNotModified {
 
         [string]$StaleFailsafeStatePath = '',
 
+        [string]$DownloadFailureStatePath = '',
+
         [string]$HealthActionSuffix = ''
     )
 
+    Reset-OpenPathWhitelistDownloadFailureState -StatePath $DownloadFailureStatePath
+    $staleFailsafeWasActive = [bool]($StaleFailsafeStatePath -and (Test-Path -LiteralPath $StaleFailsafeStatePath))
     $localWhitelistSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
     $policyState = Get-OpenPathEndpointPolicyState -WhitelistSections $localWhitelistSections
     if ($policyState.IsDisabled) {
@@ -192,9 +434,16 @@ function Handle-OpenPathNotModified {
     # kept the marker forever and the next failed download re-entered the
     # fail-safe at once, judging freshness by the last time the file changed.
     Set-OpenPathWhitelistVerified -WhitelistPath $WhitelistPath
+    if ($staleFailsafeWasActive) {
+        # Acrylic keeps serving the narrowed control-domain hosts file until it
+        # reloads; the queue apply above only rewrites the file. Restore protected
+        # mode in this cycle, but never on an ordinary 304 that was not in the
+        # fail-safe.
+        Restore-OpenPathProtectedMode -Config $Config | Out-Null
+        Write-OpenPathLog "Server confirmed the cached whitelist is current; restored protected mode and left stale fail-safe mode"
+    }
     if ($StaleFailsafeStatePath -and (Test-Path $StaleFailsafeStatePath)) {
         Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
-        Write-OpenPathLog "Server confirmed the cached whitelist is current; left stale fail-safe mode"
     }
 
     try {
@@ -224,9 +473,12 @@ function Handle-OpenPathDisabledWhitelist {
         [Parameter(Mandatory = $true)]
         [string]$StaleFailsafeStatePath,
 
+        [string]$DownloadFailureStatePath = '',
+
         [string]$HealthActionSuffix = ''
     )
 
+    Reset-OpenPathWhitelistDownloadFailureState -StatePath $DownloadFailureStatePath
     Write-OpenPathLog "DEACTIVATION FLAG detected - entering fail-open mode" -Level WARN
 
     Invoke-OpenPathUpdateWritersLockScope -Stage 'fail-open-marker' -Action {
@@ -266,9 +518,12 @@ function Handle-OpenPathWhitelistApply {
         [Parameter(Mandatory = $true)]
         [string]$StaleFailsafeStatePath,
 
+        [string]$DownloadFailureStatePath = '',
+
         [string]$HealthActionSuffix = ''
     )
 
+    Reset-OpenPathWhitelistDownloadFailureState -StatePath $DownloadFailureStatePath
     $serializedWhitelist = ConvertTo-OpenPathWhitelistFileContent `
         -Whitelist $Whitelist.Whitelist `
         -BlockedSubdomains $Whitelist.BlockedSubdomains `

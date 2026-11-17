@@ -106,6 +106,7 @@ function New-OpenPathInstallerConfig {
         enableBrowserPolicies = $true
         enableStaleFailsafe = $true
         staleWhitelistMaxAgeHours = 24
+        staleFailsafeMinConsecutiveFailures = 6
         enableIntegrityChecks = $true
         enableKnownDnsIpBlocking = $true
         enableDohIpBlocking = $true

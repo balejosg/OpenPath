@@ -1,5 +1,5 @@
 function Get-OpenPathUpdatePolicySettings {
-    # reads stale-whitelist age, failsafe, checkpoint rollback, and max-checkpoint settings from $Config, applying defaults for any missing or invalid values.
+    # reads stale-whitelist age, failsafe threshold, checkpoint rollback, and max-checkpoint settings from $Config, applying defaults for any missing or invalid values.
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config
@@ -8,6 +8,7 @@ function Get-OpenPathUpdatePolicySettings {
     $settings = [ordered]@{
         StaleWhitelistMaxAgeHours = 24
         EnableStaleFailsafe = $true
+        StaleFailsafeMinConsecutiveFailures = 6
         EnableCheckpointRollback = $true
         MaxCheckpoints = 3
     }
@@ -26,6 +27,18 @@ function Get-OpenPathUpdatePolicySettings {
 
     if ($Config.PSObject.Properties['enableStaleFailsafe']) {
         $settings.EnableStaleFailsafe = [bool]$Config.enableStaleFailsafe
+    }
+
+    if ($Config.PSObject.Properties['staleFailsafeMinConsecutiveFailures']) {
+        try {
+            $configuredMinConsecutiveFailures = [int]$Config.staleFailsafeMinConsecutiveFailures
+            if ($configuredMinConsecutiveFailures -ge 1) {
+                $settings.StaleFailsafeMinConsecutiveFailures = $configuredMinConsecutiveFailures
+            }
+        }
+        catch {
+            Write-OpenPathLog "Invalid staleFailsafeMinConsecutiveFailures value, using default: $_" -Level WARN
+        }
     }
 
     if ($Config.PSObject.Properties['enableCheckpointRollback']) {

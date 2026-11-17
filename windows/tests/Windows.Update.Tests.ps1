@@ -254,7 +254,8 @@ Describe "Update Script" {
                 '[string]$HealthActionSuffix = ''''',
                 'Join-OpenPathUpdateHealthActions -Action ''update'' -Suffix $HealthActionSuffix',
                 'Join-OpenPathUpdateHealthActions -Action ''not_modified'' -Suffix $HealthActionSuffix',
-                'Join-OpenPathUpdateHealthActions -Action ''download_failed_cached_whitelist'' -Suffix $HealthActionSuffix'
+                'Join-OpenPathUpdateHealthActions -Action $healthAction -Suffix $HealthActionSuffix',
+                'download_failed_cached_whitelist'
             )
 
             Assert-ContentContainsAll -Content $sseContent -Needles @(
@@ -342,17 +343,23 @@ Describe "Update Script" {
         Context "Stale whitelist fail-safe and server confirmation" {
             BeforeEach {
                 . (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.System.ps1")
+                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Config.ps1")
+                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Redaction.ps1")
+                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Config.ps1")
                 . (Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1")
 
                 $script:dataDir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
                 New-Item -ItemType Directory -Path $script:dataDir | Out-Null
                 $script:whitelistPath = Join-Path $script:dataDir 'whitelist.txt'
                 $script:stalePath = Join-Path $script:dataDir 'stale-failsafe-state.json'
+                $script:failureStatePath = Join-Path $script:dataDir 'whitelist-download-failures.json'
                 Set-Content -Path $script:whitelistPath -Value "## WHITELIST`nexample.org"
                 (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-93)
                 $script:mirrorFingerprint = (Get-Item $script:whitelistPath).LastWriteTimeUtc
                 $script:failsafeEntries = 0
                 $script:healthStatuses = @()
+                $script:healthActions = @()
+                $script:protectedModeRestores = 0
 
                 function Write-OpenPathLog { param([string]$Message, [string]$Level) }
                 function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $false } }
@@ -361,9 +368,25 @@ Describe "Update Script" {
                 function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) [pscustomobject]@{ Actions = @() } }
                 function Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) }
                 function Get-OpenPathRuntimeHealth { [pscustomobject]@{ DnsServiceRunning = $true; DnsResolving = $true } }
-                function Send-OpenPathHealthReport { param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions) $script:healthStatuses += $Status }
-                function Clear-StaleFailsafeState { param([string]$StaleFailsafeStatePath) Remove-Item $StaleFailsafeStatePath -Force }
+                function Send-OpenPathHealthReport { param($Status, $DnsServiceRunning, $DnsResolving, $FailCount, $Actions) $script:healthStatuses += $Status; $script:healthActions += $Actions }
+                function Clear-StaleFailsafeState { param([string]$StaleFailsafeStatePath) if (Test-Path $StaleFailsafeStatePath) { Remove-Item $StaleFailsafeStatePath -Force } }
                 function Enter-StaleWhitelistFailsafe { param($Config, $WhitelistAgeHours, $StaleFailsafeStatePath) $script:failsafeEntries++; Set-Content $StaleFailsafeStatePath '{}' }
+                function Restore-OpenPathProtectedMode { param($Config) $script:protectedModeRestores++ }
+                function Sync-FirefoxNativeHostMirror { param($Config, $WhitelistPath, [switch]$ClearWhitelist) }
+                function ConvertTo-OpenPathWhitelistFileContent { param($Whitelist, $BlockedSubdomains, $BlockedPaths) return "## WHITELIST`nexample.org" }
+                function Invoke-OpenPathRuntimeDependencyQueueApply { param($WhitelistPath, [switch]$PassThru) if ($PassThru) { return [pscustomobject]@{ Changed = $false; Processed = 0; Rejected = 0 } } return $false }
+                function Get-OpenPathRuntimeDependencyOverlayState { return $null }
+
+                function Set-OpenPathTestFailureState {
+                    param([string]$StatePath, [int]$Count, [datetime]$LastFailureUtc)
+
+                    [ordered]@{
+                        schemaVersion       = 1
+                        consecutiveFailures = $Count
+                        lastFailureUtc      = $LastFailureUtc.ToUniversalTime().ToString('o')
+                        lastError           = 'seeded'
+                    } | ConvertTo-Json -Depth 4 | Set-Content -Path $StatePath -Encoding UTF8
+                }
             }
 
             It "Leaves the fail-safe when the server confirms the cached whitelist, without touching the whitelist file" {
@@ -375,28 +398,219 @@ Describe "Update Script" {
                 Test-Path (Join-Path $script:dataDir 'whitelist.verified') | Should -BeTrue
                 (Get-Item $script:whitelistPath).LastWriteTimeUtc | Should -Be $script:mirrorFingerprint
                 Get-OpenPathCachedWhitelistAgeHours -WhitelistPath $script:whitelistPath | Should -BeLessThan 1
+                $script:protectedModeRestores | Should -Be 1
+            }
+
+            It "Does not restore protected mode on an ordinary 304 cycle" {
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+
+                $script:protectedModeRestores | Should -Be 0
             }
 
             It "Keeps using a recently confirmed whitelist when a later download fails" {
                 Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
 
                 Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
-                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -DownloadFailureStatePath $script:failureStatePath
 
                 $script:failsafeEntries | Should -Be 0
                 Test-Path $script:stalePath | Should -BeFalse
                 $script:healthStatuses[-1] | Should -Be 'DEGRADED'
             }
 
-            It "Still enters the fail-safe when neither the file nor a server confirmation is recent" {
+            It "Degrades and counts the first failed download with an old cached whitelist" {
                 Set-Content -Path (Join-Path $script:dataDir 'whitelist.verified') -Value 'old'
                 (Get-Item (Join-Path $script:dataDir 'whitelist.verified')).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-30)
 
                 Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
-                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath
+
+                $script:failsafeEntries | Should -Be 0
+                $script:healthStatuses[-1] | Should -Be 'DEGRADED'
+                $script:healthActions[-1] | Should -Match 'download_failed_cached_whitelist'
+                $script:healthActions[-1] | Should -Match 'stale_failsafe_progress=1/6'
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 1
+            }
+
+            It "Does not count a failure that arrives less than four minutes after the last counted failure" {
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-17T10:00:00', [System.DateTimeKind]::Utc)
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath -Now $t0
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath -Now $t0.AddMinutes(3)
+
+                $state = Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath
+                $state.ConsecutiveFailures | Should -Be 1
+                $state.LastFailureUtc | Should -Be $t0
+            }
+
+            It "Enters the fail-safe on the sixth counted failure" {
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-17T10:00:00', [System.DateTimeKind]::Utc)
+
+                for ($i = 0; $i -lt 5; $i++) {
+                    Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                        -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                        -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath -Now $t0.AddMinutes(5 * $i)
+                }
+                $script:failsafeEntries | Should -Be 0
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath -Now $t0.AddMinutes(25)
 
                 $script:failsafeEntries | Should -Be 1
                 $script:healthStatuses[-1] | Should -Be 'STALE_FAILSAFE'
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 6
+            }
+
+            It "Keeps a recent cached whitelist out of the fail-safe even after many counted failures" {
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime()
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-17T10:00:00', [System.DateTimeKind]::Utc)
+
+                for ($i = 0; $i -lt 10; $i++) {
+                    Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                        -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                        -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath -Now $t0.AddMinutes(5 * $i)
+                }
+
+                $script:failsafeEntries | Should -Be 0
+                $script:healthStatuses[-1] | Should -Be 'DEGRADED'
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 10
+            }
+
+            It "Resets the failure run when a 304 confirms the cached whitelist" {
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-17T10:00:00', [System.DateTimeKind]::Utc)
+                Set-OpenPathTestFailureState -StatePath $script:failureStatePath -Count 3 -LastFailureUtc $t0
+
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -DownloadFailureStatePath $script:failureStatePath
+
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 0
+            }
+
+            It "Resets the failure run when a 200 applies a new whitelist" {
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-17T10:00:00', [System.DateTimeKind]::Utc)
+                Set-OpenPathTestFailureState -StatePath $script:failureStatePath -Count 3 -LastFailureUtc $t0
+
+                Handle-OpenPathWhitelistApply `
+                    -Config ([pscustomobject]@{ enableBrowserPolicies = $false }) `
+                    -Whitelist ([pscustomobject]@{ Whitelist = @('example.org'); BlockedSubdomains = @(); BlockedPaths = @() }) `
+                    -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath `
+                    -DownloadFailureStatePath $script:failureStatePath
+
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 0
+            }
+
+            It "Resets the failure run when the server returns the remote-disable answer" {
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-17T10:00:00', [System.DateTimeKind]::Utc)
+                Set-OpenPathTestFailureState -StatePath $script:failureStatePath -Count 3 -LastFailureUtc $t0
+
+                Handle-OpenPathDisabledWhitelist `
+                    -Config ([pscustomobject]@{ enableFirewall = $false }) `
+                    -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath `
+                    -DownloadFailureStatePath $script:failureStatePath
+
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 0
+            }
+
+            It "Reads the persisted count after a simulated restart" {
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-17T10:00:00', [System.DateTimeKind]::Utc)
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath -Now $t0
+
+                . (Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1")
+
+                Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath | Should -Not -BeNullOrEmpty
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 1
+            }
+
+            It "Treats a corrupt failure state file as zero and rewrites it" {
+                Set-Content -Path $script:failureStatePath -Value 'not-json' -Encoding UTF8
+
+                { Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                        -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                        -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath } | Should -Not -Throw
+
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 1
+            }
+
+            It "Treats an unknown failure state schema as zero" {
+                [ordered]@{
+                    schemaVersion       = 99
+                    consecutiveFailures = 9
+                    lastFailureUtc      = (Get-Date).ToUniversalTime().ToString('o')
+                    lastError           = 'future schema'
+                } | ConvertTo-Json -Depth 4 | Set-Content -Path $script:failureStatePath -Encoding UTF8
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath
+
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 1
+            }
+
+            It "Counts a new failure when the last counted failure is in the future" {
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-17T10:00:00', [System.DateTimeKind]::Utc)
+                Set-OpenPathTestFailureState -StatePath $script:failureStatePath -Count 3 -LastFailureUtc $t0.AddMinutes(10)
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath -Now $t0
+
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 4
+            }
+
+            It "Reads the consecutive-failure threshold with a default of 6 and a minimum of 1" {
+                (Get-OpenPathUpdatePolicySettings -Config ([pscustomobject]@{})).StaleFailsafeMinConsecutiveFailures | Should -Be 6
+                (Get-OpenPathUpdatePolicySettings -Config ([pscustomobject]@{ staleFailsafeMinConsecutiveFailures = 1 })).StaleFailsafeMinConsecutiveFailures | Should -Be 1
+
+                foreach ($invalid in @(0, -1, 'not-a-number')) {
+                    (Get-OpenPathUpdatePolicySettings -Config ([pscustomobject]@{ staleFailsafeMinConsecutiveFailures = $invalid })).StaleFailsafeMinConsecutiveFailures | Should -Be 6
+                }
+            }
+
+            It "Enters the fail-safe on the first failure when the configured threshold is 1" {
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 1 -DownloadFailureStatePath $script:failureStatePath
+
+                $script:failsafeEntries | Should -Be 1
+                $script:healthStatuses[-1] | Should -Be 'STALE_FAILSAFE'
+            }
+
+            It "Stays in the fail-safe when the marker already exists, regardless of the threshold" {
+                Set-Content -Path $script:stalePath -Value '{}'
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath
+
+                $script:failsafeEntries | Should -Be 1
+                $script:healthStatuses[-1] | Should -Be 'STALE_FAILSAFE'
+            }
+
+            It "Stores a redacted and bounded download error without the machine token" {
+                $token = 'machine-token-abc123'
+                $errorText = "GET https://api.example/api/machines/w/$token/whitelist.txt?token=$token failed with 500 " + ('x' * 400)
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath `
+                    -DownloadErrorText $errorText
+
+                $raw = Get-Content $script:failureStatePath -Raw
+                $raw | Should -Not -Match [regex]::Escape($token)
+                $state = Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath
+                $state.LastError | Should -Match '\[redacted\]'
+                $state.LastError.Length | Should -BeLessOrEqual 200
             }
         }
 

@@ -789,6 +789,7 @@ function Invoke-OpenPathUpdateCycle {
     $whitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
     $backupPath = Join-Path $OpenPathRoot 'data\whitelist.backup.txt'
     $staleFailsafeStatePath = Join-Path $OpenPathRoot 'data\stale-failsafe-state.json'
+    $downloadFailureStatePath = Join-Path $OpenPathRoot 'data\whitelist-download-failures.json'
 
     try {
         $mutex = [System.Threading.Mutex]::new($false, $UpdateMutexName)
@@ -870,12 +871,19 @@ function Invoke-OpenPathUpdateCycle {
             & $writeUpdateStage 'download'
 
             if ($downloadResult.DownloadFailed) {
+                $downloadErrorText = ''
+                if ($downloadResult.PSObject.Properties['ErrorText']) {
+                    $downloadErrorText = [string]$downloadResult.ErrorText
+                }
                 $null = Handle-OpenPathDownloadFailure `
                     -Config $config `
                     -WhitelistPath $whitelistPath `
                     -StaleFailsafeStatePath $staleFailsafeStatePath `
                     -StaleWhitelistMaxAgeHours $updateSettings.StaleWhitelistMaxAgeHours `
                     -EnableStaleFailsafe $updateSettings.EnableStaleFailsafe `
+                    -StaleFailsafeMinConsecutiveFailures $updateSettings.StaleFailsafeMinConsecutiveFailures `
+                    -DownloadFailureStatePath $downloadFailureStatePath `
+                    -DownloadErrorText $downloadErrorText `
                     -HealthActionSuffix $portalActiveState.HealthAction
             }
             elseif ($downloadResult.Whitelist.PSObject.Properties['NotModified'] -and $downloadResult.Whitelist.NotModified) {
@@ -883,6 +891,7 @@ function Invoke-OpenPathUpdateCycle {
                     -Config $config `
                     -WhitelistPath $whitelistPath `
                     -StaleFailsafeStatePath $staleFailsafeStatePath `
+                    -DownloadFailureStatePath $downloadFailureStatePath `
                     -HealthActionSuffix $portalActiveState.HealthAction
             }
             elseif ($downloadResult.Whitelist.IsDisabled) {
@@ -890,6 +899,7 @@ function Invoke-OpenPathUpdateCycle {
                     -Config $config `
                     -WhitelistPath $whitelistPath `
                     -StaleFailsafeStatePath $staleFailsafeStatePath `
+                    -DownloadFailureStatePath $downloadFailureStatePath `
                     -HealthActionSuffix $portalActiveState.HealthAction
             }
             else {
@@ -898,6 +908,7 @@ function Invoke-OpenPathUpdateCycle {
                     -Whitelist $downloadResult.Whitelist `
                     -WhitelistPath $whitelistPath `
                     -StaleFailsafeStatePath $staleFailsafeStatePath `
+                    -DownloadFailureStatePath $downloadFailureStatePath `
                     -HealthActionSuffix $portalActiveState.HealthAction
             }
             & $writeUpdateStage 'apply'

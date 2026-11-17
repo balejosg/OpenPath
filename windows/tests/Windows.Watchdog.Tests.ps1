@@ -3896,5 +3896,117 @@ Describe "Watchdog committed update journal" {
         $resumeStart | Should -BeGreaterThan -1
         $restoreStart | Should -BeGreaterThan $resumeStart
     }
+
+    Context "Stale fail-safe watchdog behavior" {
+        It "Does not count DNS failures or roll back while the stale fail-safe marker is active" {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1")
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.FailCount.ps1")
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointPolicyState.ps1")
+
+            $testRoot = Join-Path $TestDrive ("watchdog-stale-failsafe-" + [guid]::NewGuid().ToString('N'))
+            $dataDir = Join-Path $testRoot 'data'
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $dataDir 'whitelist.txt') -Value "## WHITELIST`nblocked.example.org" -Encoding UTF8
+            Set-Content -LiteralPath (Join-Path $dataDir 'stale-failsafe-state.json') -Value '{}' -Encoding UTF8
+            $failCountPath = Join-Path $dataDir 'watchdog-fails.txt'
+            Set-Content -LiteralPath $failCountPath -Value '2' -Encoding UTF8
+            $global:OpenPathStaleFailsafeProbeDomain = ''
+            $global:OpenPathStaleFailsafeRollbackAttempted = $false
+
+            function global:Get-OpenPathWatchdogTaskHealth { param($OpenPathRoot) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
+            function global:Get-OpenPathWhitelistSectionsFromFile {
+                param([string]$Path)
+                [pscustomobject]@{ IsDisabled = $false; Whitelist = @('blocked.example.org'); BlockedSubdomains = @() }
+            }
+            function global:Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
+                param($Config, $PortalModeActive, $CaptiveState)
+                [pscustomobject]@{ Issues = @(); ReasonCodes = @() }
+            }
+            function global:Get-Service { param($DisplayName, $ErrorAction) return $null }
+            function global:New-OpenPathWatchdogProtectedModeRepairPlan {
+                param($PolicyState, $AcrylicServiceRunning, $AcrylicServiceAutoStart, $DnsResolutionHealthy, $DnsSinkholeHealthy, $FirewallActive, $LocalDnsConfigured, $AffectedLocalDnsAdapterNames, $BridgeFiltersDetected, $AffectedBridgeFilterAdapterNames)
+                $issues = @()
+                $recovery = @()
+                if (-not $DnsResolutionHealthy) {
+                    $issues += 'DNS resolution failed for allowed domain'
+                    $recovery += 'DNS resolution failed for allowed domain'
+                }
+                [pscustomobject]@{ Actions = @(); Issues = $issues; RecoveryEligibleIssues = $recovery }
+            }
+            function global:Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) }
+            function global:Test-DNSResolution {
+                $global:OpenPathStaleFailsafeProbeDomain = (Get-Content -LiteralPath (Join-Path $testRoot 'data\whitelist.txt') |
+                        Where-Object { $_ -and -not $_.StartsWith('#') } |
+                        Select-Object -First 1)
+                return $false
+            }
+            function global:Test-DNSSinkhole { param($Domain) return $true }
+            function global:Test-FirewallActive { return $true }
+            function global:Get-OpenPathActiveIpv4AdaptersMissingLocalDns { return @() }
+            function global:Get-OpenPathAdaptersWithBridgeFilters { param($ExtraComponentIds, $Allowlist) return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Invoke-OpenPathWatchdogAppControlHealth {
+                param($Config, $OpenPathRoot, $GroupSyncFailed)
+                [pscustomobject]@{ Issues = @(); ReasonCodes = @(); RecoveryEligibleIssues = @() }
+            }
+            function global:Invoke-OpenPathWatchdogFirefoxPolicySync { }
+            function global:Invoke-OpenPathWatchdogEgressFloorCheck { param($Config, $OpenPathRoot) }
+            function global:Test-OpenPathSplitDnsTopologyDrift { return [pscustomobject]@{ Drifted = $false; Reason = '' } }
+            function global:Get-OpenPathFirefoxNativeHostCompiledHealth {
+                param($Config)
+                [pscustomobject]@{ BoundaryActive = $false; ReasonCode = ''; UsesCompiledHost = $false; CompiledHealthy = $true }
+            }
+            function global:Get-OpenPathSmartAppControlState { return [pscustomobject]@{ State = 'off' } }
+            function global:Restore-CheckpointFromWatchdog {
+                $global:OpenPathStaleFailsafeRollbackAttempted = $true
+                return $false
+            }
+            function global:Write-OpenPathLog { param([string]$Message, [string]$Level) }
+
+            try {
+                $checkResult = Invoke-OpenPathWatchdogChecks `
+                    -Config ([pscustomobject]@{}) `
+                    -PortalModeActive $false `
+                    -CaptiveState 'Direct' `
+                    -OpenPathRoot $testRoot `
+                    -StaleFailsafeStatePath (Join-Path $dataDir 'stale-failsafe-state.json')
+
+                $checkResult.StaleFailsafeActive | Should -BeTrue
+                $global:OpenPathStaleFailsafeProbeDomain | Should -Be 'blocked.example.org'
+                $checkResult.Issues | Should -Contain 'DNS resolution failed for allowed domain'
+                $checkResult.RecoveryEligibleIssues | Should -Contain 'DNS resolution failed for allowed domain'
+
+                $outcome = Get-OpenPathWatchdogOutcome `
+                    -Config ([pscustomobject]@{}) `
+                    -Issues $checkResult.Issues `
+                    -ReasonCodes $checkResult.ReasonCodes `
+                    -RecoveryEligibleIssues $checkResult.RecoveryEligibleIssues `
+                    -StaleFailsafeActive $checkResult.StaleFailsafeActive `
+                    -IntegrityTampered $checkResult.IntegrityTampered `
+                    -FailOpenActive $checkResult.FailOpenActive `
+                    -PortalModeActive $false `
+                    -WatchdogFailCountPath $failCountPath `
+                    -OpenPathRoot $testRoot
+
+                $outcome.Status | Should -Be 'STALE_FAILSAFE'
+                $outcome.WatchdogFailCount | Should -Be 0
+                (Get-Content -LiteralPath $failCountPath -Raw).Trim() | Should -Be '0'
+                $global:OpenPathStaleFailsafeRollbackAttempted | Should -BeFalse
+            }
+            finally {
+                Remove-Item Function:\Get-OpenPathWatchdogTaskHealth, Function:\Get-OpenPathWhitelistSectionsFromFile -ErrorAction SilentlyContinue
+                Remove-Item Function:\Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks, Function:\Get-Service -ErrorAction SilentlyContinue
+                Remove-Item Function:\New-OpenPathWatchdogProtectedModeRepairPlan, Function:\Invoke-OpenPathEndpointStateRepairPlan -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-DNSResolution, Function:\Test-DNSSinkhole, Function:\Test-FirewallActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathActiveIpv4AdaptersMissingLocalDns, Function:\Get-OpenPathAdaptersWithBridgeFilters -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathIntegrity, Function:\Invoke-OpenPathWatchdogAppControlHealth -ErrorAction SilentlyContinue
+                Remove-Item Function:\Invoke-OpenPathWatchdogFirefoxPolicySync, Function:\Invoke-OpenPathWatchdogEgressFloorCheck -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathSplitDnsTopologyDrift, Function:\Get-OpenPathFirefoxNativeHostCompiledHealth -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathSmartAppControlState, Function:\Restore-CheckpointFromWatchdog -ErrorAction SilentlyContinue
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+                Remove-Variable -Name OpenPathStaleFailsafeProbeDomain, OpenPathStaleFailsafeRollbackAttempted -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
