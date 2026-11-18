@@ -357,9 +357,9 @@ function Set-AcrylicConfiguration {
         "GeneratedResponseTimeToLive" = "300"
         "PrimaryServerDomainNameAffinityMask" = $configuredUpstreamMask
         "SecondaryServerDomainNameAffinityMask" = $configuredUpstreamMask
-        "IgnoreFailureResponsesFromPrimaryServer" = "No"
+        "IgnoreFailureResponsesFromPrimaryServer" = "Yes"
         "IgnoreNegativeResponsesFromPrimaryServer" = "No"
-        "IgnoreFailureResponsesFromSecondaryServer" = "No"
+        "IgnoreFailureResponsesFromSecondaryServer" = "Yes"
         "IgnoreNegativeResponsesFromSecondaryServer" = "No"
         "SinkholeIPv6Lookups" = "No"
         "ForwardPrivateReverseLookups" = "No"

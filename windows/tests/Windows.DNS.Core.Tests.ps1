@@ -1550,6 +1550,10 @@ Describe "DNS Module" {
                 'IP2=::1',
                 'IgnoreNegativeResponsesFromPrimaryServer=No',
                 'IgnoreNegativeResponsesFromSecondaryServer=No',
+                # A SERVFAIL from one upstream (seen live: a school network's primary
+                # resolver failing every query) must not mask the other's good answer.
+                'IgnoreFailureResponsesFromPrimaryServer=Yes',
+                'IgnoreFailureResponsesFromSecondaryServer=Yes',
                 'AddressCacheDisabled=No'
             )
             Assert-IsAsciiEncoding $script:capturedAcrylicConfigEncoding
