@@ -387,6 +387,7 @@ Export-ModuleMember -Function *
                 'function Invoke-OpenPathWatchdogChecks { }',
                 'function Get-OpenPathOpenClassroomPosture { }',
                 'function Merge-OpenPathReasonCodes { }',
+                'function Invoke-OpenPathOpenClassroomPostureRepair { }',
                 'function Test-OpenPathAdapterDnsPinnedToLocalResolver { }'
             ) -Encoding ASCII
 

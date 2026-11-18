@@ -78,6 +78,7 @@ $requiredCommands = @(
     'Invoke-OpenPathWatchdogChecks',
     'Get-OpenPathOpenClassroomPosture',
     'Merge-OpenPathReasonCodes',
+    'Invoke-OpenPathOpenClassroomPostureRepair',
     'Test-OpenPathAdapterDnsPinnedToLocalResolver'
 )
 

@@ -1170,6 +1170,102 @@ Describe "Watchdog Script" {
         }
     }
 
+    Context "Open classroom posture repair" {
+        It "repairs a disabled classroom from the fail-open branch, reports the reopen, and never for an enabled classroom, portal mode or a DNS failure mode" {
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
+            . $helperPath
+            . (Join-Path (Split-Path $helperPath -Parent) 'Common.Whitelist.Sections.ps1')
+
+            $testRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path (Join-Path $testRoot 'data') -Force | Out-Null
+            $whitelistPath = Join-Path $testRoot 'data\whitelist.txt'
+            $global:OpenPathPostureRepairCalls = 0
+            $global:OpenPathPostureRepairResult = [pscustomobject]@{ Repaired = $true; Skipped = $false; Reason = 'open_classroom_reopened' }
+            $global:OpenPathPostureFailureMode = $null
+
+            # Local, not global: the runtime dot-sourced above defines the real one in this scope.
+            function Invoke-OpenPathOpenClassroomPostureRepair {
+                param($Config, $OpenPathRoot)
+                $global:OpenPathPostureRepairCalls++
+                return $global:OpenPathPostureRepairResult
+            }
+            function global:Read-OpenPathDnsFailureModeState { param([string]$OpenPathRoot = '') return $global:OpenPathPostureFailureMode }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathCaptivePortalMarker { return $null }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $false }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+            function global:Increment-WatchdogFailCount { return 1 }
+            function global:Reset-WatchdogFailCount { return 0 }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $config = [pscustomobject]@{ enableNonAdminAppControl = $false }
+                $invoke = {
+                    param([bool]$Portal)
+                    Invoke-OpenPathWatchdogChecks `
+                        -Config $config `
+                        -PortalModeActive $Portal `
+                        -CaptiveState 'Direct' `
+                        -OpenPathRoot $testRoot `
+                        -StaleFailsafeStatePath (Join-Path $testRoot 'data\stale-failsafe-state.json')
+                }
+
+                # Enabled classroom: the repair is never called.
+                Set-Content -LiteralPath $whitelistPath -Value "## WHITELIST`nexample.org"
+                $enabled = & $invoke $false
+                $global:OpenPathPostureRepairCalls | Should -Be 0
+                $enabled.ReasonCodes | Should -Not -Contain 'open_classroom_reopened'
+
+                # Disabled classroom: the repair runs and its success is a reason code.
+                Set-Content -LiteralPath $whitelistPath -Value "## WHITELIST`nexample.org`n#DESACTIVADO"
+                $disabled = & $invoke $false
+                $global:OpenPathPostureRepairCalls | Should -Be 1
+                $disabled.FailOpenActive | Should -BeTrue
+                $disabled.ReasonCodes | Should -Contain 'open_classroom_reopened'
+
+                # A repair that did not happen adds no code.
+                $global:OpenPathPostureRepairResult = [pscustomobject]@{ Repaired = $false; Skipped = $true; Reason = 'streak_recorded' }
+                $skipped = & $invoke $false
+                $global:OpenPathPostureRepairCalls | Should -Be 2
+                $skipped.ReasonCodes | Should -Not -Contain 'open_classroom_reopened'
+
+                # Portal mode and a DNS failure mode never reach the repair.
+                $global:OpenPathPostureRepairResult = [pscustomobject]@{ Repaired = $true; Skipped = $false; Reason = 'open_classroom_reopened' }
+                $portal = & $invoke $true
+                $global:OpenPathPostureRepairCalls | Should -Be 2
+                $portal.ReasonCodes | Should -Not -Contain 'open_classroom_reopened'
+
+                $global:OpenPathPostureFailureMode = [pscustomobject]@{ mode = 'open' }
+                $failureMode = & $invoke $false
+                $global:OpenPathPostureRepairCalls | Should -Be 2
+                $failureMode.ReasonCodes | Should -Not -Contain 'open_classroom_reopened'
+
+                # A repair that throws must not break the watchdog cycle.
+                $global:OpenPathPostureFailureMode = $null
+                function Invoke-OpenPathOpenClassroomPostureRepair { param($Config, $OpenPathRoot) throw 'boom' }
+                { & $invoke $false } | Should -Not -Throw
+            }
+            finally {
+                Remove-Item Function:\Read-OpenPathDnsFailureModeState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState, Function:\Get-OpenPathCaptivePortalMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+                Remove-Variable -Name OpenPathPostureRepairCalls, OpenPathPostureRepairResult, OpenPathPostureFailureMode -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     Context "Captive portal detection" {
         It "Defines admin-only captive portal recovery script with bounded queue processing" {
             $scriptPath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Recover-CaptivePortal.ps1")
