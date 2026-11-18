@@ -325,10 +325,13 @@ function Set-OpenPathStudentEgressFloor {
         FAIL-OPEN: when the restricted group SID cannot be resolved, or any rule or the
         profile change fails, the floor is torn down and the persisted pre-floor outbound
         default restored, so the device is never left at Block without the non-student
-        Allow. The pre-floor default is captured once (Save-... never overwrites an
-        existing state file, which also covers upgrades from the IP-set floor), and the
-        previous floor rules -- including legacy -EgressFloor-Whitelist-*/-System-* rules
-        -- are swapped out without touching the profile default.
+        Allow. Before flipping any profile to Block the apply verifies that the active
+        policy already exposes the expected non-student Allow; if not, nothing is blocked
+        and the invariant latch records the reason. The pre-floor default is captured once
+        (Save-... never overwrites an existing state file, which also covers upgrades from
+        the IP-set floor), and the previous floor rules -- including legacy
+        -EgressFloor-Whitelist-*/-System-* rules -- are removed only after the replacement
+        set exists, so a swap never leaves a window without an Allow.
     .OUTPUTS
         int -- rules created (0 == not applied / fail-open).
     #>
@@ -344,6 +347,12 @@ function Set-OpenPathStudentEgressFloor {
         return 0
     }
 
+    $latch = Read-OpenPathEgressFloorInvariantLatch
+    if ($latch) {
+        Write-OpenPathLog "Egress floor: invariant latch is active ($($latch.Reason)); NOT applying the floor until an operator clears it" -Level WARN
+        return 0
+    }
+
     try {
         $restrictedSid = Resolve-OpenPathEgressFloorRestrictedSid
         $rules = @(Get-OpenPathStudentEgressFloorRules -RestrictedSid $restrictedSid -StudentPrograms $StudentPrograms -RulePrefix $RulePrefix)
@@ -355,7 +364,12 @@ function Set-OpenPathStudentEgressFloor {
     }
 
     Save-OpenPathEgressFloorPreviousOutbound
-    Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $false
+    # Capture the existing floor rules instead of deleting them up front: the new
+    # set is created first, so there is never a moment without a non-student Allow.
+    $previousRules = @()
+    if (Get-Command -Name 'Get-NetFirewallRule' -ErrorAction SilentlyContinue) {
+        $previousRules = @(Get-NetFirewallRule -DisplayName "$RulePrefix-*-EgressFloor-*" -ErrorAction SilentlyContinue)
+    }
 
     try {
         foreach ($rule in $rules) {
@@ -365,6 +379,19 @@ function Set-OpenPathStudentEgressFloor {
             }
             New-OpenPathFirewallRule @parameters -ErrorAction Stop | Out-Null
         }
+
+        # Precondition 5.5: never flip a profile to Block unless the active policy
+        # already exposes an effective non-student Allow. Step 2 of the plan showed
+        # that AllowLocalFirewallRules=False does not suppress local rules on a
+        # workgroup Windows VM, so effectiveness is read from the active store.
+        $precondition = Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow -RestrictedSid $restrictedSid -RulePrefix $RulePrefix
+        if (-not $precondition.Holds) {
+            Write-OpenPathLog "Egress floor: effective non-student Allow precondition failed ($($precondition.Reason)); NOT applying Block (fail-open)" -Level WARN
+            Set-OpenPathEgressFloorInvariantLatch -Reason ([string]$precondition.Reason)
+            Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $true -ClearInvariantLatch:$false
+            return 0
+        }
+
         if (Get-Command -Name 'Set-NetFirewallProfile' -ErrorAction SilentlyContinue) {
             Set-NetFirewallProfile -Profile @(Get-OpenPathEgressFloorProfileNames) -DefaultOutboundAction Block -ErrorAction Stop
         }
@@ -373,6 +400,10 @@ function Set-OpenPathStudentEgressFloor {
         Write-OpenPathLog "Egress floor: apply failed ($_); tearing down and restoring the pre-floor outbound default" -Level ERROR
         Remove-OpenPathEgressFloorRules -RulePrefix $RulePrefix -RestoreDefaultOutbound $true
         return 0
+    }
+
+    if ($previousRules.Count -gt 0) {
+        Remove-OpenPathFirewallRuleObjects -Rules $previousRules
     }
 
     try { Enable-OpenPathEgressFloorAudit } catch { Write-OpenPathLog "Egress floor: blocked-connection auditing not enabled: $_" -Level WARN }
@@ -428,6 +459,317 @@ function Test-OpenPathStudentEgressFloorDrift {
     }
 
     return [PSCustomObject]@{ Drifted = $false; Reason = 'in-sync' }
+}
+
+function Get-OpenPathEgressFloorEffectiveProfileStates {
+    <#
+    .SYNOPSIS
+        Effective DefaultOutboundAction of each governed firewall profile.
+    .DESCRIPTION
+        Reads the active policy store when the NetSecurity cmdlets expose it, and
+        falls back to the cmdlet default otherwise. On Windows the active store is
+        what the firewall enforces; the local store may still say something else.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string[]]$ProfileNames = @()
+    )
+
+    if ($null -eq $ProfileNames -or $ProfileNames.Count -eq 0) {
+        $ProfileNames = @(Get-OpenPathEgressFloorProfileNames)
+    }
+
+    $command = Get-Command -Name 'Get-NetFirewallProfile' -ErrorAction SilentlyContinue
+    $supportsPolicyStore = [bool]($command -and $command.Parameters.ContainsKey('PolicyStore'))
+
+    $states = foreach ($profileName in @($ProfileNames)) {
+        $profileObject = $null
+        $source = 'default'
+        if ($command) {
+            try {
+                $parameters = @{ Profile = $profileName; ErrorAction = 'Stop' }
+                if ($supportsPolicyStore) { $parameters['PolicyStore'] = 'ActiveStore' }
+                $profileObject = Get-NetFirewallProfile @parameters
+                $source = if ($supportsPolicyStore) { 'active-store' } else { 'local-store' }
+            }
+            catch {
+                $profileObject = $null
+                try {
+                    $profileObject = Get-NetFirewallProfile -Profile $profileName -ErrorAction Stop
+                    $source = 'local-store'
+                }
+                catch {
+                    $profileObject = $null
+                    $source = 'unavailable'
+                }
+            }
+        }
+        else {
+            $source = 'unavailable'
+        }
+
+        $action = 'Unknown'
+        if ($profileObject -and $profileObject.PSObject.Properties['DefaultOutboundAction'] -and $profileObject.DefaultOutboundAction) {
+            $action = [string]$profileObject.DefaultOutboundAction
+        }
+        [PSCustomObject]@{
+            Name = [string]$profileName
+            DefaultOutboundAction = $action
+            Source = $source
+        }
+    }
+
+    return @($states)
+}
+
+function Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow {
+    <#
+    .SYNOPSIS
+        True when the active policy contains an effective non-student Allow rule.
+    .DESCRIPTION
+        "Effective" means a rule with the expected display name that is visible in
+        the active store, enabled, Action=Allow, Direction=Outbound, Profile=Any,
+        and scoped to the expected LocalUser descriptor for the restricted SID.
+        Any matching rule that satisfies all of those is enough (a reapply can
+        briefly leave a stale duplicate next to the new rule).
+    .OUTPUTS
+        PSCustomObject -- Holds (bool), Reason (string).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RestrictedSid,
+
+        [string]$RulePrefix = $script:RulePrefix
+    )
+
+    $expectedLocalUser = "D:(D;;CC;;;$RestrictedSid)(A;;CC;;;WD)"
+    $ruleName = "$RulePrefix-Allow-EgressFloor-NonStudent"
+    $ruleCommand = Get-Command -Name 'Get-NetFirewallRule' -ErrorAction SilentlyContinue
+    if (-not $ruleCommand) {
+        return [PSCustomObject]@{ Holds = $false; Reason = 'firewall-rule-query-unavailable' }
+    }
+
+    $supportsPolicyStore = [bool]$ruleCommand.Parameters.ContainsKey('PolicyStore')
+    $parameters = @{ DisplayName = $ruleName; ErrorAction = 'SilentlyContinue' }
+    if ($supportsPolicyStore) { $parameters['PolicyStore'] = 'ActiveStore' }
+    $installedRules = @(Get-NetFirewallRule @parameters)
+    if ($installedRules.Count -eq 0) {
+        return [PSCustomObject]@{ Holds = $false; Reason = 'nonstudent-allow-missing' }
+    }
+
+    $scopeCommand = Get-Command -Name 'Get-NetFirewallSecurityFilter' -ErrorAction SilentlyContinue
+    $reasons = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($installedRule in $installedRules) {
+        if ($null -eq $installedRule) { continue }
+
+        $enabled = if ($installedRule.PSObject.Properties['Enabled']) { [string]$installedRule.Enabled -eq 'True' } else { $false }
+        if (-not $enabled) {
+            if (-not $reasons.Contains('nonstudent-allow-disabled')) { $reasons.Add('nonstudent-allow-disabled') }
+            continue
+        }
+        if ($installedRule.PSObject.Properties['Action'] -and [string]$installedRule.Action -ne 'Allow') {
+            if (-not $reasons.Contains('nonstudent-allow-action-not-allow')) { $reasons.Add('nonstudent-allow-action-not-allow') }
+            continue
+        }
+        if ($installedRule.PSObject.Properties['Direction'] -and [string]$installedRule.Direction -ne 'Outbound') {
+            if (-not $reasons.Contains('nonstudent-allow-direction-not-outbound')) { $reasons.Add('nonstudent-allow-direction-not-outbound') }
+            continue
+        }
+        if ($installedRule.PSObject.Properties['Profile'] -and $installedRule.Profile) {
+            $profileText = [string]$installedRule.Profile
+            if ($profileText -and $profileText -notin @('Any', 'NotConfigured')) {
+                if (-not $reasons.Contains('nonstudent-allow-profile-not-any')) { $reasons.Add('nonstudent-allow-profile-not-any') }
+                continue
+            }
+        }
+
+        $scope = $null
+        if ($scopeCommand) {
+            $scopeParameters = @{ ErrorAction = 'SilentlyContinue' }
+            if ($supportsPolicyStore -and $scopeCommand.Parameters.ContainsKey('PolicyStore')) {
+                $scopeParameters['PolicyStore'] = 'ActiveStore'
+            }
+            $scope = @($installedRule | Get-NetFirewallSecurityFilter @scopeParameters)[0]
+        }
+        if (-not $scope) {
+            if (-not $reasons.Contains('nonstudent-scope-unavailable')) { $reasons.Add('nonstudent-scope-unavailable') }
+            continue
+        }
+        if ([string]$scope.LocalUser -ne $expectedLocalUser) {
+            if (-not $reasons.Contains('nonstudent-scope-mismatch')) { $reasons.Add('nonstudent-scope-mismatch') }
+            continue
+        }
+
+        return [PSCustomObject]@{ Holds = $true; Reason = 'effective-nonstudent-allow' }
+    }
+
+    $reason = if ($reasons.Count -gt 0) { $reasons[0] } else { 'nonstudent-allow-missing' }
+    return [PSCustomObject]@{ Holds = $false; Reason = $reason }
+}
+
+function Test-OpenPathStudentEgressFloorInvariant {
+    <#
+    .SYNOPSIS
+        Safety invariant: Block must never be active without an effective non-student Allow.
+    .DESCRIPTION
+        Reads the effective DefaultOutboundAction of Domain, Private and Public. When
+        none is Block the invariant holds trivially. Otherwise the active policy must
+        contain the expected non-student Allow (enabled, Allow, Outbound, expected
+        LocalUser). Returns a stable reason string.
+    .OUTPUTS
+        PSCustomObject -- Holds (bool), Reason (string), BlockProfiles (string[]).
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$RulePrefix = $script:RulePrefix
+    )
+
+    $profileStates = @(Get-OpenPathEgressFloorEffectiveProfileStates)
+    $blockProfiles = @($profileStates | Where-Object { [string]$_.DefaultOutboundAction -eq 'Block' } | ForEach-Object { [string]$_.Name })
+    if ($blockProfiles.Count -eq 0) {
+        return [PSCustomObject]@{ Holds = $true; Reason = 'no-governed-profile-blocked'; BlockProfiles = @() }
+    }
+
+    try {
+        $restrictedSid = Resolve-OpenPathEgressFloorRestrictedSid
+    }
+    catch {
+        return [PSCustomObject]@{ Holds = $false; Reason = 'restricted-group-unresolved'; BlockProfiles = @($blockProfiles) }
+    }
+
+    $allow = Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow -RestrictedSid $restrictedSid -RulePrefix $RulePrefix
+    return [PSCustomObject]@{
+        Holds = [bool]$allow.Holds
+        Reason = [string]$allow.Reason
+        BlockProfiles = @($blockProfiles)
+    }
+}
+
+function Get-OpenPathEgressFloorInvariantLatchPath {
+    <#
+    .SYNOPSIS
+        Path of the marker that stops the watchdog from reapplying a floor whose
+        invariant already failed twice.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$OpenPathRoot
+    )
+
+    $resolvedRoot = $OpenPathRoot
+    if ([string]::IsNullOrWhiteSpace($resolvedRoot)) {
+        if ($script:OpenPathRoot) {
+            $resolvedRoot = [string]$script:OpenPathRoot
+        }
+        elseif (Get-Command -Name 'Resolve-OpenPathWindowsRoot' -ErrorAction SilentlyContinue) {
+            $resolvedRoot = Resolve-OpenPathWindowsRoot
+        }
+        else {
+            $resolvedRoot = 'C:\OpenPath'
+        }
+    }
+    $resolvedRoot = ([string]$resolvedRoot).TrimEnd('\', '/')
+    return [System.IO.Path]::Combine($resolvedRoot, 'data', 'egress-floor-invariant-latch.json')
+}
+
+function Read-OpenPathEgressFloorInvariantLatch {
+    <#
+    .SYNOPSIS
+        Reads the invariant latch, or $null when absent/invalid.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$OpenPathRoot
+    )
+
+    $path = Get-OpenPathEgressFloorInvariantLatchPath -OpenPathRoot $OpenPathRoot
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+
+    try {
+        $parsed = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if (-not $parsed.PSObject.Properties['reason'] -or [string]::IsNullOrWhiteSpace([string]$parsed.reason)) {
+            return $null
+        }
+        $createdAt = $null
+        if ($parsed.PSObject.Properties['createdAtUtc'] -and $parsed.createdAtUtc) {
+            $parsedTimestamp = [DateTimeOffset]::MinValue
+            if ([DateTimeOffset]::TryParse(
+                    [string]$parsed.createdAtUtc,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind,
+                    [ref]$parsedTimestamp)) {
+                $createdAt = $parsedTimestamp
+            }
+        }
+        return [PSCustomObject]@{
+            Reason = [string]$parsed.reason
+            CreatedAtUtc = $createdAt
+            Path = $path
+        }
+    }
+    catch {
+        Write-OpenPathLog "Egress floor: ignoring unreadable invariant latch at ${path}: $_" -Level WARN
+        return $null
+    }
+}
+
+function Set-OpenPathEgressFloorInvariantLatch {
+    <#
+    .SYNOPSIS
+        Persists the invariant latch (reason + culture-invariant UTC timestamp).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Reason,
+
+        [AllowNull()]
+        [string]$OpenPathRoot
+    )
+
+    $path = Get-OpenPathEgressFloorInvariantLatchPath -OpenPathRoot $OpenPathRoot
+    $payload = [ordered]@{
+        reason = [string]$Reason
+        createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+
+    try {
+        $directory = Split-Path -Parent $path
+        if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        if (Get-Command -Name 'Write-OpenPathAtomicJsonFile' -ErrorAction SilentlyContinue) {
+            Write-OpenPathAtomicJsonFile -Path $path -Data $payload -Depth 3
+        }
+        else {
+            $payload | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $path -Encoding UTF8 -Force
+        }
+        Write-OpenPathLog "Egress floor: invariant latch written to ${path} (reason: $Reason)" -Level WARN
+    }
+    catch {
+        Write-OpenPathLog "Egress floor: failed to write the invariant latch at ${path}: $_" -Level WARN
+    }
+}
+
+function Clear-OpenPathEgressFloorInvariantLatch {
+    <#
+    .SYNOPSIS
+        Removes the invariant latch (operator enable/update, flag off, or recovered precondition).
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$OpenPathRoot
+    )
+
+    $path = Get-OpenPathEgressFloorInvariantLatchPath -OpenPathRoot $OpenPathRoot
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-OpenPathEgressFloorStudentProgramsFromConfig {
@@ -833,7 +1175,8 @@ function Remove-OpenPathEgressFloorRules {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$RulePrefix = $script:RulePrefix,
-        [bool]$RestoreDefaultOutbound = $true
+        [bool]$RestoreDefaultOutbound = $true,
+        [bool]$ClearInvariantLatch = $true
     )
 
     if (-not $PSCmdlet.ShouldProcess('Windows Firewall', 'Remove OpenPath egress-floor rules')) {
@@ -846,10 +1189,12 @@ function Remove-OpenPathEgressFloorRules {
     }
 
     if (-not (Get-Command -Name 'Get-NetFirewallRule' -ErrorAction SilentlyContinue)) {
+        if ($ClearInvariantLatch) { Clear-OpenPathEgressFloorInvariantLatch }
         return
     }
 
     Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -DisplayName "$RulePrefix-*-EgressFloor-*" -ErrorAction SilentlyContinue)
+    if ($ClearInvariantLatch) { Clear-OpenPathEgressFloorInvariantLatch }
 }
 
 function Add-OpenPathCaptivePortalUpstreamFirewallAllow {

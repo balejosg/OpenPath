@@ -721,6 +721,7 @@ Describe "Firewall Module" {
             Mock New-Item { } -ModuleName Firewall
             Mock Add-OpenPathFirewallManifestRule { } -ModuleName Firewall
             Mock Resolve-OpenPathEgressFloorRestrictedSid { 'S-1-5-21-1-2-3-1005' } -ModuleName Firewall
+            Mock Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow { [pscustomobject]@{ Holds = $true; Reason = 'effective-nonstudent-allow' } } -ModuleName Firewall
             Mock Get-OpenPathEgressFloorStudentProgramsFromConfig { @('C:\Program Files\Mozilla Firefox\firefox.exe') } -ModuleName Firewall
             Mock Get-OpenPathConfig { [PSCustomObject]@{ outboundEgressFloorEnabled = $true } } -ModuleName Firewall
 
@@ -973,6 +974,8 @@ Describe "Firewall Module" {
                 Mock Write-OpenPathLog { }
                 Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
                 Mock Save-OpenPathEgressFloorPreviousOutbound { $events.Add('save') }
+                Mock Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow { [pscustomobject]@{ Holds = $true; Reason = 'effective-nonstudent-allow' } }
+                Mock Get-NetFirewallRule { @() }
                 Mock Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound) $events.Add("remove:$RestoreDefaultOutbound") }
                 Mock New-OpenPathFirewallRule { $events.Add('create') }
                 Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $events.Add("profile:$DefaultOutboundAction") }
@@ -982,9 +985,59 @@ Describe "Firewall Module" {
             $outcome.Count | Should -Be 9
             $events = @($outcome.Events)
             $events[0] | Should -Be 'save'
-            $events[1] | Should -Be 'remove:False'
             @($events | Where-Object { $_ -eq 'create' }).Count | Should -Be 9
             $events[-1] | Should -Be 'profile:Block'
+            @($events | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
+        }
+
+        It "creates the replacement rules before removing the captured old floor rules" {
+            $outcome = InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                $events = New-Object System.Collections.Generic.List[string]
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Save-OpenPathEgressFloorPreviousOutbound { $events.Add('save') }
+                Mock Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow { [pscustomobject]@{ Holds = $true; Reason = 'effective-nonstudent-allow' } }
+                Mock Get-NetFirewallRule { @([pscustomobject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-NonStudent'; Id = 'old-rule' }) }
+                Mock Remove-OpenPathFirewallRuleObjects { param($Rules) $events.Add('remove-old') }
+                Mock Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound) $events.Add("remove-all:$RestoreDefaultOutbound") }
+                Mock New-OpenPathFirewallRule { $events.Add('create') }
+                Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $events.Add("profile:$DefaultOutboundAction") }
+                $count = Set-OpenPathStudentEgressFloor -StudentPrograms $Programs
+                [pscustomobject]@{ Count = $count; Events = @($events) }
+            }
+            $outcome.Count | Should -Be 9
+            $events = @($outcome.Events)
+            @($events | Where-Object { $_ -like 'remove-all:*' }).Count | Should -Be 0
+            $firstCreate = [array]::IndexOf($events, 'create')
+            $blockIndex = [array]::IndexOf($events, 'profile:Block')
+            $removeIndex = [array]::IndexOf($events, 'remove-old')
+            $firstCreate | Should -BeGreaterThan -1
+            $blockIndex | Should -BeGreaterThan $firstCreate
+            $removeIndex | Should -BeGreaterThan $blockIndex
+        }
+
+        It "does not set Block and latches when the effective non-student Allow precondition fails" {
+            $outcome = InModuleScope Firewall -Parameters @{ Sid = $script:sfaSid; Programs = $script:sfaPrograms } {
+                param($Sid, $Programs)
+                $events = New-Object System.Collections.Generic.List[string]
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Save-OpenPathEgressFloorPreviousOutbound { $events.Add('save') }
+                Mock Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow { [pscustomobject]@{ Holds = $false; Reason = 'nonstudent-allow-missing' } }
+                Mock Get-NetFirewallRule { @() }
+                Mock Set-OpenPathEgressFloorInvariantLatch { param($Reason) $events.Add("latch:$Reason") }
+                Mock Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound, $ClearInvariantLatch) $events.Add("remove:$RestoreDefaultOutbound/$ClearInvariantLatch") }
+                Mock New-OpenPathFirewallRule { $events.Add('create') }
+                Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $events.Add("profile:$DefaultOutboundAction") }
+                $count = Set-OpenPathStudentEgressFloor -StudentPrograms $Programs
+                [pscustomobject]@{ Count = $count; Events = @($events) }
+            }
+            $outcome.Count | Should -Be 0
+            $events = @($outcome.Events)
+            @($events | Where-Object { $_ -eq 'profile:Block' }).Count | Should -Be 0
+            $events | Should -Contain 'latch:nonstudent-allow-missing'
+            $events | Should -Contain 'remove:True/False'
         }
 
         It "passes LocalUser, Package and Service through to New-NetFirewallRule" {
@@ -993,6 +1046,7 @@ Describe "Firewall Module" {
                 param($Sid, $Programs)
                 Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
                 Mock Save-OpenPathEgressFloorPreviousOutbound { }
+                Mock Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow { [pscustomobject]@{ Holds = $true; Reason = 'effective-nonstudent-allow' } }
                 Mock Remove-OpenPathEgressFloorRules { }
                 Mock Add-OpenPathFirewallManifestRule { }
                 Mock Set-NetFirewallProfile { }
@@ -1030,6 +1084,7 @@ Describe "Firewall Module" {
                 Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
                 Mock Test-Path { $true }
                 Mock Set-Content { param($Path) $writes.Add([string]$Path) }
+                Mock Test-OpenPathStudentEgressFloorEffectiveNonStudentAllow { [pscustomobject]@{ Holds = $true; Reason = 'effective-nonstudent-allow' } }
                 Mock Remove-OpenPathEgressFloorRules { }
                 Mock New-OpenPathFirewallRule { }
                 Mock Set-NetFirewallProfile { }
@@ -1093,6 +1148,138 @@ Describe "Firewall Module" {
             }
             $drift.Drifted | Should -BeFalse
             $drift.Reason | Should -Be 'restricted-group-unresolved'
+        }
+    }
+
+    Context "Student egress floor invariant and latch" {
+        BeforeAll {
+            foreach ($name in @('Set-NetFirewallProfile', 'Get-NetFirewallProfile', 'Get-NetFirewallRule', 'Get-NetFirewallSecurityFilter')) {
+                if (-not (Get-Command -Name $name -ErrorAction SilentlyContinue)) {
+                    New-Item -Path "Function:\global:$name" -Value { param([Parameter(ValueFromPipeline = $true)]$InputObject, $Profile, $DefaultOutboundAction, $DisplayName, $ErrorAction) } -Force | Out-Null
+                }
+            }
+            $script:invSid = 'S-1-5-21-1-2-3-1005'
+            $script:invLocalUser = "D:(D;;CC;;;$($script:invSid))(A;;CC;;;WD)"
+            $script:invPrograms = @('C:\Program Files\Mozilla Firefox\firefox.exe')
+        }
+
+        It "fails the invariant when the NonStudent rule is disabled while a profile is Block" {
+            $rule = [pscustomobject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-NonStudent'; Enabled = $false; Action = 'Allow'; Direction = 'Outbound'; Profile = 'Any' }
+            $state = InModuleScope Firewall -Parameters @{ Sid = $script:invSid; Rule = $rule; LocalUser = $script:invLocalUser } {
+                param($Sid, $Rule, $LocalUser)
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
+                Mock Get-NetFirewallRule { $Rule }
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = $LocalUser } }
+                Test-OpenPathStudentEgressFloorInvariant
+            }
+            $state.Holds | Should -BeFalse
+            $state.Reason | Should -Be 'nonstudent-allow-disabled'
+        }
+
+        It "fails the invariant when the NonStudent rule is not Allow" {
+            $rule = [pscustomobject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-NonStudent'; Enabled = $true; Action = 'Block'; Direction = 'Outbound'; Profile = 'Any' }
+            $state = InModuleScope Firewall -Parameters @{ Sid = $script:invSid; Rule = $rule; LocalUser = $script:invLocalUser } {
+                param($Sid, $Rule, $LocalUser)
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
+                Mock Get-NetFirewallRule { $Rule }
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = $LocalUser } }
+                Test-OpenPathStudentEgressFloorInvariant
+            }
+            $state.Holds | Should -BeFalse
+            $state.Reason | Should -Be 'nonstudent-allow-action-not-allow'
+        }
+
+        It "fails the invariant when the NonStudent rule has the wrong LocalUser" {
+            $rule = [pscustomobject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-NonStudent'; Enabled = $true; Action = 'Allow'; Direction = 'Outbound'; Profile = 'Any' }
+            $state = InModuleScope Firewall -Parameters @{ Sid = $script:invSid; Rule = $rule; LocalUser = $script:invLocalUser } {
+                param($Sid, $Rule, $LocalUser)
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
+                Mock Get-NetFirewallRule { $Rule }
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = 'D:(D;;CC;;;S-1-5-21-9-9-9)(A;;CC;;;WD)' } }
+                Test-OpenPathStudentEgressFloorInvariant
+            }
+            $state.Holds | Should -BeFalse
+            $state.Reason | Should -Be 'nonstudent-scope-mismatch'
+        }
+
+        It "holds when no governed profile is at Block, regardless of the rules" {
+            $state = InModuleScope Firewall {
+                Mock Write-OpenPathLog { }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Allow' } }
+                Mock Get-NetFirewallRule { throw 'the rule store must not be read when no profile is at Block' }
+                Test-OpenPathStudentEgressFloorInvariant
+            }
+            $state.Holds | Should -BeTrue
+            $state.Reason | Should -Be 'no-governed-profile-blocked'
+        }
+
+        It "holds when a profile is at Block and the effective NonStudent rule is complete" {
+            $rule = [pscustomobject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-NonStudent'; Enabled = $true; Action = 'Allow'; Direction = 'Outbound'; Profile = 'Any' }
+            $state = InModuleScope Firewall -Parameters @{ Sid = $script:invSid; Rule = $rule; LocalUser = $script:invLocalUser } {
+                param($Sid, $Rule, $LocalUser)
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
+                Mock Get-NetFirewallRule { $Rule }
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = $LocalUser } }
+                Test-OpenPathStudentEgressFloorInvariant
+            }
+            $state.Holds | Should -BeTrue
+            $state.Reason | Should -Be 'effective-nonstudent-allow'
+        }
+
+        It "fails the invariant when the NonStudent rule is missing" {
+            $state = InModuleScope Firewall -Parameters @{ Sid = $script:invSid } {
+                param($Sid)
+                Mock Write-OpenPathLog { }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
+                Mock Get-NetFirewallRule { @() }
+                Test-OpenPathStudentEgressFloorInvariant
+            }
+            $state.Holds | Should -BeFalse
+            $state.Reason | Should -Be 'nonstudent-allow-missing'
+        }
+
+        It "writes, reads and clears a culture-invariant latch" {
+            $latchPath = Join-Path $TestDrive 'egress-floor-invariant-latch.json'
+            $outcome = InModuleScope Firewall -Parameters @{ LatchPath = $latchPath } {
+                param($LatchPath)
+                Mock Write-OpenPathLog { }
+                Mock Get-OpenPathEgressFloorInvariantLatchPath { $LatchPath }
+                Set-OpenPathEgressFloorInvariantLatch -Reason 'nonstudent-allow-disabled'
+                $read = Read-OpenPathEgressFloorInvariantLatch
+                $rawText = Get-Content -LiteralPath $LatchPath -Raw
+                $raw = $rawText | ConvertFrom-Json
+                Clear-OpenPathEgressFloorInvariantLatch
+                [pscustomobject]@{ Read = $read; RawText = $rawText; Raw = $raw; Exists = (Test-Path -LiteralPath $LatchPath) }
+            }
+            $outcome.Read.Reason | Should -Be 'nonstudent-allow-disabled'
+            $outcome.Read.CreatedAtUtc | Should -Not -BeNullOrEmpty
+            $outcome.RawText | Should -Match 'createdAtUtc"\s*:\s*"\d{4}-\d{2}-\d{2}T'
+            $outcome.Exists | Should -BeFalse
+        }
+
+        It "does not apply the floor while the invariant latch exists" {
+            $latchPath = Join-Path $TestDrive 'egress-floor-invariant-latch.json'
+            @{ reason = 'nonstudent-allow-disabled'; createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o') } |
+                ConvertTo-Json | Set-Content -LiteralPath $latchPath -Encoding UTF8
+            $outcome = InModuleScope Firewall -Parameters @{ Sid = $script:invSid; Programs = $script:invPrograms; LatchPath = $latchPath } {
+                param($Sid, $Programs, $LatchPath)
+                Mock Write-OpenPathLog { }
+                Mock Get-OpenPathEgressFloorInvariantLatchPath { $LatchPath }
+                Mock Resolve-OpenPathEgressFloorRestrictedSid { $Sid }
+                Mock New-OpenPathFirewallRule { throw 'must not create rules while latched' }
+                Mock Set-NetFirewallProfile { throw 'must not set Block while latched' }
+                Set-OpenPathStudentEgressFloor -StudentPrograms $Programs
+            }
+            $outcome | Should -Be 0
         }
     }
 
