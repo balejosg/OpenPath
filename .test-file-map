@@ -302,6 +302,7 @@ windows/lib/internal/Watchdog.CaptivePortalPolicy.ps1|windows/tests/Windows.Watc
 windows/lib/internal/EndpointPolicyState.ps1|windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/EndpointStateReconciler.ps1|windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/EndpointPosture.ps1|windows/tests/Windows.EndpointPosture.Tests.ps1,windows/tests/Windows.Update.Tests.ps1
+windows/lib/internal/AgentReleaseSignature.ps1|windows/tests/Windows.AgentReleaseSignature.Tests.ps1,windows/tests/Windows.Update.Tests.ps1
 windows/lib/internal/Services.TaskBuilders.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RotateToken.Compat.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/Firewall.psm1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
