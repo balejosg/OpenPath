@@ -25,6 +25,7 @@ $script:DomainPattern = '^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a
 . (Join-Path $script:InternalModulePath 'Common.Whitelist.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Integrity.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Network.ps1')
+. (Join-Path $script:InternalModulePath 'AgentReleaseSignature.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Update.ps1')
 
 Export-ModuleMember -Function @(

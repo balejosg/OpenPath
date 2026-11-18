@@ -118,6 +118,14 @@ try {
         throw "Agent tree is missing required commands: $($missingCommands -join ', ')"
     }
 
+    # Behavior check: the leaf must read live state and return the expected
+    # shape. It never throws by design; a throw here means the new tree is
+    # broken. This does not depend on external network reachability.
+    $posture = Get-OpenPathOpenClassroomPosture
+    if ($null -eq $posture -or -not $posture.PSObject.Properties['Findings']) {
+        throw 'Get-OpenPathOpenClassroomPosture did not return the expected object'
+    }
+
     Write-Output 'healthy'
     exit 0
 }

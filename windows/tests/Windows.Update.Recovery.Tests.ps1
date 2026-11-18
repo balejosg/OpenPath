@@ -385,7 +385,7 @@ Export-ModuleMember -Function *
             Set-Content -LiteralPath (Join-Path $internal 'Watchdog.Runtime.ps1') `
                 -Value @(
                 'function Invoke-OpenPathWatchdogChecks { }',
-                'function Get-OpenPathOpenClassroomPosture { }',
+                'function Get-OpenPathOpenClassroomPosture { [pscustomobject]@{ ClassroomDisabled = $false; PortalModeActive = $false; FirewallActive = $false; DnsPinned = $false; Findings = @() } }',
                 'function Merge-OpenPathReasonCodes { }',
                 'function Invoke-OpenPathOpenClassroomPostureRepair { }',
                 'function Test-OpenPathAdapterDnsPinnedToLocalResolver { }'

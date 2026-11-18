@@ -467,7 +467,8 @@ try {
         'self-update' {
             $checkOnly = $Arguments -contains '--check' -or $Arguments -contains '-check'
             $silent = $Arguments -contains '--silent' -or $Arguments -contains '-silent'
-            $result = Invoke-OpenPathAgentSelfUpdate -CheckOnly:$checkOnly -Silent:$silent
+            $canaryOnly = $Arguments -contains '--canary-only' -or $Arguments -contains '-canary-only'
+            $result = Invoke-OpenPathAgentSelfUpdate -CheckOnly:$checkOnly -Silent:$silent -CanaryOnly:$canaryOnly
             if (-not $result.Success) {
                 throw $result.Message
             }

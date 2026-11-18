@@ -115,6 +115,11 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'New-OpenPathWatchdogProtectedModeRepairPlan',
         'Invoke-OpenPathEndpointStateRepairPlan'
     )
+    Import-OpenPathUpdateRuntimeHelper `
+        -Path (Join-Path $OpenPathRoot 'lib\internal\AgentReleaseSignature.ps1') `
+        -FunctionNames @(
+        'Test-OpenPathAgentReleaseSignature'
+    )
 
     $script:OpenPathUpdateRuntimeSessionInitialized = $true
     $script:OpenPathUpdateRuntimeRoot = $OpenPathRoot

@@ -2140,6 +2140,35 @@ function Restore-OpenPathAgentUpdateJournalBackups {
     }
 }
 
+function Get-OpenPathAgentUpdateHttpStatusCode {
+    <#
+    .SYNOPSIS
+        Reads the HTTP status from a failed web request without parsing localized text
+    #>
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+    try {
+        $exception = $ErrorRecord.Exception
+        while ($null -ne $exception) {
+            $response = $exception.Response
+            if ($null -ne $response) {
+                $status = $response.StatusCode
+                if ($null -ne $status) {
+                    return [int]$status
+                }
+                if ($null -ne $status.value__) {
+                    return [int]$status.value__
+                }
+            }
+            $exception = $exception.InnerException
+        }
+    }
+    catch {
+        return 0
+    }
+    return 0
+}
+
 function Invoke-OpenPathAgentSelfUpdate {
     <#
     .SYNOPSIS
@@ -2148,11 +2177,14 @@ function Invoke-OpenPathAgentSelfUpdate {
         Only check if update is available
     .PARAMETER Silent
         Suppress interactive output (logs are still written)
+    .PARAMETER CanaryOnly
+        Apply the published manifest only when it belongs to the canary ring
     #>
     [CmdletBinding()]
     param(
         [switch]$CheckOnly,
-        [switch]$Silent
+        [switch]$Silent,
+        [switch]$CanaryOnly
     )
 
     function Write-SelfUpdateMessage {
@@ -2361,7 +2393,10 @@ function Invoke-OpenPathAgentSelfUpdate {
     }
 
     $apiBaseUrl = $apiUrl.TrimEnd('/')
-    $headers = @{ Authorization = "Bearer $machineToken" }
+    $headers = @{
+        Authorization = "Bearer $machineToken"
+        'X-OpenPath-Agent-Capabilities' = 'signed-release-v1'
+    }
 
     $manifest = $null
     try {
@@ -2401,6 +2436,42 @@ function Invoke-OpenPathAgentSelfUpdate {
         Write-SelfUpdateMessage -Message $message -Level ERROR
         return [PSCustomObject]@{
             Success = $false
+            Updated = $false
+            Message = $message
+        }
+    }
+
+    # A non-stable ring is a signed canary release. Verify it before the first
+    # file request: an unverified manifest must never leave bytes on disk. When
+    # the leaf is not loaded (standalone script usage), only the stable ring is
+    # accepted.
+    $releaseSignatureHelper = Get-Command -Name 'Test-OpenPathAgentReleaseSignature' -CommandType Function -ErrorAction SilentlyContinue
+    if ($releaseSignatureHelper) {
+        $releaseAccepted = [bool](Test-OpenPathAgentReleaseSignature -Manifest $manifest)
+    }
+    else {
+        $manifestRing = if ($manifest.PSObject.Properties['ring'] -and $null -ne $manifest.ring) { [string]$manifest.ring } else { '' }
+        $releaseAccepted = [string]::IsNullOrWhiteSpace($manifestRing) -or
+            [string]::Equals($manifestRing, 'stable', [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    if (-not $releaseAccepted) {
+        $manifestRing = if ($manifest.PSObject.Properties['ring']) { [string]$manifest.ring } else { '(none)' }
+        $manifestBuild = if ($manifest.PSObject.Properties['build']) { [string]$manifest.build } else { '(none)' }
+        $message = "Agent release signature rejected: ring=$manifestRing build=$manifestBuild"
+        Write-SelfUpdateMessage -Message $message -Level ERROR
+        return [PSCustomObject]@{
+            Success = $false
+            Updated = $false
+            Message = $message
+        }
+    }
+
+    $manifestRing = if ($manifest.PSObject.Properties['ring'] -and $null -ne $manifest.ring) { [string]$manifest.ring } else { '' }
+    if ($CanaryOnly -and -not [string]::Equals($manifestRing, 'canary', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $message = 'Canary-only self-update skipped: this machine is not on the canary ring'
+        Write-SelfUpdateMessage -Message $message
+        return [PSCustomObject]@{
+            Success = $true
             Updated = $false
             Message = $message
         }
@@ -2612,9 +2683,19 @@ function Invoke-OpenPathAgentSelfUpdate {
             }
 
             $encodedPath = (($manifestPath -split '/') | ForEach-Object { [System.Uri]::EscapeDataString($_) }) -join '/'
-            $fileUrl = "$apiBaseUrl/api/agent/windows/files/$encodedPath"
+            $buildQuery = if ($targetBuild) { '?build=' + [System.Uri]::EscapeDataString($targetBuild) } else { '' }
+            $fileUrl = "$apiBaseUrl/api/agent/windows/files/$encodedPath$buildQuery"
 
-            Invoke-WebRequest -Uri $fileUrl -Method Get -Headers $headers -OutFile $stagedPath -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+            try {
+                Invoke-WebRequest -Uri $fileUrl -Method Get -Headers $headers -OutFile $stagedPath -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+            }
+            catch {
+                $statusCode = Get-OpenPathAgentUpdateHttpStatusCode -ErrorRecord $_
+                if ($statusCode -eq 409) {
+                    throw "Release build $targetBuild is no longer assigned to this machine (HTTP 409); no file was replaced"
+                }
+                throw
+            }
 
             $expectedHash = if ($file.PSObject.Properties['sha256']) { [string]$file.sha256 } else { '' }
             $actualHash = (Get-FileHash -Path $stagedPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()

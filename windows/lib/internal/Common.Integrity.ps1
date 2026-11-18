@@ -27,6 +27,8 @@ function Get-OpenPathCriticalFiles {
         "$script:OpenPathRoot\lib\internal\Common.Integrity.ps1",
         "$script:OpenPathRoot\lib\internal\Common.Network.ps1",
         "$script:OpenPathRoot\lib\internal\Common.Update.ps1",
+        "$script:OpenPathRoot\lib\internal\AgentReleaseSignature.ps1",
+        "$script:OpenPathRoot\lib\agent-release-public-key.xml",
         "$script:OpenPathRoot\lib\internal\CapabilityStorage.ps1",
         "$script:OpenPathRoot\lib\internal\EndpointPosture.ps1",
         "$script:OpenPathRoot\lib\internal\EndpointStateReconciler.ps1",

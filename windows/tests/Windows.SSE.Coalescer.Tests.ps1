@@ -266,6 +266,24 @@ Describe "Sse.Coalescer" {
             $content = Get-Content $listenerPath -Raw
             $content | Should -Match "Get-SseUpdateCooldownFromConfig"
         }
+
+        It "Start-SSEListener.ps1 runs one coalesced canary self-update for agent-update-available" {
+            $listenerPath = Join-Path $PSScriptRoot ".." "scripts" "Start-SSEListener.ps1"
+            $content = Get-Content $listenerPath -Raw
+            $content | Should -Match 'agent-update-available'
+            $content | Should -Match 'Invoke-DebouncedAgentUpdate'
+            $content | Should -Match 'SseAgentUpdateCoalescerState'
+            $content | Should -Match 'self-update --canary-only --silent'
+        }
+
+        It "Start-SSEListener.ps1 checks once for a canary release at startup" {
+            $listenerPath = Join-Path $PSScriptRoot ".." "scripts" "Start-SSEListener.ps1"
+            $content = Get-Content $listenerPath -Raw
+            $startupIndex = $content.LastIndexOf('Start-OpenPathSseSelfUpdateProcess')
+            $connectionIndex = $content.LastIndexOf('Start-SSEConnection')
+            $startupIndex | Should -BeGreaterThan -1
+            $startupIndex | Should -BeLessThan $connectionIndex
+        }
     }
 
     # -------------------------------------------------------------------------

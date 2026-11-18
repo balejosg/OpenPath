@@ -54,6 +54,7 @@ Initialize-OpenPathUpdateRuntimeSession -OpenPathRoot $OpenPathRoot
 # =============================================================================
 
 $script:SseCoalescerState = New-SseCoalescerState
+$script:SseAgentUpdateCoalescerState = New-SseCoalescerState
 
 function Get-SSEConfig {
     <#
@@ -173,6 +174,66 @@ function Start-OpenPathSseUpdateProcess {
     }
 }
 
+function Start-OpenPathSseSelfUpdateProcess {
+    <#
+    .SYNOPSIS
+        Runs a canary-only agent self-update, optionally after a delay.
+    .DESCRIPTION
+        The CLI applies the published manifest only when it belongs to the
+        canary ring, so a stable machine that receives the event (or runs this
+        at startup) does nothing. Every file it downloads is pinned to the
+        manifest build by the update code.
+    #>
+    param(
+        [int]$DelaySeconds = 0
+    )
+
+    if ($DelaySeconds -gt 0) {
+        Write-OpenPathLog "SSE: Waiting ${DelaySeconds}s before starting canary self-update"
+        Start-Sleep -Seconds $DelaySeconds
+    }
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        Write-OpenPathLog "SSE: Starting canary self-update"
+        $entry = Join-Path $OpenPathRoot 'OpenPath.ps1'
+        $output = & $entry self-update --canary-only --silent 2>&1
+        $exitCode = $LASTEXITCODE
+        $stopwatch.Stop()
+        if ($exitCode -ne 0) {
+            Write-OpenPathLog "SSE: Canary self-update failed with exit code $exitCode after $($stopwatch.ElapsedMilliseconds)ms: $(@($output) -join ' ')" -Level WARN
+            return
+        }
+        Write-OpenPathLog "SSE: Canary self-update completed in $($stopwatch.ElapsedMilliseconds)ms"
+    }
+    catch {
+        $stopwatch.Stop()
+        Write-OpenPathLog "SSE: Canary self-update failed after $($stopwatch.ElapsedMilliseconds)ms: $_" -Level WARN
+    }
+}
+
+function Invoke-DebouncedAgentUpdate {
+    <#
+    .SYNOPSIS
+        Triggers one coalesced canary self-update for a burst of events.
+    #>
+    param(
+        [int]$CooldownSeconds = 10
+    )
+
+    $deferAction = {
+        param([int]$DelaySeconds, [scriptblock]$UpdateAction)
+        Write-OpenPathLog "SSE: Queuing canary self-update in ${DelaySeconds}s"
+        Start-OpenPathSseSelfUpdateProcess -DelaySeconds $DelaySeconds
+    }
+
+    $script:SseAgentUpdateCoalescerState = Invoke-SseCoalescerUpdate `
+        -State $script:SseAgentUpdateCoalescerState `
+        -UpdateAction { Start-OpenPathSseSelfUpdateProcess } `
+        -CooldownSeconds $CooldownSeconds `
+        -DeferAction $deferAction
+}
+
 # =============================================================================
 # SSE Connection Loop
 # =============================================================================
@@ -255,6 +316,10 @@ function Start-SSEConnection {
                     if ($payload -match '"whitelist-changed"') {
                         Invoke-DebouncedUpdate -CooldownSeconds $sseConfig.UpdateCooldown
                     }
+                    elseif ($payload -match '"agent-update-available"') {
+                        Write-OpenPathLog "SSE: Canary agent update available"
+                        Invoke-DebouncedAgentUpdate -CooldownSeconds $sseConfig.UpdateCooldown
+                    }
                     elseif ($payload -match '"connected"') {
                         Write-OpenPathLog "SSE: Connected to API - listening for rule changes"
                     }
@@ -283,5 +348,10 @@ function Start-SSEConnection {
 # =============================================================================
 # Main
 # =============================================================================
+
+# A canary machine checks once at startup so a release published while it was
+# off is applied without waiting for the scheduled task. The CLI is canary-only:
+# on every other machine this returns without touching the agent.
+Start-OpenPathSseSelfUpdateProcess
 
 Start-SSEConnection
