@@ -107,6 +107,23 @@ export function computeWindowsAgentBuild(files: readonly ManifestFileDescriptor[
   return computeAgentBuild(files);
 }
 
+// Manifest and file requests run in the same process for one deployment. Cache
+// the stable fingerprint for a short window so a full agent update does not read
+// and hash the whole file set once per file request.
+const STABLE_BUILD_CACHE_MS = 30_000;
+let stableBuildCache: { value: string; expiresAt: number } | null = null;
+
+function getStableWindowsAgentBuild(): string {
+  const now = Date.now();
+  if (stableBuildCache && now < stableBuildCache.expiresAt) {
+    return stableBuildCache.value;
+  }
+  const files = buildWindowsAgentFileManifest();
+  const value = computeWindowsAgentBuild(toManifestFiles(files));
+  stableBuildCache = { value, expiresAt: now + STABLE_BUILD_CACHE_MS };
+  return value;
+}
+
 async function touchMachine(hostname: string): Promise<void> {
   await classroomStorage.updateMachineLastSeen(hostname);
 }
@@ -224,11 +241,13 @@ export async function getWindowsAgentManifest(
   }
 
   const manifestFiles = toManifestFiles(files);
+  const stableBuild = computeWindowsAgentBuild(manifestFiles);
+  stableBuildCache = { value: stableBuild, expiresAt: Date.now() + STABLE_BUILD_CACHE_MS };
   return {
     ok: true,
     data: {
       version: readServerVersion(),
-      build: computeWindowsAgentBuild(manifestFiles),
+      build: stableBuild,
       generatedAt: new Date().toISOString(),
       files: manifestFiles,
     },
@@ -272,9 +291,7 @@ export async function getWindowsAgentFile(
         };
       }
     } else {
-      const stableBuild = computeWindowsAgentBuild(
-        toManifestFiles(buildWindowsAgentFileManifest())
-      );
+      const stableBuild = getStableWindowsAgentBuild();
       if (pinnedBuild !== stableBuild) {
         return {
           ok: false,
