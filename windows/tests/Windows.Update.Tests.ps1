@@ -347,6 +347,8 @@ Describe "Update Script" {
                 . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Redaction.ps1")
                 . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Config.ps1")
                 . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1")
+                # The runtime imports the adapter DNS probe from this leaf; Apply no longer defines it.
+                . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointPosture.ps1")
 
                 $script:dataDir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
                 New-Item -ItemType Directory -Path $script:dataDir | Out-Null

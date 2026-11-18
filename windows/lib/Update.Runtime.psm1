@@ -104,6 +104,11 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Get-OpenPathEndpointPolicyState'
     )
     Import-OpenPathUpdateRuntimeHelper `
+        -Path (Join-Path $OpenPathRoot 'lib\internal\EndpointPosture.ps1') `
+        -FunctionNames @(
+        'Test-OpenPathAdapterDnsPinnedToLocalResolver'
+    )
+    Import-OpenPathUpdateRuntimeHelper `
         -Path (Join-Path $OpenPathRoot 'lib\internal\EndpointStateReconciler.ps1') `
         -FunctionNames @(
         'New-OpenPathEndpointStateRepairPlan',
