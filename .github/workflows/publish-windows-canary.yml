@@ -1,0 +1,142 @@
+# Publish a signed Windows canary agent release from an exact commit that
+# already passed the Windows Pester lane. Manual dispatch only: this workflow
+# never runs on a push and never promotes anything to stable.
+#
+# Required protected environment `windows-canary-release`:
+#   secret OPENPATH_AGENT_RELEASE_SIGNING_KEY  PEM RSA private key
+#   secret OPENPATH_AGENT_RELEASE_TOKEN        OpenPath release-token bearer
+#   variable OPENPATH_API_URL                  https://<openpath-api>
+name: Publish Windows Canary Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact commit SHA that passed the Windows Pester lane
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: publish-windows-canary-${{ inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  require-windows-pester:
+    name: Require Windows Pester for ${{ inputs.sha }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a successful Windows Pester run for the exact SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ inputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${TARGET_SHA}&status=completed&per_page=100")"
+          run_id="$(printf '%s' "$runs_json" | jq -r '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty')"
+          if [ -z "$run_id" ]; then
+            echo "::error::No successful CI run for ${TARGET_SHA}; publish requires the Windows gate for that exact SHA"
+            exit 1
+          fi
+          jobs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --paginate)"
+          printf '%s' "$jobs_json" | jq -e '[.jobs[] | select(.conclusion == "success") | select(.name | test("Windows Agent Tests \\(Pester"))] | length > 0' >/dev/null \
+            || { echo "::error::CI run ${run_id} has no successful Windows Pester job for ${TARGET_SHA}"; exit 1; }
+          echo "Windows Pester gate satisfied by CI run ${run_id}"
+
+  build:
+    name: Build the complete agent file set
+    needs: require-windows-pester
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the exact SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+        with:
+          node-version: '20'
+
+      - name: Build required workspaces
+        uses: ./.github/actions/build-workspaces
+        with:
+          build-shared: 'true'
+          build-api: 'true'
+          build-extension: 'true'
+
+      - name: Build the canary release payload
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          node scripts/build-windows-agent-release.mjs \
+            --sha "$TARGET_SHA" \
+            --out "$RUNNER_TEMP/canary-release"
+
+      - name: Upload the unsigned release payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-canary-release-${{ inputs.sha }}
+          path: ${{ runner.temp }}/canary-release
+          retention-days: 1
+          if-no-files-found: error
+
+  sign-and-publish:
+    name: Sign and publish in the protected environment
+    needs: build
+    runs-on: ubuntu-latest
+    environment: windows-canary-release
+    steps:
+      - name: Checkout the exact SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js without reinstalling dependencies
+        uses: ./.github/actions/setup-node
+        with:
+          node-version: '20'
+          install-deps: 'false'
+
+      - name: Download the unsigned release payload
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-canary-release-${{ inputs.sha }}
+          path: ${{ runner.temp }}/canary-release
+
+      - name: Sign the canonical release text
+        env:
+          OPENPATH_AGENT_RELEASE_SIGNING_KEY: ${{ secrets.OPENPATH_AGENT_RELEASE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/canary-signing-key.pem"
+          (umask 077; printf '%s\n' "$OPENPATH_AGENT_RELEASE_SIGNING_KEY" > "$key")
+          openssl dgst -sha256 -sign "$key" \
+            -out "$RUNNER_TEMP/canary-signature.bin" \
+            "$RUNNER_TEMP/canary-release/canonical.txt"
+          base64 -w0 "$RUNNER_TEMP/canary-signature.bin" > "$RUNNER_TEMP/canary-signature.b64"
+          rm -f "$key"
+
+      - name: Publish the signed canary release
+        env:
+          OPENPATH_API_URL: ${{ vars.OPENPATH_API_URL }}
+          OPENPATH_AGENT_RELEASE_TOKEN: ${{ secrets.OPENPATH_AGENT_RELEASE_TOKEN }}
+          TARGET_SHA: ${{ inputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-windows-agent-release.mjs \
+            --sha "$TARGET_SHA" \
+            --out "$RUNNER_TEMP/canary-release" \
+            --signature-file "$RUNNER_TEMP/canary-signature.b64" \
+            --publish-only

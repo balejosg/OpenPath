@@ -23,7 +23,10 @@ export function readText(relativePath) {
 }
 
 export function extractWorkflowJobBlock(workflowText, jobId) {
-  const jobPattern = new RegExp(`(^  ${jobId}:\\n[\\s\\S]*?)(?=^  [a-z0-9-]+:\\n|\\Z)`, 'm');
+  const jobPattern = new RegExp(
+    `(^  ${jobId}:\\n[\\s\\S]*?)(?=^  [a-z0-9-]+:\\n|(?![\\s\\S]))`,
+    'm'
+  );
   const match = workflowText.match(jobPattern);
 
   assert.ok(match, `workflow should define a ${jobId} job block`);
