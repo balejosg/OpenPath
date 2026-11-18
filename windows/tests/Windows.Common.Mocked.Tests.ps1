@@ -322,6 +322,36 @@ download.mozilla.org/firefox/releases
             $dns.UsableForLimited | Should -BeTrue
         }
 
+        It "Prefers the DHCP resolver that also answers the browser portal-detection probe" {
+            # WEDU 2026-11-18: both resolvers know the portal host, but the first SERVFAILs
+            # every public name, so Firefox's firefox-portal-detection.com probe never resolved.
+            Mock Get-OpenPathCaptivePortalDhcpNameServerCandidates { @('172.23.140.92', '172.23.148.92') } -ModuleName Common
+            Mock Get-NetAdapter { @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 }) } -ModuleName Common
+            Mock Get-DnsClientServerAddress { @([PSCustomObject]@{ InterfaceIndex = 7; ServerAddresses = @('127.0.0.1') }) } -ModuleName Common
+            Mock Resolve-DnsName { throw 'Error de servidor DNS' } -ModuleName Common
+            Mock Resolve-DnsName { @([PSCustomObject]@{ IPAddress = '172.23.140.138' }) } -ModuleName Common -ParameterFilter { $Name -eq 'nce.wedu.comunidad.madrid' }
+            Mock Resolve-DnsName { @([PSCustomObject]@{ IPAddress = '151.101.1.91' }) } -ModuleName Common -ParameterFilter { $Server -eq '172.23.148.92' -and $Name -eq 'firefox-portal-detection.com' }
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset -ProbeDomains @('nce.wedu.comunidad.madrid')
+
+            $dns.Address | Should -Be '172.23.148.92'
+            $dns.Source | Should -Be 'dhcp-nameserver'
+            $dns.UsableForLimited | Should -BeTrue
+        }
+
+        It "Keeps the first portal-capable DHCP resolver when none answers the detection probes" {
+            Mock Get-OpenPathCaptivePortalDhcpNameServerCandidates { @('172.23.140.92', '172.23.148.92') } -ModuleName Common
+            Mock Get-NetAdapter { @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 }) } -ModuleName Common
+            Mock Get-DnsClientServerAddress { @([PSCustomObject]@{ InterfaceIndex = 7; ServerAddresses = @('127.0.0.1') }) } -ModuleName Common
+            Mock Resolve-DnsName { throw 'Error de servidor DNS' } -ModuleName Common
+            Mock Resolve-DnsName { @([PSCustomObject]@{ IPAddress = '172.23.140.138' }) } -ModuleName Common -ParameterFilter { $Name -eq 'nce.wedu.comunidad.madrid' }
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset -ProbeDomains @('nce.wedu.comunidad.madrid')
+
+            $dns.Address | Should -Be '172.23.140.92'
+            $dns.Source | Should -Be 'dhcp-nameserver'
+        }
+
         It "Prefers visible non-local adapter DNS after captive portal reset without public probes" {
             Mock Get-NetAdapter {
                 @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 })

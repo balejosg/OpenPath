@@ -410,7 +410,28 @@ function Get-OpenPathCaptivePortalUpstreamDns {
     # It survives the static 127.0.0.1 override and is the only resolver that knows
     # internal captive-portal hostnames. Only returned when it actually resolves the
     # declared portal probe domains, so it never weakens normal selection.
-    foreach ($candidate in @(Get-OpenPathCaptivePortalDhcpNameServerCandidates)) {
+    $dhcpNameServerCandidates = @(Get-OpenPathCaptivePortalDhcpNameServerCandidates)
+
+    # A network can offer several resolvers that all know the portal host but only
+    # some of which answer public names (WEDU 2026-11-18: 172.23.140.92 SERVFAILs every
+    # external name, 172.23.148.92 does not). Limited mode forwards the browser/OS
+    # detection probes to this single upstream, so prefer a resolver that also answers
+    # them; otherwise Firefox never sees the portal and the student is stuck.
+    if ($limitedProbeDomains.Count -gt 0 -and $dhcpNameServerCandidates.Count -gt 1) {
+        $detectionProbeDomains = @('firefox-portal-detection.com', 'www.msftconnecttest.com')
+        foreach ($candidate in $dhcpNameServerCandidates) {
+            if ((Test-OpenPathCaptivePortalLimitedUpstream -Address ([string]$candidate)) -and
+                (Test-OpenPathDnsServerForDomains -Server ([string]$candidate) -ProbeDomains $detectionProbeDomains)) {
+                return (New-OpenPathCaptivePortalUpstreamCandidate `
+                        -Address ([string]$candidate) `
+                        -Source 'dhcp-nameserver' `
+                        -Verified:$true `
+                        -UsableForLimited:$true)
+            }
+        }
+    }
+
+    foreach ($candidate in $dhcpNameServerCandidates) {
         if (Test-OpenPathCaptivePortalLimitedUpstream -Address ([string]$candidate)) {
             return (New-OpenPathCaptivePortalUpstreamCandidate `
                     -Address ([string]$candidate) `
