@@ -376,6 +376,29 @@ function Handle-OpenPathDownloadFailure {
     Write-OpenPathLog "Using cached whitelist (age=$cachedAgeHours h, failures=$consecutiveFailures/$failureThreshold) until next successful download" -Level WARN
 }
 
+function Test-OpenPathAdapterDnsPinnedToLocalResolver {
+    # true when an active adapter still resolves through the local Acrylic proxy; the
+    # firewall alone cannot prove a disabled classroom is open because a concurrent
+    # protected-mode restore pins DNS before it rebuilds the rules
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Command -Name 'Get-NetAdapter' -ErrorAction SilentlyContinue) -or
+        -not (Get-Command -Name 'Get-DnsClientServerAddress' -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    foreach ($adapter in @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {
+        $address = Get-DnsClientServerAddress -AddressFamily IPv4 -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue
+        $servers = @($address | ForEach-Object { @($_.ServerAddresses) } | Where-Object { $_ })
+        if ($servers.Count -gt 0 -and [string]$servers[0] -eq '127.0.0.1') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Handle-OpenPathNotModified {
     # applies cached whitelist policy when the server returns not-modified; enters fail-open path if the local marker is active
     param(
@@ -402,7 +425,7 @@ function Handle-OpenPathNotModified {
         # whitelist changes on the server.
         $protectionActive = $false
         try {
-            $protectionActive = [bool](Test-FirewallActive)
+            $protectionActive = [bool](Test-FirewallActive) -or [bool](Test-OpenPathAdapterDnsPinnedToLocalResolver)
         }
         catch {
             Write-OpenPathLog "Could not check firewall state while fail-open is active: $_" -Level WARN

@@ -413,12 +413,28 @@ Describe "Update Script" {
                 $script:repairModes | Should -Be @('FailOpen')
             }
 
+            It "Reopens a disabled classroom on a 304 cycle when only the adapter DNS is still pinned locally" {
+                $script:repairModes = @()
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) $script:repairModes += $Mode; [pscustomobject]@{ Actions = @() } }
+                function Test-FirewallActive { $false }
+                function Get-NetAdapter { param($ErrorAction) [pscustomobject]@{ Status = 'Up'; ifIndex = 7 } }
+                function Get-DnsClientServerAddress { param($AddressFamily, $InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('127.0.0.1') } }
+
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+
+                $script:repairModes | Should -Be @('FailOpen')
+            }
+
             It "Keeps a disabled classroom untouched on a 304 cycle when protection is already off" {
                 $script:repairModes = @()
                 function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
                 function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
                 function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) $script:repairModes += $Mode; [pscustomobject]@{ Actions = @() } }
                 function Test-FirewallActive { $false }
+                function Get-NetAdapter { param($ErrorAction) [pscustomobject]@{ Status = 'Up'; ifIndex = 7 } }
+                function Get-DnsClientServerAddress { param($AddressFamily, $InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('172.23.140.92') } }
 
                 Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
 

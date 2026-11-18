@@ -393,6 +393,25 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
             return
         }
 
+        # A disabled classroom is already open: entering or leaving portal mode here
+        # would pin DNS to the local resolver and re-arm the firewall.
+        if ((Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) -and
+            (Test-OpenPathCaptivePortalClassroomDisabled)) {
+            $portalModeActive = [bool](Test-OpenPathCaptivePortalModeActive)
+            Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
+                state = 'ClassroomDisabled'
+            } | Out-Null
+            Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
+                success = $false
+                operation = $operation
+                state = 'ClassroomDisabled'
+                triggerHost = $triggerHost
+                activeMarker = $portalModeActive
+                portalModeActive = $portalModeActive
+            } | Out-Null
+            return
+        }
+
         if ($operation -eq 'reconcile') {
             Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'state-probe' -Payload @{
                 operation = $operation

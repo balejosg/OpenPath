@@ -29,6 +29,7 @@ Initialize-OpenPathScriptSession `
     'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
     'Test-OpenPathCaptivePortalState',
     'Test-OpenPathCaptivePortalModeActive',
+    'Test-OpenPathCaptivePortalClassroomDisabled',
     'Update-OpenPathCaptivePortalObservation',
     'Enable-OpenPathCaptivePortalMode',
     'Disable-OpenPathCaptivePortalMode'

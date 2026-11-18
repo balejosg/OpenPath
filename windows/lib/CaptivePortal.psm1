@@ -1529,6 +1529,50 @@ function Clear-OpenPathCaptivePortalMarker {
     }
 }
 
+function Test-OpenPathCaptivePortalClassroomDisabled {
+    <#
+    .SYNOPSIS
+        Returns true when the local whitelist says the classroom is disabled.
+    .DESCRIPTION
+        A disabled classroom is intentionally open, so captive portal recovery has
+        nothing to restore. Any read failure returns false: the caller then keeps
+        the normal fail-closed protected-mode path.
+    .OUTPUTS
+        Boolean
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        $whitelistPath = Join-Path $script:OpenPathRoot 'data\whitelist.txt'
+        if (-not (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromFile' -ErrorAction SilentlyContinue) -or
+            -not (Test-Path -LiteralPath $whitelistPath -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+
+        $sections = Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath
+        return [bool]($sections -and $sections.PSObject.Properties['IsDisabled'] -and $sections.IsDisabled)
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: could not read classroom state for captive portal recovery: $_" -Level WARN
+        return $false
+    }
+}
+
+function Close-OpenPathCaptivePortalForDisabledClassroom {
+    <#
+    .SYNOPSIS
+        Ends captive portal mode without re-arming protection in a disabled classroom.
+    .OUTPUTS
+        Boolean
+    #>
+    [CmdletBinding()]
+    param()
+
+    Write-OpenPathLog 'Watchdog: classroom is disabled; closing captive portal recovery without restoring protected mode'
+    return [bool](Clear-OpenPathCaptivePortalMarker)
+}
+
 function Get-OpenPathCaptivePortalObservation {
     <#
     .SYNOPSIS
@@ -2022,6 +2066,10 @@ function Disable-OpenPathCaptivePortalMode {
         return $false
     }
 
+    if (Test-OpenPathCaptivePortalClassroomDisabled) {
+        return (Close-OpenPathCaptivePortalForDisabledClassroom)
+    }
+
     $markerPresentAtStart = Test-Path $script:CaptivePortalStatePath
     if ($markerPresentAtStart) {
         Write-OpenPathLog 'Watchdog: Captive portal resolved - restoring DNS protection' -Level WARN
@@ -2118,6 +2166,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathCaptivePortalAllowedHosts',
     'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
     'Clear-OpenPathCaptivePortalMarker',
+    'Test-OpenPathCaptivePortalClassroomDisabled',
     'Get-OpenPathCaptivePortalObservation',
     'Update-OpenPathCaptivePortalObservation',
     'Get-OpenPathCaptivePortalBootstrapHosts',
