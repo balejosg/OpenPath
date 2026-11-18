@@ -32,3 +32,11 @@ targetRules = ["generic-api-key"]
 paths = ['''^react-spa/src/lib/__tests__/config-posture\.test\.ts$''']
 regexTarget = "line"
 regexes = ['''key: '[A-Za-z0-9]+'''']
+
+[[allowlists]]
+description = "Offline installer evidence redaction tests use a synthetic JWT-shaped fixture."
+condition = "AND"
+targetRules = ["jwt"]
+paths = ['''^tests/windows-personalized-offline-installer-evidence\.test\.mjs$''']
+regexTarget = "line"
+regexes = ['''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJzeW50aGV0aWMifQ\.c2lnbmF0dXJl''']
