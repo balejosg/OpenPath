@@ -31,6 +31,7 @@ Export-ModuleMember -Function @(
     'Set-AcrylicServiceAutoStart',
     'Update-AcrylicHost',
     'Set-AcrylicConfiguration',
+    'Get-OpenPathDnsSettings',
     'Test-OpenPathSplitDnsActive',
     'Test-OpenPathSplitDnsTopologyDrift',
     'Clear-OpenPathRuntimeDependencyOverlay',

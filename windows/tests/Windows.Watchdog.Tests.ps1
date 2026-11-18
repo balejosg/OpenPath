@@ -1659,6 +1659,43 @@ Describe "Watchdog Script" {
             @($result) | Should -Be @('nce.wedu.comunidad.madrid', 'login.example.test')
         }
 
+        It "Verifies the normal Acrylic upstream against the configured DNS settings, not the 8.8.8.8 fallback" {
+            # Regression: Get-OpenPathDnsSettings was not exported from DNS.psm1, so the
+            # captive portal exit check silently fell back to 8.8.8.8/8.8.4.4 and never
+            # verified on networks with any other upstream, looping protected-mode restores.
+            $libRoot = Join-Path (Join-Path $PSScriptRoot "..") "lib"
+            $dnsModule = Import-Module (Join-Path $libRoot 'DNS.psm1') -Force -Global -PassThru
+            $captiveModule = Import-Module (Join-Path $libRoot 'CaptivePortal.psm1') -Force -PassThru
+
+            try {
+                $dnsModule.ExportedFunctions.Keys | Should -Contain 'Get-OpenPathDnsSettings'
+
+                $acrylicRoot = Join-Path $TestDrive 'acrylic-normal-state'
+                New-Item -ItemType Directory -Path $acrylicRoot -Force | Out-Null
+                Set-Content -Path (Join-Path $acrylicRoot 'AcrylicHosts.txt') -Value 'NX >blocked.example'
+                Set-Content -Path (Join-Path $acrylicRoot 'AcrylicConfiguration.ini') -NoNewline -Value "[GlobalSection]`nPrimaryServerAddress=10.20.30.40`nSecondaryServerAddress=10.20.30.41`n"
+
+                & $dnsModule {
+                    function script:Get-OpenPathConfig {
+                        [PSCustomObject]@{ primaryDNS = '10.20.30.40'; secondaryDNS = '10.20.30.41' }
+                    }
+                }
+
+                $result = & $captiveModule {
+                    param([string]$AcrylicRoot)
+                    $script:TestAcrylicRoot = $AcrylicRoot
+                    function script:Get-AcrylicPath { $script:TestAcrylicRoot }
+                    Test-OpenPathCaptivePortalAcrylicNormalState
+                } $acrylicRoot
+
+                $result | Should -BeTrue
+            }
+            finally {
+                Import-Module (Join-Path $libRoot 'DNS.psm1') -Force -Global
+                Import-Module (Join-Path $libRoot 'CaptivePortal.psm1') -Force
+            }
+        }
+
         It "Behaviorally separates bootstrap, redirect, and resource hosts without leaking URLs" {
             $modulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "CaptivePortal.psm1"
             Import-Module $modulePath -Force
