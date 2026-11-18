@@ -2972,6 +2972,17 @@ Describe "Watchdog Script" {
             )
         }
 
+        It "Runs the egress floor invariant before the network-dependent watchdog prechecks" {
+            $scriptPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Test-DNSHealth.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $invariantIndex = $content.IndexOf('Invoke-OpenPathWatchdogEgressFloorInvariantCheck')
+            $precheckIndex = $content.IndexOf('Invoke-OpenPathWatchdogPrechecks')
+            $invariantIndex | Should -BeGreaterThan -1
+            $precheckIndex | Should -BeGreaterThan -1
+            $invariantIndex | Should -BeLessThan $precheckIndex
+        }
+
         It "Repairs local DNS when any active IPv4 adapter is missing loopback DNS" {
             $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             $reconcilerPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "EndpointStateReconciler.ps1"
@@ -3601,10 +3612,10 @@ Describe "AppControl and watchdog health contract" {
         $content = Get-Content $scriptPath -Raw
 
         Assert-ContentContainsAll -Content $content -Needles @(
-            '-ReasonCodes @($checkResult.ReasonCodes)',
+            '-ReasonCodes @($checkResult.ReasonCodes + $earlyReasonCodes)',
             '-ReasonCodes @($outcome.ReasonCodes)'
         )
-        $content.IndexOf('-ReasonCodes @($checkResult.ReasonCodes)') | Should -BeGreaterThan -1
+        $content.IndexOf('-ReasonCodes @($checkResult.ReasonCodes + $earlyReasonCodes)') | Should -BeGreaterThan -1
         $content.IndexOf('-ReasonCodes @($outcome.ReasonCodes)') | Should -BeGreaterThan -1
     }
 }
@@ -3741,6 +3752,190 @@ Describe "Watchdog egress floor check" {
         $result = Invoke-OpenPathWatchdogEgressFloorCheck -Config ([pscustomobject]@{}) -OpenPathRoot 'C:\OpenPath'
         $result | Should -Be 'disabled'
         @($script:wfEvents).Count | Should -Be 0
+    }
+}
+
+Describe "Watchdog egress floor invariant check" {
+    BeforeAll {
+        Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Firewall.psm1") -Force -Global -ErrorAction SilentlyContinue
+        . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")
+        $global:wfiLatchPath = Join-Path (Join-Path $TestDrive 'data') 'egress-floor-invariant-latch.json'
+    }
+
+    BeforeEach {
+        $global:wfiEvents = @()
+        $global:wfiInvariantCalls = 0
+        $global:wfiProfiles = @([pscustomobject]@{ Name = 'Domain'; DefaultOutboundAction = 'Block' }, [pscustomobject]@{ Name = 'Private'; DefaultOutboundAction = 'Block' }, [pscustomobject]@{ Name = 'Public'; DefaultOutboundAction = 'Block' })
+        $global:wfiRules = @([pscustomobject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-NonStudent' })
+        function global:Write-OpenPathLog { param($Message, $Level) }
+        function global:Get-OpenPathEgressFloorStudentProgramsFromConfig { param($Config, $OpenPathRoot) @('C:\Program Files\Mozilla Firefox\firefox.exe') }
+        function global:Set-OpenPathStudentEgressFloor { param($StudentPrograms) $global:wfiEvents += 'set'; 9 }
+        function global:Remove-OpenPathEgressFloorRules { param($RulePrefix, $RestoreDefaultOutbound, $ClearInvariantLatch) $global:wfiEvents += "remove:$RestoreDefaultOutbound/$ClearInvariantLatch" }
+        function global:Get-OpenPathEgressFloorPreviousOutboundStatePath { param($OpenPathRoot) Join-Path $TestDrive 'egress-floor-prev-outbound.json' }
+        function global:Get-OpenPathEgressFloorEffectiveProfileStates { $global:wfiProfiles }
+        function global:Test-OpenPathStudentEgressFloorInvariant { $global:wfiInvariantCalls++; if ($global:wfiInvariantQueue.Count -gt 0) { $next = $global:wfiInvariantQueue[0]; $global:wfiInvariantQueue = @($global:wfiInvariantQueue | Select-Object -Skip 1); return $next } return $global:wfiInvariant }
+        function global:Resolve-OpenPathEgressFloorRestrictedSid { 'S-1-5-21-1-2-3-1005' }
+        function global:Get-NetFirewallRule { param($DisplayName, $ErrorAction) $global:wfiRules }
+        $global:wfiInvariant = [pscustomobject]@{ Holds = $false; Reason = 'nonstudent-allow-disabled'; BlockProfiles = @('Domain', 'Private', 'Public') }
+        $global:wfiInvariantQueue = @()
+        Remove-Item -LiteralPath $global:wfiLatchPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $TestDrive 'egress-floor-prev-outbound.json') -Force -ErrorAction SilentlyContinue
+    }
+
+    AfterEach {
+        foreach ($name in @('Write-OpenPathLog', 'Get-OpenPathEgressFloorStudentProgramsFromConfig', 'Set-OpenPathStudentEgressFloor',
+                'Remove-OpenPathEgressFloorRules', 'Get-OpenPathEgressFloorPreviousOutboundStatePath',
+                'Get-OpenPathEgressFloorEffectiveProfileStates',
+                'Test-OpenPathStudentEgressFloorInvariant', 'Resolve-OpenPathEgressFloorRestrictedSid', 'Get-NetFirewallRule')) {
+            Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+        }
+        Remove-Variable -Scope Global -Name wfiEvents, wfiInvariantCalls, wfiProfiles, wfiRules, wfiInvariant, wfiInvariantQueue -ErrorAction SilentlyContinue
+    }
+
+    It "reapplies once and leaves no latch when the invariant recovers" {
+        $global:wfiInvariantQueue = @(
+            [pscustomobject]@{ Holds = $false; Reason = 'nonstudent-allow-disabled'; BlockProfiles = @('Domain') },
+            [pscustomobject]@{ Holds = $true; Reason = 'effective-nonstudent-allow'; BlockProfiles = @('Domain') }
+        )
+        $result = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $true }) -OpenPathRoot $TestDrive
+        $result.Result | Should -Be 'reapplied'
+        $result.ReasonCode | Should -BeNullOrEmpty
+        $global:wfiEvents | Should -Be @('set')
+        Test-Path -LiteralPath $global:wfiLatchPath | Should -BeFalse
+    }
+
+    It "tears down and leaves a latch when the invariant fails again after reapply" {
+        $result = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $true }) -OpenPathRoot $TestDrive
+        $result.Result | Should -Be 'torn-down'
+        $result.ReasonCode | Should -Be 'egress_floor_invariant_failed'
+        $result.Issue | Should -Match 'nonstudent-allow-disabled'
+        $global:wfiEvents | Should -Be @('set', 'remove:True/False')
+        $latch = Get-Content -LiteralPath $global:wfiLatchPath -Raw | ConvertFrom-Json
+        $latch.reason | Should -Be 'nonstudent-allow-disabled'
+    }
+
+    It "does not reapply while the latch is present" {
+        $global:wfiLatchPath | ForEach-Object { New-Item -ItemType Directory -Path (Split-Path -Parent $_) -Force | Out-Null }
+        @{ reason = 'nonstudent-allow-disabled'; createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o') } |
+            ConvertTo-Json | Set-Content -LiteralPath $global:wfiLatchPath -Encoding UTF8
+        $result = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $true }) -OpenPathRoot $TestDrive
+        $result.Result | Should -Be 'latched'
+        $result.ReasonCode | Should -Be 'egress_floor_invariant_failed'
+        $global:wfiEvents | Should -Be @()
+        $global:wfiInvariantCalls | Should -Be 0
+    }
+
+    It "keeps the latch when the configuration is unavailable" {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $global:wfiLatchPath) -Force | Out-Null
+        @{ reason = 'nonstudent-allow-disabled'; createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o') } |
+            ConvertTo-Json | Set-Content -LiteralPath $global:wfiLatchPath -Encoding UTF8
+        $result = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config $null -OpenPathRoot $TestDrive
+        $result.Result | Should -Be 'latched'
+        $result.ReasonCode | Should -Be 'egress_floor_invariant_failed'
+        Test-Path -LiteralPath $global:wfiLatchPath | Should -BeTrue
+    }
+
+    It "removes leftovers and clears the latch when the flag is off" {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $global:wfiLatchPath) -Force | Out-Null
+        @{ reason = 'nonstudent-allow-disabled'; createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o') } |
+            ConvertTo-Json | Set-Content -LiteralPath $global:wfiLatchPath -Encoding UTF8
+        $result = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $false }) -OpenPathRoot $TestDrive
+        $result.Result | Should -Be 'removed'
+        $global:wfiEvents | Should -Be @('remove:True/')
+        Test-Path -LiteralPath $global:wfiLatchPath | Should -BeFalse
+    }
+
+    It "clears a transient restricted-group latch once the group resolves" {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $global:wfiLatchPath) -Force | Out-Null
+        @{ reason = 'restricted-group-unresolved'; createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o') } |
+            ConvertTo-Json | Set-Content -LiteralPath $global:wfiLatchPath -Encoding UTF8
+        $global:wfiProfiles = @([pscustomobject]@{ Name = 'Domain'; DefaultOutboundAction = 'Block' })
+        $global:wfiInvariant = [pscustomobject]@{ Holds = $true; Reason = 'effective-nonstudent-allow'; BlockProfiles = @('Domain') }
+        $result = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $true }) -OpenPathRoot $TestDrive
+        $result.Result | Should -Be 'in-sync'
+        Test-Path -LiteralPath $global:wfiLatchPath | Should -BeFalse
+    }
+
+    It "reports a precondition-failed latch written during reapply" {
+        function global:Set-OpenPathStudentEgressFloor {
+            param($StudentPrograms)
+            $global:wfiEvents += 'set'
+            Set-OpenPathEgressFloorInvariantLatch -Reason 'nonstudent-allow-missing' -OpenPathRoot $TestDrive
+            return 0
+        }
+        $result = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $true }) -OpenPathRoot $TestDrive
+        $result.Result | Should -Be 'precondition-failed'
+        $result.ReasonCode | Should -Be 'egress_floor_invariant_failed'
+        $result.Issue | Should -Match 'nonstudent-allow-missing'
+    }
+
+    It "leaves an absent floor to the gated drift check" {
+        $global:wfiProfiles = @([pscustomobject]@{ Name = 'Domain'; DefaultOutboundAction = 'Allow' })
+        $global:wfiRules = @()
+        $result = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config ([pscustomobject]@{ outboundEgressFloorEnabled = $true }) -OpenPathRoot $TestDrive
+        $result.Result | Should -Be 'absent'
+        $global:wfiEvents | Should -Be @()
+    }
+}
+
+Describe "Watchdog checks the egress floor invariant outside the protected-mode gate" {
+    BeforeAll {
+        Import-Module (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Firewall.psm1") -Force -Global -ErrorAction SilentlyContinue
+        . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")
+    }
+
+    BeforeEach {
+        $script:invariantGateRoot = Join-Path $TestDrive ('invariant-gate-' + [guid]::NewGuid().ToString('N'))
+        $script:invariantGateLatch = Join-Path (Join-Path $script:invariantGateRoot 'data') 'egress-floor-invariant-latch.json'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $script:invariantGateLatch) -Force | Out-Null
+        @{ reason = 'restricted-group-unresolved'; createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o') } |
+            ConvertTo-Json | Set-Content -LiteralPath $script:invariantGateLatch -Encoding UTF8
+        function global:Get-OpenPathWatchdogTaskHealth { param($OpenPathRoot) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
+        function global:Get-OpenPathWhitelistSectionsFromFile { param($Path) throw 'whitelist unreadable' }
+        function global:Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks { param($Config, $PortalModeActive, $CaptiveState) [pscustomobject]@{ Issues = @(); ReasonCodes = @() } }
+        function global:Get-Service { param($DisplayName, $ErrorAction) return $null }
+        function global:New-OpenPathWatchdogProtectedModeRepairPlan { param($PolicyState, $AcrylicServiceRunning, $AcrylicServiceAutoStart, $DnsResolutionHealthy, $DnsSinkholeHealthy, $FirewallActive, $LocalDnsConfigured, $AffectedLocalDnsAdapterNames, $BridgeFiltersDetected, $AffectedBridgeFilterAdapterNames) [pscustomobject]@{ Actions = @(); Issues = @(); RecoveryEligibleIssues = @() } }
+        function global:Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) }
+        function global:Test-DNSResolution { return $true }
+        function global:Test-DNSSinkhole { param($Domain) return $true }
+        function global:Test-FirewallActive { return $true }
+        function global:Get-OpenPathActiveIpv4AdaptersMissingLocalDns { return @() }
+        function global:Get-OpenPathAdaptersWithBridgeFilters { param($ExtraComponentIds, $Allowlist) return @() }
+        function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+        function global:Invoke-OpenPathWatchdogAppControlHealth { param($Config, $OpenPathRoot, $GroupSyncFailed) [pscustomobject]@{ Issues = @(); ReasonCodes = @(); RecoveryEligibleIssues = @() } }
+        function global:Invoke-OpenPathWatchdogFirefoxPolicySync { }
+        function global:Test-OpenPathSplitDnsTopologyDrift { return [pscustomobject]@{ Drifted = $false; Reason = '' } }
+        function global:Get-OpenPathFirefoxNativeHostCompiledHealth { param($Config) [pscustomobject]@{ BoundaryActive = $false; ReasonCode = '' } }
+        function global:Get-OpenPathSmartAppControlState { return [pscustomobject]@{ State = 'off' } }
+        function global:Write-OpenPathLog { param($Message, $Level) }
+    }
+
+    AfterEach {
+        Remove-Item Function:\Get-OpenPathWatchdogTaskHealth, Function:\Get-OpenPathWhitelistSectionsFromFile -ErrorAction SilentlyContinue
+        Remove-Item Function:\Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks, Function:\Get-Service -ErrorAction SilentlyContinue
+        Remove-Item Function:\New-OpenPathWatchdogProtectedModeRepairPlan, Function:\Invoke-OpenPathEndpointStateRepairPlan -ErrorAction SilentlyContinue
+        Remove-Item Function:\Test-DNSResolution, Function:\Test-DNSSinkhole, Function:\Test-FirewallActive -ErrorAction SilentlyContinue
+        Remove-Item Function:\Get-OpenPathActiveIpv4AdaptersMissingLocalDns, Function:\Get-OpenPathAdaptersWithBridgeFilters -ErrorAction SilentlyContinue
+        Remove-Item Function:\Test-OpenPathIntegrity, Function:\Invoke-OpenPathWatchdogAppControlHealth -ErrorAction SilentlyContinue
+        Remove-Item Function:\Invoke-OpenPathWatchdogFirefoxPolicySync, Function:\Test-OpenPathSplitDnsTopologyDrift -ErrorAction SilentlyContinue
+        Remove-Item Function:\Get-OpenPathFirefoxNativeHostCompiledHealth, Function:\Get-OpenPathSmartAppControlState, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Script -Name invariantGateRoot, invariantGateLatch -ErrorAction SilentlyContinue
+    }
+
+    It "evaluates the invariant in portal mode <Name> with an unreadable whitelist" -ForEach @(
+        @{ Name = 'on'; PortalModeActive = $true }
+        @{ Name = 'off'; PortalModeActive = $false }
+    ) {
+        $result = Invoke-OpenPathWatchdogChecks `
+            -Config ([pscustomobject]@{ enableNonAdminAppControl = $false; outboundEgressFloorEnabled = $true }) `
+            -PortalModeActive $PortalModeActive `
+            -CaptiveState 'Direct' `
+            -OpenPathRoot $script:invariantGateRoot `
+            -StaleFailsafeStatePath (Join-Path $TestDrive 'stale.json')
+
+        $result.ReasonCodes | Should -Contain 'egress_floor_invariant_failed'
+        $result.Issues | Should -Contain 'Egress floor invariant latch is active (restricted-group-unresolved); the floor is not reapplied'
+        Test-Path -LiteralPath $script:invariantGateLatch | Should -BeTrue
     }
 }
 

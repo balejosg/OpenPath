@@ -435,6 +435,11 @@ try {
             Show-OpenPathStatus -OpenPathRoot $openPathRoot
         }
         'update' {
+            # Operator-initiated update clears the egress-floor invariant latch: the
+            # operator has seen the reported reason and asked for a fresh apply.
+            if (Get-Command -Name 'Clear-OpenPathEgressFloorInvariantLatch' -ErrorAction SilentlyContinue) {
+                Clear-OpenPathEgressFloorInvariantLatch -OpenPathRoot $openPathRoot
+            }
             Invoke-OpenPathScript -ScriptPath "$scriptsPath\Update-OpenPath.ps1" -ScriptArguments $Arguments
         }
         'health' {
@@ -570,6 +575,12 @@ try {
         }
         'enable' {
             Write-Host 'Enabling OpenPath enforcement...' -ForegroundColor Cyan
+
+            # Operator-initiated enable clears the egress-floor invariant latch: the
+            # operator has seen the reported reason and asked for a fresh apply.
+            if (Get-Command -Name 'Clear-OpenPathEgressFloorInvariantLatch' -ErrorAction SilentlyContinue) {
+                Clear-OpenPathEgressFloorInvariantLatch -OpenPathRoot $openPathRoot
+            }
 
             $enabledFirewall = Enable-OpenPathFirewall
             if (-not $enabledFirewall) {

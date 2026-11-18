@@ -101,6 +101,26 @@ catch {
     Write-OpenPathLog "Watchdog: Error loading configuration: $_" -Level ERROR
 }
 
+# The egress-floor safety invariant runs before ANY network-dependent precheck:
+# if a profile is at Block without an effective non-student Allow, the machine has
+# no egress and a DNS/portal probe can block for minutes before the main checks.
+# This only touches firewall/profile state and never DNS, Acrylic or whitelist policy.
+$earlyReasonCodes = @()
+try {
+    $earlyFloorInvariant = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config $config -OpenPathRoot $OpenPathRoot
+    if ($earlyFloorInvariant -and $earlyFloorInvariant.PSObject.Properties['ReasonCode'] -and $earlyFloorInvariant.ReasonCode) {
+        $earlyReasonCodes += [string]$earlyFloorInvariant.ReasonCode
+        if ($earlyFloorInvariant.PSObject.Properties['Issue'] -and $earlyFloorInvariant.Issue) {
+            $issues += [string]$earlyFloorInvariant.Issue
+        }
+    }
+}
+catch {
+    $issues += 'Egress floor invariant check failed'
+    $recoveryEligibleIssues += 'Egress floor invariant check failed'
+    Write-OpenPathLog "Watchdog: Error checking the outbound egress floor invariant before prechecks: $_" -Level ERROR
+}
+
 try {
     Remove-OpenPathOrphanControlPlaneValve -OpenPathRoot $OpenPathRoot | Out-Null
 }
@@ -154,7 +174,7 @@ if (
 $outcome = Get-OpenPathWatchdogOutcome `
     -Config $config `
     -Issues @($issues) `
-    -ReasonCodes @($checkResult.ReasonCodes) `
+    -ReasonCodes @($checkResult.ReasonCodes + $earlyReasonCodes) `
     -RecoveryEligibleIssues @($recoveryEligibleIssues) `
     -StaleFailsafeActive $checkResult.StaleFailsafeActive `
     -IntegrityTampered $checkResult.IntegrityTampered `

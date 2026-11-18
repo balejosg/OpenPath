@@ -302,6 +302,20 @@ Describe "Operational Command Script" {
             $body = $content.Substring($start, $end - $start)
             $body | Should -Match '(?s)Update-OpenPath\.ps1.*Invoke-OpenPathWatchdogEgressFloorCheck -Config \(Get-OpenPathConfig\)'
         }
+
+        It "OpenPath.ps1 enable and update clear the egress floor invariant latch" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $enableStart = $content.IndexOf("'enable' {")
+            $enableEnd = $content.IndexOf("'disable' {")
+            $updateStart = $content.IndexOf("'update' {")
+            $updateEnd = $content.IndexOf("'health' {")
+            $enableBody = $content.Substring($enableStart, $enableEnd - $enableStart)
+            $updateBody = $content.Substring($updateStart, $updateEnd - $updateStart)
+
+            $enableBody | Should -Match 'Clear-OpenPathEgressFloorInvariantLatch'
+            $updateBody | Should -Match 'Clear-OpenPathEgressFloorInvariantLatch'
+        }
     }
 
     Context "New verb: disable" {

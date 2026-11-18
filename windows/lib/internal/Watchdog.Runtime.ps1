@@ -1519,6 +1519,25 @@ function Invoke-OpenPathWatchdogChecks {
     $shouldRunDnsProxyChecks = [bool]($shouldRunProtectedModeChecks -or $failureModeActive)
 
     try {
+        # Safety invariant, deliberately OUTSIDE the protected-mode/whitelist gate and
+        # before the network-dependent DNS/repair checks: the floor does not depend on
+        # the whitelist, and Block without an effective non-student Allow cuts every
+        # user's egress (portal mode and DNS fail-open included). Running it first also
+        # repairs the floor before a DNS repair path can block on missing connectivity.
+        # It never calls DNS, Acrylic or whitelist policy code.
+        $egressFloorInvariant = Invoke-OpenPathWatchdogEgressFloorInvariantCheck -Config $Config -OpenPathRoot $OpenPathRoot
+        if ($egressFloorInvariant -and $egressFloorInvariant.PSObject.Properties['ReasonCode'] -and $egressFloorInvariant.ReasonCode) {
+            & $addReasonCode ([string]$egressFloorInvariant.ReasonCode)
+            if ($egressFloorInvariant.PSObject.Properties['Issue'] -and $egressFloorInvariant.Issue) {
+                $issues += [string]$egressFloorInvariant.Issue
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Error checking the outbound egress floor invariant: $_" -Level ERROR
+    }
+
+    try {
         $acrylicService = if ($shouldRunProtectedModeChecks) { Get-Service -DisplayName "*Acrylic*" -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
         $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
             -PolicyState $policyState `
@@ -2120,6 +2139,159 @@ function Get-OpenPathWatchdogOutcome {
         FailureModeActive = $FailureModeActive
         FailureModeOpenActive = $FailureModeOpenActive
     }
+}
+
+function Test-OpenPathWatchdogEgressFloorLatchRelease {
+    # A latch left by a transient cause (unresolved restricted group or an
+    # unavailable active-store query) is released once that cause is gone.
+    # Rule-level causes stay latched until an operator enable/update or flag off.
+    param(
+        [AllowNull()][object]$Latch,
+        [string]$OpenPathRoot
+    )
+
+    if (-not $Latch) { return $false }
+    switch ([string]$Latch.Reason) {
+        'restricted-group-unresolved' {
+            try {
+                $null = Resolve-OpenPathEgressFloorRestrictedSid
+                return $true
+            }
+            catch {
+                return $false
+            }
+        }
+        'firewall-rule-query-unavailable' {
+            return [bool](Get-Command -Name 'Get-NetFirewallRule' -ErrorAction SilentlyContinue)
+        }
+        default {
+            return $false
+        }
+    }
+}
+
+function Invoke-OpenPathWatchdogEgressFloorInvariantCheck {
+    <#
+    .SYNOPSIS
+        One watchdog pass over the egress-floor safety invariant.
+    .DESCRIPTION
+        Runs outside the protected-mode/whitelist gate. When the flag is on, or a
+        governed profile is at Block with floor leftovers, it checks that Block is
+        accompanied by an effective non-student Allow. On failure it reapplies the
+        floor once; if the failure persists it tears the floor down (fail-open) and
+        writes the invariant latch so the next cycles do not flap.
+    .OUTPUTS
+        PSCustomObject -- Result (string), ReasonCode (string), Issue (string).
+    #>
+    param(
+        [AllowNull()]
+        [object]$Config,
+
+        [string]$OpenPathRoot
+    )
+
+    $result = {
+        param([string]$Result, [string]$ReasonCode = '', [string]$Issue = '')
+        [PSCustomObject]@{ Result = $Result; ReasonCode = $ReasonCode; Issue = $Issue }
+    }
+
+    $configAvailable = [bool]$Config
+    $enabled = [bool]($configAvailable -and $Config.PSObject.Properties['outboundEgressFloorEnabled'] -and [bool]$Config.outboundEgressFloorEnabled)
+    $latch = Read-OpenPathEgressFloorInvariantLatch -OpenPathRoot $OpenPathRoot
+
+    $profileStates = @(Get-OpenPathEgressFloorEffectiveProfileStates)
+    $blockProfiles = @($profileStates | Where-Object { [string]$_.DefaultOutboundAction -eq 'Block' } | ForEach-Object { [string]$_.Name })
+
+    $floorRules = @()
+    if (Get-Command -Name 'Get-NetFirewallRule' -ErrorAction SilentlyContinue) {
+        $floorRules = @(Get-NetFirewallRule -DisplayName 'OpenPath-DNS-*-EgressFloor-*' -ErrorAction SilentlyContinue)
+    }
+    $statePath = if (Get-Command -Name 'Get-OpenPathEgressFloorPreviousOutboundStatePath' -ErrorAction SilentlyContinue) {
+        Get-OpenPathEgressFloorPreviousOutboundStatePath -OpenPathRoot $OpenPathRoot
+    }
+    else {
+        $null
+    }
+    $stateExists = [bool]($statePath -and (Test-Path -LiteralPath $statePath))
+    $floorEvidence = [bool](($floorRules.Count -gt 0) -or $stateExists -or ($blockProfiles.Count -gt 0))
+
+    if (-not $configAvailable) {
+        # Unknown flag is not "flag off": never clear a latch or restore defaults on
+        # a configuration read failure. Keep protecting any Block evidence.
+        if ($latch) {
+            $issue = "Egress floor invariant latch is active ($($latch.Reason)); the floor is not reapplied"
+            Write-OpenPathLog "Watchdog: $issue (configuration unavailable)" -Level WARN
+            return (& $result 'latched' 'egress_floor_invariant_failed' $issue)
+        }
+        if (-not $floorEvidence) {
+            return (& $result 'configuration-unavailable')
+        }
+    }
+    elseif (-not $enabled) {
+        if ($floorRules.Count -gt 0 -or $stateExists) {
+            Write-OpenPathLog 'Watchdog: egress floor disabled but leftovers found; removing and restoring the pre-floor outbound default' -Level WARN
+            Remove-OpenPathEgressFloorRules -RestoreDefaultOutbound $true
+            Clear-OpenPathEgressFloorInvariantLatch -OpenPathRoot $OpenPathRoot
+            return (& $result 'removed')
+        }
+        if ($latch) {
+            Clear-OpenPathEgressFloorInvariantLatch -OpenPathRoot $OpenPathRoot
+            return (& $result 'removed-latch')
+        }
+        return (& $result 'disabled')
+    }
+
+    $forceReapply = $false
+    if ($latch) {
+        if (Test-OpenPathWatchdogEgressFloorLatchRelease -Latch $latch -OpenPathRoot $OpenPathRoot) {
+            Write-OpenPathLog "Watchdog: egress floor invariant latch cause recovered ($($latch.Reason)); clearing the latch" -Level WARN
+            Clear-OpenPathEgressFloorInvariantLatch -OpenPathRoot $OpenPathRoot
+            $latch = $null
+            $forceReapply = $true
+        }
+        else {
+            $issue = "Egress floor invariant latch is active ($($latch.Reason)); the floor is not reapplied"
+            Write-OpenPathLog "Watchdog: $issue" -Level WARN
+            return (& $result 'latched' 'egress_floor_invariant_failed' $issue)
+        }
+    }
+
+    if (-not $floorEvidence -and -not $forceReapply) {
+        return (& $result 'absent')
+    }
+
+    $invariant = Test-OpenPathStudentEgressFloorInvariant
+    if ([bool]$invariant.Holds) {
+        return (& $result 'in-sync')
+    }
+
+    Write-OpenPathLog "Watchdog: egress floor invariant failed ($($invariant.Reason)); reapplying once" -Level WARN
+    $programs = @(Get-OpenPathEgressFloorStudentProgramsFromConfig -Config $Config -OpenPathRoot $OpenPathRoot)
+    $applied = Set-OpenPathStudentEgressFloor -StudentPrograms $programs
+
+    $latchAfterApply = Read-OpenPathEgressFloorInvariantLatch -OpenPathRoot $OpenPathRoot
+    if ($latchAfterApply) {
+        $issue = "Egress floor invariant precondition failed ($($latchAfterApply.Reason)); the floor was not applied"
+        return (& $result 'precondition-failed' 'egress_floor_invariant_failed' $issue)
+    }
+    if ([int]$applied -le 0) {
+        Write-OpenPathLog "Watchdog: egress floor reapply did not apply any rules ($($invariant.Reason)); tearing down to restore egress" -Level ERROR
+        Remove-OpenPathEgressFloorRules -RestoreDefaultOutbound $true -ClearInvariantLatch:$false
+        Set-OpenPathEgressFloorInvariantLatch -Reason ([string]$invariant.Reason) -OpenPathRoot $OpenPathRoot
+        $issue = "Egress floor invariant failed ($($invariant.Reason)); floor torn down to restore egress"
+        return (& $result 'torn-down' 'egress_floor_invariant_failed' $issue)
+    }
+
+    $after = Test-OpenPathStudentEgressFloorInvariant
+    if ([bool]$after.Holds) {
+        return (& $result 'reapplied')
+    }
+
+    Write-OpenPathLog "Watchdog: egress floor invariant still fails after reapply ($($after.Reason)); tearing down (fail-open)" -Level ERROR
+    Remove-OpenPathEgressFloorRules -RestoreDefaultOutbound $true -ClearInvariantLatch:$false
+    Set-OpenPathEgressFloorInvariantLatch -Reason ([string]$after.Reason) -OpenPathRoot $OpenPathRoot
+    $issue = "Egress floor invariant failed ($($after.Reason)); floor torn down to restore egress"
+    return (& $result 'torn-down' 'egress_floor_invariant_failed' $issue)
 }
 
 function Invoke-OpenPathWatchdogEgressFloorCheck {
