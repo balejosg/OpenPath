@@ -58,6 +58,7 @@ describe('publish Windows canary workflow contract', () => {
     assert.match(workflow, /--out "\$RUNNER_TEMP\/canary-release"/);
     assert.match(script, /buildWindowsAgentFileManifest/);
     assert.match(script, /openpath-agent-release-v1/);
+    assert.match(script, /files\.sort\(\(left, right\)/);
     assert.match(script, /computeBuild/);
     assert.match(script, /contentBase64/);
     assert.match(script, /console\.log\(`build=\$\{build\}`\)/);

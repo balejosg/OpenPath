@@ -196,6 +196,9 @@ async function main() {
       contentBase64: content.toString('base64'),
     };
   });
+  // The API computes the published build over ordinal path order; sort here so
+  // the declared build and the stored build are the same fingerprint.
+  files.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   const build = computeBuild(files);
   const canonical = buildCanonicalText(files, build, args.sha.trim());
 
