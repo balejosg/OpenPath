@@ -29,6 +29,8 @@ export default defineConfig({
     'email_verification_tokens',
     'push_subscriptions',
     'health_reports',
+    'agent_releases',
+    'agent_release_files',
     'whitelist_groups',
     'whitelist_rules',
     'dashboard_users',

@@ -6,6 +6,7 @@ import { logger } from './logger.js';
 export type DbEventPayload =
   | { type: 'group'; groupId: string; origin?: string }
   | { type: 'classroom'; classroomId: string; origin?: string }
+  | { type: 'agent-update'; build: string; origin?: string }
   | { type: 'broadcast'; origin?: string };
 
 export interface DbEventBridge {
@@ -81,6 +82,16 @@ export function createDbEventBridge(params: {
     if (evt.type === 'broadcast') {
       const origin = evt.origin;
       params.onEvent(origin ? { type: 'broadcast', origin } : { type: 'broadcast' });
+      return;
+    }
+
+    if (evt.type === 'agent-update' && typeof evt.build === 'string' && evt.build.length > 0) {
+      const origin = evt.origin;
+      params.onEvent(
+        origin
+          ? { type: 'agent-update', build: evt.build, origin }
+          : { type: 'agent-update', build: evt.build }
+      );
     }
   }
 

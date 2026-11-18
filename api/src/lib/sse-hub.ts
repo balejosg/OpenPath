@@ -25,6 +25,7 @@ interface SseClient {
   hostname: string;
   classroomId: string;
   groupId: string;
+  agentRing: 'stable' | 'canary';
   stream: SseStream;
   lastWriteAt: number;
 }
@@ -37,11 +38,13 @@ export interface SseHub {
     hostname: string;
     classroomId: string;
     groupId: string;
+    agentRing?: 'stable' | 'canary';
     stream: SseStream;
   }) => () => void;
   getSseClientCount: () => number;
   publishGroupChangedLocal: (groupId: string) => void;
   publishBroadcastLocal: () => void;
+  publishAgentUpdateAvailableLocal: (build: string) => void;
   publishClassroomChangedLocal: (classroomId: string, now?: Date) => Promise<void>;
 }
 
@@ -124,6 +127,7 @@ export function createSseHub(params: {
     hostname: string;
     classroomId: string;
     groupId: string;
+    agentRing?: 'stable' | 'canary';
     stream: SseStream;
   }): () => void {
     const id = randomUUID();
@@ -132,6 +136,7 @@ export function createSseHub(params: {
       hostname: params2.hostname,
       classroomId: params2.classroomId,
       groupId: params2.groupId,
+      agentRing: params2.agentRing === 'canary' ? 'canary' : 'stable',
       stream: params2.stream,
       lastWriteAt: Date.now(),
     };
@@ -169,6 +174,18 @@ export function createSseHub(params: {
         event: 'whitelist-changed',
         groupId: client.groupId,
       })}\n\n`;
+      tryWrite(client, payload);
+    }
+  }
+
+  function publishAgentUpdateAvailableLocal(build: string): void {
+    const payload = `data: ${JSON.stringify({
+      event: 'agent-update-available',
+      ring: 'canary',
+      build,
+    })}\n\n`;
+    for (const client of clientsById.values()) {
+      if (client.agentRing !== 'canary') continue;
       tryWrite(client, payload);
     }
   }
@@ -217,6 +234,7 @@ export function createSseHub(params: {
     getSseClientCount,
     publishGroupChangedLocal,
     publishBroadcastLocal,
+    publishAgentUpdateAvailableLocal,
     publishClassroomChangedLocal,
   };
 }

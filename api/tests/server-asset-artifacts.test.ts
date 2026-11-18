@@ -6,6 +6,7 @@ import {
   getAgentArtifactRoots,
   stableAptMetadataAdvertisesLinuxAgentVersion,
 } from '../src/lib/server-asset-artifacts.js';
+import { buildWindowsAgentFileManifest } from '../src/lib/server-asset-windows.js';
 
 void test('server-asset-artifacts exposes roots and parses apt metadata', () => {
   clearLinuxAgentAptMetadataCache();
@@ -19,4 +20,12 @@ void test('server-asset-artifacts exposes roots and parses apt metadata', () => 
     ),
     true
   );
+});
+
+void test('the Windows agent file set ships the canary release public key', () => {
+  const files = buildWindowsAgentFileManifest();
+  const publicKey = files.find((file) => file.relativePath === 'lib/agent-release-public-key.xml');
+
+  assert.ok(publicKey, 'lib/agent-release-public-key.xml must be part of the agent file set');
+  assert.ok(publicKey.size > 0);
 });

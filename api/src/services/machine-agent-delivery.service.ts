@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -15,8 +14,16 @@ import {
   resolveWindowsAgentManifestFile,
 } from '../lib/server-assets.js';
 
+import {
+  computeAgentBuild,
+  getAgentReleaseFile,
+  resolveAgentReleaseForMachine,
+  type AgentReleaseRepository,
+} from './agent-release.service.js';
+
 export type MachineAgentDeliveryError =
   | { code: 'BAD_REQUEST'; message: string }
+  | { code: 'CONFLICT'; message: string }
   | { code: 'NOT_FOUND'; message: string }
   | { code: 'UNAVAILABLE'; message: string };
 
@@ -54,6 +61,10 @@ export interface WindowsAgentManifestOutput {
   files: ManifestFileDescriptor[];
   generatedAt: string;
   version: string;
+  /** Present only for a signed canary release. */
+  ring?: 'canary';
+  sourceSha?: string;
+  signature?: string;
 }
 
 export interface LinuxAgentManifestOutput {
@@ -93,9 +104,7 @@ function toManifestFiles(
 
 /** sha256 over the sorted `path<TAB>sha256` lines of the manifest files. */
 export function computeWindowsAgentBuild(files: readonly ManifestFileDescriptor[]): string {
-  return createHash('sha256')
-    .update(files.map((file) => `${file.path}\t${file.sha256}\n`).join(''))
-    .digest('hex');
+  return computeAgentBuild(files);
 }
 
 async function touchMachine(hostname: string): Promise<void> {
@@ -177,7 +186,12 @@ export function getWindowsBootstrapFile(
 }
 
 export async function getWindowsAgentManifest(
-  machineHostname: string
+  machineHostname: string,
+  options: {
+    capabilityHeader?: string | undefined;
+    repository?: AgentReleaseRepository | undefined;
+    onMachineSeen?: ((hostname: string) => Promise<void>) | undefined;
+  } = {}
 ): Promise<MachineAgentDeliveryResult<WindowsAgentManifestOutput>> {
   const files = buildWindowsAgentFileManifest();
   if (files.length === 0) {
@@ -187,7 +201,27 @@ export async function getWindowsAgentManifest(
     };
   }
 
-  await touchMachine(machineHostname);
+  await (options.onMachineSeen ?? touchMachine)(machineHostname);
+
+  const assignment = await resolveAgentReleaseForMachine({
+    hostname: machineHostname,
+    capabilityHeader: options.capabilityHeader,
+    repository: options.repository,
+  });
+  if (assignment.ring === 'canary') {
+    return {
+      ok: true,
+      data: {
+        version: readServerVersion(),
+        build: assignment.release.build,
+        generatedAt: new Date().toISOString(),
+        files: assignment.release.files,
+        ring: 'canary',
+        sourceSha: assignment.release.sourceSha,
+        signature: assignment.release.signature,
+      },
+    };
+  }
 
   const manifestFiles = toManifestFiles(files);
   return {
@@ -203,12 +237,75 @@ export async function getWindowsAgentManifest(
 
 export async function getWindowsAgentFile(
   machineHostname: string,
-  requestedPath: string
+  requestedPath: string,
+  options: {
+    build?: string | undefined;
+    capabilityHeader?: string | undefined;
+    repository?: AgentReleaseRepository | undefined;
+    onMachineSeen?: ((hostname: string) => Promise<void>) | undefined;
+  } = {}
 ): Promise<MachineAgentDeliveryResult<TextFileOutput>> {
   if (!requestedPath) {
     return {
       ok: false,
       error: { code: 'BAD_REQUEST', message: 'file path required' },
+    };
+  }
+
+  const repository = options.repository;
+  const assignment = await resolveAgentReleaseForMachine({
+    hostname: machineHostname,
+    capabilityHeader: options.capabilityHeader,
+    repository,
+  });
+  const pinnedBuild = options.build?.trim().toLowerCase() ?? '';
+
+  if (pinnedBuild) {
+    if (assignment.ring === 'canary') {
+      if (pinnedBuild !== assignment.release.build) {
+        return {
+          ok: false,
+          error: {
+            code: 'CONFLICT',
+            message: `Release ${pinnedBuild} is not the build assigned to this machine`,
+          },
+        };
+      }
+    } else {
+      const stableBuild = computeWindowsAgentBuild(
+        toManifestFiles(buildWindowsAgentFileManifest())
+      );
+      if (pinnedBuild !== stableBuild) {
+        return {
+          ok: false,
+          error: {
+            code: 'CONFLICT',
+            message: `Release ${pinnedBuild} is not the build assigned to this machine`,
+          },
+        };
+      }
+    }
+  }
+
+  await (options.onMachineSeen ?? touchMachine)(machineHostname);
+
+  if (assignment.ring === 'canary') {
+    const releaseFile = await getAgentReleaseFile(
+      assignment.release.build,
+      requestedPath.trim().replaceAll('\\', '/'),
+      repository
+    );
+    if (!releaseFile.ok) {
+      return {
+        ok: false,
+        error: { code: 'NOT_FOUND', message: 'File not found in the assigned release' },
+      };
+    }
+    return {
+      ok: true,
+      data: {
+        body: releaseFile.data.content,
+      },
     };
   }
 
@@ -219,8 +316,6 @@ export async function getWindowsAgentFile(
       error: { code: 'NOT_FOUND', message: 'File not found in agent package' },
     };
   }
-
-  await touchMachine(machineHostname);
 
   return {
     ok: true,

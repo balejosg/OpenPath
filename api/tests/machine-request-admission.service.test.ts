@@ -16,6 +16,7 @@ type AccessResult =
     };
 
 const testMachine: AuthenticatedMachine = {
+  agentRing: 'stable',
   classroomId: 'classroom-1',
   configPosture: null,
   createdAt: null,

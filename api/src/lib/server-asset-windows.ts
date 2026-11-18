@@ -115,6 +115,13 @@ export function buildWindowsAgentFileManifest(options?: {
     addManifestDirectory(absoluteDirectory, relativeDirectory, /\.(ps1|psm1|cmd)$/i);
   }
 
+  // The canary release verifier needs the release public key on the machine.
+  // It is a data file, so the extension-filtered lib scan above skips it.
+  addManifestFile(
+    'lib/agent-release-public-key.xml',
+    path.join(roots.windowsAgentRoot, 'lib', 'agent-release-public-key.xml')
+  );
+
   // Phase 5.2 D1: native-host/OpenPathNativeHost.cs is the source the install
   // and update flows compile; only .cs files from that directory are published.
   addManifestDirectory(

@@ -132,4 +132,55 @@ await describe('SSE Hub', async () => {
     unsubA();
     unsubB();
   });
+
+  await test('publishAgentUpdateAvailableLocal targets only canary-ring clients', () => {
+    const writesCanary: string[] = [];
+    const writesStable: string[] = [];
+
+    const hub = createSseHub({
+      resolveClassroomGroupContext: () => Promise.resolve(null),
+    });
+
+    const unsubCanary = hub.registerSseClient({
+      hostname: 'host-canary',
+      classroomId: 'room-a',
+      groupId: CANONICAL_GROUP_IDS.groupA,
+      agentRing: 'canary',
+      stream: {
+        write: (chunk: string) => {
+          writesCanary.push(chunk);
+          return true;
+        },
+      },
+    });
+
+    const unsubStable = hub.registerSseClient({
+      hostname: 'host-stable',
+      classroomId: 'room-b',
+      groupId: CANONICAL_GROUP_IDS.groupB,
+      stream: {
+        write: (chunk: string) => {
+          writesStable.push(chunk);
+          return true;
+        },
+      },
+    });
+
+    hub.publishAgentUpdateAvailableLocal('a'.repeat(64));
+
+    assert.ok(writesCanary.length > 0);
+    assert.strictEqual(writesStable.length, 0);
+
+    const parsed = JSON.parse(firstSseDataPayload(writesCanary)) as {
+      event?: string;
+      ring?: string;
+      build?: string;
+    };
+    assert.strictEqual(parsed.event, 'agent-update-available');
+    assert.strictEqual(parsed.ring, 'canary');
+    assert.strictEqual(parsed.build, 'a'.repeat(64));
+
+    unsubCanary();
+    unsubStable();
+  });
 });

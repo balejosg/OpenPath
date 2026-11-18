@@ -32,6 +32,17 @@ export function registerAppMiddleware(
   registerCors(app, runtimeConfig);
   registerRateLimits(app, runtimeConfig);
 
+  // A canary agent release uploads the complete file set (about 2.6 MB of
+  // source) in one request. Only that internal, release-token-protected route
+  // gets the larger parser; every other JSON request keeps the 10 kb limit.
+  const releasePublishJson = express.json({ limit: '12mb' });
+  app.use((req, res, next) => {
+    if (req.method === 'POST' && req.path === '/api/agent/windows/releases') {
+      releasePublishJson(req, res, next);
+      return;
+    }
+    next();
+  });
   app.use(express.json({ limit: '10kb' }));
   app.use(requestIdMiddleware);
   registerCsrfProtection(app, trustedBrowserOrigins);

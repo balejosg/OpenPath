@@ -21,8 +21,16 @@ import {
   check,
   boolean,
   jsonb,
+  customType,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return 'bytea';
+  },
+});
 
 // =============================================================================
 // Users Table
@@ -166,10 +174,15 @@ export const machines = pgTable(
     lastSeen: timestamp('last_seen', { withTimezone: true }).defaultNow(),
     downloadTokenHash: varchar('download_token_hash', { length: 64 }).unique(),
     downloadTokenLastRotatedAt: timestamp('download_token_last_rotated_at', { withTimezone: true }),
+    // Canary ring assignment is server-side: the agent never chooses it.
+    agentRing: varchar('agent_ring', { length: 20 }).default('stable').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   },
-  (table) => [index('machines_classroom_created_idx').on(table.classroomId, table.createdAt)]
+  (table) => [
+    index('machines_classroom_created_idx').on(table.classroomId, table.createdAt),
+    check('machines_agent_ring_check', sql`${table.agentRing} IN ('stable', 'canary')`),
+  ]
 );
 
 // =============================================================================
@@ -411,6 +424,51 @@ export const healthReports = pgTable(
 );
 
 // =============================================================================
+// Canary Agent Releases Table
+// =============================================================================
+
+// A canary release is a complete Windows agent file set stored in PostgreSQL
+// (about 2.6 MB of source). Only one release per ring is active at a time; a
+// newer publish retires the previous one. The signature is verified by the
+// agent before any file is downloaded.
+export const agentReleases = pgTable(
+  'agent_releases',
+  {
+    build: varchar('build', { length: 64 }).primaryKey(),
+    ring: varchar('ring', { length: 20 }).default('canary').notNull(),
+    sourceSha: varchar('source_sha', { length: 64 }).notNull(),
+    signature: text('signature').notNull(),
+    status: varchar('status', { length: 20 }).default('active').notNull(),
+    fileCount: integer('file_count').notNull(),
+    publishedAt: timestamp('published_at', { withTimezone: true }).defaultNow(),
+    retiredAt: timestamp('retired_at', { withTimezone: true }),
+  },
+  (table) => [
+    check('agent_releases_ring_check', sql`${table.ring} IN ('canary')`),
+    check('agent_releases_status_check', sql`${table.status} IN ('active', 'retired')`),
+    index('agent_releases_ring_status_published_idx').on(
+      table.ring,
+      table.status,
+      table.publishedAt
+    ),
+  ]
+);
+
+export const agentReleaseFiles = pgTable(
+  'agent_release_files',
+  {
+    build: varchar('build', { length: 64 })
+      .notNull()
+      .references(() => agentReleases.build, { onDelete: 'cascade' }),
+    path: varchar('path', { length: 512 }).notNull(),
+    sha256: varchar('sha256', { length: 64 }).notNull(),
+    size: integer('size').notNull(),
+    content: bytea('content').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.build, table.path] })]
+);
+
+// =============================================================================
 // Whitelist Groups Table (Dashboard)
 // =============================================================================
 
@@ -516,6 +574,11 @@ export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
 
 export type HealthReport = typeof healthReports.$inferSelect;
 export type NewHealthReport = typeof healthReports.$inferInsert;
+
+export type AgentRelease = typeof agentReleases.$inferSelect;
+export type NewAgentRelease = typeof agentReleases.$inferInsert;
+export type AgentReleaseFile = typeof agentReleaseFiles.$inferSelect;
+export type NewAgentReleaseFile = typeof agentReleaseFiles.$inferInsert;
 
 export type WhitelistGroup = typeof whitelistGroups.$inferSelect;
 export type NewWhitelistGroup = typeof whitelistGroups.$inferInsert;

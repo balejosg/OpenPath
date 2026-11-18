@@ -28,6 +28,11 @@ const dbBridge = createDbEventBridge({
       return;
     }
 
+    if (event.type === 'agent-update') {
+      sseHub.publishAgentUpdateAvailableLocal(event.build);
+      return;
+    }
+
     sseHub.publishBroadcastLocal();
   },
 });
@@ -44,6 +49,7 @@ export function registerSseClient(params: {
   hostname: string;
   classroomId: string;
   groupId: string;
+  agentRing?: 'stable' | 'canary';
   stream: SseStream;
 }): () => void {
   return sseHub.registerSseClient(params);
@@ -98,6 +104,18 @@ export function emitClassroomChanged(classroomId: string, now?: Date): void {
   logger.debug('Emitting classroom-changed event', { classroomId });
   void sseHub.publishClassroomChangedLocal(classroomId, now ?? new Date());
   void dbBridge.notify({ type: 'classroom', classroomId, origin: INSTANCE_ID });
+}
+
+/**
+ * Emit an agent-update-available event for canary-ring machines.
+ * Called after a signed canary release is published.
+ *
+ * @param build - The release build fingerprint
+ */
+export function emitAgentUpdateAvailable(build: string): void {
+  logger.debug('Emitting agent-update-available event', { build });
+  sseHub.publishAgentUpdateAvailableLocal(build);
+  void dbBridge.notify({ type: 'agent-update', build, origin: INSTANCE_ID });
 }
 
 /**

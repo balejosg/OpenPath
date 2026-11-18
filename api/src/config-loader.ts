@@ -57,6 +57,7 @@ export interface LoadedConfig {
   readonly isProduction: boolean;
   readonly isTest: boolean;
   readonly aptRepoUrl: string;
+  readonly agentReleaseToken: string;
   readonly enableRateLimitInTest: boolean;
   readonly bcryptRounds: number;
   readonly jwtSecret: string;
@@ -121,6 +122,7 @@ export function loadConfig(
     aptRepoUrl:
       normalizeAptRepoUrl(env.APT_REPO_URL) ??
       'https://raw.githubusercontent.com/balejosg/openpath/gh-pages/apt',
+    agentReleaseToken: (env.OPENPATH_AGENT_RELEASE_TOKEN ?? '').trim(),
     enableRateLimitInTest: parseBooleanEnv(env.ENABLE_RATE_LIMIT_IN_TEST, false),
     bcryptRounds: parseIntEnv(env.BCRYPT_ROUNDS, 12),
     jwtSecret: resolveJwtSecret(env, nodeEnv),
