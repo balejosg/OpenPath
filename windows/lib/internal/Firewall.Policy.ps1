@@ -696,13 +696,21 @@ function Read-OpenPathEgressFloorInvariantLatch {
         }
         $createdAt = $null
         if ($parsed.PSObject.Properties['createdAtUtc'] -and $parsed.createdAtUtc) {
-            $parsedTimestamp = [DateTimeOffset]::MinValue
-            if ([DateTimeOffset]::TryParse(
-                    [string]$parsed.createdAtUtc,
-                    [System.Globalization.CultureInfo]::InvariantCulture,
-                    [System.Globalization.DateTimeStyles]::RoundtripKind,
-                    [ref]$parsedTimestamp)) {
-                $createdAt = $parsedTimestamp
+            if ($parsed.createdAtUtc -is [DateTimeOffset]) {
+                $createdAt = [DateTimeOffset]$parsed.createdAtUtc
+            }
+            elseif ($parsed.createdAtUtc -is [DateTime]) {
+                $createdAt = [DateTimeOffset]$parsed.createdAtUtc
+            }
+            else {
+                $parsedTimestamp = [DateTimeOffset]::MinValue
+                if ([DateTimeOffset]::TryParse(
+                        [string]$parsed.createdAtUtc,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind,
+                        [ref]$parsedTimestamp)) {
+                    $createdAt = $parsedTimestamp
+                }
             }
         }
         return [PSCustomObject]@{
