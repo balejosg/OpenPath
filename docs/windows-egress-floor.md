@@ -43,17 +43,17 @@ literals stay reachable for captive portals and LAN gateways).
 Rules (`G` = the `OpenPath-Restricted` SID; names carry the `OpenPath-DNS-`
 prefix):
 
-| Rule                                               | Action | Scope                                                          |
-| -------------------------------------------------- | ------ | -------------------------------------------------------------- |
-| `Allow-EgressFloor-NonStudent`                     | Allow  | LocalUser `D:(D;;CC;;;G)(A;;CC;;;WD)`, any protocol/remote     |
-| `Allow-EgressFloor-NonStudentAppContainers`        | Allow  | Package `*`, LocalUser `D:(D;;CC;;;G)(A;;CC;;;WD)(A;;CC;;;AC)` |
-| `Allow-EgressFloor-Student-<id>` (one per program) | Allow  | Program path, LocalUser `D:(A;;CC;;;G)`                        |
-| `Allow-EgressFloor-Loopback`                       | Allow  | RemoteAddress `127.0.0.0/8`, `::1`                             |
-| `Block-EgressFloor-StudentAppContainers`           | Block  | Package `*`, LocalUser `D:(A;;CC;;;G)(A;;CC;;;AC)`             |
-| `Block-EgressFloor-ICMPv4-Internet`                | Block  | ICMPv4 to `Internet`                                           |
-| `Block-EgressFloor-ICMPv6-Internet`                | Block  | ICMPv6 to global unicast `2000::/3`                            |
-| `Block-EgressFloor-SMB-Internet`                   | Block  | TCP 139/445 to `Internet`                                      |
-| `Block-EgressFloor-WebClient-Internet`             | Block  | Service `WebClient` to `Internet`                              |
+| Rule                                               | Action | Scope                                                                               |
+| -------------------------------------------------- | ------ | ----------------------------------------------------------------------------------- |
+| `Allow-EgressFloor-NonStudent`                     | Allow  | LocalUser `D:(D;;CC;;;G)(A;;CC;;;WD)`, any protocol/remote                          |
+| `Allow-EgressFloor-NonStudentAppContainers`        | Allow  | Package `*`, LocalUser `D:(D;;CC;;;G)(A;;CC;;;WD)(A;;CC;;;AC)`                      |
+| `Allow-EgressFloor-Student-<id>` (one per program) | Allow  | Program path, LocalUser `D:(A;;CC;;;G)`                                             |
+| `Allow-EgressFloor-Loopback`                       | Allow  | RemoteAddress `127.0.0.0/8` (IPv4 only; `::1` is WFP-exempt and rejected as a rule) |
+| `Block-EgressFloor-StudentAppContainers`           | Block  | Package `*`, LocalUser `D:(A;;CC;;;G)(A;;CC;;;AC)`                                  |
+| `Block-EgressFloor-ICMPv4-Internet`                | Block  | ICMPv4 to `Internet`                                                                |
+| `Block-EgressFloor-ICMPv6-Internet`                | Block  | ICMPv6 to global unicast `2000::/3`                                                 |
+| `Block-EgressFloor-SMB-Internet`                   | Block  | TCP 139/445 to `Internet`                                                           |
+| `Block-EgressFloor-WebClient-Internet`             | Block  | Service `WebClient` to `Internet`                                                   |
 
 Student programs (`<id>` is the sanitized file stem plus an 8-hex SHA-256
 prefix of the lower-cased path):
@@ -75,6 +75,39 @@ every student Store app egress.
   or profile change fails, the floor restores the pre-floor
   `DefaultOutboundAction` and removes its rules. It never leaves Block without
   the non-student Allow.
+- Before flipping any governed profile to Block, the apply verifies that the
+  active firewall policy already exposes the non-student Allow: existing,
+  enabled, `Action=Allow`, `Direction=Outbound`, `Profile=Any`, and scoped to
+  the expected `LocalUser` for the current `OpenPath-Restricted` SID. If that
+  precondition fails, nothing is blocked, a WARN is logged, the partial rules
+  are removed, and the invariant latch records the reason.
+- The rule swap creates the replacement set before removing the captured old
+  rules. Duplicate display names are harmless for a moment, but there is never
+  a window without a non-student Allow, including when the apply process is
+  interrupted. Legacy `-EgressFloor-Whitelist-*` / `-EgressFloor-System-*`
+  rules are still removed.
+- A separate safety invariant runs every watchdog cycle, outside the
+  protected-mode/whitelist gate (so captive-portal mode, an unreadable
+  whitelist and DNS fail-open mode are covered): if any governed profile's
+  effective `DefaultOutboundAction` is Block, the active policy must contain
+  the effective non-student Allow described above. It reads the active policy
+  store, never DNS, Acrylic or whitelist state.
+- On invariant failure the watchdog reapplies the floor once. If it still
+  fails, it tears the floor down (restoring the pre-floor default) and writes
+  `C:\OpenPath\data\egress-floor-invariant-latch.json`. The health report then
+  carries the reason code `egress_floor_invariant_failed`, which makes the
+  report `DEGRADED`.
+- While the latch exists the watchdog does not reapply the floor. The latch is
+  cleared by `OpenPath.ps1 enable` / `update`, by turning the flag off (normal
+  cleanup), or automatically when a transient cause (`restricted-group-unresolved`
+  or an unavailable active-store query) recovers. A rule-level failure
+  (disabled/missing/wrong action/wrong scope) stays latched until an operator
+  acts, so the floor cannot alternate between apply and teardown every minute.
+- Lab finding (2026-11-18, workgroup Windows 11 25H2): setting
+  `AllowLocalFirewallRules=False` in both the profile and the policy registry
+  made the active store report `False` but did not remove the local rules from
+  the active store and did not block SYSTEM egress. Effectiveness is therefore
+  defined by active-store rule visibility, not by the merge flag.
 - The pre-floor outbound default is saved once to
   `C:\OpenPath\data\egress-floor-prev-outbound.json` and never overwritten
   while the floor is on (this also covers upgrades from the old IP-set floor,
