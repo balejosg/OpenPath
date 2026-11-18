@@ -71,6 +71,10 @@ function Get-OpenPathOpenClassroomPosture {
         classroom (no findings); a failed firewall, DNS or portal probe counts as
         not active for that signal. Portal state is read without the expired-marker
         restore, so reading posture never changes the endpoint.
+
+        FirewallActive and DnsPinned are probed only when the classroom is disabled
+        and portal mode is inactive. In every other case both are $false and mean
+        "not probed", not "probed and found inactive".
     .OUTPUTS
         PSCustomObject with ClassroomDisabled, PortalModeActive, FirewallActive,
         DnsPinned and Findings.
@@ -85,8 +89,12 @@ function Get-OpenPathOpenClassroomPosture {
 
     try { $classroomDisabled = [bool](Test-OpenPathCaptivePortalClassroomDisabled) } catch { $classroomDisabled = $false }
     try { $portalModeActive = [bool](Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore) } catch { $portalModeActive = $false }
-    try { $firewallActive = [bool](Test-FirewallActive) } catch { $firewallActive = $false }
-    try { $dnsPinned = [bool](Test-OpenPathAdapterDnsPinnedToLocalResolver) } catch { $dnsPinned = $false }
+    # The watchdog runs every minute and the protection probes only matter for an
+    # open classroom outside portal mode, so they are skipped otherwise.
+    if ($classroomDisabled -and -not $portalModeActive) {
+        try { $firewallActive = [bool](Test-FirewallActive) } catch { $firewallActive = $false }
+        try { $dnsPinned = [bool](Test-OpenPathAdapterDnsPinnedToLocalResolver) } catch { $dnsPinned = $false }
+    }
 
     $findings = @(Get-OpenPathOpenClassroomPostureFindings `
             -ClassroomDisabled $classroomDisabled `
@@ -129,4 +137,36 @@ function Merge-OpenPathReasonCodes {
     }
 
     return $merged.ToArray()
+}
+
+function Get-OpenPathOutcomeReasonCodesWithPosture {
+    <#
+    .SYNOPSIS
+        Returns the watchdog outcome's reason codes plus any open-classroom findings.
+    .DESCRIPTION
+        Reason codes only: the outcome's Status and Actions are neither read nor
+        changed. If the posture cannot be evaluated the existing codes are returned
+        unchanged and a warning is logged.
+    .OUTPUTS
+        string[]
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Outcome
+    )
+
+    $existingCodes = @()
+    if ($Outcome -and $Outcome.PSObject.Properties['ReasonCodes']) {
+        $existingCodes = @($Outcome.ReasonCodes | ForEach-Object { [string]$_ })
+    }
+
+    try {
+        $posture = Get-OpenPathOpenClassroomPosture
+        return Merge-OpenPathReasonCodes -ReasonCodes $existingCodes -AdditionalReasonCodes @($posture.Findings)
+    }
+    catch {
+        try { Write-OpenPathLog "Watchdog: Could not evaluate open-classroom posture: $_" -Level WARN } catch { }
+        return Merge-OpenPathReasonCodes -ReasonCodes $existingCodes -AdditionalReasonCodes @()
+    }
 }

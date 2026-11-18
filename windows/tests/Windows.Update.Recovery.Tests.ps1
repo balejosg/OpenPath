@@ -383,7 +383,12 @@ Export-ModuleMember -Function *
                 Set-Content -LiteralPath (Join-Path $lib $name) -Value $modules[$name] -Encoding ASCII
             }
             Set-Content -LiteralPath (Join-Path $internal 'Watchdog.Runtime.ps1') `
-                -Value 'function Invoke-OpenPathWatchdogChecks { }' -Encoding ASCII
+                -Value @(
+                'function Invoke-OpenPathWatchdogChecks { }',
+                'function Get-OpenPathOpenClassroomPosture { }',
+                'function Merge-OpenPathReasonCodes { }',
+                'function Test-OpenPathAdapterDnsPinnedToLocalResolver { }'
+            ) -Encoding ASCII
 
             return $root
         }
@@ -1458,6 +1463,17 @@ Export-ModuleMember -Function *
             $result = Invoke-GateScript -Root $root
 
             $result.ExitCode | Should -Be 0
+        }
+
+        It "Exits non-zero when the endpoint posture commands are not exposed by the watchdog runtime" {
+            $root = New-FakeAgentRoot
+            Set-Content -LiteralPath (Join-Path $root 'lib/internal/Watchdog.Runtime.ps1') `
+                -Value 'function Invoke-OpenPathWatchdogChecks { }' -Encoding ASCII
+
+            $result = Invoke-GateScript -Root $root
+
+            $result.ExitCode | Should -Not -Be 0
+            $result.Output | Should -Match 'Get-OpenPathOpenClassroomPosture'
         }
 
         It "Exits non-zero when a required module cannot be loaded" {

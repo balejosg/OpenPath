@@ -82,6 +82,7 @@ function Restore-CheckpointFromWatchdog {
 
 . (Join-Path $PSScriptRoot 'EndpointPolicyState.ps1')
 . (Join-Path $PSScriptRoot 'EndpointStateReconciler.ps1')
+. (Join-Path $PSScriptRoot 'EndpointPosture.ps1')
 . (Join-Path $PSScriptRoot 'Watchdog.CaptivePortalPolicy.ps1')
 
 if (-not (Get-Command -Name 'Get-OpenPathScheduledTaskCatalog' -ErrorAction SilentlyContinue)) {

@@ -75,7 +75,10 @@ $requiredCommands = @(
     'Set-OpenPathFirewall',
     'Test-FirewallActive',
     'Invoke-OpenPathUpdateCycle',
-    'Invoke-OpenPathWatchdogChecks'
+    'Invoke-OpenPathWatchdogChecks',
+    'Get-OpenPathOpenClassroomPosture',
+    'Merge-OpenPathReasonCodes',
+    'Test-OpenPathAdapterDnsPinnedToLocalResolver'
 )
 
 try {

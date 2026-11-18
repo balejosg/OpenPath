@@ -37,7 +37,6 @@ try { & (Join-Path $OpenPathRoot 'scripts\Recover-OpenPathAgentUpdate.ps1') -Ope
 
 . (Join-Path $OpenPathRoot 'lib\internal\Watchdog.FailCount.ps1')
 . (Join-Path $OpenPathRoot 'lib\internal\Watchdog.Runtime.ps1')
-. (Join-Path $OpenPathRoot 'lib\internal\EndpointPosture.ps1')
 
 # Initialize standalone script session via the shared bootstrap helper.
 Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force
@@ -235,15 +234,7 @@ if ($outcome.EnterDnsFailureMode) {
 
 # An open classroom that still has protection active fails browsing silently;
 # add reason codes only, the status above is left as computed.
-try {
-    $openClassroomPosture = Get-OpenPathOpenClassroomPosture
-    $outcome.ReasonCodes = @(Merge-OpenPathReasonCodes `
-        -ReasonCodes @($outcome.ReasonCodes) `
-        -AdditionalReasonCodes @($openClassroomPosture.Findings))
-}
-catch {
-    Write-OpenPathLog "Watchdog: Could not evaluate open-classroom posture: $_" -Level WARN
-}
+$outcome.ReasonCodes = @(Get-OpenPathOutcomeReasonCodesWithPosture -Outcome $outcome)
 
 $runtimeHealth = Get-OpenPathRuntimeHealth
 try { Send-OpenPathAgentUpdateRecoveryReport -OpenPathRoot $OpenPathRoot | Out-Null } catch { }

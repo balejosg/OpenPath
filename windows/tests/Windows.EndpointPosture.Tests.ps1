@@ -122,6 +122,35 @@ Describe 'Get-OpenPathOpenClassroomPosture' {
         @($posture.Findings).Count | Should -Be 0
     }
 
+    It 'does not probe firewall or DNS for an enabled classroom' {
+        Mock Test-OpenPathCaptivePortalClassroomDisabled { $false }
+
+        $posture = Get-OpenPathOpenClassroomPosture
+
+        $posture.FirewallActive | Should -BeFalse
+        $posture.DnsPinned | Should -BeFalse
+        Should -Invoke Test-FirewallActive -Times 0 -Exactly
+        Should -Invoke Get-NetAdapter -Times 0 -Exactly
+    }
+
+    It 'does not probe firewall or DNS while captive portal mode is active' {
+        Mock Test-OpenPathCaptivePortalModeActive { $true }
+
+        $posture = Get-OpenPathOpenClassroomPosture
+
+        $posture.FirewallActive | Should -BeFalse
+        $posture.DnsPinned | Should -BeFalse
+        Should -Invoke Test-FirewallActive -Times 0 -Exactly
+        Should -Invoke Get-NetAdapter -Times 0 -Exactly
+    }
+
+    It 'probes firewall and DNS once each for an open classroom outside portal mode' {
+        Get-OpenPathOpenClassroomPosture | Out-Null
+
+        Should -Invoke Test-FirewallActive -Times 1 -Exactly
+        Should -Invoke Get-NetAdapter -Times 1 -Exactly
+    }
+
     It 'does not run the expired-marker restore while reading portal state' {
         Get-OpenPathOpenClassroomPosture | Out-Null
 
@@ -202,34 +231,87 @@ Describe 'Merge-OpenPathReasonCodes' {
     }
 }
 
-Describe 'Endpoint posture wiring' {
-    It 'is loaded by the watchdog script and listed as a required command' {
-        $content = Get-Content (Join-Path (Join-Path $script:windowsRoot 'scripts') 'Test-DNSHealth.ps1') -Raw
-
-        Assert-ContentContainsAll -Content $content -Needles @(
-            "lib\internal\EndpointPosture.ps1",
-            "'Test-OpenPathCaptivePortalClassroomDisabled'",
-            'Get-OpenPathOpenClassroomPosture',
-            'Merge-OpenPathReasonCodes'
-        )
+Describe 'Get-OpenPathOutcomeReasonCodesWithPosture' {
+    BeforeEach {
+        Mock Write-OpenPathLog {}
+        Mock Test-OpenPathCaptivePortalClassroomDisabled { $true }
+        Mock Test-OpenPathCaptivePortalModeActive { $false }
+        Mock Test-FirewallActive { $true }
+        Mock Get-NetAdapter { @([pscustomobject]@{ Status = 'Up'; ifIndex = 7 }) }
+        Mock Get-DnsClientServerAddress { [pscustomobject]@{ ServerAddresses = @('127.0.0.1') } }
+        $script:outcome = [pscustomobject]@{
+            Status      = 'FAIL_OPEN'
+            Actions     = 'fail_open_activated'
+            ReasonCodes = @('fail_open_activated', 'open_classroom_dns_pinned')
+        }
     }
 
-    It 'merges the posture findings into the report before it is sent' {
+    It 'merges findings into the existing codes without duplicates' {
+        $codes = @(Get-OpenPathOutcomeReasonCodesWithPosture -Outcome $script:outcome)
+
+        $codes | Should -Be @('fail_open_activated', 'open_classroom_dns_pinned', 'open_classroom_firewall_active')
+    }
+
+    It 'leaves the outcome Status, Actions and ReasonCodes untouched' {
+        Get-OpenPathOutcomeReasonCodesWithPosture -Outcome $script:outcome | Out-Null
+
+        $script:outcome.Status | Should -Be 'FAIL_OPEN'
+        $script:outcome.Actions | Should -Be 'fail_open_activated'
+        @($script:outcome.ReasonCodes) | Should -Be @('fail_open_activated', 'open_classroom_dns_pinned')
+    }
+
+    It 'returns the existing codes when there are no findings' {
+        Mock Test-OpenPathCaptivePortalClassroomDisabled { $false }
+
+        @(Get-OpenPathOutcomeReasonCodesWithPosture -Outcome $script:outcome) |
+            Should -Be @('fail_open_activated', 'open_classroom_dns_pinned')
+    }
+
+    It 'keeps the existing codes and logs when the posture itself fails' {
+        Mock Get-OpenPathOpenClassroomPosture { throw 'posture exploded' }
+
+        $codes = @(Get-OpenPathOutcomeReasonCodesWithPosture -Outcome $script:outcome)
+
+        $codes | Should -Be @('fail_open_activated', 'open_classroom_dns_pinned')
+        Should -Invoke Write-OpenPathLog -Times 1 -Exactly -ParameterFilter { $Level -eq 'WARN' }
+    }
+
+    It 'handles an outcome with no reason codes' {
+        $bare = [pscustomobject]@{ Status = 'HEALTHY'; Actions = 'watchdog_ok'; ReasonCodes = @() }
+
+        @(Get-OpenPathOutcomeReasonCodesWithPosture -Outcome $bare) |
+            Should -Be @('open_classroom_firewall_active', 'open_classroom_dns_pinned')
+    }
+}
+
+Describe 'Endpoint posture wiring' {
+    It 'feeds the outcome reason codes through the posture merge and sends them in the report' {
         $content = Get-Content (Join-Path (Join-Path $script:windowsRoot 'scripts') 'Test-DNSHealth.ps1') -Raw
 
-        $postureIndex = $content.IndexOf('Get-OpenPathOpenClassroomPosture')
+        $mergeIndex = $content.IndexOf('$outcome.ReasonCodes = @(Get-OpenPathOutcomeReasonCodesWithPosture -Outcome $outcome)')
         $sendIndex = $content.IndexOf('Send-OpenPathHealthReport -Status $outcome.Status')
 
-        $postureIndex | Should -BeGreaterThan -1
-        $sendIndex | Should -BeGreaterThan $postureIndex
-        $content | Should -Match '\$outcome\.ReasonCodes\s*=\s*@\(Merge-OpenPathReasonCodes'
-        $content | Should -Match '-ReasonCodes @\(\$outcome\.ReasonCodes\)'
+        $mergeIndex | Should -BeGreaterThan -1
+        $sendIndex | Should -BeGreaterThan $mergeIndex
+        $content | Should -Match '(?s)Send-OpenPathHealthReport -Status \$outcome\.Status.*?-ReasonCodes @\(\$outcome\.ReasonCodes\)'
     }
 
-    It 'keeps the watchdog status untouched by the posture' {
-        $content = Get-Content (Join-Path (Join-Path $script:windowsRoot 'scripts') 'Test-DNSHealth.ps1') -Raw
+    It 'is loaded beside its siblings by the watchdog runtime and not separately by the watchdog script' {
+        $runtime = Get-Content (Join-Path $script:internalPath 'Watchdog.Runtime.ps1') -Raw
+        $script = Get-Content (Join-Path (Join-Path $script:windowsRoot 'scripts') 'Test-DNSHealth.ps1') -Raw
 
-        $content | Should -Not -Match '\$outcome\.Status\s*=\s*[^\r\n]*OpenClassroom'
+        $runtime.Contains(". (Join-Path `$PSScriptRoot 'EndpointPosture.ps1')") | Should -BeTrue
+        $script.Contains('EndpointPosture.ps1') | Should -BeFalse
+    }
+
+    It 'is required by the post-update health gate' {
+        $gate = Get-Content (Join-Path (Join-Path $script:windowsRoot 'scripts') 'Test-OpenPathAgentUpdateHealth.ps1') -Raw
+
+        Assert-ContentContainsAll -Content $gate -Needles @(
+            "'Get-OpenPathOpenClassroomPosture'",
+            "'Merge-OpenPathReasonCodes'",
+            "'Test-OpenPathAdapterDnsPinnedToLocalResolver'"
+        )
     }
 
     It 'is imported by the update runtime, which used to own the moved function' {
@@ -252,7 +334,8 @@ Describe 'Endpoint posture wiring' {
             'Test-OpenPathAdapterDnsPinnedToLocalResolver',
             'Get-OpenPathOpenClassroomPostureFindings',
             'Get-OpenPathOpenClassroomPosture',
-            'Merge-OpenPathReasonCodes'
+            'Merge-OpenPathReasonCodes',
+            'Get-OpenPathOutcomeReasonCodesWithPosture'
         )
         $files = @(Get-ChildItem -Path $script:windowsRoot -Recurse -File -Include '*.ps1', '*.psm1' |
                 Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' })
