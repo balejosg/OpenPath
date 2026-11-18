@@ -42,8 +42,8 @@ jobs:
             echo "::error::No successful CI run for ${TARGET_SHA}; publish requires the Windows gate for that exact SHA"
             exit 1
           fi
-          jobs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --paginate)"
-          printf '%s' "$jobs_json" | jq -e '[.jobs[] | select(.conclusion == "success") | select(.name | test("Windows Agent Tests \\(Pester"))] | length > 0' >/dev/null \
+          jobs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --paginate --slurp)"
+          printf '%s' "$jobs_json" | jq -e '[.[] | .jobs[] | select(.conclusion == "success") | select(.name | test("Windows Agent Tests \\(Pester"))] | length > 0' >/dev/null \
             || { echo "::error::CI run ${run_id} has no successful Windows Pester job for ${TARGET_SHA}"; exit 1; }
           echo "Windows Pester gate satisfied by CI run ${run_id}"
 
