@@ -397,7 +397,22 @@ function Handle-OpenPathNotModified {
     $localWhitelistSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
     $policyState = Get-OpenPathEndpointPolicyState -WhitelistSections $localWhitelistSections
     if ($policyState.IsDisabled) {
-        $repairPlan = New-OpenPathEndpointStateRepairPlan -PolicyState $policyState -Mode 'FailOpenMarkerOnly'
+        # A 304 does not prove the endpoint is still open: anything that re-armed
+        # protection after the disable would otherwise stay in force until the
+        # whitelist changes on the server.
+        $protectionActive = $false
+        try {
+            $protectionActive = [bool](Test-FirewallActive)
+        }
+        catch {
+            Write-OpenPathLog "Could not check firewall state while fail-open is active: $_" -Level WARN
+        }
+        $repairMode = 'FailOpenMarkerOnly'
+        if ($protectionActive) {
+            Write-OpenPathLog "Protection is active while the classroom is disabled; re-entering fail-open mode" -Level WARN
+            $repairMode = 'FailOpen'
+        }
+        $repairPlan = New-OpenPathEndpointStateRepairPlan -PolicyState $policyState -Mode $repairMode
         Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
         Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist
         Write-OpenPathLog "Whitelist not modified and local fail-open marker remains active"

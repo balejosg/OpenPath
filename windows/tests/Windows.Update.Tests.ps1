@@ -401,6 +401,30 @@ Describe "Update Script" {
                 $script:protectedModeRestores | Should -Be 1
             }
 
+            It "Reopens a disabled classroom on a 304 cycle when protection was re-armed" {
+                $script:repairModes = @()
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) $script:repairModes += $Mode; [pscustomobject]@{ Actions = @() } }
+                function Test-FirewallActive { $true }
+
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+
+                $script:repairModes | Should -Be @('FailOpen')
+            }
+
+            It "Keeps a disabled classroom untouched on a 304 cycle when protection is already off" {
+                $script:repairModes = @()
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) $script:repairModes += $Mode; [pscustomobject]@{ Actions = @() } }
+                function Test-FirewallActive { $false }
+
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+
+                $script:repairModes | Should -Be @('FailOpenMarkerOnly')
+            }
+
             It "Does not restore protected mode on an ordinary 304 cycle" {
                 Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
 
@@ -3089,6 +3113,76 @@ Describe "Update Script" {
                 $journalOnDisk = Get-Content -LiteralPath (Join-Path $Root 'data/agent-update/update-journal.json') -Raw | ConvertFrom-Json
                 $journalOnDisk.phase | Should -Be 'committed'
                 $journalOnDisk.finalizationAttempts | Should -Be 1
+            }
+        }
+
+        It "Restores protected mode after an update only when the local whitelist is not disabled" -TestCases @(
+            @{ Whitelist = '# DESACTIVADO'; ExpectedRestores = 0; ExpectedAcrylicRestarts = 1 }
+            @{ Whitelist = "## WHITELIST`nexample.org"; ExpectedRestores = 1; ExpectedAcrylicRestarts = 0 }
+        ) {
+            $root = Join-Path $TestDrive ('finalize-fail-open-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'new-target' -Encoding ASCII
+            $targetHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            $journal = [PSCustomObject]@{
+                schemaVersion   = 2
+                phase           = 'committed'
+                targetVersion   = '9.9.9'
+                targetBuild     = 'build-new'
+                previousVersion = '9.9.8'
+                previousBuild   = 'build-old'
+                backupRoot      = (Join-Path $root 'data/agent-update/backups/run-test')
+                createdAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                files           = @(
+                    [PSCustomObject]@{
+                        relativePath   = 'lib\existing.ps1'
+                        existedBefore  = $true
+                        previousSha256 = ('e' * 64)
+                        sha256         = $targetHash
+                    }
+                )
+            }
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            New-Item -ItemType Directory -Path (Split-Path $journalPath -Parent) -Force | Out-Null
+            $journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $journalPath -Encoding UTF8
+            Set-Content -LiteralPath (Join-Path $root 'data/whitelist.txt') -Value $Whitelist -Encoding UTF8
+            $config = [PSCustomObject]@{ version = '9.9.8'; agentBuild = 'build-old' }
+
+            InModuleScope Common -Parameters @{
+                Root = $root
+                Journal = $journal
+                Config = $config
+                ExpectedRestores = $ExpectedRestores
+                ExpectedAcrylicRestarts = $ExpectedAcrylicRestarts
+            } {
+                $script:OpenPathRoot = $Root
+                Mock Write-OpenPathLog { }
+                Mock Send-OpenPathHealthReport { }
+                Mock Set-OpenPathConfig { }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Restore-OpenPathProtectedMode', 'Restart-AcrylicService', 'Start-OpenPathTask', 'Save-OpenPathIntegrityBackup', 'New-OpenPathIntegrityBaseline')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Register-OpenPathTask { }
+                Mock Enable-OpenPathTask { }
+                Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                Mock Register-OpenPathFirefoxNativeHost { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Restart-AcrylicService { }
+                Mock Start-OpenPathTask { }
+                Mock Save-OpenPathIntegrityBackup { }
+                Mock New-OpenPathIntegrityBaseline { }
+                Mock Remove-OpenPathAgentUpdateBackupDirectories { }
+
+                $result = Complete-OpenPathAgentUpdateFinalization -OpenPathRoot $Root -Journal $Journal -Config $Config
+
+                $result.Success | Should -BeTrue
+                Should -Invoke Restore-OpenPathProtectedMode -Times $ExpectedRestores -Exactly
+                Should -Invoke Restart-AcrylicService -Times $ExpectedAcrylicRestarts -Exactly
             }
         }
 

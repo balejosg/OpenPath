@@ -1910,7 +1910,10 @@ function Complete-OpenPathAgentUpdateFinalization {
         if (Get-Command -Name 'Register-OpenPathFirefoxNativeHost' -ErrorAction SilentlyContinue) {
             Register-OpenPathFirefoxNativeHost -Config $Config -PreserveExistingOnNotReady | Out-Null
         }
-        if (Get-Command -Name 'Restore-OpenPathProtectedMode' -ErrorAction SilentlyContinue) {
+        # A classroom disabled on the server stays open across an agent update.
+        $whitelistPath = Join-Path (Join-Path $OpenPathRoot 'data') 'whitelist.txt'
+        $classroomDisabled = [bool](Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath).IsDisabled
+        if (-not $classroomDisabled -and (Get-Command -Name 'Restore-OpenPathProtectedMode' -ErrorAction SilentlyContinue)) {
             Restore-OpenPathProtectedMode -Config $Config | Out-Null
         }
         elseif (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {

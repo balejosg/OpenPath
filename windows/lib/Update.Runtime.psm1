@@ -84,6 +84,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Clear-OpenPathRuntimeDependencyOverlay',
         'Restore-OriginalDNS',
         'Remove-OpenPathFirewall',
+        'Test-FirewallActive',
         'Remove-BrowserPolicy',
         'Set-AllBrowserPolicy',
         'Test-OpenPathCaptivePortalModeActive',
