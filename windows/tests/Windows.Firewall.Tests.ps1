@@ -1182,7 +1182,7 @@ Describe "Firewall Module" {
                 Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
                 Mock Get-NetFirewallRule { $Rule }
                 $typeRemoval = Get-OpenPathFirewallTestMockTypeRemoval -Command Get-NetFirewallSecurityFilter -Parameter AssociatedNetFirewallRule
-                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = $LocalUser } } @typeRemoval
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } } @typeRemoval
                 Test-OpenPathStudentEgressFloorInvariant
             }
             $state.Holds | Should -BeFalse
@@ -1198,7 +1198,7 @@ Describe "Firewall Module" {
                 Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
                 Mock Get-NetFirewallRule { $Rule }
                 $typeRemoval = Get-OpenPathFirewallTestMockTypeRemoval -Command Get-NetFirewallSecurityFilter -Parameter AssociatedNetFirewallRule
-                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = $LocalUser } } @typeRemoval
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } } @typeRemoval
                 Test-OpenPathStudentEgressFloorInvariant
             }
             $state.Holds | Should -BeFalse
@@ -1241,7 +1241,7 @@ Describe "Firewall Module" {
                 Mock Get-NetFirewallProfile { [pscustomobject]@{ DefaultOutboundAction = 'Block' } }
                 Mock Get-NetFirewallRule { $Rule }
                 $typeRemoval = Get-OpenPathFirewallTestMockTypeRemoval -Command Get-NetFirewallSecurityFilter -Parameter AssociatedNetFirewallRule
-                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = $LocalUser } } @typeRemoval
+                Mock Get-NetFirewallSecurityFilter { [pscustomobject]@{ LocalUser = "D:(D;;CC;;;$Sid)(A;;CC;;;WD)" } } @typeRemoval
                 Test-OpenPathStudentEgressFloorInvariant
             }
             $state.Holds | Should -BeTrue
