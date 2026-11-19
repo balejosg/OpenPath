@@ -1,6 +1,7 @@
-import { describe, test, after } from 'node:test';
+import { describe, test, after, mock } from 'node:test';
 import assert from 'node:assert';
 import { sendPgNotification } from '../src/db/notify.js';
+import { pool } from '../src/db/pool.js';
 import { createDbEventBridge, type DbEventPayload } from '../src/lib/db-event-bridge.js';
 import { TEST_RUN_ID } from './test-utils.js';
 
@@ -52,6 +53,49 @@ await describe('DB Event Bridge', async () => {
     assert.ok(events.some((e) => e.type === 'group' && e.groupId === 'g1'));
     assert.ok(!events.some((e) => e.type === 'group' && e.groupId === 'ignored'));
 
+    await bridge.stop();
+  });
+
+  await test('notify contains serialization failures instead of rejecting', async () => {
+    const events: DbEventPayload[] = [];
+    const bridge = createDbEventBridge({
+      instanceId: 'instance-a',
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+    });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    await bridge.notify(circular as unknown as DbEventPayload);
+
+    assert.deepEqual(events, []);
+  });
+
+  await test('concurrent ensureStarted calls share one listening client', async () => {
+    const bridge = createDbEventBridge({
+      instanceId: 'instance-a',
+      onEvent: () => undefined,
+    });
+
+    await Promise.all([bridge.ensureStarted(), bridge.ensureStarted()]);
+    await bridge.stop();
+  });
+
+  await test('ensureStarted contains connection failures and retries after them', async () => {
+    const connect = mock.method(pool, 'connect', () =>
+      Promise.reject(new Error('connect refused'))
+    );
+    const bridge = createDbEventBridge({
+      instanceId: 'instance-a',
+      onEvent: () => undefined,
+    });
+
+    await bridge.ensureStarted();
+
+    connect.mock.restore();
+
+    await bridge.ensureStarted();
     await bridge.stop();
   });
 });

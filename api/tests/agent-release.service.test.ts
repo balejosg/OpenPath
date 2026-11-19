@@ -6,10 +6,14 @@ import { after, before, describe, test } from 'node:test';
 
 import {
   computeAgentBuild,
+  getActiveAgentRelease,
+  getAgentReleaseFile,
   listAgentRingHostnames,
   publishAgentRelease,
   type PublishedAgentRelease,
   retireAgentRelease,
+  setMachineAgentRing,
+  validateAgentReleaseInput,
   type ActiveAgentRelease,
   type AgentReleaseFileRecord,
   type AgentReleaseManifestFile,
@@ -429,5 +433,149 @@ await describe('canary agent releases', { concurrency: false }, async () => {
 
     assert.ok(result.ok);
     assert.ok(result.data.body.length > 0);
+  });
+
+  await test('release validation rejects every malformed input branch', async () => {
+    const validFile = fileInput('lib/Alpha.psm1', 'alpha');
+    const cases: {
+      input: Parameters<typeof validateAgentReleaseInput>[0];
+      message: RegExp;
+    }[] = [
+      {
+        input: { sourceSha: 'not-a-commit', signature: 'sig', files: [validFile] },
+        message: /sourceSha/,
+      },
+      {
+        input: { sourceSha: SOURCE_SHA, signature: '   ', files: [validFile] },
+        message: /signature/,
+      },
+      {
+        input: { sourceSha: SOURCE_SHA, signature: 'sig', files: [] },
+        message: /files/,
+      },
+      {
+        input: {
+          sourceSha: SOURCE_SHA,
+          signature: 'sig',
+          files: [{ ...validFile, path: '../escape' }],
+        },
+        message: /unsafe release path/,
+      },
+      {
+        input: {
+          sourceSha: SOURCE_SHA,
+          signature: 'sig',
+          files: [{ ...validFile, path: '/absolute' }],
+        },
+        message: /unsafe release path/,
+      },
+      {
+        input: {
+          sourceSha: SOURCE_SHA,
+          signature: 'sig',
+          files: [{ ...validFile, path: 'lib//nested' }],
+        },
+        message: /unsafe release path/,
+      },
+      {
+        input: {
+          sourceSha: SOURCE_SHA,
+          signature: 'sig',
+          files: [validFile, { ...validFile }],
+        },
+        message: /duplicate release path/,
+      },
+      {
+        input: {
+          sourceSha: SOURCE_SHA,
+          signature: 'sig',
+          files: [{ ...validFile, sha256: 'zz' }],
+        },
+        message: /invalid sha256/,
+      },
+      {
+        input: {
+          sourceSha: SOURCE_SHA,
+          signature: 'sig',
+          files: [{ ...validFile, contentBase64: '' }],
+        },
+        message: /empty content/,
+      },
+      {
+        input: {
+          sourceSha: SOURCE_SHA,
+          signature: 'sig',
+          files: [validFile],
+          build: 'not-hex',
+        },
+        message: /invalid build fingerprint/,
+      },
+      {
+        input: {
+          sourceSha: SOURCE_SHA,
+          signature: 'sig',
+          files: [validFile],
+          build: 'f'.repeat(64),
+        },
+        message: /declared build does not match/,
+      },
+    ];
+
+    for (const { input, message } of cases) {
+      const result = validateAgentReleaseInput(input);
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        assert.match(result.error.message, message);
+      }
+    }
+  });
+
+  await test('release and ring helpers report unknown builds and machines', async () => {
+    const repository = new FakeRepository();
+    repository.ring = 'canary';
+    const published = await publishFixture(repository);
+
+    const active = await getActiveAgentRelease('canary', repository);
+    assert.equal(active?.build, published.build);
+
+    const file = await getAgentReleaseFile(
+      published.build.toUpperCase(),
+      'lib/Alpha.psm1',
+      repository
+    );
+    assert.ok(file.ok);
+    assert.equal(file.data.content.toString('utf8'), 'alpha');
+
+    const missingFile = await getAgentReleaseFile(published.build, 'missing.ps1', repository);
+    assert.equal(missingFile.ok, false);
+    if (!missingFile.ok) {
+      assert.equal(missingFile.error.code, 'NOT_FOUND');
+    }
+
+    const invalidBuild = await retireAgentRelease('not-a-build', repository);
+    assert.equal(invalidBuild.ok, false);
+
+    const missingBuild = await retireAgentRelease('f'.repeat(64), repository);
+    assert.equal(missingBuild.ok, false);
+    if (!missingBuild.ok) {
+      assert.equal(missingBuild.error.code, 'NOT_FOUND');
+    }
+
+    const updated = await setMachineAgentRing('  PC-Canary  ', 'canary', repository);
+    assert.ok(updated.ok);
+    assert.deepEqual(updated.data, { hostname: 'pc-canary', ring: 'canary' });
+
+    const blankHostname = await setMachineAgentRing('   ', 'canary', repository);
+    assert.equal(blankHostname.ok, false);
+
+    const badRing = await setMachineAgentRing('pc-canary', 'beta', repository);
+    assert.equal(badRing.ok, false);
+
+    repository.setMachineRing = () => Promise.resolve(false);
+    const unknownMachine = await setMachineAgentRing('pc-ghost', 'stable', repository);
+    assert.equal(unknownMachine.ok, false);
+    if (!unknownMachine.ok) {
+      assert.equal(unknownMachine.error.code, 'NOT_FOUND');
+    }
   });
 });
