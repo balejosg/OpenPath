@@ -1302,6 +1302,9 @@ Describe "Watchdog Script" {
             function Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config, $BlockedPaths) if ([string]$Plan.Mode -eq 'FailOpen') { $global:OpenPathPostureRepairPlanCalls++ } }
             function Enter-OpenPathAgentUpdateLock { param([int]$TimeoutMilliseconds = 0) [pscustomobject]@{ Acquired = $true; Mutex = $null } }
             function Exit-OpenPathAgentUpdateLock { param($Lock) }
+            # The real whitelist update mutex is machine-wide: a live agent on a self-hosted
+            # runner could hold it, so this test never touches it.
+            function Enter-OpenPathPostureNamedMutex { param([string]$Name) [pscustomobject]@{ Acquired = $true; Mutex = $null } }
             function global:Read-OpenPathDnsFailureModeState { param([string]$OpenPathRoot = '') return $null }
             function global:Test-OpenPathCaptivePortalModeActive { return $false }
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
@@ -1365,7 +1368,7 @@ Describe "Watchdog Script" {
         }
     }
 
-Context "Captive portal detection" {
+    Context "Captive portal detection" {
         It "Defines admin-only captive portal recovery script with bounded queue processing" {
             $scriptPath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Recover-CaptivePortal.ps1")
             $leafPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")

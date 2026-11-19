@@ -394,21 +394,27 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
             return $result
         }
 
-        $failureModeState = $null
-        if (Get-Command -Name 'Read-OpenPathDnsFailureModeState' -ErrorAction SilentlyContinue) {
-            try { $failureModeState = Read-OpenPathDnsFailureModeState -OpenPathRoot $OpenPathRoot } catch { $failureModeState = $null }
-        }
-        if ($failureModeState -and [string]$failureModeState.mode -in @('protected', 'open')) {
-            Remove-OpenPathPostureStateFile -Path $streakPath
-            $result.Reason = 'dns_failure_mode_active'
-            return $result
+        # A DNS failure mode, or the stale-whitelist fail-safe (which deliberately
+        # re-arms protection), makes a reopen inappropriate; reopening would only
+        # flap against them. Returns the reason, or '' when neither is active.
+        $blockedByOtherMode = {
+            $failureModeState = $null
+            if (Get-Command -Name 'Read-OpenPathDnsFailureModeState' -ErrorAction SilentlyContinue) {
+                try { $failureModeState = Read-OpenPathDnsFailureModeState -OpenPathRoot $OpenPathRoot } catch { $failureModeState = $null }
+            }
+            if ($failureModeState -and [string]$failureModeState.mode -in @('protected', 'open')) {
+                return 'dns_failure_mode_active'
+            }
+            if (Test-Path -LiteralPath (Join-Path $dataRoot 'stale-failsafe-state.json') -PathType Leaf) {
+                return 'stale_failsafe_active'
+            }
+            return ''
         }
 
-        # The stale-whitelist fail-safe deliberately re-arms protection; reopening
-        # would only flap against it.
-        if (Test-Path -LiteralPath (Join-Path $dataRoot 'stale-failsafe-state.json') -PathType Leaf) {
+        $blocked = & $blockedByOtherMode
+        if ($blocked) {
             Remove-OpenPathPostureStateFile -Path $streakPath
-            $result.Reason = 'stale_failsafe_active'
+            $result.Reason = $blocked
             return $result
         }
 
@@ -469,6 +475,7 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
         $lock = $null
         try {
             if (-not (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
+                & $refreshStreak
                 $result.Reason = 'update_lock_unavailable'
                 return $result
             }
@@ -484,6 +491,12 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
             $sections = & $readSections
             if (-not $sections) {
                 $result.Reason = 'whitelist_unreadable'
+                return $result
+            }
+            $blocked = & $blockedByOtherMode
+            if ($blocked) {
+                Remove-OpenPathPostureStateFile -Path $streakPath
+                $result.Reason = $blocked
                 return $result
             }
             $posture = $null

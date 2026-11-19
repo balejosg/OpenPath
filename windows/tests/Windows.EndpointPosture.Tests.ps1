@@ -692,6 +692,51 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
         Test-Path -LiteralPath $script:streakPath | Should -BeFalse
     }
 
+    It 'rechecks the stale-whitelist fail-safe once both locks are held' {
+        Invoke-TestPostureCycle | Out-Null
+        Mock Enter-OpenPathAgentUpdateLock {
+            Set-Content -LiteralPath (Join-Path $script:dataDir 'stale-failsafe-state.json') -Value '{}'
+            [pscustomobject]@{ Acquired = $true; Mutex = $null }
+        }
+
+        $result = Invoke-TestPostureCycle
+
+        $result.Repaired | Should -BeFalse
+        $result.Skipped | Should -BeTrue
+        $result.Reason | Should -Be 'stale_failsafe_active'
+        $script:repairCalls | Should -Be 0
+        $script:lockExits | Should -Be 1
+    }
+
+    It 'rechecks the DNS failure mode once both locks are held' {
+        Invoke-TestPostureCycle | Out-Null
+        Mock Enter-OpenPathAgentUpdateLock {
+            $script:failureModeStarted = $true
+            [pscustomobject]@{ Acquired = $true; Mutex = $null }
+        }
+        $script:failureModeStarted = $false
+        Mock Read-OpenPathDnsFailureModeState { if ($script:failureModeStarted) { [pscustomobject]@{ mode = 'protected' } } else { $null } }
+
+        $result = Invoke-TestPostureCycle
+
+        $result.Repaired | Should -BeFalse
+        $result.Reason | Should -Be 'dns_failure_mode_active'
+        $script:repairCalls | Should -Be 0
+    }
+
+    It 'refreshes the streak when the agent update lock command is unavailable' {
+        Invoke-TestPostureCycle | Out-Null
+        Mock Get-Command { $null } -ParameterFilter { $Name -eq 'Enter-OpenPathAgentUpdateLock' }
+
+        $first = Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(4)
+        $second = Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(8)
+
+        $first.Reason | Should -Be 'update_lock_unavailable'
+        $second.Reason | Should -Be 'update_lock_unavailable'
+        Mock Get-Command { & (Get-Command -Name Get-Command -CommandType Cmdlet) @PSBoundParameters } -ParameterFilter { $Name -eq 'Enter-OpenPathAgentUpdateLock' }
+        (Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(12)).Repaired | Should -BeTrue
+    }
+
     It 'does not report success when the classroom stopped being open during the repair' {
         Mock Invoke-OpenPathEndpointStateRepairPlan {
             $script:repairCalls++
