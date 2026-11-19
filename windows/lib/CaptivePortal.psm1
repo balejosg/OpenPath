@@ -59,16 +59,30 @@ function Test-OpenPathCaptivePortalModeActive {
 
     if (Test-OpenPathCaptivePortalMarkerExpired -Marker $marker) {
         if ($SkipExpiredRestore) { return $true }
-        if ((Get-OpenPathCaptivePortalMarkerMode -Marker $marker) -eq 'passthrough') {
+        $markerMode = Get-OpenPathCaptivePortalMarkerMode -Marker $marker
+        $markerModeLabel = if ($markerMode) { $markerMode } else { 'unknown' }
+        if ($markerMode -eq 'passthrough') {
             Write-OpenPathLog 'Watchdog: captive portal passthrough deadline expired; attempting protected-mode restore' -Level WARN
         }
         $disabled = Disable-OpenPathCaptivePortalMode
         if (-not [bool]$disabled) {
+            $classroomDisabled = $false
+            if (Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) {
+                try { $classroomDisabled = [bool](Test-OpenPathCaptivePortalClassroomDisabled) } catch { $classroomDisabled = $false }
+            }
+            if ($classroomDisabled) {
+                # An intentionally open classroom must never be re-armed by a
+                # failed expired-marker restore. Clear the marker and report the
+                # mode as inactive without calling Set-LocalDNS.
+                Write-OpenPathLog "Watchdog: failed to close expired captive portal $markerModeLabel marker; classroom is disabled, clearing it without re-arming protection" -Level WARN
+                try { Close-OpenPathCaptivePortalForDisabledClassroom | Out-Null } catch { }
+                return $false
+            }
             # Fail closed: the restore did not complete. Force DNS back to the local
             # resolver (127.0.0.1) so enforcement is not bypassed while the marker
             # file exists. The marker is treated as needing-restore (return $false)
             # so the next watchdog cycle retries the full disable path.
-            Write-OpenPathLog 'Watchdog: failed to close expired captive portal passthrough marker; forcing DNS to 127.0.0.1 and treating mode as inactive (fail closed)' -Level WARN
+            Write-OpenPathLog "Watchdog: failed to close expired captive portal $markerModeLabel marker; forcing DNS to 127.0.0.1 and treating mode as inactive (fail closed)" -Level WARN
             try {
                 if (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue) {
                     Set-LocalDNS | Out-Null
@@ -846,6 +860,12 @@ function Enable-OpenPathCaptivePortalPassthroughMode {
         [switch]$ForcePassthrough
     )
 
+    if ((Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) -and
+        (Test-OpenPathCaptivePortalClassroomDisabled)) {
+        Write-OpenPathLog 'Watchdog: captive portal passthrough entry skipped because the classroom is disabled' -Level WARN
+        return $false
+    }
+
     if (-not $ForcePassthrough -and $ExistingMarker -and (Get-OpenPathCaptivePortalMarkerMode -Marker $ExistingMarker) -eq 'limited') {
         $existingHosts = @($ExistingMarker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { $_ })
         $existingUpstream = Get-OpenPathCaptivePortalUpstreamFromMarker -Marker $ExistingMarker
@@ -935,6 +955,12 @@ function Enable-OpenPathCaptivePortalLimitedMode {
         [int]$TtlSeconds = 300,
         [object]$Marker = $null
     )
+
+    if ((Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) -and
+        (Test-OpenPathCaptivePortalClassroomDisabled)) {
+        Write-OpenPathLog 'Watchdog: captive portal limited-mode entry skipped because the classroom is disabled' -Level WARN
+        return $false
+    }
 
     $limitedModeTtlSeconds = [Math]::Min([Math]::Max(1, $TtlSeconds), 120)
     $markerMode = Get-OpenPathCaptivePortalMarkerMode -Marker $Marker
@@ -1500,6 +1526,16 @@ function Restore-OpenPathLimitedCaptivePortalAttempt {
     [CmdletBinding()]
     param()
 
+    if ((Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) -and
+        (Test-OpenPathCaptivePortalClassroomDisabled)) {
+        # A failed limited-mode attempt must not re-arm protection in an
+        # intentionally open classroom. Clear the marker and leave the fail-open
+        # posture to the normal repair path.
+        Write-OpenPathLog 'Watchdog: classroom is disabled; clearing the portal marker without restoring protected mode after a failed limited attempt' -Level WARN
+        Close-OpenPathCaptivePortalForDisabledClassroom | Out-Null
+        return
+    }
+
     try {
         $config = Get-OpenPathConfig
         Restore-OpenPathCaptivePortalAcrylicHostState | Out-Null
@@ -1532,11 +1568,12 @@ function Clear-OpenPathCaptivePortalMarker {
 function Test-OpenPathCaptivePortalClassroomDisabled {
     <#
     .SYNOPSIS
-        Returns true when the local whitelist says the classroom is disabled.
+        Returns true only when the local whitelist positively says the classroom is disabled.
     .DESCRIPTION
         A disabled classroom is intentionally open, so captive portal recovery has
-        nothing to restore. Any read failure returns false: the caller then keeps
-        the normal fail-closed protected-mode path.
+        nothing to restore. Any read failure after the whitelist read retries is
+        reported as Unknown (reasonCode classroom_state_unknown) and returns false:
+        the caller then keeps the normal fail-closed protected-mode path.
     .OUTPUTS
         Boolean
     #>
@@ -1551,7 +1588,20 @@ function Test-OpenPathCaptivePortalClassroomDisabled {
         }
 
         $sections = Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath
-        return [bool]($sections -and $sections.PSObject.Properties['IsDisabled'] -and $sections.IsDisabled)
+        if (-not $sections) {
+            return $false
+        }
+
+        $readSucceeded = $true
+        if ($sections.PSObject.Properties['ReadSucceeded']) {
+            $readSucceeded = [bool]$sections.ReadSucceeded
+        }
+        if (-not $readSucceeded) {
+            Write-OpenPathLog 'Watchdog: classroom whitelist state is unknown after read retries (reasonCode=classroom_state_unknown); keeping fail-closed enforcement' -Level WARN
+            return $false
+        }
+
+        return [bool]($sections.PSObject.Properties['IsDisabled'] -and $sections.IsDisabled)
     }
     catch {
         Write-OpenPathLog "Watchdog: could not read classroom state for captive portal recovery: $_" -Level WARN
@@ -2008,6 +2058,12 @@ function Enable-OpenPathCaptivePortalMode {
         return $false
     }
 
+    if ((Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) -and
+        (Test-OpenPathCaptivePortalClassroomDisabled)) {
+        Write-OpenPathLog 'Watchdog: captive portal mode was not entered because the classroom is disabled' -Level WARN
+        return $false
+    }
+
     $marker = $null
     if (Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore) {
         $marker = Get-OpenPathCaptivePortalMarker
@@ -2167,6 +2223,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
     'Clear-OpenPathCaptivePortalMarker',
     'Test-OpenPathCaptivePortalClassroomDisabled',
+    'Close-OpenPathCaptivePortalForDisabledClassroom',
     'Get-OpenPathCaptivePortalObservation',
     'Update-OpenPathCaptivePortalObservation',
     'Get-OpenPathCaptivePortalBootstrapHosts',

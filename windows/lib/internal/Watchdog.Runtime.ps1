@@ -463,6 +463,35 @@ function Invoke-OpenPathWatchdogPrechecks {
     }
 
     $portalModeActive = Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore
+    $classroomDisabled = $false
+    if (Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) {
+        try { $classroomDisabled = [bool](Test-OpenPathCaptivePortalClassroomDisabled) } catch { $classroomDisabled = $false }
+    }
+    if ($classroomDisabled) {
+        # A disabled classroom is intentionally open. Portal detection, entry and
+        # refresh would only re-arm 127.0.0.1 or the firewall, so stop here and
+        # clear any marker left by an earlier cycle without restoring protection.
+        if ($portalModeActive -and (Get-Command -Name 'Close-OpenPathCaptivePortalForDisabledClassroom' -ErrorAction SilentlyContinue)) {
+            try {
+                Write-OpenPathLog 'Watchdog: classroom is disabled; closing the captive portal marker without re-arming protection' -Level WARN
+                Close-OpenPathCaptivePortalForDisabledClassroom | Out-Null
+            }
+            catch {
+                Write-OpenPathLog "Watchdog: could not close the captive portal marker for a disabled classroom: $_" -Level WARN
+            }
+        }
+        return [PSCustomObject]@{
+            PortalModeActive   = $false
+            CaptiveState       = 'NoNetwork'
+            PortalSince        = $null
+            PortalAgeSeconds   = 0
+            AuthenticatedCount = 0
+            MinimumPortalElapsed = $false
+            ShouldExitPortal   = $false
+            GroupSyncFailed    = $groupSyncFailed
+        }
+    }
+
     $captiveState = 'NoNetwork'
     $proxyState = $null
     if (Get-Command -Name Get-OpenPathDnsProxyState -ErrorAction SilentlyContinue) {
@@ -635,6 +664,23 @@ function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
     )
 
     $issues = @()
+    $classroomDisabled = $false
+    if (Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) {
+        try { $classroomDisabled = [bool](Test-OpenPathCaptivePortalClassroomDisabled) } catch { $classroomDisabled = $false }
+    }
+    if ($classroomDisabled) {
+        # Nothing to verify or close in an intentionally open classroom beyond
+        # clearing the marker; never restore protected mode from this path.
+        if ($PortalModeActive -and (Get-Command -Name 'Close-OpenPathCaptivePortalForDisabledClassroom' -ErrorAction SilentlyContinue)) {
+            try { Close-OpenPathCaptivePortalForDisabledClassroom | Out-Null } catch { }
+        }
+        return [PSCustomObject]@{
+            Issues = @()
+            MarkerMode = ''
+            LocalDnsConfigured = $null
+        }
+    }
+
     if (-not $PortalModeActive) {
         return [PSCustomObject]@{
             Issues = @()

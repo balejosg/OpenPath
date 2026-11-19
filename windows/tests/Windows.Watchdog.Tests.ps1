@@ -2695,7 +2695,7 @@ Describe "Watchdog Script" {
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 'passthrough deadline expired',
-                'failed to close expired captive portal passthrough marker',
+                'failed to close expired captive portal $markerModeLabel marker',
                 'Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue',
                 '127.0.0.1',
                 'CAPTIVE PORTAL RECOVERY',
@@ -2724,7 +2724,7 @@ Describe "Watchdog Script" {
                 'return $false'
             )
             # The fail-closed path must NOT return true when the disable fails
-            $content | Should -Not -Match "failed to close expired captive portal passthrough marker[^`n]*`n[^`n]*return \`$true"
+            $content | Should -Not -Match "failed to close expired captive portal \`$markerModeLabel marker[^`n]*`n[^`n]*return \`$true"
         }
 
         It "Uses hysteresis before entering or exiting captive portal mode" {

@@ -177,7 +177,7 @@ Describe "Update Script" {
             Assert-ContentContainsAll -Content $runtimeContent -Needles @(
                 'Attempting checkpoint rollback',
                 'Falling back to backup whitelist rollback',
-                'Copy-Item $BackupPath $WhitelistPath -Force',
+                'Write-OpenPathAtomicTextFile -Path $WhitelistPath -Content $backupContent',
                 'Restore-OpenPathCheckpoint'
             )
         }
@@ -188,7 +188,48 @@ Describe "Update Script" {
 
             $runtimeContent | Should -Match '\[AllowNull\(\)\]\s+\[PSCustomObject\]\$Config'
             $runtimeContent | Should -Match "(?s)if \(\`$Config\) \{\s+Invoke-OpenPathUpdateWritersLockScope -Stage 'checkpoint-rollback-mirror' -Action \{\s+Sync-FirefoxNativeHostMirror -Config \`$Config -WhitelistPath \`$WhitelistPath"
-            $runtimeContent | Should -Match '(?s)if \(\$Config\) \{\s+Restore-OpenPathProtectedMode -Config \$Config -ErrorAction SilentlyContinue \| Out-Null\s+\}'
+            $runtimeContent | Should -Match '(?s)if \(\$Config -and -not \$backupDisabled\) \{\s+Restore-OpenPathProtectedMode -Config \$Config -ErrorAction SilentlyContinue \| Out-Null\s+\}'
+        }
+
+        It "Keeps fail-open state when a backup rollback restores a disabled marker" {
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Config.ps1")
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Rollback.ps1")
+
+            $dir = Join-Path $TestDrive ("rollback-disabled-" + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $backupPath = Join-Path $dir 'whitelist.backup.txt'
+            $whitelistPath = Join-Path $dir 'whitelist.txt'
+            Set-Content -LiteralPath $backupPath -Value '# DESACTIVADO' -Encoding UTF8
+
+            $script:acrylicUpdates = 0
+            $script:protectedModeRestores = 0
+            function Invoke-OpenPathUpdateWritersLockScope { param([string]$Stage, [scriptblock]$Action) return (& $Action) }
+            function Get-OpenPathWhitelistSectionsFromFile {
+                param([string]$Path)
+                [pscustomobject]@{ IsDisabled = $true; ReadSucceeded = $true; Whitelist = @(); BlockedSubdomains = @() }
+            }
+            function Sync-FirefoxNativeHostMirror { param($Config, $WhitelistPath) }
+            function Update-AcrylicHost { param($WhitelistedDomains, $BlockedSubdomains, $ErrorAction) $script:acrylicUpdates++ }
+            function Restore-OpenPathProtectedMode { param($Config, $ErrorAction) $script:protectedModeRestores++ }
+            function Write-UpdateCatchLog { param([string]$Message, [string]$Level) }
+            function Write-OpenPathLog { param([string]$Message, [string]$Level) }
+
+            try {
+                $result = Invoke-OpenPathUpdateRollback `
+                    -Config ([pscustomobject]@{ enableCheckpointRollback = $false }) `
+                    -WhitelistPath $whitelistPath `
+                    -BackupPath $backupPath `
+                    -StaleFailsafeStatePath (Join-Path $dir 'stale-failsafe-state.json')
+
+                $result.RollbackSucceeded | Should -BeTrue
+                $result.RollbackMethod | Should -Be 'backup'
+                (Get-Content -LiteralPath $whitelistPath -Raw) | Should -Match '# DESACTIVADO'
+                $script:acrylicUpdates | Should -Be 0
+                $script:protectedModeRestores | Should -Be 0
+            }
+            finally {
+                Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
 
         It "Resolves the Windows root from helper while preserving C:\OpenPath as the default" {
@@ -238,11 +279,12 @@ Describe "Update Script" {
 
             Assert-ContentContainsAll -Content $runtimeContent -Needles @(
                 'function Write-OpenPathUpdatePortalActiveState',
-                'Test-OpenPathCaptivePortalModeActive',
+                'Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore',
                 'Get-OpenPathCaptivePortalMarker',
                 'data\update-portal-active-state.json',
                 'triggerSource = $TriggerSource',
                 'healthAction = $healthAction',
+                'classroom_state_unknown',
                 'update_while_portal_active',
                 'sse_update_while_portal_active',
                 'OpenPath $TriggerSource update observed while captive portal mode is active',
@@ -334,7 +376,8 @@ Describe "Update Script" {
 
             $content | Should -Match '(?s)elseif \(\$downloadResult\.Whitelist\.IsDisabled\).*?Handle-OpenPathDisabledWhitelist'
             $applyContent | Should -Match '(?s)Handle-OpenPathDisabledWhitelist.*?Invoke-OpenPathEndpointStateRepairPlan'
-            $applyContent | Should -Match '(?s)Handle-OpenPathDisabledWhitelist.*?# DESACTIVADO.*?Set-Content \$WhitelistPath'
+            $applyContent | Should -Match '(?s)Handle-OpenPathDisabledWhitelist.*?# DESACTIVADO.*?Write-OpenPathAtomicTextFile -Path \$WhitelistPath'
+            $applyContent | Should -Match '(?s)Handle-OpenPathWhitelistApply.*?Write-OpenPathAtomicTextFile -Path \$WhitelistPath'
             $applyContent | Should -Match '(?s)Handle-OpenPathNotModified.*?IsDisabled.*?FAIL_OPEN.*?remote_disable_marker_not_modified'
             $applyContent | Should -Match '(?s)Handle-OpenPathWhitelistApply.*?Invoke-OpenPathRuntimeDependencyQueueApply.*?Invoke-OpenPathEndpointStateRepairPlan'
             $rollbackContent | Should -Match '(?s)Falling back to backup whitelist rollback.*?Restore-OpenPathProtectedMode -Config \$Config -ErrorAction SilentlyContinue'
@@ -441,6 +484,25 @@ Describe "Update Script" {
                 Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
 
                 $script:repairModes | Should -Be @('FailOpenMarkerOnly')
+            }
+
+            It "Clears a stale captive portal marker when the classroom is disabled" {
+                $script:markerClears = 0
+                function Clear-OpenPathCaptivePortalMarker { $script:markerClears++; $true }
+                function Invoke-OpenPathUpdateWritersLockScope { param([string]$Stage, [scriptblock]$Action) return (& $Action) }
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true; ReadSucceeded = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) [pscustomobject]@{ Actions = @() } }
+                function Test-FirewallActive { $false }
+                function Get-NetAdapter { param($ErrorAction) [pscustomobject]@{ Status = 'Up'; ifIndex = 7 } }
+                function Get-DnsClientServerAddress { param($AddressFamily, $InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('192.0.2.53') } }
+
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+                $script:markerClears | Should -Be 1
+
+                Handle-OpenPathDisabledWhitelist -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+                $script:markerClears | Should -Be 2
+                (Get-Content -LiteralPath $script:whitelistPath -Raw) | Should -Match '# DESACTIVADO'
             }
 
             It "Does not restore protected mode on an ordinary 304 cycle" {
@@ -1694,6 +1756,7 @@ Describe "Update Script" {
             }
 
             # Shared stubs for the update apply path (Phase 7 P2 stamping tests).
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Config.ps1")
             . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1")
             function ConvertTo-OpenPathWhitelistFileContent { param($Whitelist, $BlockedSubdomains, $BlockedPaths) 'WHITELIST' }
             function Sync-FirefoxNativeHostMirror { param($Config, $WhitelistPath, [switch]$ClearWhitelist) }
@@ -1817,6 +1880,8 @@ Describe "Update Script" {
             $script:stampCalls[0].Generation | Should -Be 3
             $script:lockScopes | Should -Contain 'whitelist-queue-apply'
             $script:lockScopes | Should -Contain 'overlay-stamp'
+            (Get-Content -LiteralPath (Join-Path $TestDrive 'whitelist.txt') -Raw).Trim() | Should -Be 'WHITELIST'
+            @(Get-ChildItem -LiteralPath $TestDrive -Filter 'whitelist.txt.tmp.*').Count | Should -Be 0
         }
 
         It "does not stamp when the repair plan did not prove both a restart and a flush" {
@@ -3135,7 +3200,7 @@ Describe "Update Script" {
         }
 
         It "Restores protected mode after an update only when the local whitelist is not disabled" -TestCases @(
-            @{ Whitelist = '# DESACTIVADO'; ExpectedRestores = 0; ExpectedAcrylicRestarts = 1 }
+            @{ Whitelist = '# DESACTIVADO'; ExpectedRestores = 0; ExpectedAcrylicRestarts = 0 }
             @{ Whitelist = "## WHITELIST`nexample.org"; ExpectedRestores = 1; ExpectedAcrylicRestarts = 0 }
         ) {
             $root = Join-Path $TestDrive ('finalize-fail-open-' + [guid]::NewGuid().ToString('N'))

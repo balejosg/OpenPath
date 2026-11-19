@@ -366,19 +366,9 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
     if ($RequestEnvelope.Request.PSObject.Properties['portalRecoveryHosts']) {
         $portalRecoveryHostCandidates += @($RequestEnvelope.Request.portalRecoveryHosts)
     }
-    # W-3: the CaptivePortalRecoveryQueue grants BUILTIN\Users Modify, so triggerHost and
-    # portalRecoveryHosts are attacker-controllable. Syntax-normalising them is not enough;
-    # intersect with the admin-configured captive-portal domains + built-in detection hosts
-    # so SYSTEM never opens an arbitrary requested host. Anything off the allowlist is dropped.
-    $portalRecoveryHosts = @(Select-OpenPathCaptivePortalAllowedRecoveryHosts -RequestedHosts $portalRecoveryHostCandidates)
+    $portalRecoveryHosts = @()
 
     try {
-        Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'request-read' -Payload @{
-            operation = $operation
-            hasTriggerHost = (-not [string]::IsNullOrWhiteSpace($triggerHost))
-            portalRecoveryHostCount = @($portalRecoveryHosts).Count
-        } | Out-Null
-
         if (-not (Test-OpenPathRecoveryRequestFresh -RequestEnvelope $RequestEnvelope -NowUtc $NowUtc)) {
             Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
                 state = 'StaleRequest'
@@ -394,10 +384,21 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
         }
 
         # A disabled classroom is already open: entering or leaving portal mode here
-        # would pin DNS to the local resolver and re-arm the firewall.
-        if ((Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) -and
-            (Test-OpenPathCaptivePortalClassroomDisabled)) {
-            $portalModeActive = [bool](Test-OpenPathCaptivePortalModeActive)
+        # would pin DNS to the local resolver and re-arm the firewall. Check this
+        # before filtering/logging requested hosts so a disabled classroom never
+        # logs misleading "dropped" diagnostics.
+        $classroomDisabled = $false
+        if (Get-Command -Name 'Test-OpenPathCaptivePortalClassroomDisabled' -ErrorAction SilentlyContinue) {
+            try { $classroomDisabled = [bool](Test-OpenPathCaptivePortalClassroomDisabled) } catch { $classroomDisabled = $false }
+        }
+        if ($classroomDisabled) {
+            $markerActive = $false
+            if (Get-Command -Name 'Test-OpenPathCaptivePortalModeActive' -ErrorAction SilentlyContinue) {
+                try { $markerActive = [bool](Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore) } catch { $markerActive = $false }
+            }
+            if ($markerActive -and (Get-Command -Name 'Close-OpenPathCaptivePortalForDisabledClassroom' -ErrorAction SilentlyContinue)) {
+                try { Close-OpenPathCaptivePortalForDisabledClassroom | Out-Null } catch { }
+            }
             Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
                 state = 'ClassroomDisabled'
             } | Out-Null
@@ -406,11 +407,23 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                 operation = $operation
                 state = 'ClassroomDisabled'
                 triggerHost = $triggerHost
-                activeMarker = $portalModeActive
-                portalModeActive = $portalModeActive
+                activeMarker = $false
+                portalModeActive = $false
             } | Out-Null
             return
         }
+
+        # W-3: the CaptivePortalRecoveryQueue grants BUILTIN\Users Modify, so triggerHost and
+        # portalRecoveryHosts are attacker-controllable. Syntax-normalising them is not enough;
+        # intersect with the admin-configured captive-portal domains + built-in detection hosts
+        # so SYSTEM never opens an arbitrary requested host. Anything off the allowlist is dropped.
+        $portalRecoveryHosts = @(Select-OpenPathCaptivePortalAllowedRecoveryHosts -RequestedHosts $portalRecoveryHostCandidates)
+
+        Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'request-read' -Payload @{
+            operation = $operation
+            hasTriggerHost = (-not [string]::IsNullOrWhiteSpace($triggerHost))
+            portalRecoveryHostCount = @($portalRecoveryHosts).Count
+        } | Out-Null
 
         if ($operation -eq 'reconcile') {
             Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'state-probe' -Payload @{

@@ -1997,11 +1997,13 @@ function Complete-OpenPathAgentUpdateFinalization {
         # A classroom disabled on the server stays open across an agent update.
         $whitelistPath = Join-Path (Join-Path $OpenPathRoot 'data') 'whitelist.txt'
         $classroomDisabled = [bool](Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath).IsDisabled
-        if (-not $classroomDisabled -and (Get-Command -Name 'Restore-OpenPathProtectedMode' -ErrorAction SilentlyContinue)) {
-            Restore-OpenPathProtectedMode -Config $Config | Out-Null
-        }
-        elseif (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
-            Restart-AcrylicService | Out-Null
+        if (-not $classroomDisabled) {
+            if (Get-Command -Name 'Restore-OpenPathProtectedMode' -ErrorAction SilentlyContinue) {
+                Restore-OpenPathProtectedMode -Config $Config | Out-Null
+            }
+            elseif (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
+                Restart-AcrylicService | Out-Null
+            }
         }
         if (Get-Command -Name 'Start-OpenPathTask' -ErrorAction SilentlyContinue) {
             Start-OpenPathTask -TaskType SSE | Out-Null

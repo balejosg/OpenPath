@@ -935,6 +935,39 @@ download.mozilla.org/firefox/releases
             }
         }
 
+        It "Restores a disabled checkpoint without re-arming protected mode" {
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-checkpoint-disabled-" + [Guid]::NewGuid().ToString())
+            $checkpointDir = Join-Path $tempDir 'checkpoint-001'
+            $checkpointWhitelistPath = Join-Path $checkpointDir 'whitelist.txt'
+            $targetWhitelistPath = Join-Path $tempDir 'whitelist.txt'
+
+            try {
+                New-Item -ItemType Directory -Path $checkpointDir -Force | Out-Null
+                Set-Content -LiteralPath $checkpointWhitelistPath -Value '# DESACTIVADO' -Encoding UTF8
+
+                Mock Get-OpenPathLatestCheckpoint {
+                    [PSCustomObject]@{
+                        Path = $checkpointDir
+                        WhitelistPath = $checkpointWhitelistPath
+                        Metadata = $null
+                    }
+                } -ModuleName Common
+                Mock Update-AcrylicHost { $true } -ModuleName Common
+                Mock Restore-OpenPathProtectedMode { $true } -ModuleName Common
+
+                $result = Restore-OpenPathLatestCheckpoint -Config ([PSCustomObject]@{}) -WhitelistPath $targetWhitelistPath
+
+                $result.Success | Should -BeTrue
+                $result.DomainCount | Should -Be 0
+                (Get-Content -LiteralPath $targetWhitelistPath -Raw) | Should -Match '# DESACTIVADO'
+                Should -Invoke Update-AcrylicHost -ModuleName Common -Times 0 -Exactly
+                Should -Invoke Restore-OpenPathProtectedMode -ModuleName Common -Times 0 -Exactly
+            }
+            finally {
+                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Returns failure when checkpoint whitelist has no valid domains" {
             $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-checkpoint-invalid-" + [Guid]::NewGuid().ToString())
             $checkpointDir = Join-Path $tempDir 'checkpoint-001'

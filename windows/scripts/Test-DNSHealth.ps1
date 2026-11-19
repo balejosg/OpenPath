@@ -54,6 +54,7 @@ Initialize-OpenPathScriptSession `
     'Restore-OpenPathIntegrity',
     'Test-OpenPathCaptivePortalModeActive',
     'Test-OpenPathCaptivePortalClassroomDisabled',
+    'Close-OpenPathCaptivePortalForDisabledClassroom',
     'Test-OpenPathCaptivePortalMarkerExpired',
     'Test-OpenPathCaptivePortalState',
     'Test-DNSResolution',

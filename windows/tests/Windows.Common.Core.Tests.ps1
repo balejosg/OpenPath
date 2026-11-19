@@ -912,9 +912,39 @@ allowed.example/private
             }
 
             $sections.IsDisabled | Should -BeFalse
+            $sections.ReadSucceeded | Should -BeFalse
             @($sections.Whitelist).Count | Should -Be 0
             @($sections.BlockedSubdomains).Count | Should -Be 0
             @($sections.BlockedPaths).Count | Should -Be 0
+        }
+
+        It "Marks a successful read as ReadSucceeded and a persistently locked file as Unknown" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-locked-" + [Guid]::NewGuid().ToString() + ".txt")
+
+            try {
+                Set-Content -LiteralPath $tempFile -Value '# DESACTIVADO' -Encoding UTF8
+                $parsed = InModuleScope Common -Parameters @{ TempFile = $tempFile } {
+                    Get-OpenPathWhitelistSectionsFromFile -Path $TempFile
+                }
+                $parsed.ReadSucceeded | Should -BeTrue
+                $parsed.IsDisabled | Should -BeTrue
+
+                $lock = [System.IO.File]::Open($tempFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+                try {
+                    $locked = InModuleScope Common -Parameters @{ TempFile = $tempFile } {
+                        Get-OpenPathWhitelistSectionsFromFile -Path $TempFile -MaxAttempts 2
+                    }
+                }
+                finally {
+                    $lock.Dispose()
+                }
+
+                $locked.ReadSucceeded | Should -BeFalse
+                $locked.IsDisabled | Should -BeFalse
+            }
+            finally {
+                Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+            }
         }
 
         It "Parses ALLOWED-PATHS section and never leaks path entries into Whitelist" {

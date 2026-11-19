@@ -989,8 +989,29 @@ function Write-OpenPathUpdatePortalActiveState {
         HealthAction = ''
     }
 
+    $classroomStateUnknown = $false
     try {
-        if (-not (Test-OpenPathCaptivePortalModeActive)) {
+        $whitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
+        if (Test-Path -LiteralPath $whitelistPath -PathType Leaf -ErrorAction SilentlyContinue) {
+            $classroomSections = Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath
+            $classroomStateUnknown = [bool](
+                $classroomSections -and
+                $classroomSections.PSObject.Properties['ReadSucceeded'] -and
+                -not [bool]$classroomSections.ReadSucceeded
+            )
+        }
+    }
+    catch {
+        $classroomStateUnknown = $true
+    }
+
+    if ($classroomStateUnknown) {
+        Write-OpenPathLog 'OpenPath update observed an unknown classroom whitelist state after read retries (reasonCode=classroom_state_unknown); keeping fail-closed enforcement' -Level WARN
+        $result['HealthAction'] = 'classroom_state_unknown'
+    }
+
+    try {
+        if (-not (Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore)) {
             return [PSCustomObject]$result
         }
 
@@ -999,6 +1020,9 @@ function Write-OpenPathUpdatePortalActiveState {
         $state = if ($marker -and $marker.PSObject.Properties['state']) { [string]$marker.state } else { 'Unknown' }
         $since = if ($marker -and $marker.PSObject.Properties['since']) { [string]$marker.since } else { '' }
         $healthAction = if ($TriggerSource -eq 'SSE') { 'sse_update_while_portal_active' } else { 'update_while_portal_active' }
+        if ($classroomStateUnknown) {
+            $healthAction = "$healthAction; classroom_state_unknown"
+        }
 
         $dir = Split-Path $statePath -Parent
         if (-not (Test-Path $dir -ErrorAction SilentlyContinue)) {

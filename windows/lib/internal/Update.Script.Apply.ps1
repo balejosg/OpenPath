@@ -414,6 +414,9 @@ function Handle-OpenPathNotModified {
         }
         $repairPlan = New-OpenPathEndpointStateRepairPlan -PolicyState $policyState -Mode $repairMode
         Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
+        if (Get-Command -Name 'Clear-OpenPathCaptivePortalMarker' -ErrorAction SilentlyContinue) {
+            try { Clear-OpenPathCaptivePortalMarker | Out-Null } catch { Write-OpenPathLog "Could not clear the captive portal marker while the classroom is disabled: $_" -Level WARN }
+        }
         Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist
         Write-OpenPathLog "Whitelist not modified and local fail-open marker remains active"
 
@@ -497,12 +500,15 @@ function Handle-OpenPathDisabledWhitelist {
     Write-OpenPathLog "DEACTIVATION FLAG detected - entering fail-open mode" -Level WARN
 
     Invoke-OpenPathUpdateWritersLockScope -Stage 'fail-open-marker' -Action {
-        "# DESACTIVADO" | Set-Content $WhitelistPath -Encoding UTF8
+        Write-OpenPathAtomicTextFile -Path $WhitelistPath -Content '# DESACTIVADO'
     } | Out-Null
     $policyState = Get-OpenPathEndpointPolicyState `
         -WhitelistSections ([PSCustomObject]@{ IsDisabled = $true })
     $repairPlan = New-OpenPathEndpointStateRepairPlan -PolicyState $policyState -Mode 'FailOpen'
     Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
+    if (Get-Command -Name 'Clear-OpenPathCaptivePortalMarker' -ErrorAction SilentlyContinue) {
+        try { Clear-OpenPathCaptivePortalMarker | Out-Null } catch { Write-OpenPathLog "Could not clear the captive portal marker after entering fail-open mode: $_" -Level WARN }
+    }
     Invoke-OpenPathUpdateWritersLockScope -Stage 'fail-open-mirror' -Action {
         Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist | Out-Null
     } | Out-Null
@@ -547,7 +553,7 @@ function Handle-OpenPathWhitelistApply {
     # they run in one short Acrylic writers scope so the dependency fast path can
     # interleave with the rest of the cycle (network, restarts, policies).
     $queueScope = Invoke-OpenPathUpdateWritersLockScope -Stage 'whitelist-queue-apply' -Action {
-        $serializedWhitelist | Set-Content $WhitelistPath -Encoding UTF8
+        Write-OpenPathAtomicTextFile -Path $WhitelistPath -Content $serializedWhitelist
         Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath | Out-Null
         $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath -PassThru
         return [PSCustomObject]@{

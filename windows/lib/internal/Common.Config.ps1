@@ -30,10 +30,15 @@ function Get-OpenPathConfig {
     return Get-Content $script:ConfigPath -Raw | ConvertFrom-Json
 }
 
-function Write-OpenPathAtomicJsonFile {
+function Write-OpenPathAtomicTextFile {
     <#
     .SYNOPSIS
-        Atomically writes JSON content to disk using temp file, durable flush, and atomic replace/move.
+        Atomically writes text content to disk using a sibling temp file, durable flush, and atomic replace/move.
+    .DESCRIPTION
+        The final replace/move is retried a bounded number of times when Windows reports a
+        sharing violation (for example another process reading the destination without
+        FILE_SHARE_DELETE). The writer never falls back to an in-place write: after the last
+        attempt it removes the temp file and rethrows, leaving the previous destination intact.
     #>
     [CmdletBinding()]
     param(
@@ -41,9 +46,12 @@ function Write-OpenPathAtomicJsonFile {
         [string]$Path,
 
         [Parameter(Mandatory = $true)]
-        $Data,
+        [AllowEmptyString()]
+        [string]$Content,
 
-        [int]$Depth = 10
+        [int]$MaxAttempts = 5,
+
+        [switch]$NoTrailingNewline
     )
 
     $parentDir = Split-Path -Path $Path -Parent
@@ -51,9 +59,14 @@ function Write-OpenPathAtomicJsonFile {
         New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
     }
 
-    $json = $Data | ConvertTo-Json -Depth $Depth
+    # Mirror Set-Content for text files: keep a single trailing newline.
+    $payload = [string]$Content
+    if (-not $NoTrailingNewline -and -not $payload.EndsWith("`n")) {
+        $payload += [Environment]::NewLine
+    }
+
     $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
-    $bytes = $utf8WithoutBom.GetBytes($json)
+    $bytes = $utf8WithoutBom.GetBytes($payload)
 
     $guid = [guid]::NewGuid().ToString('N')
     $tempPath = "$Path.tmp.$guid"
@@ -72,18 +85,37 @@ function Write-OpenPathAtomicJsonFile {
         }
     }
 
+    $attempt = 0
+    $lastError = $null
     try {
-        if ([System.IO.File]::Exists($Path)) {
-            # Atomic swap into existing destination. If Replace fails, throws immediately;
-            # the existing destination is never partially overwritten in place.
-            Invoke-OpenPathAtomicFileReplace `
-                -TempPath $tempPath `
-                -DestinationPath $Path `
-                -BackupPath $backupPath
-        }
-        else {
-            # Atomic move into non-existent destination within the same directory.
-            [System.IO.File]::Move($tempPath, $Path)
+        while ($attempt -lt [Math]::Max(1, $MaxAttempts)) {
+            $attempt += 1
+            try {
+                if ([System.IO.File]::Exists($Path)) {
+                    # Atomic swap into existing destination. If Replace fails, the
+                    # existing destination is never partially overwritten in place.
+                    Invoke-OpenPathAtomicFileReplace `
+                        -TempPath $tempPath `
+                        -DestinationPath $Path `
+                        -BackupPath $backupPath
+                }
+                else {
+                    # Atomic move into non-existent destination within the same directory.
+                    [System.IO.File]::Move($tempPath, $Path)
+                }
+                $lastError = $null
+                break
+            }
+            catch [System.IO.IOException] {
+                $lastError = $_
+            }
+            catch [System.UnauthorizedAccessException] {
+                $lastError = $_
+            }
+
+            if ($lastError -and $attempt -lt $MaxAttempts) {
+                Start-Sleep -Milliseconds ([Math]::Min(200, 50 * $attempt))
+            }
         }
     }
     finally {
@@ -94,6 +126,31 @@ function Write-OpenPathAtomicJsonFile {
             try { [System.IO.File]::Delete($backupPath) } catch {}
         }
     }
+
+    if ($lastError) {
+        Write-OpenPathLog "Atomic text write failed after $attempt attempt(s) for ${Path}: $lastError" -Level WARN
+        throw $lastError
+    }
+}
+
+function Write-OpenPathAtomicJsonFile {
+    <#
+    .SYNOPSIS
+        Atomically writes JSON content to disk using temp file, durable flush, and atomic replace/move.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        $Data,
+
+        [int]$Depth = 10
+    )
+
+    $json = $Data | ConvertTo-Json -Depth $Depth
+    Write-OpenPathAtomicTextFile -Path $Path -Content ([string]$json) -NoTrailingNewline
 }
 
 function Set-OpenPathConfig {

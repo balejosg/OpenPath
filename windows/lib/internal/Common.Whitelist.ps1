@@ -244,11 +244,29 @@ function Restore-OpenPathLatestCheckpoint {
     }
 
     try {
-        Copy-Item $checkpoint.WhitelistPath $WhitelistPath -Force
+        $checkpointContent = [System.IO.File]::ReadAllText($checkpoint.WhitelistPath)
+        Write-OpenPathAtomicTextFile -Path $WhitelistPath -Content $checkpointContent
 
+        $sections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
+        if ($sections.PSObject.Properties['ReadSucceeded'] -and -not [bool]$sections.ReadSucceeded) {
+            $result.Error = 'Checkpoint restore aborted: restored whitelist is unreadable'
+            return [PSCustomObject]$result
+        }
+
+        $restoredDisabled = [bool]($sections.PSObject.Properties['IsDisabled'] -and $sections.IsDisabled)
         $domains = Get-ValidWhitelistDomainsFromFile -Path $WhitelistPath
-        if ($domains.Count -lt 1) {
+        if (-not $restoredDisabled -and $domains.Count -lt 1) {
             $result.Error = 'Checkpoint restore aborted: no valid domains in checkpoint whitelist'
+            return [PSCustomObject]$result
+        }
+
+        if ($restoredDisabled) {
+            # Never re-arm protection from a checkpoint that says the classroom is
+            # intentionally open; the fail-open posture is the correct state.
+            Write-OpenPathLog 'Checkpoint restored a disabled classroom marker; keeping fail-open state without restoring protected mode' -Level WARN
+            $result.Success = $true
+            $result.CheckpointPath = $checkpoint.Path
+            $result.DomainCount = 0
             return [PSCustomObject]$result
         }
 

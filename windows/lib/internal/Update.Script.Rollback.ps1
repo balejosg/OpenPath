@@ -42,15 +42,23 @@ function Invoke-OpenPathUpdateRollback {
     if (-not $rollbackSucceeded -and (Test-Path $BackupPath)) {
         Write-UpdateCatchLog 'Falling back to backup whitelist rollback...' -Level WARN
         try {
-            Invoke-OpenPathUpdateWritersLockScope -Stage 'backup-rollback' -Action {
-                Copy-Item $BackupPath $WhitelistPath -Force
-                if ($Config) {
-                    Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath | Out-Null
-                }
-                $backupSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
-                Update-AcrylicHost -WhitelistedDomains $backupSections.Whitelist -BlockedSubdomains $backupSections.BlockedSubdomains -ErrorAction SilentlyContinue
-            } | Out-Null
-            if ($Config) {
+            $backupDisabled = [bool](Invoke-OpenPathUpdateWritersLockScope -Stage 'backup-rollback' -Action {
+                    $backupContent = [System.IO.File]::ReadAllText($BackupPath)
+                    Write-OpenPathAtomicTextFile -Path $WhitelistPath -Content $backupContent
+                    if ($Config) {
+                        Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath | Out-Null
+                    }
+                    $backupSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
+                    $isDisabled = [bool]($backupSections.PSObject.Properties['IsDisabled'] -and $backupSections.IsDisabled)
+                    if ($isDisabled) {
+                        Write-UpdateCatchLog 'Restored backup is a disabled classroom marker; keeping fail-open state' -Level WARN
+                    }
+                    else {
+                        Update-AcrylicHost -WhitelistedDomains $backupSections.Whitelist -BlockedSubdomains $backupSections.BlockedSubdomains -ErrorAction SilentlyContinue | Out-Null
+                    }
+                    return $isDisabled
+                })
+            if ($Config -and -not $backupDisabled) {
                 Restore-OpenPathProtectedMode -Config $Config -ErrorAction SilentlyContinue | Out-Null
             }
             $rollbackSucceeded = $true

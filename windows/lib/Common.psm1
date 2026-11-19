@@ -41,6 +41,7 @@ Export-ModuleMember -Function @(
     'Test-OpenPathProgramFilesCatalogPath',
     'Set-OpenPathConfig',
     'Write-OpenPathAtomicJsonFile',
+    'Write-OpenPathAtomicTextFile',
     'Set-OpenPathConfigValue',
     'Get-OpenPathConfigValue',
     'ConvertTo-OpenPathNormalizedConfig',

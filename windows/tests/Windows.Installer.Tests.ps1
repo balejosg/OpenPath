@@ -488,6 +488,50 @@ Describe "Installer" {
             $code | Should -Match '\$backupPath\s*=\s*"\$Path\.bak\.'
         }
 
+        It "retries an atomic text replace when Windows reports a transient sharing violation" {
+            $testDir = Join-Path $TestDrive "atomic-text-retry-test"
+            New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+            $testFile = Join-Path $testDir "whitelist.txt"
+            Set-Content -LiteralPath $testFile -Value "old" -Encoding UTF8
+
+            $global:OpenPathAtomicTextAttempts = 0
+            Mock Invoke-OpenPathAtomicFileReplace -ModuleName Common {
+                param($TempPath, $DestinationPath, $BackupPath)
+                $global:OpenPathAtomicTextAttempts++
+                if ($global:OpenPathAtomicTextAttempts -lt 3) {
+                    throw [System.IO.IOException]::new('sharing violation')
+                }
+                [System.IO.File]::Replace($TempPath, $DestinationPath, $BackupPath, $true)
+            }
+
+            Write-OpenPathAtomicTextFile -Path $testFile -Content 'new line'
+
+            $global:OpenPathAtomicTextAttempts | Should -Be 3
+            (Get-Content -LiteralPath $testFile -Raw).Trim() | Should -Be 'new line'
+            @(Get-ChildItem -LiteralPath $testDir -Filter "*.tmp.*").Count | Should -Be 0
+            @(Get-ChildItem -LiteralPath $testDir -Filter "*.bak.*").Count | Should -Be 0
+        }
+
+        It "does not fall back to an in-place write when every atomic text attempt fails" {
+            $testDir = Join-Path $TestDrive "atomic-text-exhaust-test"
+            New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+            $testFile = Join-Path $testDir "whitelist.txt"
+            Set-Content -LiteralPath $testFile -Value "ORIGINAL" -Encoding UTF8
+            $originalBytes = [System.IO.File]::ReadAllBytes($testFile)
+
+            Mock Invoke-OpenPathAtomicFileReplace -ModuleName Common {
+                throw [System.IO.IOException]::new('persistent sharing violation')
+            }
+
+            { Write-OpenPathAtomicTextFile -Path $testFile -Content 'REPLACEMENT' -MaxAttempts 2 } |
+                Should -Throw '*persistent sharing violation*'
+
+            $currentBytes = [System.IO.File]::ReadAllBytes($testFile)
+            [System.Linq.Enumerable]::SequenceEqual($originalBytes, $currentBytes) | Should -BeTrue
+            @(Get-ChildItem -LiteralPath $testDir -Filter "*.tmp.*").Count | Should -Be 0
+            @(Get-ChildItem -LiteralPath $testDir -Filter "*.bak.*").Count | Should -Be 0
+        }
+
         It "does not implement non-atomic File.Copy or Copy-Item overwrite fallback" {
             $commonConfigPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Config.ps1"
             $code = Get-Content $commonConfigPath -Raw
