@@ -133,7 +133,7 @@ await describe('SSE Hub', async () => {
     unsubB();
   });
 
-  await test('publishAgentUpdateAvailableLocal targets only canary-ring clients', () => {
+  await test('publishAgentUpdateAvailableLocal targets only the named hostnames', () => {
     const writesCanary: string[] = [];
     const writesStable: string[] = [];
 
@@ -142,10 +142,9 @@ await describe('SSE Hub', async () => {
     });
 
     const unsubCanary = hub.registerSseClient({
-      hostname: 'host-canary',
+      hostname: 'Host-Canary',
       classroomId: 'room-a',
       groupId: CANONICAL_GROUP_IDS.groupA,
-      agentRing: 'canary',
       stream: {
         write: (chunk: string) => {
           writesCanary.push(chunk);
@@ -166,21 +165,57 @@ await describe('SSE Hub', async () => {
       },
     });
 
-    hub.publishAgentUpdateAvailableLocal('a'.repeat(64));
+    hub.publishAgentUpdateAvailableLocal(new Set(['host-canary']), 'a'.repeat(64));
 
     assert.ok(writesCanary.length > 0);
     assert.strictEqual(writesStable.length, 0);
 
     const parsed = JSON.parse(firstSseDataPayload(writesCanary)) as {
       event?: string;
-      ring?: string;
       build?: string;
     };
     assert.strictEqual(parsed.event, 'agent-update-available');
-    assert.strictEqual(parsed.ring, 'canary');
     assert.strictEqual(parsed.build, 'a'.repeat(64));
 
     unsubCanary();
     unsubStable();
+  });
+
+  await test('the agent update targets are resolved at emit time, not at registration', () => {
+    const writes: string[] = [];
+    const hub = createSseHub({
+      resolveClassroomGroupContext: () => Promise.resolve(null),
+    });
+
+    // Registered while the machine was on the stable ring.
+    const unsubscribe = hub.registerSseClient({
+      hostname: 'pc-17',
+      classroomId: 'room-a',
+      groupId: CANONICAL_GROUP_IDS.groupA,
+      stream: {
+        write: (chunk: string) => {
+          writes.push(chunk);
+          return true;
+        },
+      },
+    });
+
+    hub.publishAgentUpdateAvailableLocal(new Set(), 'b'.repeat(64));
+    assert.strictEqual(writes.length, 0);
+
+    // The ring changed to canary later; the next emit resolves it as a target.
+    hub.publishAgentUpdateAvailableLocal(new Set(['pc-17']), 'c'.repeat(64));
+    assert.strictEqual(writes.length, 1);
+
+    // A retire or a return to stable carries no build.
+    hub.publishAgentUpdateAvailableLocal(new Set(['pc-17']));
+    const parsed = JSON.parse(firstSseDataPayload(writes.slice(1))) as {
+      event?: string;
+      build?: string;
+    };
+    assert.strictEqual(parsed.event, 'agent-update-available');
+    assert.strictEqual(parsed.build, undefined);
+
+    unsubscribe();
   });
 });

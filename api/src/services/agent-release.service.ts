@@ -7,15 +7,20 @@
  * pins for every file request. Only one release per ring is active; publishing
  * retires the previous one and retiring returns its machines to stable.
  *
- * Signature verification belongs to the agent. This service only rejects a
- * publish whose declared hashes do not match the uploaded bytes, so a broken
- * publication never reaches a canary.
+ * A publish is rejected unless the declared hashes match the uploaded bytes and
+ * the signature verifies against the public key the agents ship. An active
+ * release that every agent would refuse would otherwise keep canaries on
+ * neither the canary build nor stable.
  */
-import { createHash } from 'node:crypto';
+import { createHash, type KeyObject } from 'node:crypto';
 
 import { and, asc, desc, eq } from 'drizzle-orm';
 
 import { agentReleaseFiles, agentReleases, db, machines, withTransaction } from '../db/index.js';
+import {
+  readAgentReleasePublicKey,
+  verifyAgentReleaseSignature,
+} from '../lib/agent-release-signature.js';
 
 export type AgentRing = 'stable' | 'canary';
 
@@ -63,6 +68,7 @@ export interface AgentReleaseFileRecord {
 export interface AgentReleaseRepository {
   getActiveRelease(ring: AgentRing): Promise<ActiveAgentRelease | null>;
   getMachineRing(hostname: string): Promise<AgentRing | null>;
+  listMachineHostnamesByRing(ring: AgentRing): Promise<string[]>;
   getReleaseFile(build: string, path: string): Promise<AgentReleaseFileRecord | null>;
   publishRelease(
     release: Omit<ActiveAgentRelease, 'files' | 'ring'> & { ring: AgentRing },
@@ -72,7 +78,7 @@ export interface AgentReleaseRepository {
   setMachineRing(hostname: string, ring: AgentRing): Promise<boolean>;
 }
 
-export type AgentReleaseErrorCode = 'BAD_REQUEST' | 'CONFLICT' | 'NOT_FOUND';
+export type AgentReleaseErrorCode = 'BAD_REQUEST' | 'CONFLICT' | 'NOT_FOUND' | 'UNAVAILABLE';
 
 export interface AgentReleaseError {
   code: AgentReleaseErrorCode;
@@ -241,6 +247,14 @@ export const agentReleaseRepository: AgentReleaseRepository = {
     return (machine?.agentRing as AgentRing | undefined) ?? null;
   },
 
+  async listMachineHostnamesByRing(ring) {
+    const rows = await db
+      .select({ hostname: machines.hostname })
+      .from(machines)
+      .where(eq(machines.agentRing, ring));
+    return rows.map((row) => row.hostname);
+  },
+
   async getReleaseFile(build, path) {
     const [file] = await db
       .select({
@@ -307,11 +321,40 @@ export const agentReleaseRepository: AgentReleaseRepository = {
 
 export async function publishAgentRelease(
   input: PublishAgentReleaseInput,
-  repository: AgentReleaseRepository = agentReleaseRepository
+  repository: AgentReleaseRepository = agentReleaseRepository,
+  options: { publicKey?: KeyObject | null } = {}
 ): Promise<AgentReleaseResult<PublishedAgentRelease>> {
   const validated = validateAgentReleaseInput(input);
   if (!validated.ok) {
     return validated;
+  }
+
+  const publicKey =
+    options.publicKey === undefined ? readAgentReleasePublicKey() : options.publicKey;
+  if (!publicKey) {
+    return {
+      ok: false,
+      error: { code: 'UNAVAILABLE', message: 'the agent release public key is unavailable' },
+    };
+  }
+  const signatureValid = verifyAgentReleaseSignature(
+    {
+      ring: 'canary',
+      build: validated.build,
+      sourceSha: input.sourceSha.trim(),
+      files: validated.files,
+      signature: input.signature,
+    },
+    publicKey
+  );
+  if (!signatureValid) {
+    return {
+      ok: false,
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'signature does not verify against the agent release public key',
+      },
+    };
   }
 
   await repository.publishRelease(
@@ -408,6 +451,15 @@ export async function resolveAgentReleaseForMachine(params: {
   }
 
   return { ring: 'canary', release };
+}
+
+/** Hostnames of the machines assigned to a ring, lower-cased. */
+export async function listAgentRingHostnames(
+  ring: AgentRing,
+  repository: AgentReleaseRepository = agentReleaseRepository
+): Promise<string[]> {
+  const hostnames = await repository.listMachineHostnamesByRing(ring);
+  return hostnames.map((hostname) => hostname.trim().toLowerCase()).filter(Boolean);
 }
 
 export async function getActiveAgentRelease(

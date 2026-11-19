@@ -6,7 +6,7 @@ import { logger } from './logger.js';
 export type DbEventPayload =
   | { type: 'group'; groupId: string; origin?: string }
   | { type: 'classroom'; classroomId: string; origin?: string }
-  | { type: 'agent-update'; build: string; origin?: string }
+  | { type: 'agent-update'; build?: string; hostnames?: string[]; origin?: string }
   | { type: 'broadcast'; origin?: string };
 
 export interface DbEventBridge {
@@ -85,13 +85,20 @@ export function createDbEventBridge(params: {
       return;
     }
 
-    if (evt.type === 'agent-update' && typeof evt.build === 'string' && evt.build.length > 0) {
-      const origin = evt.origin;
-      params.onEvent(
-        origin
-          ? { type: 'agent-update', build: evt.build, origin }
-          : { type: 'agent-update', build: evt.build }
-      );
+    if (evt.type === 'agent-update') {
+      const event: Extract<DbEventPayload, { type: 'agent-update' }> = { type: 'agent-update' };
+      if (typeof evt.build === 'string' && evt.build.length > 0) {
+        event.build = evt.build;
+      }
+      if (Array.isArray(evt.hostnames)) {
+        event.hostnames = evt.hostnames.filter(
+          (hostname): hostname is string => typeof hostname === 'string' && hostname.length > 0
+        );
+      }
+      if (evt.origin) {
+        event.origin = evt.origin;
+      }
+      params.onEvent(event);
     }
   }
 

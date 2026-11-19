@@ -1,8 +1,9 @@
 import type { Express, Request, Response } from 'express';
-import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 
 import { config } from '../../config.js';
+import { isAgentReleaseTokenAuthorized } from '../../lib/agent-release-auth.js';
+import { logger } from '../../lib/logger.js';
 import { emitAgentUpdateAvailable } from '../../lib/rule-events.js';
 import {
   getActiveAgentRelease,
@@ -58,35 +59,20 @@ const setMachineRingSchema = z.object({
   ring: z.enum(['stable', 'canary']),
 });
 
-function extractReleaseToken(req: Request): string | null {
-  const authorization = req.get('authorization');
-  const bearerPrefix = 'Bearer ';
-  if (authorization?.startsWith(bearerPrefix)) {
-    return authorization.slice(bearerPrefix.length).trim() || null;
-  }
-  const headerToken = req.get('x-openpath-release-token')?.trim();
-  return headerToken ?? null;
-}
-
-function releaseTokenMatches(expected: string, presented: string | null): boolean {
-  if (!presented) {
-    return false;
-  }
-  const expectedBuffer = Buffer.from(expected);
-  const presentedBuffer = Buffer.from(presented);
-  return (
-    expectedBuffer.length === presentedBuffer.length &&
-    timingSafeEqual(expectedBuffer, presentedBuffer)
-  );
-}
-
 function authorizeAgentRelease(req: Request, res: Response): boolean {
-  const expected = config.agentReleaseToken;
-  if (!expected || !releaseTokenMatches(expected, extractReleaseToken(req))) {
+  if (!isAgentReleaseTokenAuthorized(config.agentReleaseToken, req)) {
     res.status(403).json({ success: false, error: 'Invalid release token' });
     return false;
   }
   return true;
+}
+
+function notifyAgentUpdate(params: { build?: string; hostnames?: readonly string[] }): void {
+  emitAgentUpdateAvailable(params).catch((error: unknown) => {
+    logger.warn('Failed to emit agent-update-available', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 function getAgentCapabilities(req: Request): string {
@@ -117,7 +103,7 @@ export function registerMachineDeliveryRoutes(app: Express, deps: MachineRouteDe
         }
 
         res.status(201).json({ success: true, release: result.data });
-        emitAgentUpdateAvailable(result.data.build);
+        notifyAgentUpdate({ build: result.data.build });
       }
     )
   );
@@ -139,6 +125,9 @@ export function registerMachineDeliveryRoutes(app: Express, deps: MachineRouteDe
         }
 
         res.json({ success: true, ...result.data });
+        // The canary ring now resolves to stable: tell those machines at once,
+        // because the scheduled agent update may be disabled on them.
+        notifyAgentUpdate({});
       }
     )
   );
@@ -166,6 +155,9 @@ export function registerMachineDeliveryRoutes(app: Express, deps: MachineRouteDe
         }
 
         res.json({ success: true, ...result.data });
+        // A connected machine applies its new ring now: the active canary
+        // release when it joins, the stable build when it leaves.
+        notifyAgentUpdate({ hostnames: [result.data.hostname] });
       }
     )
   );

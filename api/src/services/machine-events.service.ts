@@ -65,7 +65,6 @@ export async function openMachineEventsStream(
     hostname: machine.hostname,
     classroomId,
     groupId,
-    agentRing: machine.agentRing === 'canary' ? 'canary' : 'stable',
     stream: input.stream,
   });
 

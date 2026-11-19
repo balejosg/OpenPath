@@ -13,6 +13,7 @@ import * as classroomStorage from '../src/lib/classroom-storage.js';
 
 export interface SseMachine {
   classroomId: string;
+  hostname: string;
   id: string;
   token: string;
 }
@@ -30,7 +31,9 @@ export interface SseTestHarness extends HttpTestHarness {
   testMachineToken: string;
 }
 
-export async function startSseTestHarness(): Promise<SseTestHarness> {
+export async function startSseTestHarness(
+  extraEnv: Record<string, string | undefined> = {}
+): Promise<SseTestHarness> {
   const harness = await startHttpTestHarness({
     cleanup: async () => {
       await stopDbEventBridge();
@@ -38,6 +41,7 @@ export async function startSseTestHarness(): Promise<SseTestHarness> {
     },
     env: {
       JWT_SECRET: 'test-jwt-secret',
+      ...extraEnv,
     },
     readyDelayMs: 1000,
     resetDb: true,
@@ -80,6 +84,7 @@ export async function startSseTestHarness(): Promise<SseTestHarness> {
 
     return {
       classroomId: classroom.id,
+      hostname: machine.hostname,
       id: machine.id,
       token,
     };

@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
 import type { Config } from './config.js';
+import { isAgentReleaseTokenAuthorized } from './lib/agent-release-auth.js';
 import { requestIdMiddleware } from './lib/error-tracking.js';
 import { logger } from './lib/logger.js';
 import { isCookieAuthenticatedMutation, isTrustedCsrfOrigin } from './lib/server-request-auth.js';
@@ -34,10 +35,16 @@ export function registerAppMiddleware(
 
   // A canary agent release uploads the complete file set (about 2.6 MB of
   // source) in one request. Only that internal, release-token-protected route
-  // gets the larger parser; every other JSON request keeps the 10 kb limit.
+  // gets the larger parser, and only after the token matches, so an
+  // unauthenticated caller can never make the API buffer and parse 12 MB.
+  // Every other JSON request keeps the 10 kb limit.
   const releasePublishJson = express.json({ limit: '12mb' });
   app.use((req, res, next) => {
     if (req.method === 'POST' && req.path === '/api/agent/windows/releases') {
+      if (!isAgentReleaseTokenAuthorized(runtimeConfig.agentReleaseToken, req)) {
+        res.status(403).json({ success: false, error: 'Invalid release token' });
+        return;
+      }
       releasePublishJson(req, res, next);
       return;
     }

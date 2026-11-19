@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import express from 'express';
 import type { Server } from 'node:http';
 import { after, before, describe, test } from 'node:test';
 
 import {
+  computeAgentBuild,
+  listAgentRingHostnames,
   publishAgentRelease,
   type PublishedAgentRelease,
   retireAgentRelease,
@@ -19,6 +21,7 @@ import {
   getWindowsAgentManifest,
 } from '../src/services/machine-agent-delivery.service.js';
 import { sendMachineServiceError } from '../src/routes/machines/helpers.js';
+import { buildAgentReleaseCanonicalText } from '../src/lib/agent-release-signature.js';
 import { getAvailablePort } from './test-utils.js';
 
 const noopSeen = (): Promise<void> => Promise.resolve();
@@ -34,6 +37,10 @@ class FakeRepository implements AgentReleaseRepository {
 
   getMachineRing(): Promise<AgentRing | null> {
     return Promise.resolve(this.ring);
+  }
+
+  listMachineHostnamesByRing(ring: AgentRing): Promise<string[]> {
+    return Promise.resolve(this.ring === ring ? ['PC-Canary'] : []);
   }
 
   getReleaseFile(build: string, path: string): Promise<AgentReleaseFileRecord | null> {
@@ -87,14 +94,36 @@ function fileInput(
   };
 }
 
+const SOURCE_SHA = '0123456789abcdef0123456789abcdef01234567';
+const { privateKey: testPrivateKey, publicKey: testPublicKey } = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+});
+const { publicKey: otherPublicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+
+function signRelease(
+  files: { path: string; sha256: string }[],
+  privateKey: KeyObject = testPrivateKey
+): string {
+  const canonical = buildAgentReleaseCanonicalText({
+    ring: 'canary',
+    build: computeAgentBuild(files),
+    sourceSha: SOURCE_SHA,
+    files,
+  });
+  return sign('sha256', Buffer.from(canonical, 'utf8'), privateKey).toString('base64');
+}
+
+function fixtureFiles(): { path: string; sha256: string; contentBase64: string }[] {
+  return [fileInput('lib/Alpha.psm1', 'alpha'), fileInput('scripts/Run.ps1', 'run')];
+}
+
 async function publishFixture(repository: FakeRepository): Promise<PublishedAgentRelease> {
+  const files = fixtureFiles();
+  const signature = signRelease(files);
   const result = await publishAgentRelease(
-    {
-      sourceSha: '0123456789abcdef0123456789abcdef01234567',
-      signature: 'test-signature',
-      files: [fileInput('lib/Alpha.psm1', 'alpha'), fileInput('scripts/Run.ps1', 'run')],
-    },
-    repository
+    { sourceSha: SOURCE_SHA, signature, files },
+    repository,
+    { publicKey: testPublicKey }
   );
   assert.ok(result.ok);
   return result.data;
@@ -170,7 +199,7 @@ await describe('canary agent releases', { concurrency: false }, async () => {
     assert.equal(manifest.data.ring, 'canary');
     assert.equal(manifest.data.build, published.build);
     assert.equal(manifest.data.sourceSha, '0123456789abcdef0123456789abcdef01234567');
-    assert.equal(manifest.data.signature, 'test-signature');
+    assert.equal(manifest.data.signature, signRelease(fixtureFiles()));
     assert.deepEqual(
       manifest.data.files.map((file) => file.path),
       ['lib/Alpha.psm1', 'scripts/Run.ps1']
@@ -240,13 +269,94 @@ await describe('canary agent releases', { concurrency: false }, async () => {
           },
         ],
       },
-      repository
+      repository,
+      { publicKey: testPublicKey }
     );
 
     assert.equal(result.ok, false);
     assert.equal(result.error.code, 'BAD_REQUEST');
     assert.match(result.error.message, /sha256 mismatch/);
     assert.equal(repository.active, null);
+  });
+
+  await test('a signature that does not verify is rejected at publish', async () => {
+    const repository = new FakeRepository();
+    const files = fixtureFiles();
+    const result = await publishAgentRelease(
+      { sourceSha: SOURCE_SHA, signature: signRelease(files), files },
+      repository,
+      { publicKey: otherPublicKey }
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'BAD_REQUEST');
+    assert.match(result.error.message, /signature/);
+    assert.equal(repository.active, null);
+  });
+
+  await test('a signature signed over another file set is rejected at publish', async () => {
+    const repository = new FakeRepository();
+    const files = fixtureFiles();
+    const tampered = [
+      fileInput('lib/Alpha.psm1', 'alpha-changed'),
+      fileInput('scripts/Run.ps1', 'run'),
+    ];
+    const result = await publishAgentRelease(
+      { sourceSha: SOURCE_SHA, signature: signRelease(files), files: tampered },
+      repository,
+      { publicKey: testPublicKey }
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(repository.active, null);
+  });
+
+  await test('a base64-encoded-twice signature is rejected at publish', async () => {
+    const repository = new FakeRepository();
+    const files = fixtureFiles();
+    const doubleEncoded = Buffer.from(signRelease(files), 'utf8').toString('base64');
+    const result = await publishAgentRelease(
+      { sourceSha: SOURCE_SHA, signature: doubleEncoded, files },
+      repository,
+      { publicKey: testPublicKey }
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'BAD_REQUEST');
+    assert.equal(repository.active, null);
+  });
+
+  await test('a publish without a usable public key is refused as unavailable', async () => {
+    const repository = new FakeRepository();
+    const files = fixtureFiles();
+    const result = await publishAgentRelease(
+      { sourceSha: SOURCE_SHA, signature: signRelease(files), files },
+      repository,
+      { publicKey: null }
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'UNAVAILABLE');
+    assert.equal(repository.active, null);
+  });
+
+  await test('the shipped public key verifies nothing signed by a test key', async () => {
+    const repository = new FakeRepository();
+    const files = fixtureFiles();
+    const result = await publishAgentRelease(
+      { sourceSha: SOURCE_SHA, signature: signRelease(files), files },
+      repository
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'BAD_REQUEST');
+  });
+
+  await test('the canary ring hostnames are listed lower-cased', async () => {
+    const repository = new FakeRepository();
+    repository.ring = 'canary';
+    assert.deepEqual(await listAgentRingHostnames('canary', repository), ['pc-canary']);
+    assert.deepEqual(await listAgentRingHostnames('stable', repository), []);
   });
 
   await test('retiring the active release returns its machines to stable', async () => {

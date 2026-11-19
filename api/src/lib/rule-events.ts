@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { getErrorMessage } from '@openpath/shared';
+import { listAgentRingHostnames } from '../services/agent-release.service.js';
 import { createDbEventBridge, type DbEventPayload } from './db-event-bridge.js';
 import { resolveEffectiveClassroomPolicyContext } from './classroom-storage.js';
 import { getActiveExemptHostnamesByClassroom, UNRESTRICTED_GROUP_ID } from './exemption-storage.js';
@@ -29,7 +31,7 @@ const dbBridge = createDbEventBridge({
     }
 
     if (event.type === 'agent-update') {
-      sseHub.publishAgentUpdateAvailableLocal(event.build);
+      void publishAgentUpdateAvailableLocal(event.hostnames, event.build);
       return;
     }
 
@@ -49,7 +51,6 @@ export function registerSseClient(params: {
   hostname: string;
   classroomId: string;
   groupId: string;
-  agentRing?: 'stable' | 'canary';
   stream: SseStream;
 }): () => void {
   return sseHub.registerSseClient(params);
@@ -107,15 +108,48 @@ export function emitClassroomChanged(classroomId: string, now?: Date): void {
 }
 
 /**
- * Emit an agent-update-available event for canary-ring machines.
- * Called after a signed canary release is published.
- *
- * @param build - The release build fingerprint
+ * Delivers agent-update-available to the local SSE clients. Without explicit
+ * hostnames the targets are the machines on the canary ring right now, read
+ * from the database at emit time, so a ring change needs no reconnect.
  */
-export function emitAgentUpdateAvailable(build: string): void {
-  logger.debug('Emitting agent-update-available event', { build });
-  sseHub.publishAgentUpdateAvailableLocal(build);
-  void dbBridge.notify({ type: 'agent-update', build, origin: INSTANCE_ID });
+async function publishAgentUpdateAvailableLocal(
+  hostnames: readonly string[] | undefined,
+  build: string | undefined
+): Promise<void> {
+  try {
+    const targets = hostnames ?? (await listAgentRingHostnames('canary'));
+    sseHub.publishAgentUpdateAvailableLocal(
+      new Set(targets.map((hostname) => hostname.trim().toLowerCase()).filter(Boolean)),
+      build
+    );
+  } catch (error: unknown) {
+    logger.warn('Failed to deliver agent-update-available', { error: getErrorMessage(error) });
+  }
+}
+
+/**
+ * Emit an agent-update-available event so machines check their agent release now.
+ * Called after a signed canary release is published or retired (targets: the
+ * canary ring at emit time) and after a machine's ring changes (targets: that
+ * machine), so a machine returning to stable does not wait for a scheduled task.
+ */
+export async function emitAgentUpdateAvailable(
+  params: { build?: string; hostnames?: readonly string[] } = {}
+): Promise<void> {
+  const hostnames = params.hostnames
+    ? params.hostnames.map((hostname) => hostname.trim().toLowerCase()).filter(Boolean)
+    : undefined;
+  logger.debug('Emitting agent-update-available event', {
+    build: params.build,
+    targets: hostnames ? hostnames.length : 'canary-ring',
+  });
+  await publishAgentUpdateAvailableLocal(hostnames, params.build);
+  await dbBridge.notify({
+    type: 'agent-update',
+    ...(params.build ? { build: params.build } : {}),
+    ...(hostnames ? { hostnames } : {}),
+    origin: INSTANCE_ID,
+  });
 }
 
 /**
