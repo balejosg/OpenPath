@@ -71,6 +71,18 @@ jobs:
           build-api: 'true'
           build-extension: 'true'
 
+      # The stable file set carries the AMO-signed Firefox release. Restore the
+      # signed artifacts that the Firefox release automation cached for this
+      # SHA's payload hash; never sign here. A cache miss fails the build, and
+      # the build script refuses a file set without them.
+      - name: Restore the signed Firefox release for this SHA
+        uses: ./.github/actions/prepare-firefox-release-artifacts
+        with:
+          web-ext-api-key: ''
+          web-ext-api-secret: ''
+          sign-on-cache-miss: 'false'
+          require-signed-artifacts: 'true'
+
       - name: Build the canary release payload
         env:
           TARGET_SHA: ${{ inputs.sha }}
@@ -78,7 +90,8 @@ jobs:
           set -euo pipefail
           node scripts/build-windows-agent-release.mjs \
             --sha "$TARGET_SHA" \
-            --out "$RUNNER_TEMP/canary-release"
+            --out "$RUNNER_TEMP/canary-release" \
+            --omit-chromium-managed
 
       - name: Upload the unsigned release payload
         uses: actions/upload-artifact@v7
@@ -113,6 +126,8 @@ jobs:
           name: windows-canary-release-${{ inputs.sha }}
           path: ${{ runner.temp }}/canary-release
 
+      # The signature file stays raw bytes: the publish script base64-encodes
+      # it exactly once and verifies it with the agent's public key first.
       - name: Sign the canonical release text
         env:
           OPENPATH_AGENT_RELEASE_SIGNING_KEY: ${{ secrets.OPENPATH_AGENT_RELEASE_SIGNING_KEY }}
@@ -124,7 +139,6 @@ jobs:
           openssl dgst -sha256 -sign "$key" \
             -out "$RUNNER_TEMP/canary-signature.bin" \
             "$RUNNER_TEMP/canary-release/canonical.txt"
-          base64 -w0 "$RUNNER_TEMP/canary-signature.bin" > "$RUNNER_TEMP/canary-signature.b64"
           rm -f "$key"
 
       - name: Publish the signed canary release
@@ -138,5 +152,5 @@ jobs:
           node scripts/build-windows-agent-release.mjs \
             --sha "$TARGET_SHA" \
             --out "$RUNNER_TEMP/canary-release" \
-            --signature-file "$RUNNER_TEMP/canary-signature.b64" \
+            --signature-file "$RUNNER_TEMP/canary-signature.bin" \
             --publish-only
