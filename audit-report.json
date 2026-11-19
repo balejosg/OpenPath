@@ -6,7 +6,7 @@
       "severity": "moderate",
       "isDirect": false,
       "via": ["minimatch"],
-      "effects": [],
+      "effects": ["eslint"],
       "range": "0.23.0 - 0.23.5",
       "nodes": [
         "dashboard/node_modules/@eslint/config-array",
@@ -14,7 +14,11 @@
         "node_modules/addons-linter/node_modules/@eslint/config-array",
         "shared/node_modules/@eslint/config-array"
       ],
-      "fixAvailable": true
+      "fixAvailable": {
+        "name": "web-ext",
+        "version": "10.8.0",
+        "isSemVerMajor": false
+      }
     },
     "@eslint/eslintrc": {
       "name": "@eslint/eslintrc",
@@ -25,20 +29,6 @@
       "range": "",
       "nodes": ["node_modules/@eslint/eslintrc"],
       "fixAvailable": true
-    },
-    "@eslint/js": {
-      "name": "@eslint/js",
-      "severity": "moderate",
-      "isDirect": true,
-      "via": ["eslint"],
-      "effects": [],
-      "range": ">=10.0.1",
-      "nodes": ["node_modules/@eslint/js"],
-      "fixAvailable": {
-        "name": "@eslint/js",
-        "version": "9.39.5",
-        "isSemVerMajor": true
-      }
     },
     "@humanfs/node": {
       "name": "@humanfs/node",
@@ -71,8 +61,22 @@
       "isDirect": false,
       "via": ["extract-zip", "proxy-agent"],
       "effects": ["find-chrome-bin", "puppeteer-core"],
-      "range": "*",
+      "range": "<=2.13.2",
       "nodes": ["node_modules/@puppeteer/browsers"],
+      "fixAvailable": {
+        "name": "@size-limit/preset-app",
+        "version": "11.0.0",
+        "isSemVerMajor": true
+      }
+    },
+    "@size-limit/file": {
+      "name": "@size-limit/file",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["size-limit"],
+      "effects": ["@size-limit/preset-app"],
+      "range": "11.1.5 - 12.1.0",
+      "nodes": ["node_modules/@size-limit/file"],
       "fixAvailable": {
         "name": "@size-limit/preset-app",
         "version": "11.0.0",
@@ -83,7 +87,7 @@
       "name": "@size-limit/preset-app",
       "severity": "high",
       "isDirect": true,
-      "via": ["@size-limit/time"],
+      "via": ["@size-limit/file", "@size-limit/time", "size-limit"],
       "effects": [],
       "range": "7.0.2 || 7.0.6 || 8.2.0 - 8.2.2 || 8.2.5 || >=11.0.1",
       "nodes": ["node_modules/@size-limit/preset-app"],
@@ -97,7 +101,7 @@
       "name": "@size-limit/time",
       "severity": "high",
       "isDirect": false,
-      "via": ["estimo"],
+      "via": ["estimo", "size-limit"],
       "effects": ["@size-limit/preset-app"],
       "range": ">=11.0.1",
       "nodes": ["node_modules/@size-limit/time"],
@@ -160,23 +164,23 @@
       "severity": "moderate",
       "isDirect": false,
       "via": ["@typescript-eslint/typescript-estree", "@typescript-eslint/utils"],
-      "effects": [],
+      "effects": ["@typescript-eslint/eslint-plugin"],
       "range": "6.16.0 - 8.72.2",
       "nodes": ["node_modules/@typescript-eslint/type-utils"],
       "fixAvailable": true
     },
     "@typescript-eslint/typescript-estree": {
       "name": "@typescript-eslint/typescript-estree",
-      "severity": "moderate",
+      "severity": "high",
       "isDirect": false,
-      "via": ["minimatch"],
+      "via": ["minimatch", "tinyglobby"],
       "effects": [
         "@typescript-eslint/parser",
         "@typescript-eslint/type-utils",
         "@typescript-eslint/utils",
         "typescript-eslint"
       ],
-      "range": "6.16.0 - 8.72.2",
+      "range": ">=6.16.0",
       "nodes": ["node_modules/@typescript-eslint/typescript-estree"],
       "fixAvailable": true
     },
@@ -185,7 +189,7 @@
       "severity": "moderate",
       "isDirect": false,
       "via": ["@typescript-eslint/typescript-estree"],
-      "effects": ["@typescript-eslint/eslint-plugin", "typescript-eslint"],
+      "effects": ["typescript-eslint"],
       "range": "6.16.0 - 8.72.2",
       "nodes": ["node_modules/@typescript-eslint/utils"],
       "fixAvailable": true
@@ -243,9 +247,9 @@
       "name": "addons-linter",
       "severity": "high",
       "isDirect": false,
-      "via": ["deepmerge", "eslint", "image-size"],
+      "via": ["eslint", "image-size"],
       "effects": ["web-ext"],
-      "range": ">=1.15.2",
+      "range": ">=7.8.0",
       "nodes": ["node_modules/addons-linter"],
       "fixAvailable": {
         "name": "web-ext",
@@ -674,41 +678,12 @@
       "nodes": ["node_modules/compression"],
       "fixAvailable": true
     },
-    "deepmerge": {
-      "name": "deepmerge",
-      "severity": "low",
-      "isDirect": false,
-      "via": [
-        {
-          "source": 1243505,
-          "name": "deepmerge",
-          "dependency": "deepmerge",
-          "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
-          "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4",
-          "severity": "low",
-          "cwe": ["CWE-1321"],
-          "cvss": {
-            "score": 5.3,
-            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-          },
-          "range": ">=4.2.0 <=4.3.1"
-        }
-      ],
-      "effects": ["addons-linter"],
-      "range": ">=4.2.0",
-      "nodes": ["node_modules/deepmerge"],
-      "fixAvailable": {
-        "name": "web-ext",
-        "version": "10.8.0",
-        "isSemVerMajor": false
-      }
-    },
     "eslint": {
       "name": "eslint",
       "severity": "moderate",
       "isDirect": true,
       "via": ["@eslint/config-array", "minimatch"],
-      "effects": ["@eslint/js", "addons-linter"],
+      "effects": ["addons-linter"],
       "range": "10.0.0-alpha.0 - 10.14.0",
       "nodes": [
         "dashboard/node_modules/eslint",
@@ -717,9 +692,9 @@
         "shared/node_modules/eslint"
       ],
       "fixAvailable": {
-        "name": "@eslint/js",
-        "version": "9.39.5",
-        "isSemVerMajor": true
+        "name": "web-ext",
+        "version": "10.8.0",
+        "isSemVerMajor": false
       }
     },
     "eslint-plugin-import-x": {
@@ -786,6 +761,20 @@
       "fixAvailable": {
         "name": "@size-limit/preset-app",
         "version": "11.0.0",
+        "isSemVerMajor": true
+      }
+    },
+    "fast-glob": {
+      "name": "fast-glob",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["micromatch"],
+      "effects": ["globby"],
+      "range": ">=3.0.0",
+      "nodes": ["node_modules/fast-glob"],
+      "fixAvailable": {
+        "name": "secretlint",
+        "version": "14.0.1",
         "isSemVerMajor": true
       }
     },
@@ -954,6 +943,16 @@
       "nodes": ["node_modules/fast-uri"],
       "fixAvailable": true
     },
+    "fdir": {
+      "name": "fdir",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["picomatch"],
+      "effects": ["vite"],
+      "range": ">=5.2.1",
+      "nodes": ["node_modules/tinyglobby/node_modules/fdir", "node_modules/vite/node_modules/fdir"],
+      "fixAvailable": true
+    },
     "find-chrome-bin": {
       "name": "find-chrome-bin",
       "severity": "high",
@@ -963,6 +962,20 @@
       "range": ">=2.0.0",
       "nodes": ["node_modules/find-chrome-bin"],
       "fixAvailable": true
+    },
+    "find-yarn-workspace-root": {
+      "name": "find-yarn-workspace-root",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["micromatch"],
+      "effects": ["patch-package"],
+      "range": ">=2.0.0",
+      "nodes": ["node_modules/find-yarn-workspace-root"],
+      "fixAvailable": {
+        "name": "patch-package",
+        "version": "6.4.5",
+        "isSemVerMajor": true
+      }
     },
     "firefox-profile": {
       "name": "firefox-profile",
@@ -984,7 +997,7 @@
       "isDirect": false,
       "via": ["basic-ftp"],
       "effects": ["pac-proxy-agent"],
-      "range": ">=5.0.0",
+      "range": "5.0.0 - 8.0.1",
       "nodes": ["node_modules/get-uri"],
       "fixAvailable": {
         "name": "@size-limit/preset-app",
@@ -1019,6 +1032,20 @@
       "fixAvailable": {
         "name": "c8",
         "version": "9.1.0",
+        "isSemVerMajor": true
+      }
+    },
+    "globby": {
+      "name": "globby",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["fast-glob"],
+      "effects": ["secretlint"],
+      "range": ">=10.0.0",
+      "nodes": ["node_modules/globby"],
+      "fixAvailable": {
+        "name": "secretlint",
+        "version": "14.0.1",
         "isSemVerMajor": true
       }
     },
@@ -1226,6 +1253,30 @@
       "range": "4.0.0 - 4.3.1",
       "nodes": ["node_modules/js-yaml"],
       "fixAvailable": true
+    },
+    "lint-staged": {
+      "name": "lint-staged",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["micromatch"],
+      "effects": [],
+      "range": "9.0.0 - 16.3.4",
+      "nodes": ["node_modules/lint-staged"],
+      "fixAvailable": true
+    },
+    "micromatch": {
+      "name": "micromatch",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["picomatch"],
+      "effects": ["fast-glob", "find-yarn-workspace-root", "lint-staged"],
+      "range": ">=4.0.0",
+      "nodes": ["node_modules/micromatch"],
+      "fixAvailable": {
+        "name": "patch-package",
+        "version": "6.4.5",
+        "isSemVerMajor": true
+      }
     },
     "minimatch": {
       "name": "minimatch",
@@ -1689,11 +1740,59 @@
       "isDirect": false,
       "via": ["get-uri"],
       "effects": ["proxy-agent"],
-      "range": ">=6.0.0",
+      "range": "6.0.0 - 9.1.0",
       "nodes": ["node_modules/pac-proxy-agent"],
       "fixAvailable": {
         "name": "@size-limit/preset-app",
         "version": "11.0.0",
+        "isSemVerMajor": true
+      }
+    },
+    "patch-package": {
+      "name": "patch-package",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["find-yarn-workspace-root"],
+      "effects": [],
+      "range": ">=6.4.6",
+      "nodes": ["node_modules/patch-package"],
+      "fixAvailable": {
+        "name": "patch-package",
+        "version": "6.4.5",
+        "isSemVerMajor": true
+      }
+    },
+    "picomatch": {
+      "name": "picomatch",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1247710,
+          "name": "picomatch",
+          "dependency": "picomatch",
+          "title": "picomatch vulnerable to ReDoS through single-branch repeated extglobs",
+          "url": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+          "severity": "high",
+          "cwe": ["CWE-1333"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=4.0.7"
+        }
+      ],
+      "effects": ["fdir", "micromatch", "tinyglobby", "vite", "vitest"],
+      "range": "*",
+      "nodes": [
+        "node_modules/picomatch",
+        "node_modules/tinyglobby/node_modules/picomatch",
+        "node_modules/vite/node_modules/picomatch",
+        "react-spa/node_modules/picomatch"
+      ],
+      "fixAvailable": {
+        "name": "size-limit",
+        "version": "11.1.4",
         "isSemVerMajor": true
       }
     },
@@ -1742,7 +1841,7 @@
       "isDirect": false,
       "via": ["pac-proxy-agent"],
       "effects": ["@puppeteer/browsers"],
-      "range": ">=6.0.0",
+      "range": "6.0.0 - 8.0.2",
       "nodes": ["node_modules/proxy-agent"],
       "fixAvailable": {
         "name": "@size-limit/preset-app",
@@ -1817,6 +1916,34 @@
       "nodes": ["node_modules/qs"],
       "fixAvailable": true
     },
+    "secretlint": {
+      "name": "secretlint",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["globby"],
+      "effects": [],
+      "range": "<=12.3.1",
+      "nodes": ["node_modules/secretlint"],
+      "fixAvailable": {
+        "name": "secretlint",
+        "version": "14.0.1",
+        "isSemVerMajor": true
+      }
+    },
+    "size-limit": {
+      "name": "size-limit",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["tinyglobby"],
+      "effects": ["@size-limit/file", "@size-limit/preset-app", "@size-limit/time"],
+      "range": "11.1.5 - 12.1.0",
+      "nodes": ["node_modules/size-limit"],
+      "fixAvailable": {
+        "name": "size-limit",
+        "version": "11.1.4",
+        "isSemVerMajor": true
+      }
+    },
     "source-map-js": {
       "name": "source-map-js",
       "severity": "high",
@@ -1863,6 +1990,20 @@
       "fixAvailable": {
         "name": "c8",
         "version": "9.1.0",
+        "isSemVerMajor": true
+      }
+    },
+    "tinyglobby": {
+      "name": "tinyglobby",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["fdir", "picomatch"],
+      "effects": ["@typescript-eslint/typescript-estree", "size-limit", "vitest"],
+      "range": "*",
+      "nodes": ["node_modules/tinyglobby"],
+      "fixAvailable": {
+        "name": "size-limit",
+        "version": "11.1.4",
         "isSemVerMajor": true
       }
     },
@@ -2288,16 +2429,19 @@
             "vectorString": null
           },
           "range": ">=7.0.0 <=7.3.6"
-        }
+        },
+        "fdir",
+        "picomatch",
+        "tinyglobby"
       ],
       "effects": [],
-      "range": "7.0.0 - 7.3.6",
+      "range": ">=6.3.0-beta.0",
       "nodes": ["node_modules/vite"],
       "fixAvailable": true
     },
     "vitest": {
       "name": "vitest",
-      "severity": "moderate",
+      "severity": "high",
       "isDirect": true,
       "via": [
         "@vitest/coverage-v8",
@@ -2315,10 +2459,12 @@
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
           },
           "range": ">=2.1.0 <4.1.11"
-        }
+        },
+        "picomatch",
+        "tinyglobby"
       ],
       "effects": ["@vitest/coverage-v8"],
-      "range": "2.1.0-beta.1 - 4.1.10",
+      "range": ">=2.1.0-beta.1",
       "nodes": ["react-spa/node_modules/vitest"],
       "fixAvailable": true
     },
@@ -2369,11 +2515,11 @@
   "metadata": {
     "vulnerabilities": {
       "info": 0,
-      "low": 1,
-      "moderate": 25,
-      "high": 31,
+      "low": 0,
+      "moderate": 22,
+      "high": 45,
       "critical": 0,
-      "total": 57
+      "total": 67
     },
     "dependencies": {
       "prod": 273,
