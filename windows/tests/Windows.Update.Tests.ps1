@@ -3271,6 +3271,95 @@ Describe "Update Script" {
             }
         }
 
+        It "Keeps the agent update task as it was before the update (<Before>), also across a retried finalization" -TestCases @(
+            @{ Before = 'disabled'; FailFirstDisable = $false; Expected = $false }
+            @{ Before = 'disabled'; FailFirstDisable = $true; Expected = $false }
+            @{ Before = 'enabled'; FailFirstDisable = $false; Expected = $true }
+        ) {
+            param($Before, $FailFirstDisable, $Expected)
+
+            $root = Join-Path $TestDrive ('finalize-agent-task-' + [guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $root 'lib/existing.ps1'
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $destination -Value 'new-target' -Encoding ASCII
+            $targetHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            $backupRoot = Join-Path $root 'data/agent-update/backups/run-test'
+            $journal = [PSCustomObject]@{
+                schemaVersion   = 2
+                phase           = 'committed'
+                targetVersion   = '9.9.9'
+                targetBuild     = 'build-new'
+                previousVersion = '9.9.8'
+                previousBuild   = 'build-old'
+                backupRoot      = $backupRoot
+                createdAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                updatedAt       = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+                files           = @(
+                    [PSCustomObject]@{
+                        relativePath   = 'lib\existing.ps1'
+                        existedBefore  = $true
+                        previousSha256 = ('e' * 64)
+                        sha256         = $targetHash
+                    }
+                )
+            }
+            $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
+            New-Item -ItemType Directory -Path (Split-Path $journalPath -Parent) -Force | Out-Null
+            $journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $journalPath -Encoding UTF8
+            $config = [PSCustomObject]@{ version = '9.9.8'; agentBuild = 'build-old' }
+
+            InModuleScope Common -Parameters @{
+                Root = $root; Journal = $journal; Config = $config
+                Before = $Before; FailFirstDisable = $FailFirstDisable; Expected = $Expected
+            } {
+                $script:OpenPathRoot = $Root
+                # One simulated task store: re-registration and Enable-OpenPathTask enable the
+                # task, as the real Register-ScheduledTask -Force and Enable-ScheduledTask do.
+                $script:AgentTaskEnabled = ($Before -eq 'enabled')
+                $script:DisableCalls = 0
+                Mock Write-OpenPathLog { }
+                Mock Send-OpenPathHealthReport { }
+                Mock Set-OpenPathConfig { }
+                foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask', 'Get-ScheduledTask', 'Disable-ScheduledTask')) {
+                    if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                        Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                    }
+                }
+                Mock Get-ScheduledTask {
+                    [PSCustomObject]@{ TaskName = 'OpenPath-AgentUpdate'; Settings = [PSCustomObject]@{ Enabled = $script:AgentTaskEnabled } }
+                }
+                Mock Disable-ScheduledTask {
+                    $script:DisableCalls++
+                    if ($FailFirstDisable -and $script:DisableCalls -eq 1) { throw 'task scheduler busy' }
+                    $script:AgentTaskEnabled = $false
+                }
+                Mock Register-OpenPathTask { $script:AgentTaskEnabled = $true }
+                Mock Enable-OpenPathTask { $script:AgentTaskEnabled = $true }
+                Mock Invoke-OpenPathFirefoxNativeHostCompiledEnsure { }
+                Mock Register-OpenPathFirefoxNativeHost { }
+                Mock Restore-OpenPathProtectedMode { }
+                Mock Start-OpenPathTask { }
+                Mock Save-OpenPathIntegrityBackup { }
+                Mock New-OpenPathIntegrityBaseline { }
+                Mock Remove-OpenPathAgentUpdateBackupDirectories { }
+
+                $result = Complete-OpenPathAgentUpdateFinalization -OpenPathRoot $Root -Journal $Journal -Config $Config
+                if ($FailFirstDisable) {
+                    $result.Success | Should -BeFalse
+                    # the failed attempt left the task enabled; the journal still knows better
+                    $script:AgentTaskEnabled | Should -BeTrue
+                    $onDisk = Get-Content -LiteralPath (Join-Path $Root 'data/agent-update/update-journal.json') -Raw | ConvertFrom-Json
+                    $onDisk.agentUpdateTaskState | Should -Be 'disabled'
+                    $result = Complete-OpenPathAgentUpdateFinalization -OpenPathRoot $Root -Journal $onDisk -Config $Config
+                }
+
+                $result.Success | Should -BeTrue
+                $script:AgentTaskEnabled | Should -Be $Expected
+                if ($Expected) { $script:DisableCalls | Should -Be 0 }
+            }
+        }
+
         It "Stops before refreshing integrity when an installed file does not match the target hash" {
             $root = Join-Path $TestDrive ('finalize-hash-' + [guid]::NewGuid().ToString('N'))
             $destination = Join-Path $root 'lib/existing.ps1'

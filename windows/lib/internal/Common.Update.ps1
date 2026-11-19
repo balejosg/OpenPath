@@ -3,6 +3,8 @@ $script:OpenPathAgentUpdateLockName = 'Global\OpenPathAgentUpdateLock'
 # repair timestamp more than a few seconds ahead means the wall clock was
 # corrected backwards, so the repair wait is already satisfied.
 $script:OpenPathAgentUpdateRepairClockSkewToleranceSeconds = 5
+# Same name as the AgentUpdate entry of internal\ScheduledTaskCatalog.ps1.
+$script:OpenPathAgentUpdateTaskName = 'OpenPath-AgentUpdate'
 
 function Enter-OpenPathAgentUpdateLock {
     <#
@@ -1764,6 +1766,57 @@ function Send-OpenPathAgentUpdateFinalizationFailureReport {
     }
 }
 
+function Get-OpenPathAgentUpdateTaskEnabledState {
+    <#
+    .SYNOPSIS
+        Whether the scheduled agent update task is enabled: 'enabled', 'disabled' or 'absent'
+    .DESCRIPTION
+        Reads the boolean Settings.Enabled of the task, never localized text.
+    #>
+    if (-not (Get-Command -Name 'Get-ScheduledTask' -ErrorAction SilentlyContinue)) {
+        return 'absent'
+    }
+    $task = Get-ScheduledTask -TaskName $script:OpenPathAgentUpdateTaskName -ErrorAction SilentlyContinue
+    if ($null -eq $task) {
+        return 'absent'
+    }
+    if ($task.Settings -and ($task.Settings.Enabled -eq $false)) {
+        return 'disabled'
+    }
+    return 'enabled'
+}
+
+function Get-OpenPathAgentUpdateTaskPriorState {
+    <#
+    .SYNOPSIS
+        The agent update task state from before this update touched any task
+    .DESCRIPTION
+        Finalization may run more than once. The first attempt records the
+        state in the journal before re-registering the tasks, so a retry after
+        a failure between the re-registration and the restore still knows that
+        an operator had disabled unattended agent updates.
+    #>
+    param(
+        [string]$OpenPathRoot = $script:OpenPathRoot,
+        [Parameter(Mandatory = $true)][object]$Journal
+    )
+
+    if ($Journal.PSObject.Properties['agentUpdateTaskState'] -and
+        @('enabled', 'disabled', 'absent') -contains [string]$Journal.agentUpdateTaskState) {
+        return [string]$Journal.agentUpdateTaskState
+    }
+
+    $state = Get-OpenPathAgentUpdateTaskEnabledState
+    if ($Journal.PSObject.Properties['agentUpdateTaskState']) {
+        $Journal.agentUpdateTaskState = $state
+    }
+    else {
+        $Journal | Add-Member -NotePropertyName agentUpdateTaskState -NotePropertyValue $state
+    }
+    Write-OpenPathAgentUpdateJournal -OpenPathRoot $OpenPathRoot -Journal $Journal | Out-Null
+    return $state
+}
+
 function Complete-OpenPathAgentUpdateFinalization {
     <#
     .SYNOPSIS
@@ -1919,11 +1972,21 @@ function Complete-OpenPathAgentUpdateFinalization {
             }
         }
 
+        # An operator may disable unattended agent updates on a machine; the
+        # re-registration below must not silently turn them back on.
+        $agentUpdateTaskState = Get-OpenPathAgentUpdateTaskPriorState -OpenPathRoot $OpenPathRoot -Journal $Journal
         if (Get-Command -Name 'Register-OpenPathTask' -ErrorAction SilentlyContinue) {
             Register-OpenPathTask -OpenPathRoot $OpenPathRoot -UpdateIntervalMinutes $updateInterval -WatchdogIntervalMinutes $watchdogInterval | Out-Null
         }
         if (Get-Command -Name 'Enable-OpenPathTask' -ErrorAction SilentlyContinue) {
             Enable-OpenPathTask | Out-Null
+        }
+        if ($agentUpdateTaskState -eq 'disabled') {
+            Disable-ScheduledTask -TaskName $script:OpenPathAgentUpdateTaskName -ErrorAction Stop | Out-Null
+            if ((Get-OpenPathAgentUpdateTaskEnabledState) -eq 'enabled') {
+                throw 'the agent update task was disabled before the update and could not be disabled again'
+            }
+            Write-OpenPathLog 'Self-update: the agent update task stays disabled, as it was before the update'
         }
         if (Get-Command -Name 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure' -ErrorAction SilentlyContinue) {
             try { Invoke-OpenPathFirefoxNativeHostCompiledEnsure -Config $Config | Out-Null } catch { }
