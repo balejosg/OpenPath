@@ -388,6 +388,7 @@ Export-ModuleMember -Function *
                 'function Get-OpenPathOpenClassroomPosture { [pscustomobject]@{ ClassroomDisabled = $false; PortalModeActive = $false; FirewallActive = $false; DnsPinned = $false; Findings = @() } }',
                 'function Merge-OpenPathReasonCodes { }',
                 'function Invoke-OpenPathOpenClassroomPostureRepair { }',
+                'function Clear-OpenPathOpenClassroomPostureState { }',
                 'function Test-OpenPathAdapterDnsPinnedToLocalResolver { }'
             ) -Encoding ASCII
 

@@ -1248,6 +1248,15 @@ Describe "Watchdog Script" {
                 $global:OpenPathPostureRepairCalls | Should -Be 2
                 $failureMode.ReasonCodes | Should -Not -Contain 'open_classroom_reopened'
 
+                # The stale-whitelist fail-safe deliberately re-arms protection: no repair.
+                $global:OpenPathPostureFailureMode = $null
+                $staleMarker = Join-Path $testRoot 'data\stale-failsafe-state.json'
+                Set-Content -LiteralPath $staleMarker -Value '{}'
+                $stale = & $invoke $false
+                $global:OpenPathPostureRepairCalls | Should -Be 2
+                $stale.ReasonCodes | Should -Not -Contain 'open_classroom_reopened'
+                Remove-Item -LiteralPath $staleMarker -Force
+
                 # A repair that throws must not break the watchdog cycle.
                 $global:OpenPathPostureFailureMode = $null
                 function Invoke-OpenPathOpenClassroomPostureRepair { param($Config, $OpenPathRoot) throw 'boom' }
@@ -1264,9 +1273,99 @@ Describe "Watchdog Script" {
                 Remove-Variable -Name OpenPathPostureRepairCalls, OpenPathPostureRepairResult, OpenPathPostureFailureMode -Scope Global -ErrorAction SilentlyContinue
             }
         }
+
+        It "treats disabled, then enabled, then disabled again as a new streak and only records it" {
+            $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
+            . $helperPath
+            . (Join-Path (Split-Path $helperPath -Parent) 'Common.Whitelist.Sections.ps1')
+
+            $testRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path (Join-Path $testRoot 'data') -Force | Out-Null
+            $whitelistPath = Join-Path $testRoot 'data\whitelist.txt'
+            $streakPath = Join-Path $testRoot 'data\open-classroom-posture-streak.txt'
+            $global:OpenPathPostureRepairPlanCalls = 0
+            $global:OpenPathPostureWhitelistPath = $whitelistPath
+
+            # Local (not global) so they override the real ones the runtime defined here.
+            function Get-OpenPathOpenClassroomPosture {
+                $sections = Get-OpenPathWhitelistSectionsFromFile -Path $global:OpenPathPostureWhitelistPath
+                $disabled = [bool]$sections.IsDisabled
+                [pscustomobject]@{
+                    ClassroomDisabled = $disabled
+                    PortalModeActive  = $false
+                    FirewallActive    = $disabled
+                    DnsPinned         = $false
+                    Findings          = $(if ($disabled) { @('open_classroom_firewall_active') } else { @() })
+                }
+            }
+            # counts only the reopen (FailOpen) plan; the watchdog runs other plans for an enabled classroom
+            function Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config, $BlockedPaths) if ([string]$Plan.Mode -eq 'FailOpen') { $global:OpenPathPostureRepairPlanCalls++ } }
+            function Enter-OpenPathAgentUpdateLock { param([int]$TimeoutMilliseconds = 0) [pscustomobject]@{ Acquired = $true; Mutex = $null } }
+            function Exit-OpenPathAgentUpdateLock { param($Lock) }
+            function global:Read-OpenPathDnsFailureModeState { param([string]$OpenPathRoot = '') return $null }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathCaptivePortalMarker { return $null }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Test-OpenPathStudentEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $false }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+            function global:Increment-WatchdogFailCount { return 1 }
+            function global:Reset-WatchdogFailCount { return 0 }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $config = [pscustomobject]@{ enableNonAdminAppControl = $false }
+                $invoke = {
+                    Invoke-OpenPathWatchdogChecks `
+                        -Config $config `
+                        -PortalModeActive $false `
+                        -CaptiveState 'Direct' `
+                        -OpenPathRoot $testRoot `
+                        -StaleFailsafeStatePath (Join-Path $testRoot 'data\stale-failsafe-state.json')
+                }
+
+                Set-Content -LiteralPath $whitelistPath -Value "## WHITELIST`nexample.org`n#DESACTIVADO"
+                $first = & $invoke
+                $global:OpenPathPostureRepairPlanCalls | Should -Be 0
+                Test-Path -LiteralPath $streakPath | Should -BeTrue
+
+                # Re-enabled: the watchdog clears the streak even though it no longer
+                # reaches the repair.
+                Set-Content -LiteralPath $whitelistPath -Value "## WHITELIST`nexample.org"
+                & $invoke | Out-Null
+                Test-Path -LiteralPath $streakPath | Should -BeFalse
+
+                # Disabled again: a new streak, not the continuation of the old one.
+                Set-Content -LiteralPath $whitelistPath -Value "## WHITELIST`nexample.org`n#DESACTIVADO"
+                $again = & $invoke
+                $global:OpenPathPostureRepairPlanCalls | Should -Be 0
+                $again.ReasonCodes | Should -Not -Contain 'open_classroom_reopened'
+                Test-Path -LiteralPath $streakPath | Should -BeTrue
+
+                # The next consecutive cycle does repair.
+                $third = & $invoke
+                $global:OpenPathPostureRepairPlanCalls | Should -Be 1
+                $third.ReasonCodes | Should -Not -Contain 'open_classroom_firewall_active'
+            }
+            finally {
+                Remove-Item Function:\Read-OpenPathDnsFailureModeState, Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathCaptivePortalMarker, Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathStudentEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+                Remove-Variable -Name OpenPathPostureRepairPlanCalls, OpenPathPostureWhitelistPath -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
     }
 
-    Context "Captive portal detection" {
+Context "Captive portal detection" {
         It "Defines admin-only captive portal recovery script with bounded queue processing" {
             $scriptPath = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "scripts") "Recover-CaptivePortal.ps1")
             $leafPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "CaptivePortal.RecoveryRunner.ps1")

@@ -1499,9 +1499,11 @@ function Invoke-OpenPathWatchdogChecks {
             -FailureModeState $failureModeState
         if ($policyState.FailOpenActive) {
             Write-OpenPathLog "Watchdog: local fail-open whitelist marker active; skipping protected-mode DNS/firewall recovery" -Level WARN
-            # An open classroom must not stay protected: repair it after two cycles
-            # with findings. Never during portal mode or a DNS failure mode.
-            if (-not $PortalModeActive -and -not $failureModeActive) {
+            # An open classroom must not stay protected: repair it after two
+            # consecutive cycles with findings. Never during portal mode, a DNS
+            # failure mode or the stale-whitelist fail-safe (which re-arms protection
+            # on purpose).
+            if (-not $PortalModeActive -and -not $failureModeActive -and -not $policyState.StaleFailsafeActive) {
                 try {
                     $reopen = Invoke-OpenPathOpenClassroomPostureRepair -Config $Config -OpenPathRoot $OpenPathRoot
                     if ($reopen -and $reopen.Repaired) {
@@ -1512,6 +1514,13 @@ function Invoke-OpenPathWatchdogChecks {
                     Write-OpenPathLog "Watchdog: Open-classroom posture repair failed: $_" -Level WARN
                 }
             }
+            else {
+                try { Clear-OpenPathOpenClassroomPostureState -OpenPathRoot $OpenPathRoot } catch { }
+            }
+        }
+        else {
+            # Not an open classroom: a streak recorded earlier must not carry over.
+            try { Clear-OpenPathOpenClassroomPostureState -OpenPathRoot $OpenPathRoot } catch { }
         }
     }
     catch {

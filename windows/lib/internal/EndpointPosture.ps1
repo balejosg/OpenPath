@@ -244,6 +244,72 @@ function Remove-OpenPathPostureStateFile {
     try { if ([System.IO.File]::Exists($Path)) { [System.IO.File]::Delete($Path) } } catch { }
 }
 
+function Enter-OpenPathPostureNamedMutex {
+    # takes a named machine-wide mutex without waiting; Acquired is $false when it
+    # is busy or cannot be opened, and the caller then skips instead of waiting
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $mutex = $null
+    $acquired = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, $Name)
+        try {
+            $acquired = $mutex.WaitOne(0)
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+    }
+    catch {
+        $acquired = $false
+    }
+
+    if (-not $acquired -and $mutex) {
+        $mutex.Dispose()
+        $mutex = $null
+    }
+
+    return [PSCustomObject]@{ Acquired = [bool]$acquired; Mutex = $mutex }
+}
+
+function Exit-OpenPathPostureNamedMutex {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Lock
+    )
+
+    if (-not $Lock -or -not $Lock.Mutex) { return }
+    try { if ($Lock.Acquired) { $Lock.Mutex.ReleaseMutex() } } catch { }
+    try { $Lock.Mutex.Dispose() } catch { }
+}
+
+function Clear-OpenPathOpenClassroomPostureState {
+    <#
+    .SYNOPSIS
+        Forgets the open-classroom repair streak and backoff.
+    .DESCRIPTION
+        Called by the watchdog on every cycle that is not an eligible open
+        classroom (enabled, portal mode, DNS failure mode, stale fail-safe), so a
+        streak recorded before such a cycle can never count as consecutive.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$OpenPathRoot = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {
+        $OpenPathRoot = if ($script:OpenPathRoot) { [string]$script:OpenPathRoot } else { 'C:\OpenPath' }
+    }
+    $dataRoot = Join-Path $OpenPathRoot 'data'
+    Remove-OpenPathPostureStateFile -Path (Join-Path $dataRoot 'open-classroom-posture-streak.txt')
+    Remove-OpenPathPostureStateFile -Path (Join-Path $dataRoot 'open-classroom-posture-repair-attempt.txt')
+}
+
 function Invoke-OpenPathOpenClassroomPostureRepair {
     <#
     .SYNOPSIS
@@ -253,9 +319,13 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
         failure mode) must not keep firewall rules or a DNS pin to the local
         resolver. A protected-mode restore that is still in progress briefly shows
         the same state, so the repair waits for a second consecutive watchdog cycle
-        with findings (streak file). It then takes the agent update lock without
-        waiting, re-reads the whitelist and the posture, and repairs with the
-        FailOpen plan only if the classroom is still open and findings still exist.
+        with findings. The streak file holds the UTC ticks of the last such cycle
+        and counts only while recent (StreakMaxAgeMinutes); busy and backoff
+        cycles refresh it. It then takes, without waiting, the whitelist update
+        cycle's mutex (Global\OpenPathUpdateLock, so no update can apply a
+        whitelist meanwhile) and the agent update lock, re-reads the whitelist and
+        the posture, and repairs with the FailOpen plan only if the classroom is
+        still open and findings still exist. Both locks are held through the repair.
 
         After an attempt it does not try again for BackoffMinutes while findings
         persist, so a third-party local resolver that also uses 127.0.0.1 does not
@@ -278,6 +348,10 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
         [string]$OpenPathRoot = '',
 
         [int]$BackoffMinutes = 30,
+
+        [int]$StreakMaxAgeMinutes = 5,
+
+        [string]$UpdateMutexName = 'Global\OpenPathUpdateLock',
 
         [datetime]$NowUtc = [datetime]::UtcNow
     )
@@ -330,6 +404,14 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
             return $result
         }
 
+        # The stale-whitelist fail-safe deliberately re-arms protection; reopening
+        # would only flap against it.
+        if (Test-Path -LiteralPath (Join-Path $dataRoot 'stale-failsafe-state.json') -PathType Leaf) {
+            Remove-OpenPathPostureStateFile -Path $streakPath
+            $result.Reason = 'stale_failsafe_active'
+            return $result
+        }
+
         $posture = $null
         try { $posture = Get-OpenPathOpenClassroomPosture } catch { $posture = $null }
         if (-not $posture) {
@@ -345,11 +427,20 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
             return $result
         }
 
-        $streak = Read-OpenPathPostureStateNumber -Path $streakPath
-        if ($null -eq $streak -or $streak -lt 1) {
-            if (-not (Write-OpenPathPostureStateNumber -Path $streakPath -Value 1)) {
+        # The streak is the time of the last cycle with findings and counts only
+        # while recent: an old, future-dated or corrupt value starts a new streak.
+        $refreshStreak = {
+            if (-not (Write-OpenPathPostureStateNumber -Path $streakPath -Value $NowUtc.Ticks)) {
                 Write-OpenPathLog "Watchdog: Could not record the open-classroom posture streak at $streakPath" -Level WARN
             }
+        }
+        $streakTicks = Read-OpenPathPostureStateNumber -Path $streakPath
+        $streakIsRecent = $false
+        if ($null -ne $streakTicks -and $streakTicks -le $NowUtc.Ticks) {
+            $streakIsRecent = ([TimeSpan]::FromTicks($NowUtc.Ticks - $streakTicks) -le [TimeSpan]::FromMinutes($StreakMaxAgeMinutes))
+        }
+        if (-not $streakIsRecent) {
+            & $refreshStreak
             $result.Reason = 'streak_recorded'
             return $result
         }
@@ -358,24 +449,38 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
         if ($null -ne $lastAttemptTicks -and $lastAttemptTicks -le $NowUtc.Ticks) {
             $elapsed = [TimeSpan]::FromTicks($NowUtc.Ticks - $lastAttemptTicks)
             if ($elapsed -lt [TimeSpan]::FromMinutes($BackoffMinutes)) {
+                & $refreshStreak
                 $result.Reason = 'repair_backoff'
                 return $result
             }
         }
 
-        if (-not (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
-            $result.Reason = 'update_lock_unavailable'
-            return $result
-        }
-        $lock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 0
-        if (-not $lock -or -not $lock.Acquired) {
+        # The whitelist update cycle holds its own mutex (outermost lock) while it
+        # downloads and applies a whitelist; the agent update lock does not exclude
+        # it. Take both without waiting and hold them through the repair, so a
+        # whitelist that re-enables the classroom is never undone by this repair.
+        $updateCycleLock = Enter-OpenPathPostureNamedMutex -Name $UpdateMutexName
+        if (-not $updateCycleLock.Acquired) {
+            & $refreshStreak
             $result.Reason = 'update_lock_busy'
             return $result
         }
 
+        $lock = $null
         try {
-            # A concurrent update may have re-enabled the classroom while the lock was
-            # taken: judge the state as it is now, never the state the streak saw.
+            if (-not (Get-Command -Name 'Enter-OpenPathAgentUpdateLock' -ErrorAction SilentlyContinue)) {
+                $result.Reason = 'update_lock_unavailable'
+                return $result
+            }
+            $lock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 0
+            if (-not $lock -or -not $lock.Acquired) {
+                $lock = $null
+                & $refreshStreak
+                $result.Reason = 'update_lock_busy'
+                return $result
+            }
+
+            # Judge the state as it is now, never the state the streak saw.
             $sections = & $readSections
             if (-not $sections) {
                 $result.Reason = 'whitelist_unreadable'
@@ -411,23 +516,32 @@ function Invoke-OpenPathOpenClassroomPostureRepair {
                 Invoke-OpenPathEndpointStateRepairPlan -Plan $plan -Config $Config | Out-Null
 
                 $after = Get-OpenPathOpenClassroomPosture
-                if (@($after.Findings).Count -eq 0) {
+                if (-not ([bool]$after.ClassroomDisabled -and -not [bool]$after.PortalModeActive)) {
+                    # success would be misleading: the classroom is no longer open or
+                    # portal mode started; the next cycle judges the new state
+                    $result.Reason = 'classroom_changed_during_repair'
+                    Write-OpenPathLog 'Watchdog: Classroom state changed during the open-classroom repair; not reporting a reopen' -Level WARN
+                }
+                elseif (@($after.Findings).Count -eq 0) {
                     Remove-OpenPathPostureStateFile -Path $streakPath
                     $result.Repaired = $true
                     $result.Reason = 'open_classroom_reopened'
                     Write-OpenPathLog 'Watchdog: Reopened a disabled classroom that was left protected'
                 }
                 else {
+                    & $refreshStreak
                     Write-OpenPathLog "Watchdog: Open-classroom repair left findings in place ($(@($after.Findings) -join ', ')); next attempt after $BackoffMinutes minutes" -Level WARN
                 }
             }
             catch {
+                & $refreshStreak
                 Write-OpenPathLog "Watchdog: Open-classroom repair failed: $_; next attempt after $BackoffMinutes minutes" -Level WARN
             }
             return $result
         }
         finally {
-            Exit-OpenPathAgentUpdateLock -Lock $lock
+            if ($lock) { Exit-OpenPathAgentUpdateLock -Lock $lock }
+            Exit-OpenPathPostureNamedMutex -Lock $updateCycleLock
         }
     }
     catch {

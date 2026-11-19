@@ -298,7 +298,35 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
     BeforeAll {
         function Invoke-TestPostureCycle {
             param([datetime]$NowUtc = $script:now)
-            Invoke-OpenPathOpenClassroomPostureRepair -Config $script:config -OpenPathRoot $script:root -NowUtc $NowUtc
+            Invoke-OpenPathOpenClassroomPostureRepair -Config $script:config -OpenPathRoot $script:root -NowUtc $NowUtc -UpdateMutexName $script:updateMutexName
+        }
+
+        # Holds a named mutex on another thread (a mutex is re-entrant on its owner,
+        # so holding it here would not exclude the code under test).
+        function Start-TestMutexHolder {
+            param([string]$Name)
+            $release = [System.Threading.ManualResetEventSlim]::new($false)
+            $acquired = [System.Threading.ManualResetEventSlim]::new($false)
+            $ps = [powershell]::Create()
+            [void]$ps.AddScript({
+                    param($MutexName, $Release, $Acquired)
+                    $m = [System.Threading.Mutex]::new($false, $MutexName)
+                    [void]$m.WaitOne()
+                    $Acquired.Set()
+                    $Release.Wait()
+                    $m.ReleaseMutex()
+                    $m.Dispose()
+                }).AddArgument($Name).AddArgument($release).AddArgument($acquired)
+            $handle = $ps.BeginInvoke()
+            [void]$acquired.Wait(10000)
+            [pscustomobject]@{ Release = $release; Ps = $ps; Handle = $handle }
+        }
+
+        function Stop-TestMutexHolder {
+            param($Holder)
+            $Holder.Release.Set()
+            [void]$Holder.Ps.EndInvoke($Holder.Handle)
+            $Holder.Ps.Dispose()
         }
     }
 
@@ -307,6 +335,7 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
         $script:dataDir = Join-Path $script:root 'data'
         New-Item -ItemType Directory -Path $script:dataDir -Force | Out-Null
         $script:whitelistPath = Join-Path $script:dataDir 'whitelist.txt'
+        $script:updateMutexName = 'OpenPathTest.UpdateLock.' + [guid]::NewGuid().ToString('N')
         $script:streakPath = Join-Path $script:dataDir 'open-classroom-posture-streak.txt'
         $script:attemptPath = Join-Path $script:dataDir 'open-classroom-posture-repair-attempt.txt'
         $script:now = [datetime]::new(2026, 11, 18, 10, 0, 0, [System.DateTimeKind]::Utc)
@@ -453,7 +482,7 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
     It 'never repairs an enabled classroom, whatever protection is live' {
         Set-Content -LiteralPath $script:whitelistPath -Value "## WHITELIST`nexample.org"
         $script:classroomDisabled = $false
-        Set-Content -LiteralPath $script:streakPath -Value '5'
+        Set-Content -LiteralPath $script:streakPath -Value ([string]$script:now.Ticks)
 
         $result = Invoke-TestPostureCycle
 
@@ -466,7 +495,7 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
 
     It 'never repairs while captive portal mode is active' {
         $script:portalActive = $true
-        Set-Content -LiteralPath $script:streakPath -Value '1'
+        Set-Content -LiteralPath $script:streakPath -Value ([string]$script:now.Ticks)
 
         $result = Invoke-TestPostureCycle
 
@@ -477,7 +506,7 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
 
     It 'never repairs while a DNS failure mode is active' {
         Mock Read-OpenPathDnsFailureModeState { [pscustomobject]@{ mode = 'open' } }
-        Set-Content -LiteralPath $script:streakPath -Value '1'
+        Set-Content -LiteralPath $script:streakPath -Value ([string]$script:now.Ticks)
 
         $result = Invoke-TestPostureCycle
 
@@ -488,7 +517,7 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
     }
 
     It 'does nothing when the whitelist state cannot be read' {
-        Set-Content -LiteralPath $script:streakPath -Value '1'
+        Set-Content -LiteralPath $script:streakPath -Value ([string]$script:now.Ticks)
         Remove-Item -LiteralPath $script:whitelistPath
 
         $result = Invoke-TestPostureCycle
@@ -498,7 +527,7 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
         $result.Reason | Should -Be 'whitelist_unreadable'
         $script:repairCalls | Should -Be 0
         $script:postureReads | Should -Be 0
-        (Get-Content -LiteralPath $script:streakPath -Raw).Trim() | Should -Be '1'
+        (Get-Content -LiteralPath $script:streakPath -Raw).Trim() | Should -Be ([string]$script:now.Ticks)
 
         Set-Content -LiteralPath $script:whitelistPath -Value '#DESACTIVADO'
         Mock Get-OpenPathWhitelistSectionsFromFile { throw 'file is locked' }
@@ -518,9 +547,12 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
         Should -Invoke Write-OpenPathLog -ParameterFilter { $Level -eq 'WARN' -and $Message -match 'adapter busy' }
         $script:lockExits | Should -Be 1
 
-        $waiting = Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(29)
-        $waiting.Skipped | Should -BeTrue
-        $waiting.Reason | Should -Be 'repair_backoff'
+        # the watchdog runs every minute; each backoff cycle keeps the streak fresh
+        foreach ($minute in 1..29) {
+            $waiting = Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes($minute)
+            $waiting.Skipped | Should -BeTrue
+            $waiting.Reason | Should -Be 'repair_backoff'
+        }
         $script:repairCalls | Should -Be 1
 
         $retry = Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(31)
@@ -565,10 +597,137 @@ Describe 'Invoke-OpenPathOpenClassroomPostureRepair' {
         (Invoke-TestPostureCycle).Repaired | Should -BeTrue
 
         $script:protectionLive = $true
-        Set-Content -LiteralPath $script:streakPath -Value '1'
+        Set-Content -LiteralPath $script:streakPath -Value ([string]$script:now.Ticks)
         $future = $script:now.AddDays(3650).Ticks
         Set-Content -LiteralPath $script:attemptPath -Value ([string]$future)
         (Invoke-TestPostureCycle).Repaired | Should -BeTrue
+    }
+
+    It 'does not run while the whitelist update cycle holds its mutex, and keeps the streak' {
+        Invoke-TestPostureCycle | Out-Null
+        $holder = Start-TestMutexHolder -Name $script:updateMutexName
+        try {
+            $busy = Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(1)
+
+            $busy.Repaired | Should -BeFalse
+            $busy.Skipped | Should -BeTrue
+            $busy.Reason | Should -Be 'update_lock_busy'
+            $script:repairCalls | Should -Be 0
+            Should -Invoke Enter-OpenPathAgentUpdateLock -Times 0 -Exactly
+            Test-Path -LiteralPath $script:streakPath | Should -BeTrue
+        }
+        finally {
+            Stop-TestMutexHolder -Holder $holder
+        }
+
+        (Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(2)).Repaired | Should -BeTrue
+    }
+
+    It 'holds the update mutex through the repair and releases both locks afterwards' {
+        $script:mutexHeldDuringRepair = $null
+        Mock Invoke-OpenPathEndpointStateRepairPlan {
+            # another thread must find the whitelist update mutex taken while repairing
+            $probe = [powershell]::Create()
+            [void]$probe.AddScript({
+                    param($MutexName)
+                    $m = [System.Threading.Mutex]::new($false, $MutexName)
+                    $got = $m.WaitOne(0)
+                    if ($got) { $m.ReleaseMutex() }
+                    $m.Dispose()
+                    -not $got
+                }).AddArgument($script:updateMutexName)
+            $script:mutexHeldDuringRepair = [bool]@($probe.Invoke())[0]
+            $probe.Dispose()
+            $script:repairCalls++
+            $script:protectionLive = $false
+            @('RemoveFirewall')
+        }
+        Invoke-TestPostureCycle | Out-Null
+        (Invoke-TestPostureCycle).Repaired | Should -BeTrue
+
+        $script:mutexHeldDuringRepair | Should -BeTrue
+        $script:lockExits | Should -Be 1
+        # released afterwards: a holder on another thread can take it at once
+        $holder = Start-TestMutexHolder -Name $script:updateMutexName
+        Stop-TestMutexHolder -Holder $holder
+    }
+
+    It 'does not count an old streak as consecutive' {
+        Invoke-TestPostureCycle | Out-Null
+
+        $late = Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(10)
+
+        $late.Reason | Should -Be 'streak_recorded'
+        $script:repairCalls | Should -Be 0
+        (Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(11)).Repaired | Should -BeTrue
+    }
+
+    It 'treats a future-dated streak as not consecutive' {
+        Set-Content -LiteralPath $script:streakPath -Value ([string]$script:now.AddDays(30).Ticks)
+
+        (Invoke-TestPostureCycle).Reason | Should -Be 'streak_recorded'
+        $script:repairCalls | Should -Be 0
+    }
+
+    It 'refreshes the streak while the update lock is busy so the next free cycle still repairs' {
+        Invoke-TestPostureCycle | Out-Null
+        Mock Enter-OpenPathAgentUpdateLock { [pscustomobject]@{ Acquired = $false; Mutex = $null } }
+        Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(4) | Out-Null
+        Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(8) | Out-Null
+        Mock Enter-OpenPathAgentUpdateLock { [pscustomobject]@{ Acquired = $true; Mutex = $null } }
+
+        (Invoke-TestPostureCycle -NowUtc $script:now.AddMinutes(12)).Repaired | Should -BeTrue
+    }
+
+    It 'never repairs while the stale-whitelist fail-safe is active' {
+        Set-Content -LiteralPath (Join-Path $script:dataDir 'stale-failsafe-state.json') -Value '{}'
+        Set-Content -LiteralPath $script:streakPath -Value ([string]$script:now.Ticks)
+
+        $result = Invoke-TestPostureCycle
+
+        $result.Repaired | Should -BeFalse
+        $result.Skipped | Should -BeTrue
+        $result.Reason | Should -Be 'stale_failsafe_active'
+        $script:repairCalls | Should -Be 0
+        Test-Path -LiteralPath $script:streakPath | Should -BeFalse
+    }
+
+    It 'does not report success when the classroom stopped being open during the repair' {
+        Mock Invoke-OpenPathEndpointStateRepairPlan {
+            $script:repairCalls++
+            $script:protectionLive = $false
+            $script:classroomDisabled = $false
+            @('RemoveFirewall')
+        }
+        Invoke-TestPostureCycle | Out-Null
+
+        $result = Invoke-TestPostureCycle
+
+        $result.Repaired | Should -BeFalse
+        $result.Skipped | Should -BeFalse
+        $result.Reason | Should -Be 'classroom_changed_during_repair'
+    }
+
+    It 'does not report success when portal mode started during the repair' {
+        Mock Invoke-OpenPathEndpointStateRepairPlan {
+            $script:repairCalls++
+            $script:protectionLive = $false
+            $script:portalActive = $true
+            @('RemoveFirewall')
+        }
+        Invoke-TestPostureCycle | Out-Null
+
+        (Invoke-TestPostureCycle).Repaired | Should -BeFalse
+    }
+
+    It 'clears the streak and backoff state on request' {
+        Set-Content -LiteralPath $script:streakPath -Value '1'
+        Set-Content -LiteralPath $script:attemptPath -Value '1'
+
+        Clear-OpenPathOpenClassroomPostureState -OpenPathRoot $script:root
+
+        Test-Path -LiteralPath $script:streakPath | Should -BeFalse
+        Test-Path -LiteralPath $script:attemptPath | Should -BeFalse
     }
 
     It 'writes its state atomically and leaves no temporary files behind' {
@@ -607,7 +766,7 @@ Describe 'Endpoint posture wiring' {
     It 'calls the repair from the watchdog fail-open branch and reports the reopen through the cycle reason codes' {
         $runtime = Get-Content (Join-Path $script:internalPath 'Watchdog.Runtime.ps1') -Raw
 
-        $runtime | Should -Match '(?s)if \(\$policyState\.FailOpenActive\) \{.*?skipping protected-mode DNS/firewall recovery.*?-not \$PortalModeActive.*?-not \$failureModeActive.*?Invoke-OpenPathOpenClassroomPostureRepair -Config \$Config -OpenPathRoot \$OpenPathRoot.*?& \$addReasonCode ''open_classroom_reopened'''
+        $runtime | Should -Match '(?s)if \(\$policyState\.FailOpenActive\) \{.*?skipping protected-mode DNS/firewall recovery.*?-not \$PortalModeActive.*?-not \$failureModeActive.*?-not \$policyState\.StaleFailsafeActive.*?Invoke-OpenPathOpenClassroomPostureRepair -Config \$Config -OpenPathRoot \$OpenPathRoot.*?& \$addReasonCode ''open_classroom_reopened'''
     }
 
     It 'is required by the post-update health gate' {
@@ -617,6 +776,7 @@ Describe 'Endpoint posture wiring' {
             "'Get-OpenPathOpenClassroomPosture'",
             "'Merge-OpenPathReasonCodes'",
             "'Invoke-OpenPathOpenClassroomPostureRepair'",
+            "'Clear-OpenPathOpenClassroomPostureState'",
             "'Test-OpenPathAdapterDnsPinnedToLocalResolver'"
         )
     }
@@ -643,7 +803,8 @@ Describe 'Endpoint posture wiring' {
             'Get-OpenPathOpenClassroomPosture',
             'Merge-OpenPathReasonCodes',
             'Get-OpenPathOutcomeReasonCodesWithPosture',
-            'Invoke-OpenPathOpenClassroomPostureRepair'
+            'Invoke-OpenPathOpenClassroomPostureRepair',
+            'Clear-OpenPathOpenClassroomPostureState'
         )
         $files = @(Get-ChildItem -Path $script:windowsRoot -Recurse -File -Include '*.ps1', '*.psm1' |
                 Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' })
