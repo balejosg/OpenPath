@@ -273,7 +273,8 @@ Describe "Sse.Coalescer" {
             $content | Should -Match 'agent-update-available'
             $content | Should -Match 'Invoke-DebouncedAgentUpdate'
             $content | Should -Match 'SseAgentUpdateCoalescerState'
-            $content | Should -Match 'self-update --canary-only --silent'
+            $content | Should -Match 'Invoke-SseCanarySelfUpdateProcess'
+            $content | Should -Not -Match '\$LASTEXITCODE'
         }
 
         It "Start-SSEListener.ps1 checks once for a canary release at startup" {
@@ -283,6 +284,52 @@ Describe "Sse.Coalescer" {
             $connectionIndex = $content.LastIndexOf('Start-SSEConnection')
             $startupIndex | Should -BeGreaterThan -1
             $startupIndex | Should -BeLessThan $connectionIndex
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    Context "Invoke-SseCanarySelfUpdateProcess" {
+        It "runs OpenPath.ps1 self-update --canary-only --silent in its own process and succeeds on exit 0" {
+            $captured = @{ File = ''; Arguments = '' }
+            $result = Invoke-SseCanarySelfUpdateProcess -OpenPathRoot 'C:\OpenPath' -PowerShellPath 'C:\ps.exe' -ProcessRunner {
+                param([string]$FilePath, [string]$ArgumentList, [int]$WaitSeconds)
+                $captured.File = $FilePath
+                $captured.Arguments = $ArgumentList
+                return 0
+            }.GetNewClosure()
+
+            $result.Success | Should -BeTrue
+            $result.ExitCode | Should -Be 0
+            $captured.File | Should -Be 'C:\ps.exe'
+            $captured.Arguments | Should -Match '-File "C:\\OpenPath[\\/]OpenPath\.ps1" self-update --canary-only --silent$'
+        }
+
+        It "ignores a stale LASTEXITCODE in the caller's session" {
+            $global:LASTEXITCODE = 7
+            try {
+                $result = Invoke-SseCanarySelfUpdateProcess -OpenPathRoot 'C:\OpenPath' -PowerShellPath 'C:\ps.exe' -ProcessRunner { return 0 }
+                $result.Success | Should -BeTrue
+            }
+            finally {
+                $global:LASTEXITCODE = 0
+            }
+        }
+
+        It "reports a non-zero exit code as a failure" {
+            $result = Invoke-SseCanarySelfUpdateProcess -OpenPathRoot 'C:\OpenPath' -PowerShellPath 'C:\ps.exe' -ProcessRunner { return 1 }
+            $result.Success | Should -BeFalse
+            $result.ExitCode | Should -Be 1
+            $result.Message | Should -Match 'exited with code 1'
+        }
+
+        It "reports a process that could not start or did not finish" {
+            $failed = Invoke-SseCanarySelfUpdateProcess -OpenPathRoot 'C:\OpenPath' -PowerShellPath 'C:\ps.exe' -ProcessRunner { throw 'cannot start' }
+            $failed.Success | Should -BeFalse
+            $failed.Message | Should -Match 'could not start'
+
+            $running = Invoke-SseCanarySelfUpdateProcess -OpenPathRoot 'C:\OpenPath' -PowerShellPath 'C:\ps.exe' -TimeoutSeconds 5 -ProcessRunner { return $null }
+            $running.Success | Should -BeFalse
+            $running.Message | Should -Match 'still running'
         }
     }
 

@@ -1852,6 +1852,27 @@ function Complete-OpenPathAgentUpdateFinalization {
             }
         }
 
+        # Remember whether the installed build came from a canary release. A
+        # canary-only check (SSE event, listener start) must still run on such
+        # a machine after its release is retired or its ring returns to stable,
+        # so it converges back to the stable build without the nightly task.
+        $targetRing = if ($Journal.PSObject.Properties['targetRing'] -and
+            [string]::Equals([string]$Journal.targetRing, 'canary', [System.StringComparison]::OrdinalIgnoreCase)) {
+            'canary'
+        }
+        else {
+            'stable'
+        }
+        $installedRing = if ($Config.PSObject.Properties['agentReleaseRing']) { [string]$Config.agentReleaseRing } else { '' }
+        if ($targetRing -eq 'canary' -and $installedRing -ne 'canary') {
+            $Config | Add-Member -NotePropertyName agentReleaseRing -NotePropertyValue 'canary' -Force
+            $configChanged = $true
+        }
+        elseif ($targetRing -ne 'canary' -and $installedRing -eq 'canary') {
+            $Config | Add-Member -NotePropertyName agentReleaseRing -NotePropertyValue 'stable' -Force
+            $configChanged = $true
+        }
+
         $hasUpdateTimestamp = (
             $Config.PSObject.Properties['lastAgentUpdateAt'] -and
             -not [string]::IsNullOrWhiteSpace([string]$Config.lastAgentUpdateAt)
@@ -2154,10 +2175,13 @@ function Get-OpenPathAgentUpdateHttpStatusCode {
             if ($null -ne $response) {
                 $status = $response.StatusCode
                 if ($null -ne $status) {
+                    # An HttpStatusCode enum exposes its number as value__; a
+                    # plain integer (or a test double) is cast directly.
+                    $numeric = $status.value__
+                    if ($null -ne $numeric) {
+                        return [int]$numeric
+                    }
                     return [int]$status
-                }
-                if ($null -ne $status.value__) {
-                    return [int]$status.value__
                 }
             }
             $exception = $exception.InnerException
@@ -2169,6 +2193,72 @@ function Get-OpenPathAgentUpdateHttpStatusCode {
     return 0
 }
 
+function Test-OpenPathAgentInstalledFromCanaryRelease {
+    <#
+    .SYNOPSIS
+        Tells whether the installed agent build came from a canary release
+    #>
+    param([object]$Config)
+
+    if ($null -eq $Config -or -not $Config.PSObject.Properties['agentReleaseRing']) {
+        return $false
+    }
+    return [string]::Equals([string]$Config.agentReleaseRing, 'canary', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-OpenPathAgentManifestIsCanary {
+    param([object]$Manifest)
+
+    if ($null -eq $Manifest -or -not $Manifest.PSObject.Properties['ring'] -or $null -eq $Manifest.ring) {
+        return $false
+    }
+    return [string]::Equals([string]$Manifest.ring, 'canary', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-OpenPathAgentCanaryOnlyDecision {
+    <#
+    .SYNOPSIS
+        Decides, before any other self-update work, whether a canary-only run applies
+    .DESCRIPTION
+        A canary-only run (SSE event or listener start) proceeds only when the
+        installed build came from a canary release, so it can return to stable,
+        or when the server serves this machine a canary manifest. Every other
+        machine returns here: no journal restore, no pending finalization, no
+        lock, no file request.
+    #>
+    param([Parameter(Mandatory = $true)][object]$Config)
+
+    if (Test-OpenPathAgentInstalledFromCanaryRelease -Config $Config) {
+        return [PSCustomObject]@{ Proceed = $true; Success = $true; Message = '' }
+    }
+
+    $apiUrl = if ($Config.PSObject.Properties['apiUrl']) { [string]$Config.apiUrl } else { '' }
+    $whitelistUrl = if ($Config.PSObject.Properties['whitelistUrl']) { [string]$Config.whitelistUrl } else { '' }
+    if (-not $apiUrl -or -not $whitelistUrl) {
+        return [PSCustomObject]@{ Proceed = $false; Success = $true; Message = 'Canary-only self-update skipped: classroom mode is not configured' }
+    }
+    $machineToken = Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl $whitelistUrl
+    if (-not $machineToken) {
+        return [PSCustomObject]@{ Proceed = $false; Success = $false; Message = 'Canary-only self-update skipped: could not extract the machine token' }
+    }
+
+    $headers = @{
+        Authorization = "Bearer $machineToken"
+        'X-OpenPath-Agent-Capabilities' = 'signed-release-v1'
+    }
+    try {
+        $manifest = Invoke-RestMethod -Uri "$($apiUrl.TrimEnd('/'))/api/agent/windows/manifest" -Method Get -Headers $headers -TimeoutSec 30 -ErrorAction Stop
+    }
+    catch {
+        return [PSCustomObject]@{ Proceed = $false; Success = $false; Message = "Canary-only self-update skipped: manifest unavailable ($($_.Exception.GetType().Name))" }
+    }
+
+    if (Test-OpenPathAgentManifestIsCanary -Manifest $manifest) {
+        return [PSCustomObject]@{ Proceed = $true; Success = $true; Message = '' }
+    }
+    return [PSCustomObject]@{ Proceed = $false; Success = $true; Message = 'Canary-only self-update skipped: this machine is not on the canary ring' }
+}
+
 function Invoke-OpenPathAgentSelfUpdate {
     <#
     .SYNOPSIS
@@ -2178,7 +2268,10 @@ function Invoke-OpenPathAgentSelfUpdate {
     .PARAMETER Silent
         Suppress interactive output (logs are still written)
     .PARAMETER CanaryOnly
-        Apply the published manifest only when it belongs to the canary ring
+        Run only on a canary machine: one served a canary manifest, or one whose
+        installed build came from a canary release (so a retired release or a
+        return to stable converges at once). Any other machine returns before
+        doing anything else.
     #>
     [CmdletBinding()]
     param(
@@ -2222,6 +2315,18 @@ function Invoke-OpenPathAgentSelfUpdate {
             Success = $false
             Updated = $false
             Message = $message
+        }
+    }
+
+    if ($CanaryOnly) {
+        $canaryDecision = Get-OpenPathAgentCanaryOnlyDecision -Config $config
+        if (-not $canaryDecision.Proceed) {
+            Write-SelfUpdateMessage -Message $canaryDecision.Message
+            return [PSCustomObject]@{
+                Success = [bool]$canaryDecision.Success
+                Updated = $false
+                Message = $canaryDecision.Message
+            }
         }
     }
 
@@ -2466,8 +2571,9 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
     }
 
-    $manifestRing = if ($manifest.PSObject.Properties['ring'] -and $null -ne $manifest.ring) { [string]$manifest.ring } else { '' }
-    if ($CanaryOnly -and -not [string]::Equals($manifestRing, 'canary', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $manifestIsCanary = Test-OpenPathAgentManifestIsCanary -Manifest $manifest
+    $targetRing = if ($manifestIsCanary) { 'canary' } else { 'stable' }
+    if ($CanaryOnly -and -not $manifestIsCanary -and -not (Test-OpenPathAgentInstalledFromCanaryRelease -Config $config)) {
         $message = 'Canary-only self-update skipped: this machine is not on the canary ring'
         Write-SelfUpdateMessage -Message $message
         return [PSCustomObject]@{
@@ -2760,6 +2866,7 @@ function Invoke-OpenPathAgentSelfUpdate {
             durable         = $true
             targetVersion   = $targetVersion
             targetBuild     = $targetBuild
+            targetRing      = $targetRing
             previousVersion = $currentVersion
             previousBuild   = $currentBuild
             backupRoot      = $backupRoot

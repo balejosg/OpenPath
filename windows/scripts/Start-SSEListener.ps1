@@ -179,10 +179,11 @@ function Start-OpenPathSseSelfUpdateProcess {
     .SYNOPSIS
         Runs a canary-only agent self-update, optionally after a delay.
     .DESCRIPTION
-        The CLI applies the published manifest only when it belongs to the
-        canary ring, so a stable machine that receives the event (or runs this
-        at startup) does nothing. Every file it downloads is pinned to the
-        manifest build by the update code.
+        The CLI runs in its own process and acts only on a canary machine: one
+        served a canary manifest, or one whose installed build came from a
+        canary release (so a retired release or a return to stable converges
+        at once). Every other machine returns before any other work. Every file
+        it downloads is pinned to the manifest build by the update code.
     #>
     param(
         [int]$DelaySeconds = 0
@@ -194,22 +195,14 @@ function Start-OpenPathSseSelfUpdateProcess {
     }
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    try {
-        Write-OpenPathLog "SSE: Starting canary self-update"
-        $entry = Join-Path $OpenPathRoot 'OpenPath.ps1'
-        $output = & $entry self-update --canary-only --silent 2>&1
-        $exitCode = $LASTEXITCODE
-        $stopwatch.Stop()
-        if ($exitCode -ne 0) {
-            Write-OpenPathLog "SSE: Canary self-update failed with exit code $exitCode after $($stopwatch.ElapsedMilliseconds)ms: $(@($output) -join ' ')" -Level WARN
-            return
-        }
-        Write-OpenPathLog "SSE: Canary self-update completed in $($stopwatch.ElapsedMilliseconds)ms"
+    Write-OpenPathLog "SSE: Starting canary self-update check"
+    $result = Invoke-SseCanarySelfUpdateProcess -OpenPathRoot $OpenPathRoot
+    $stopwatch.Stop()
+    if (-not $result.Success) {
+        Write-OpenPathLog "SSE: Canary self-update check failed after $($stopwatch.ElapsedMilliseconds)ms: $($result.Message)" -Level WARN
+        return
     }
-    catch {
-        $stopwatch.Stop()
-        Write-OpenPathLog "SSE: Canary self-update failed after $($stopwatch.ElapsedMilliseconds)ms: $_" -Level WARN
-    }
+    Write-OpenPathLog "SSE: Canary self-update check completed in $($stopwatch.ElapsedMilliseconds)ms"
 }
 
 function Invoke-DebouncedAgentUpdate {
@@ -349,9 +342,9 @@ function Start-SSEConnection {
 # Main
 # =============================================================================
 
-# A canary machine checks once at startup so a release published while it was
-# off is applied without waiting for the scheduled task. The CLI is canary-only:
-# on every other machine this returns without touching the agent.
+# A canary machine checks once at startup so a release published (or retired)
+# while it was off is applied without waiting for the scheduled task. The CLI is
+# canary-only: on every other machine it returns after the ring check.
 Start-OpenPathSseSelfUpdateProcess
 
 Start-SSEConnection

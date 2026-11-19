@@ -4898,4 +4898,226 @@ Describe "Canary self-update" {
             $result.Message | Should -Match 'not on the canary ring'
         }
     }
+
+    It "checks the ring first and does nothing else on a non-canary machine" {
+        $root = Join-Path $TestDrive ('canary-first-' + [guid]::NewGuid().ToString('N'))
+        $manifest = [PSCustomObject]@{
+            version = '9.9.9'
+            build   = 'build-stable'
+            files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = ('a' * 64) })
+        }
+
+        InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest } {
+            $script:OpenPathRoot = $Root
+            $script:TestManifest = $Manifest
+            # A superseded journal and a committed journal would normally be
+            # restored and finalized before the manifest is read.
+            $updateRoot = Join-Path (Join-Path $Root 'data') 'agent-update'
+            New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
+            Set-Content -LiteralPath (Get-OpenPathAgentUpdateSupersededJournalPath -OpenPathRoot $Root) -Value '{"schemaVersion":2,"phase":"committed"}' -Encoding ASCII
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl       = 'https://api.test'
+                    whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                    version      = '9.9.8'
+                    agentBuild   = 'build-old'
+                }
+            }
+            Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+            Mock Invoke-RestMethod { $script:TestManifest }
+            Mock Invoke-WebRequest { throw 'no file may be requested on a stable machine' }
+            Mock Restore-OpenPathAgentUpdateSupersededJournal { throw 'the superseded journal must not be touched' }
+            Mock Complete-OpenPathAgentUpdateFinalization { throw 'no finalization may run' }
+            Mock Enter-OpenPathAgentUpdateLock { throw 'the update lock must not be taken' }
+            Mock Write-OpenPathLog { }
+
+            $result = Invoke-OpenPathAgentSelfUpdate -Silent -CanaryOnly
+
+            $result.Success | Should -BeTrue
+            $result.Updated | Should -BeFalse
+            $result.Message | Should -Match 'not on the canary ring'
+            Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+            Should -Invoke Restore-OpenPathAgentUpdateSupersededJournal -Times 0 -Exactly
+            Should -Invoke Enter-OpenPathAgentUpdateLock -Times 0 -Exactly
+            Test-Path -LiteralPath (Get-OpenPathAgentUpdateSupersededJournalPath -OpenPathRoot $Root) | Should -BeTrue
+        }
+    }
+
+    It "records the canary ring when a canary release is installed" {
+        $root = Join-Path $TestDrive ('canary-ring-' + [guid]::NewGuid().ToString('N'))
+        $destination = Join-Path $root 'lib/existing.ps1'
+        New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+        Set-Content -LiteralPath $destination -Value 'Write-Output "stable"' -Encoding ASCII
+
+        $stagedSource = Join-Path $TestDrive ('canary-' + [guid]::NewGuid().ToString('N') + '.ps1')
+        Set-Content -LiteralPath $stagedSource -Value 'Write-Output "canary"' -Encoding ASCII
+        $stagedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest = [PSCustomObject]@{
+            version   = '9.9.8'
+            build     = 'build-canary'
+            ring      = 'canary'
+            sourceSha = ('a' * 40)
+            signature = 'signed'
+            files     = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $stagedHash })
+        }
+
+        InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest; StagedSource = $stagedSource } {
+            $script:OpenPathRoot = $Root
+            $script:TestManifest = $Manifest
+            $script:TestStagedSource = $StagedSource
+            $script:SavedConfigs = @()
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl       = 'https://api.test'
+                    whitelistUrl = 'https://api.test/w/token/whitelist.txt'
+                    version      = '9.9.8'
+                    agentBuild   = 'build-stable'
+                }
+            }
+            Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+            Mock Test-OpenPathAgentReleaseSignature { $true }
+            Mock Invoke-RestMethod { $script:TestManifest }
+            Mock Invoke-WebRequest {
+                param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                Copy-Item -LiteralPath $script:TestStagedSource -Destination $OutFile -Force
+            }
+            Mock Write-OpenPathLog { }
+            Mock Set-OpenPathConfig { param($Config) $script:SavedConfigs += ($Config | ConvertTo-Json -Compress) }
+            Mock Save-OpenPathIntegrityBackup { }
+            Mock New-OpenPathIntegrityBaseline { }
+            Mock Restore-OpenPathProtectedMode { }
+            Mock Send-OpenPathHealthReport { }
+            Mock Invoke-OpenPathAgentUpdateHealthGate { [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false } }
+            foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                    Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                }
+            }
+            Mock Register-OpenPathTask { }
+            Mock Enable-OpenPathTask { }
+            Mock Start-OpenPathTask { }
+
+            $result = Invoke-OpenPathAgentSelfUpdate -Silent -CanaryOnly
+
+            $result.Success | Should -BeTrue
+            $result.Updated | Should -BeTrue
+            $saved = $script:SavedConfigs[-1] | ConvertFrom-Json
+            $saved.agentBuild | Should -Be 'build-canary'
+            $saved.agentReleaseRing | Should -Be 'canary'
+        }
+    }
+
+    It "returns a retired canary to the stable build in canary-only mode, without the nightly task" {
+        $root = Join-Path $TestDrive ('canary-retired-' + [guid]::NewGuid().ToString('N'))
+        $destination = Join-Path $root 'lib/existing.ps1'
+        New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+        Set-Content -LiteralPath $destination -Value 'Write-Output "canary"' -Encoding ASCII
+
+        $stagedSource = Join-Path $TestDrive ('stable-' + [guid]::NewGuid().ToString('N') + '.ps1')
+        Set-Content -LiteralPath $stagedSource -Value 'Write-Output "stable"' -Encoding ASCII
+        $stagedHash = (Get-FileHash -LiteralPath $stagedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+        # After the retire the server serves this canary-ring machine the stable
+        # manifest: same version, different build, no ring.
+        $manifest = [PSCustomObject]@{
+            version = '9.9.8'
+            build   = 'build-stable'
+            files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = $stagedHash })
+        }
+
+        InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest; StagedSource = $stagedSource } {
+            $script:OpenPathRoot = $Root
+            $script:TestManifest = $Manifest
+            $script:TestStagedSource = $StagedSource
+            $script:SavedConfigs = @()
+            $script:FileUris = @()
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl           = 'https://api.test'
+                    whitelistUrl     = 'https://api.test/w/token/whitelist.txt'
+                    version          = '9.9.8'
+                    agentBuild       = 'build-canary'
+                    agentReleaseRing = 'canary'
+                }
+            }
+            Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+            Mock Invoke-RestMethod { $script:TestManifest }
+            Mock Invoke-WebRequest {
+                param($Uri, $Method, $Headers, $OutFile, $UseBasicParsing, $TimeoutSec, $ErrorAction)
+                $script:FileUris += $Uri
+                Copy-Item -LiteralPath $script:TestStagedSource -Destination $OutFile -Force
+            }
+            Mock Write-OpenPathLog { }
+            Mock Set-OpenPathConfig { param($Config) $script:SavedConfigs += ($Config | ConvertTo-Json -Compress) }
+            Mock Save-OpenPathIntegrityBackup { }
+            Mock New-OpenPathIntegrityBaseline { }
+            Mock Restore-OpenPathProtectedMode { }
+            Mock Send-OpenPathHealthReport { }
+            Mock Invoke-OpenPathAgentUpdateHealthGate { [PSCustomObject]@{ Healthy = $true; Message = ''; TimedOut = $false } }
+            foreach ($commandName in @('Register-OpenPathTask', 'Enable-OpenPathTask', 'Invoke-OpenPathFirefoxNativeHostCompiledEnsure', 'Register-OpenPathFirefoxNativeHost', 'Start-OpenPathTask')) {
+                if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                    Set-Item -Path "function:$commandName" -Value { param([Parameter(ValueFromRemainingArguments = $true)]$Rest) }
+                }
+            }
+            Mock Register-OpenPathTask { }
+            Mock Enable-OpenPathTask { }
+            Mock Start-OpenPathTask { }
+
+            $result = Invoke-OpenPathAgentSelfUpdate -Silent -CanaryOnly
+
+            $result.Success | Should -BeTrue
+            $result.Updated | Should -BeTrue
+            $script:FileUris[0] | Should -Match ([regex]::Escape('?build=build-stable'))
+            (Get-Content -LiteralPath (Join-Path $Root 'lib/existing.ps1') -Raw).Trim() | Should -Be 'Write-Output "stable"'
+            $saved = $script:SavedConfigs[-1] | ConvertFrom-Json
+            $saved.agentBuild | Should -Be 'build-stable'
+            $saved.agentReleaseRing | Should -Be 'stable'
+            Should -Invoke New-OpenPathIntegrityBaseline -Times 1 -Exactly
+        }
+    }
+
+    It "keeps the seven-day backoff when the stable build already failed on a retired canary" {
+        $root = Join-Path $TestDrive ('canary-backoff-' + [guid]::NewGuid().ToString('N'))
+        $manifest = [PSCustomObject]@{
+            version = '9.9.8'
+            build   = 'build-stable'
+            files   = @([PSCustomObject]@{ path = 'lib/existing.ps1'; sha256 = ('a' * 64) })
+        }
+
+        InModuleScope Common -Parameters @{ Root = $root; Manifest = $manifest } {
+            $script:OpenPathRoot = $Root
+            $script:TestManifest = $Manifest
+            New-Item -ItemType Directory -Path (Join-Path (Join-Path $Root 'data') 'agent-update') -Force | Out-Null
+            Save-OpenPathAgentUpdateFailureRecord -OpenPathRoot $Root -Version '9.9.8' -Build 'build-stable' -Stage 'gate' -Message 'previous failure'
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl           = 'https://api.test'
+                    whitelistUrl     = 'https://api.test/w/token/whitelist.txt'
+                    version          = '9.9.8'
+                    agentBuild       = 'build-canary'
+                    agentReleaseRing = 'canary'
+                }
+            }
+            Mock Get-OpenPathMachineTokenFromWhitelistUrl { 'token' }
+            Mock Invoke-RestMethod { $script:TestManifest }
+            Mock Invoke-WebRequest { throw 'a build inside its failure backoff must not be downloaded' }
+            Mock Write-OpenPathLog { }
+
+            $result = Invoke-OpenPathAgentSelfUpdate -Silent -CanaryOnly
+
+            $result.Success | Should -BeTrue
+            $result.Updated | Should -BeFalse
+            $result.Message | Should -Match 'previously failed'
+        }
+    }
+
+    It "reads the HTTP status from an HttpStatusCode enum" {
+        InModuleScope Common {
+            $response = [PSCustomObject]@{ StatusCode = [System.Net.HttpStatusCode]::Conflict }
+            $exception = New-Object System.Exception('conflict')
+            $exception | Add-Member -NotePropertyName Response -NotePropertyValue $response
+            $record = New-Object System.Management.Automation.ErrorRecord($exception, 'test', 'NotSpecified', $null)
+
+            Get-OpenPathAgentUpdateHttpStatusCode -ErrorRecord $record | Should -Be 409
+        }
+    }
 }

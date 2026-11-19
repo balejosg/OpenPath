@@ -181,3 +181,98 @@ function Get-SseUpdateCooldownFromConfig {
 
     return $parsed
 }
+
+function Invoke-SseCanarySelfUpdateProcess {
+    <#
+    .SYNOPSIS
+        Runs the canary-only agent self-update in its own Windows PowerShell process.
+    .DESCRIPTION
+        The self-update imports every agent module, may replace files and
+        re-registers the scheduled tasks, so it runs as `OpenPath.ps1
+        self-update --canary-only --silent` in a separate process instead of
+        inside the listener. Success is that process's exit code: OpenPath.ps1
+        exits 1 on a failed self-update and 0 otherwise, so no stale
+        $LASTEXITCODE from the listener session can be read as a failure.
+    .PARAMETER ProcessRunner
+        Test seam: receives the executable path and argument string, returns the
+        exit code. The default starts a hidden process and waits for it.
+    .OUTPUTS
+        PSCustomObject with Success, ExitCode and Message.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenPathRoot,
+
+        [string]$PowerShellPath = '',
+
+        [int]$TimeoutSeconds = 1800,
+
+        [scriptblock]$ProcessRunner = $null
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PowerShellPath)) {
+        $systemRoot = [string]$env:SystemRoot
+        $candidate = if ($systemRoot) { Join-Path $systemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' } else { '' }
+        $PowerShellPath = if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { $candidate } else { 'powershell.exe' }
+    }
+
+    # String join, not Join-Path: the root is a Windows path that must not be
+    # resolved against the drives of the current session.
+    $entry = $OpenPathRoot.TrimEnd('\', '/') + '\OpenPath.ps1'
+    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$entry`" self-update --canary-only --silent"
+
+    if ($null -eq $ProcessRunner) {
+        $ProcessRunner = {
+            param([string]$FilePath, [string]$ArgumentList, [int]$WaitSeconds)
+            $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $startInfo.FileName = $FilePath
+            $startInfo.Arguments = $ArgumentList
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $process = [System.Diagnostics.Process]::Start($startInfo)
+            try {
+                if (-not $process.WaitForExit($WaitSeconds * 1000)) {
+                    # Never kill an update mid-way; the update lock and journal
+                    # keep a later run safe.
+                    return $null
+                }
+                return $process.ExitCode
+            }
+            finally {
+                $process.Dispose()
+            }
+        }
+    }
+
+    try {
+        $exitCode = & $ProcessRunner $PowerShellPath $arguments $TimeoutSeconds
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success  = $false
+            ExitCode = $null
+            Message  = "could not start the canary self-update process: $($_.Exception.Message)"
+        }
+    }
+
+    if ($null -eq $exitCode) {
+        return [PSCustomObject]@{
+            Success  = $false
+            ExitCode = $null
+            Message  = "the canary self-update process is still running after $TimeoutSeconds seconds"
+        }
+    }
+    if ([int]$exitCode -ne 0) {
+        return [PSCustomObject]@{
+            Success  = $false
+            ExitCode = [int]$exitCode
+            Message  = "the canary self-update process exited with code $exitCode"
+        }
+    }
+    return [PSCustomObject]@{
+        Success  = $true
+        ExitCode = 0
+        Message  = ''
+    }
+}
