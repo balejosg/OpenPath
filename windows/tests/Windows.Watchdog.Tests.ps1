@@ -4174,6 +4174,89 @@ Describe "Watchdog checks the egress floor invariant outside the protected-mode 
     }
 }
 
+Describe "Watchdog protected-mode repairs re-check the classroom state" {
+    # 2026-11-20: a watchdog cycle that began before a classroom disable restored
+    # local DNS 3 s after the disable had restored the network DNS (no browsing for
+    # 5-10 min), and another rebuilt the firewall in parallel with the enabling cycle.
+    BeforeAll {
+        . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")
+        # Every collaborator is stubbed in this Describe scope, after the dot-source, so
+        # neither the real helpers nor stubs from other blocks can answer instead.
+        function Get-OpenPathWatchdogTaskHealth { param($OpenPathRoot) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
+        function Get-OpenPathWhitelistSectionsFromFile { param($Path) [pscustomobject]@{ Disabled = $script:wrDisabled } }
+        function Get-OpenPathEndpointPolicyState {
+            param($WhitelistSections, $PortalModeActive, $StaleFailsafeActive, $FailureModeState)
+            $open = [bool]($WhitelistSections -and $WhitelistSections.Disabled)
+            [pscustomobject]@{ FailOpenActive = $open; ProtectedModeEligible = (-not $open); StaleFailsafeActive = $false }
+        }
+        function Invoke-OpenPathOpenClassroomPostureRepair { param($Config, $OpenPathRoot) $null }
+        function Clear-OpenPathOpenClassroomPostureState { param($OpenPathRoot) }
+        function Invoke-OpenPathWatchdogEgressFloorInvariantCheck { param($Config, $OpenPathRoot) $null }
+        function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks { param($Config, $PortalModeActive, $CaptiveState) [pscustomobject]@{ Issues = @(); ReasonCodes = @() } }
+        function Get-Service { param($DisplayName, $ErrorAction) [pscustomobject]@{ Status = 'Running'; StartType = 'Automatic' } }
+        function New-OpenPathWatchdogProtectedModeRepairPlan {
+            param($PolicyState, $AcrylicServiceRunning, $AcrylicServiceAutoStart, $DnsResolutionHealthy, $DnsSinkholeHealthy, $FirewallActive, $LocalDnsConfigured, $AffectedLocalDnsAdapterNames, $BridgeFiltersDetected, $AffectedBridgeFilterAdapterNames)
+            $actions = @()
+            if ($PSBoundParameters.ContainsKey('LocalDnsConfigured') -and -not $LocalDnsConfigured) { $actions += 'SetLocalDns' }
+            [pscustomobject]@{ Actions = $actions; Issues = @($actions | ForEach-Object { "issue $_" }); RecoveryEligibleIssues = @() }
+        }
+        function Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) $script:wrRepairs += @($Plan.Actions) }
+        function Enter-OpenPathPostureNamedMutex { param($Name) [pscustomobject]@{ Acquired = $script:wrLockAvailable; Mutex = $null } }
+        function Exit-OpenPathPostureNamedMutex { param($Lock) if ($Lock.Acquired) { $script:wrLockReleased++ } }
+        function Test-DNSResolution { return $true }
+        function Test-DNSSinkhole { param($Domain) return $true }
+        function Test-FirewallActive { return $true }
+        # The classroom gets disabled while this cycle's checks run.
+        function Get-OpenPathActiveIpv4AdaptersMissingLocalDns {
+            if ($script:wrDisableDuringChecks) { $script:wrDisabled = $true }
+            return @([pscustomobject]@{ Name = 'Wi-Fi' })
+        }
+        function Get-OpenPathAdaptersWithBridgeFilters { param($ExtraComponentIds, $Allowlist) return @() }
+        function Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+        function Invoke-OpenPathWatchdogAppControlHealth { param($Config, $OpenPathRoot, $GroupSyncFailed) [pscustomobject]@{ Issues = @(); ReasonCodes = @(); RecoveryEligibleIssues = @() } }
+        function Invoke-OpenPathWatchdogFirefoxPolicySync { }
+        function Test-OpenPathSplitDnsTopologyDrift { return [pscustomobject]@{ Drifted = $false; Reason = '' } }
+        function Get-OpenPathFirefoxNativeHostCompiledHealth { param($Config) [pscustomobject]@{ BoundaryActive = $false; ReasonCode = '' } }
+        function Get-OpenPathSmartAppControlState { return [pscustomobject]@{ State = 'off' } }
+        function Write-OpenPathLog { param($Message, $Level) }
+
+        function Invoke-WatchdogRaceCycle {
+            Invoke-OpenPathWatchdogChecks `
+                -Config ([pscustomobject]@{ enableNonAdminAppControl = $false }) `
+                -PortalModeActive $false `
+                -CaptiveState 'Direct' `
+                -OpenPathRoot $TestDrive `
+                -StaleFailsafeStatePath (Join-Path $TestDrive 'stale.json') | Out-Null
+        }
+    }
+
+    BeforeEach {
+        $script:wrDisabled = $false
+        $script:wrDisableDuringChecks = $false
+        $script:wrRepairs = @()
+        $script:wrLockAvailable = $true
+        $script:wrLockReleased = 0
+    }
+
+    It "repairs missing local DNS while the classroom stays protected, under the update cycle lock" {
+        Invoke-WatchdogRaceCycle
+        $script:wrRepairs | Should -Be @('SetLocalDns')
+        $script:wrLockReleased | Should -Be 1
+    }
+
+    It "does not restore local DNS when the classroom was disabled after the cycle began" {
+        $script:wrDisableDuringChecks = $true
+        Invoke-WatchdogRaceCycle
+        @($script:wrRepairs).Count | Should -Be 0
+    }
+
+    It "skips the repair while an update cycle holds its lock" {
+        $script:wrLockAvailable = $false
+        Invoke-WatchdogRaceCycle
+        @($script:wrRepairs).Count | Should -Be 0
+    }
+}
+
 Describe "Watchdog committed update journal" {
     BeforeAll {
         . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")

@@ -1585,6 +1585,39 @@ function Invoke-OpenPathWatchdogChecks {
     $issues += @($passthroughEmergency.Issues)
 
     $shouldRunProtectedModeChecks = [bool]$policyState.ProtectedModeEligible
+
+    # The checks below take tens of seconds, and the protected-mode decision above is
+    # from the start of this cycle. If the classroom was disabled meanwhile, or an
+    # update cycle is applying a new whitelist right now, a repair would undo it:
+    # on 2026-11-20 a watchdog restored local DNS 3 s after a disable had restored
+    # the network DNS, leaving open-classroom PCs without browsing for 5-10 min, and
+    # rebuilt the firewall in parallel with the enabling cycle (duplicate rules).
+    # So each repair re-reads the whitelist and runs only while the update cycle lock
+    # is free (taken without waiting and held through the repair).
+    $invokeProtectedModeRepair = {
+        param($RepairPlan)
+        $cycleLock = Enter-OpenPathPostureNamedMutex -Name 'Global\OpenPathUpdateLock'
+        if (-not $cycleLock.Acquired) {
+            Write-OpenPathLog "Watchdog: an update cycle is running; skipping protected-mode repair ($(@($RepairPlan.Actions) -join ', ')) this cycle" -Level WARN
+            return
+        }
+        try {
+            $currentSections = Get-OpenPathWhitelistSectionsFromFile -Path $localWhitelistPath
+            $currentPolicy = Get-OpenPathEndpointPolicyState `
+                -WhitelistSections $currentSections `
+                -PortalModeActive:$PortalModeActive `
+                -StaleFailsafeActive:(Test-Path $StaleFailsafeStatePath) `
+                -FailureModeState $failureModeState
+            if (-not $currentPolicy.ProtectedModeEligible) {
+                Write-OpenPathLog "Watchdog: protection no longer applies (classroom disabled or portal mode since this cycle began); skipping protected-mode repair ($(@($RepairPlan.Actions) -join ', '))" -Level WARN
+                return
+            }
+            Invoke-OpenPathEndpointStateRepairPlan -Plan $RepairPlan -Config $Config | Out-Null
+        }
+        finally {
+            Exit-OpenPathPostureNamedMutex -Lock $cycleLock
+        }
+    }
     $shouldRunDnsProxyChecks = [bool]($shouldRunProtectedModeChecks -or $failureModeActive)
 
     try {
@@ -1615,7 +1648,7 @@ function Invoke-OpenPathWatchdogChecks {
         if ($repairPlan.Actions.Count -gt 0) {
             $issues += @($repairPlan.Issues)
             $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
-            Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
+            & $invokeProtectedModeRepair $repairPlan
         }
     }
     catch {
@@ -1632,7 +1665,7 @@ function Invoke-OpenPathWatchdogChecks {
                 -DnsResolutionHealthy:$false
             $issues += @($repairPlan.Issues)
             $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
-            Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
+            & $invokeProtectedModeRepair $repairPlan
         }
     }
     catch {
@@ -1700,7 +1733,7 @@ function Invoke-OpenPathWatchdogChecks {
                 -FirewallActive:$false
             $issues += @($repairPlan.Issues)
             $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
-            Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
+            & $invokeProtectedModeRepair $repairPlan
         }
     }
     catch {
@@ -1719,7 +1752,7 @@ function Invoke-OpenPathWatchdogChecks {
                 -AffectedLocalDnsAdapterNames $affectedAdapterNames
             $issues += @($repairPlan.Issues)
             $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
-            Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
+            & $invokeProtectedModeRepair $repairPlan
         }
     }
     catch {
@@ -1752,7 +1785,7 @@ function Invoke-OpenPathWatchdogChecks {
                     -AffectedBridgeFilterAdapterNames $affectedBridgeAdapterNames
                 $issues += @($repairPlan.Issues)
                 $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
-                Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
+                & $invokeProtectedModeRepair $repairPlan
             }
         }
     }
