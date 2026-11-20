@@ -215,7 +215,8 @@ Describe "Runtime dependency worker" {
                     -DebounceMs 0 `
                     -WatcherTimeoutMs 200 `
                     -NoProgressBackoffMs 200 `
-                    -MaxNoProgressBackoffMs 400 | Should -Be 0
+                    -MaxNoProgressBackoffMs 400 `
+                    -NoProgressRetryMs 0 | Should -Be 0
                 $elapsed.Stop()
             }
             finally {
@@ -227,6 +228,48 @@ Describe "Runtime dependency worker" {
             # Waits after cycles 1-3 are 200, 400 and 400 ms instead of the 200 ms sweep.
             $elapsed.ElapsedMilliseconds | Should -BeGreaterOrEqual 900
             @($script:stuckLogs | Where-Object { $_ -match 'left the same 1 queue file\(s\) pending' }).Count | Should -Be 2
+        }
+
+        It "re-runs a stalled batch only every NoProgressRetryMs while keeping the heartbeat" {
+            $stallQueue = Join-Path $TestDrive 'stall-queue'
+            New-Item -ItemType Directory -Path $stallQueue -Force | Out-Null
+            Set-Content -Path (Join-Path $stallQueue 'stale.json') -Value '{}' -Encoding UTF8
+            $stallState = Join-Path $TestDrive 'stall-state.json'
+
+            # Disabled classroom: every batch leaves the queue untouched.
+            $script:stallApplyCount = 0
+            Start-OpenPathRuntimeDependencyWorker `
+                -QueuePath $stallQueue `
+                -StatePath $stallState `
+                -ApplyAction { $script:stallApplyCount++; return @{ ExitCode = 0; LockBusy = $false } } `
+                -MaxCycles 5 `
+                -DebounceMs 0 `
+                -WatcherTimeoutMs 200 `
+                -NoProgressBackoffMs 200 `
+                -MaxNoProgressBackoffMs 200 `
+                -HeartbeatSeconds 1 `
+                -NoProgressRetryMs 60000 | Should -Be 0
+
+            $script:stallApplyCount | Should -Be 1
+            $state = Get-Content $stallState -Raw | ConvertFrom-Json
+            $state.cycles | Should -Be 5
+            $state.noProgressBackoffMs | Should -Be 200
+
+            # Once the retry interval has passed the batch runs again.
+            $script:stallApplyCount = 0
+            Remove-Item -LiteralPath $stallState -Force
+            Start-OpenPathRuntimeDependencyWorker `
+                -QueuePath $stallQueue `
+                -StatePath $stallState `
+                -ApplyAction { $script:stallApplyCount++; return @{ ExitCode = 0; LockBusy = $false } } `
+                -MaxCycles 6 `
+                -DebounceMs 0 `
+                -WatcherTimeoutMs 200 `
+                -NoProgressBackoffMs 200 `
+                -MaxNoProgressBackoffMs 200 `
+                -NoProgressRetryMs 500 | Should -Be 0
+            $script:stallApplyCount | Should -BeGreaterOrEqual 2
+            $script:stallApplyCount | Should -BeLessThan 6
         }
 
         It "does not back off when the batch drains the queue" {

@@ -468,6 +468,11 @@ function Start-OpenPathRuntimeDependencyWorker {
         # each cycle writes never goes stale for the native host.
         [int]$NoProgressBackoffMs = 1000,
         [int]$MaxNoProgressBackoffMs = 5000,
+        # While the same queue files stay pending, the worker still wakes every backoff
+        # interval for its heartbeat but re-runs the batch only this often (or as soon
+        # as the queue changes). A disabled classroom can keep a queue pending for
+        # hours; re-running it every 5 s cost ~16% of a CPU core on classroom laptops.
+        [int]$NoProgressRetryMs = 30000,
         [switch]$Once,
         [int]$MaxCycles = 0
     )
@@ -521,6 +526,8 @@ function Start-OpenPathRuntimeDependencyWorker {
         $lastHeartbeat = [System.Diagnostics.Stopwatch]::StartNew()
         $noProgressWaitMs = 0
         $noProgressCapMs = [Math]::Max(200, [Math]::Min($MaxNoProgressBackoffMs, [Math]::Max(1, $HeartbeatSeconds) * 1000))
+        $stalledNames = ''
+        $stalledRetry = [System.Diagnostics.Stopwatch]::StartNew()
         while ($true) {
             $cycles = [int]$state['cycles'] + 1
             $state['cycles'] = $cycles
@@ -532,9 +539,16 @@ function Start-OpenPathRuntimeDependencyWorker {
             $state['queueFiles'] = $queueFiles.Count
             if ($queueFiles.Count -eq 0) {
                 $noProgressWaitMs = 0
+                $stalledNames = ''
             }
 
-            if ($queueFiles.Count -gt 0) {
+            $skipStalledBatch = $false
+            if ($queueFiles.Count -gt 0 -and $stalledNames -and $stalledRetry.ElapsedMilliseconds -lt [Math]::Max(0, $NoProgressRetryMs)) {
+                $currentNames = (@($queueFiles | ForEach-Object { [System.IO.Path]::GetFileName($_) } | Sort-Object) -join '|')
+                $skipStalledBatch = ($currentNames -eq $stalledNames)
+            }
+
+            if ($queueFiles.Count -gt 0 -and -not $skipStalledBatch) {
                 # Phase 2D D3: expose how long the oldest queued request waited
                 # before the worker noticed it (acceptance bound: <= 300 ms).
                 $queueFileAgeMs = -1
@@ -616,9 +630,12 @@ function Start-OpenPathRuntimeDependencyWorker {
                         Write-OpenPathLog "Runtime dependency worker left the same $($pendingAfter.Count) queue file(s) pending; retrying every $nextWaitMs ms until the queue changes"
                     }
                     $noProgressWaitMs = $nextWaitMs
+                    $stalledNames = $namesAfter
+                    $stalledRetry.Restart()
                 }
                 else {
                     $noProgressWaitMs = 0
+                    $stalledNames = ''
                 }
                 $state['noProgressBackoffMs'] = $noProgressWaitMs
                 Write-OpenPathRuntimeDependencyWorkerState -State $state -StatePath $StatePath | Out-Null
