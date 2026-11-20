@@ -1556,11 +1556,16 @@ function Clear-OpenPathCaptivePortalMarker {
     .OUTPUTS
         Boolean
     #>
+    if (-not (Test-Path -LiteralPath $script:CaptivePortalStatePath -ErrorAction SilentlyContinue)) {
+        return $true
+    }
+
     try {
-        Remove-Item -Path $script:CaptivePortalStatePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:CaptivePortalStatePath -Force -ErrorAction Stop
         return $true
     }
     catch {
+        Write-OpenPathLog "Watchdog: could not delete the captive portal marker: $_" -Level WARN
         return $false
     }
 }
@@ -1582,8 +1587,12 @@ function Test-OpenPathCaptivePortalClassroomDisabled {
 
     try {
         $whitelistPath = Join-Path $script:OpenPathRoot 'data\whitelist.txt'
-        if (-not (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromFile' -ErrorAction SilentlyContinue) -or
-            -not (Test-Path -LiteralPath $whitelistPath -ErrorAction SilentlyContinue)) {
+        if (-not (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromFile' -ErrorAction SilentlyContinue)) {
+            Write-OpenPathLog 'Watchdog: classroom whitelist reader is unavailable (reasonCode=classroom_state_unknown); keeping fail-closed enforcement' -Level WARN
+            return $false
+        }
+        if (-not (Test-Path -LiteralPath $whitelistPath -ErrorAction SilentlyContinue)) {
+            Write-OpenPathLog "Watchdog: classroom whitelist is missing at $whitelistPath (reasonCode=classroom_state_unknown); keeping fail-closed enforcement" -Level WARN
             return $false
         }
 
@@ -1604,7 +1613,7 @@ function Test-OpenPathCaptivePortalClassroomDisabled {
         return [bool]($sections.PSObject.Properties['IsDisabled'] -and $sections.IsDisabled)
     }
     catch {
-        Write-OpenPathLog "Watchdog: could not read classroom state for captive portal recovery: $_" -Level WARN
+        Write-OpenPathLog "Watchdog: could not read classroom state for captive portal recovery (reasonCode=classroom_state_unknown): $_" -Level WARN
         return $false
     }
 }

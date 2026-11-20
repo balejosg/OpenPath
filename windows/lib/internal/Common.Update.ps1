@@ -1996,7 +1996,12 @@ function Complete-OpenPathAgentUpdateFinalization {
         }
         # A classroom disabled on the server stays open across an agent update.
         $whitelistPath = Join-Path (Join-Path $OpenPathRoot 'data') 'whitelist.txt'
-        $classroomDisabled = [bool](Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath).IsDisabled
+        $classroomSections = Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath
+        $classroomDisabled = [bool]$classroomSections.IsDisabled
+        if ($classroomSections.PSObject.Properties['ReadSucceeded'] -and -not [bool]$classroomSections.ReadSucceeded) {
+            # Unknown keeps the fail-closed path below; make that visible in the fleet.
+            Write-OpenPathLog 'Agent update finalization could not read the classroom whitelist state (reasonCode=classroom_state_unknown); restoring protected mode' -Level WARN
+        }
         if (-not $classroomDisabled) {
             if (Get-Command -Name 'Restore-OpenPathProtectedMode' -ErrorAction SilentlyContinue) {
                 Restore-OpenPathProtectedMode -Config $Config | Out-Null

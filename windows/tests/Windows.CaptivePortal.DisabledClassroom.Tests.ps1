@@ -147,6 +147,76 @@ Describe 'Captive portal recovery while the classroom is disabled' {
         }
     }
 
+    Context 'Classroom state and marker clearing diagnostics' {
+        BeforeEach {
+            $script:root = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+            New-Item -ItemType Directory -Path (Join-Path $script:root 'data') -Force | Out-Null
+            $script:whitelistPath = Join-Path $script:root 'data/whitelist.txt'
+            $script:markerPath = Join-Path $script:root 'data/captive-portal-active.json'
+
+            InModuleScope CaptivePortal -Parameters @{ Root = $script:root; Marker = $script:markerPath } {
+                param($Root, $Marker)
+                $script:savedRoot = $script:OpenPathRoot
+                $script:savedMarker = $script:CaptivePortalStatePath
+                $script:OpenPathRoot = $Root
+                $script:CaptivePortalStatePath = $Marker
+            }
+
+            Mock -ModuleName CaptivePortal Write-OpenPathLog { }
+        }
+
+        AfterEach {
+            InModuleScope CaptivePortal {
+                $script:OpenPathRoot = $script:savedRoot
+                $script:CaptivePortalStatePath = $script:savedMarker
+            }
+        }
+
+        It 'reports a missing whitelist as classroom_state_unknown and stays fail-closed' {
+            Test-OpenPathCaptivePortalClassroomDisabled | Should -BeFalse
+
+            Should -Invoke -ModuleName CaptivePortal Write-OpenPathLog -Times 1 -Exactly -ParameterFilter {
+                $Message -match 'classroom_state_unknown'
+            }
+        }
+
+        It 'does not log classroom_state_unknown for a readable disabled whitelist' {
+            Set-Content -Path $script:whitelistPath -Value '# DESACTIVADO'
+
+            Test-OpenPathCaptivePortalClassroomDisabled | Should -BeTrue
+
+            Should -Invoke -ModuleName CaptivePortal Write-OpenPathLog -Times 0 -Exactly -ParameterFilter {
+                $Message -match 'classroom_state_unknown'
+            }
+        }
+
+        It 'reports success when the marker is already absent' {
+            InModuleScope CaptivePortal { Clear-OpenPathCaptivePortalMarker } | Should -BeTrue
+        }
+
+        It 'deletes an existing marker' {
+            Set-Content -LiteralPath $script:markerPath -Value '{}'
+
+            InModuleScope CaptivePortal { Clear-OpenPathCaptivePortalMarker } | Should -BeTrue
+            Test-Path -LiteralPath $script:markerPath | Should -BeFalse
+        }
+
+        It 'reports and logs a marker that could not be deleted' {
+            Set-Content -LiteralPath $script:markerPath -Value '{}'
+            Set-Content -Path $script:whitelistPath -Value '# DESACTIVADO'
+            # A non-terminating error is what an in-use or ACL-protected file produces.
+            Mock -ModuleName CaptivePortal Remove-Item { Write-Error 'access denied' -ErrorAction $PesterBoundParameters['ErrorAction'] }
+
+            InModuleScope CaptivePortal { Clear-OpenPathCaptivePortalMarker } | Should -BeFalse
+            Close-OpenPathCaptivePortalForDisabledClassroom | Should -BeFalse
+
+            Test-Path -LiteralPath $script:markerPath | Should -BeTrue
+            Should -Invoke -ModuleName CaptivePortal Write-OpenPathLog -Times 2 -Exactly -ParameterFilter {
+                $Message -match 'could not delete the captive portal marker'
+            }
+        }
+    }
+
     Context 'Portal entry functions' {
         BeforeEach {
             $script:root = Join-Path $TestDrive ([guid]::NewGuid().ToString())

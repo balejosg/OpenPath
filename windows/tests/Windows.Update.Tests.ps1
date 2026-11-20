@@ -3200,8 +3200,9 @@ Describe "Update Script" {
         }
 
         It "Restores protected mode after an update only when the local whitelist is not disabled" -TestCases @(
-            @{ Whitelist = '# DESACTIVADO'; ExpectedRestores = 0; ExpectedAcrylicRestarts = 0 }
-            @{ Whitelist = "## WHITELIST`nexample.org"; ExpectedRestores = 1; ExpectedAcrylicRestarts = 0 }
+            @{ Whitelist = '# DESACTIVADO'; ExpectedRestores = 0; ExpectedAcrylicRestarts = 0; ExpectedUnknownLogs = 0 }
+            @{ Whitelist = "## WHITELIST`nexample.org"; ExpectedRestores = 1; ExpectedAcrylicRestarts = 0; ExpectedUnknownLogs = 0 }
+            @{ Whitelist = $null; ExpectedRestores = 1; ExpectedAcrylicRestarts = 0; ExpectedUnknownLogs = 1 }
         ) {
             $root = Join-Path $TestDrive ('finalize-fail-open-' + [guid]::NewGuid().ToString('N'))
             $destination = Join-Path $root 'lib/existing.ps1'
@@ -3231,7 +3232,9 @@ Describe "Update Script" {
             $journalPath = Join-Path $root 'data/agent-update/update-journal.json'
             New-Item -ItemType Directory -Path (Split-Path $journalPath -Parent) -Force | Out-Null
             $journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $journalPath -Encoding UTF8
-            Set-Content -LiteralPath (Join-Path $root 'data/whitelist.txt') -Value $Whitelist -Encoding UTF8
+            if ($null -ne $Whitelist) {
+                Set-Content -LiteralPath (Join-Path $root 'data/whitelist.txt') -Value $Whitelist -Encoding UTF8
+            }
             $config = [PSCustomObject]@{ version = '9.9.8'; agentBuild = 'build-old' }
 
             InModuleScope Common -Parameters @{
@@ -3240,6 +3243,7 @@ Describe "Update Script" {
                 Config = $config
                 ExpectedRestores = $ExpectedRestores
                 ExpectedAcrylicRestarts = $ExpectedAcrylicRestarts
+                ExpectedUnknownLogs = $ExpectedUnknownLogs
             } {
                 $script:OpenPathRoot = $Root
                 Mock Write-OpenPathLog { }
@@ -3266,6 +3270,9 @@ Describe "Update Script" {
                 $result.Success | Should -BeTrue
                 Should -Invoke Restore-OpenPathProtectedMode -Times $ExpectedRestores -Exactly
                 Should -Invoke Restart-AcrylicService -Times $ExpectedAcrylicRestarts -Exactly
+                Should -Invoke Write-OpenPathLog -Times $ExpectedUnknownLogs -Exactly -ParameterFilter {
+                    $Message -match 'classroom_state_unknown'
+                }
             }
         }
 
