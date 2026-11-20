@@ -141,28 +141,87 @@ Describe "Installer cleanup helper" {
         )
     }
 
-    It "Serializes uninstall AppControl removal with the watchdog update lock" {
+    It "Stops OpenPath-rooted processes before removing AppControl and the restricted group" {
+        # A surviving watchdog recreates the group and repairs the AppLocker rules
+        # outside Global\OpenPathUpdateLock, so the process stop must come first.
         $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
         $content = Get-Content $uninstallPath -Raw
 
-        Assert-ContentContainsAll -Content $content -Needles @(
-            'function Enter-OpenPathUninstallUpdateLock',
-            'function Exit-OpenPathUninstallUpdateLock',
-            '[System.Threading.Mutex]::new($false, ''Global\OpenPathUpdateLock'')',
-            'WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))',
-            '$uninstallUpdateLock = Enter-OpenPathUninstallUpdateLock',
-            'OpenPath-Restricted group still exists after uninstall.'
-        )
-
+        $tasksIndex = $content.IndexOf("`nStop-OpenPathScheduledTask")
+        $stopIndex = $content.IndexOf("`nStop-OpenPathRootedProcess")
         $lockIndex = $content.IndexOf('$uninstallUpdateLock = Enter-OpenPathUninstallUpdateLock')
         $appControlIndex = $content.IndexOf('Remove-OpenPathNonAdminAppControl | Out-Null')
         $groupIndex = $content.IndexOf('Remove-OpenPathRestrictedGroup | Out-Null')
-        $releaseIndex = $content.IndexOf('Exit-OpenPathUninstallUpdateLock -Mutex $uninstallUpdateLock')
+        $leftoverGateIndex = $content.IndexOf('if ($uninstallLeftovers.Count -gt 0)')
+        $successIndex = $content.IndexOf('UNINSTALL COMPLETED')
 
-        $lockIndex | Should -BeGreaterThan -1
+        $tasksIndex | Should -BeGreaterThan -1
+        $stopIndex | Should -BeGreaterThan $tasksIndex
+        $lockIndex | Should -BeGreaterThan $stopIndex
         $appControlIndex | Should -BeGreaterThan $lockIndex
         $groupIndex | Should -BeGreaterThan $appControlIndex
-        $releaseIndex | Should -BeGreaterThan $groupIndex
+        $leftoverGateIndex | Should -BeGreaterThan $groupIndex
+        $successIndex | Should -BeGreaterThan $leftoverGateIndex
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            'OpenPath-Restricted group still exists after uninstall.',
+            'OpenPath AppLocker rules remain in the local policy after uninstall.',
+            'Wait-Process -Id $processIds -Timeout $ExitWaitSeconds'
+        )
+    }
+
+    Context "Uninstall process and leftover helpers" {
+        BeforeAll {
+            $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+            $wanted = @('Get-OpenPathUninstallAncestorProcessIds', 'Get-OpenPathUninstallManagedAppLockerRuleCount')
+            foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wanted }, $true)) {
+                . ([scriptblock]::Create($fn.Extent.Text))
+            }
+        }
+
+        It "Excludes the uninstaller and its whole parent chain from the process stop" {
+            $processes = @(
+                [PSCustomObject]@{ ProcessId = 500; ParentProcessId = 400 },
+                [PSCustomObject]@{ ProcessId = 400; ParentProcessId = 300 },
+                [PSCustomObject]@{ ProcessId = 300; ParentProcessId = 0 },
+                [PSCustomObject]@{ ProcessId = 700; ParentProcessId = 300 }
+            )
+
+            $ids = @(Get-OpenPathUninstallAncestorProcessIds -ProcessId 500 -Processes $processes)
+
+            $ids | Should -Be @(500, 400, 300)
+            $ids | Should -Not -Contain 700
+        }
+
+        It "Stops walking on a parent cycle or an unknown parent" {
+            $cycle = @(
+                [PSCustomObject]@{ ProcessId = 10; ParentProcessId = 20 },
+                [PSCustomObject]@{ ProcessId = 20; ParentProcessId = 10 }
+            )
+            @(Get-OpenPathUninstallAncestorProcessIds -ProcessId 10 -Processes $cycle) | Should -Be @(10, 20)
+            @(Get-OpenPathUninstallAncestorProcessIds -ProcessId 42 -Processes @()) | Should -Be @(42)
+        }
+
+        It "Counts only OpenPath-managed AppLocker rules" {
+            $policy = @'
+<AppLockerPolicy Version="1">
+  <RuleCollection Type="Exe" EnforcementMode="Enabled">
+    <FilePathRule Id="1" Name="OpenPath non-admin app control - allow Windows" UserOrGroupSid="S-1-1-0" Action="Allow" />
+    <FilePathRule Id="2" Name="Corporate allow rule" UserOrGroupSid="S-1-1-0" Action="Allow" />
+    <FilePathRule Id="3" Name="OpenPath non-admin app control - deny student" UserOrGroupSid="S-1-1-0" Action="Deny" />
+  </RuleCollection>
+</AppLockerPolicy>
+'@
+            Get-OpenPathUninstallManagedAppLockerRuleCount -PolicyXml $policy | Should -Be 2
+            Get-OpenPathUninstallManagedAppLockerRuleCount -PolicyXml '<AppLockerPolicy Version="1" />' | Should -Be 0
+            Get-OpenPathUninstallManagedAppLockerRuleCount -PolicyXml '' | Should -Be 0
+        }
+
+        It "Refuses to guess when the AppLocker policy is unreadable" {
+            { Get-OpenPathUninstallManagedAppLockerRuleCount -PolicyXml '<not-xml' } |
+                Should -Throw '*manual recovery is required*'
+        }
     }
 
     It "Restores DNS from legacy snapshots with array interface indexes" {

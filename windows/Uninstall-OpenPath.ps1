@@ -77,38 +77,81 @@ function Stop-OpenPathScheduledTask {
     }
 }
 
+function Get-OpenPathUninstallAncestorProcessIds {
+    # Returns the ids of $ProcessId and its ancestors from Win32_Process-shaped
+    # rows (ProcessId, ParentProcessId). A wrapper such as
+    # `cmd /c powershell -File C:\OpenPath\Uninstall-OpenPath.ps1` has the
+    # install root in its command line, and killing it would end the caller's
+    # wait early with a bogus exit code.
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [AllowEmptyCollection()][object[]]$Processes = @()
+    )
+
+    $parentById = @{}
+    foreach ($process in @($Processes)) {
+        if ($null -eq $process) { continue }
+        $parentById[[int]$process.ProcessId] = [int]$process.ParentProcessId
+    }
+
+    $ancestors = [System.Collections.Generic.List[int]]::new()
+    $current = $ProcessId
+    while ($current -gt 0 -and -not $ancestors.Contains($current)) {
+        $ancestors.Add($current)
+        if (-not $parentById.ContainsKey($current)) { break }
+        $current = $parentById[$current]
+    }
+    return @($ancestors)
+}
+
 function Stop-OpenPathRootedProcess {
-    $processIds = @()
+    # Stops every process running from, or launched with, the install root and
+    # waits for it to exit. Repeats a few rounds so children spawned by a
+    # process while it was being stopped are caught too.
+    param([int]$MaxRounds = 3, [int]$ExitWaitSeconds = 15)
 
-    $processIds += Get-Process -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Id -ne $PID -and
-            $_.Path -and
-            $_.Path.StartsWith($OpenPathRoot, [System.StringComparison]::OrdinalIgnoreCase)
-        } |
-        Select-Object -ExpandProperty Id
+    for ($round = 0; $round -lt $MaxRounds; $round++) {
+        $cimProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+        $excludedIds = @(Get-OpenPathUninstallAncestorProcessIds -ProcessId $PID -Processes $cimProcesses)
+        $processIds = @()
 
-    $processIds += Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.ProcessId -ne $PID -and
-            $_.CommandLine -like "*$OpenPathRoot*"
-        } |
-        Select-Object -ExpandProperty ProcessId
+        $processIds += Get-Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Id -notin $excludedIds -and
+                $_.Path -and
+                $_.Path.StartsWith($OpenPathRoot, [System.StringComparison]::OrdinalIgnoreCase)
+            } |
+            Select-Object -ExpandProperty Id
 
-    $processIds |
-        Where-Object { $_ } |
-        Select-Object -Unique |
-        ForEach-Object {
-            Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
+        $processIds += $cimProcesses |
+            Where-Object {
+                $_.ProcessId -notin $excludedIds -and
+                $_.CommandLine -like "*$OpenPathRoot*"
+            } |
+            Select-Object -ExpandProperty ProcessId
+
+        $processIds = @($processIds | Where-Object { $_ } | Select-Object -Unique)
+        if ($processIds.Count -eq 0) { return }
+
+        foreach ($processId in $processIds) {
+            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
         }
+        # Stop-Process returns once termination is requested; wait for the exit
+        # so a stopped watchdog cannot still be finishing a repair afterwards.
+        Wait-Process -Id $processIds -Timeout $ExitWaitSeconds -ErrorAction SilentlyContinue
+    }
+
+    Write-Warning "OpenPath processes were still starting after $MaxRounds stop rounds."
 }
 
 function Enter-OpenPathUninstallUpdateLock {
-    # The watchdog takes Global\OpenPathUpdateLock without waiting before a
-    # protected-mode repair. Hold the same mutex through the AppControl removal
-    # and the install-root wipe so a watchdog that started before this uninstall
-    # cannot recreate OpenPath-Restricted or the AppLocker rules after they are
-    # removed. Wait for an in-flight cycle instead of racing it.
+    # Global\OpenPathUpdateLock serializes the whitelist update cycle and the
+    # watchdog's DNS/firewall repair. Every holder is an OpenPath-rooted process
+    # that Stop-OpenPathRootedProcess has already stopped, so this normally
+    # succeeds at once (possibly as an abandoned mutex); it is a second line of
+    # defense against a holder the process sweep missed. It does NOT cover the
+    # watchdog's restricted-group sync or AppControl repair, which run outside
+    # this mutex: stopping the processes is what keeps those from racing.
     param([int]$TimeoutSeconds = 60)
 
     $mutex = $null
@@ -143,22 +186,36 @@ function Exit-OpenPathUninstallUpdateLock {
     try { $Mutex.Dispose() } catch {}
 }
 
-function Remove-OpenPathFallbackAppLockerRules {
-    if (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
+function Get-OpenPathUninstallManagedAppLockerRuleCount {
+    # Counts OpenPath-managed rules in the local AppLocker policy XML; -1 when
+    # AppLocker cannot be queried on this machine.
+    param([AllowNull()][string]$PolicyXml)
+
+    if ($null -eq $PolicyXml) {
+        if (-not (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { return -1 }
         try {
-            $policyXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
-            $managedRules = @()
-            foreach ($rule in @($policyXml.SelectNodes('//*[@Name]'))) {
-                if ($rule -is [System.Xml.XmlElement] -and $rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
-                    $managedRules += $rule
-                }
-            }
-            if ($managedRules.Count -eq 0) { return $true }
+            $PolicyXml = [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
         }
         catch {
             throw 'Unable to inspect local AppLocker policy; manual recovery is required.'
         }
     }
+    if ([string]::IsNullOrWhiteSpace($PolicyXml)) { return 0 }
+
+    try { $policyDocument = [xml]$PolicyXml }
+    catch { throw 'Unable to inspect local AppLocker policy; manual recovery is required.' }
+
+    $count = 0
+    foreach ($rule in @($policyDocument.SelectNodes('//*[@Name]'))) {
+        if ($rule -is [System.Xml.XmlElement] -and $rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
+            $count++
+        }
+    }
+    return $count
+}
+
+function Remove-OpenPathFallbackAppLockerRules {
+    if ((Get-OpenPathUninstallManagedAppLockerRuleCount) -eq 0) { return $true }
 
     $modulePath = Join-Path $OpenPathRoot 'lib\AppControl.psm1'
     if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
@@ -760,13 +817,18 @@ Write-Host "[1/6] Removing scheduled tasks..." -ForegroundColor Yellow
 Stop-OpenPathScheduledTask
 Write-Host "  Scheduled tasks removed" -ForegroundColor Green
 
-# A watchdog process may still be alive even though its task was stopped. It
-# takes Global\OpenPathUpdateLock without waiting before a protected-mode repair,
-# so hold the same mutex from here until the install root is gone. Otherwise it
-# can restore DNS or recreate the restricted group and AppLocker rules after the
-# steps below remove them (observed as rollback-group-remains and
-# rollback-openpath-rules-remain in the desktop-survival cleanup lane).
+# Stopping a task does not reliably end every process it started. A surviving
+# watchdog recreates OpenPath-Restricted and repairs the AppLocker rules when it
+# finds them missing, and holds Global\OpenPath-AppControl-v1 while it does, so
+# Remove-OpenPathNonAdminAppControl could also give up on a busy lock. Both were
+# observed as rollback-group-remains and rollback-openpath-rules-remain in the
+# desktop-survival cleanup lane. Stop every rooted process before any removal;
+# the tasks are gone, so nothing restarts them.
+Stop-OpenPathRootedProcess
+Write-Host "  OpenPath processes stopped" -ForegroundColor Green
+
 $uninstallUpdateLock = Enter-OpenPathUninstallUpdateLock
+$uninstallLeftovers = @()
 
 # Step 2: Restore DNS
 Write-Host "[2/6] Restoring DNS configuration..." -ForegroundColor Yellow
@@ -793,11 +855,15 @@ if (Get-Command -Name Remove-OpenPathRestrictedGroup -ErrorAction SilentlyContin
     Remove-OpenPathRestrictedGroup | Out-Null
 }
 
-# Remove-OpenPathRestrictedGroup intentionally swallows removal errors; fail the
-# uninstall if the group survived so a silent leftover cannot pass as success.
-if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
-    Exit-OpenPathUninstallUpdateLock -Mutex $uninstallUpdateLock
-    throw 'OpenPath-Restricted group still exists after uninstall.'
+# Both removals swallow their own failures (the AppControl one also returns
+# $false on a busy transaction lock). Record what survived and fail at the end,
+# after the remaining steps ran, so a leftover cannot pass as success.
+if ((Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue) -and
+    (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue)) {
+    $uninstallLeftovers += 'OpenPath-Restricted group still exists after uninstall.'
+}
+if ((Get-OpenPathUninstallManagedAppLockerRuleCount) -gt 0) {
+    $uninstallLeftovers += 'OpenPath AppLocker rules remain in the local policy after uninstall.'
 }
 
 # Step 4: Remove browser policies
@@ -945,9 +1011,9 @@ else {
 # Step 6: Remove whitelist files
 Write-Host "[6/6] Removing files..." -ForegroundColor Yellow
 if (Test-Path $OpenPathRoot) {
+    # Catch anything started from the install root since Step 1 before the
+    # files are deleted.
     Stop-OpenPathRootedProcess
-    # The agent binaries are gone and every rooted process was stopped, so no
-    # watchdog can recreate the AppControl state from here on.
     Exit-OpenPathUninstallUpdateLock -Mutex $uninstallUpdateLock
     Remove-OpenPathUninstallDnsFailureArtifacts
 
@@ -959,6 +1025,19 @@ if (Test-Path $OpenPathRoot) {
         Remove-OpenPathInstallRoot
         Write-Host "  Files removed" -ForegroundColor Green
     }
+}
+
+if ($uninstallLeftovers.Count -gt 0) {
+    Exit-OpenPathUninstallUpdateLock -Mutex $uninstallUpdateLock
+    Write-Host ""
+    Write-Host "UNINSTALL INCOMPLETE:" -ForegroundColor Red
+    foreach ($leftover in $uninstallLeftovers) {
+        Write-Host "  $leftover" -ForegroundColor Red
+    }
+    # The install root (and this script) is already gone, so re-running is not
+    # an option: name the manual fix instead.
+    Write-Host "Remove them manually: Remove-LocalGroup -Name 'OpenPath-Restricted', and delete the 'OpenPath non-admin app control*' rules with secpol.msc or Set-AppLockerPolicy." -ForegroundColor Red
+    exit 1
 }
 
 Write-Host ""
