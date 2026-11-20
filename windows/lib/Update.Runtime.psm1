@@ -170,10 +170,13 @@ function Sync-OpenPathMachineClientConfig {
 
     try {
         $headers = @{ Authorization = "Bearer $machineToken" }
+        # PowerShell 5.1 waits forever without a timeout: a stalled connection would hang the
+        # update cycle while it holds the cycle lock, so the PC would ignore classroom changes.
         $response = Invoke-RestMethod `
             -Uri "$apiUrl/api/machines/client-config" `
             -Method Get `
             -Headers $headers `
+            -TimeoutSec 15 `
             -ErrorAction Stop
 
         if (-not $response -or ($response.PSObject.Properties['success'] -and -not [bool]$response.success)) {

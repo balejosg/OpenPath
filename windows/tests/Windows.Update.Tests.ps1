@@ -106,6 +106,11 @@ Describe "Update Script" {
 
                 $global:OpenPathTestClientConfigUri | Should -Be 'https://classroompath.eu/api/machines/client-config'
                 $global:OpenPathTestClientConfigAuth | Should -Be 'Bearer machine-token-123'
+                # Without a timeout, PowerShell 5.1 waits forever on a stalled connection and the
+                # hung cycle keeps the update lock, so the PC ignores classroom changes.
+                Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
+                    $TimeoutSec -gt 0 -and $TimeoutSec -le 30
+                }
                 $global:OpenPathTestPersistedDomains | Should -Be @('nce.wedu.comunidad.madrid')
                 $updated.captivePortalDomains | Should -Be @('nce.wedu.comunidad.madrid')
             }
