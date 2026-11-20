@@ -113,6 +113,13 @@ function Get-CapturedFirewallRules {
     return @($script:createdFirewallRules)
 }
 
+function Test-FirewallRuleTargetsAddress {
+    # Captured RemoteAddress is the rule's address list joined with spaces; resolver
+    # blocks group many IPs in one rule.
+    param($Rule, [string]$Address)
+    return (@(([string]$Rule.RemoteAddress) -split '\s+') -contains $Address)
+}
+
 function Set-FirewallAcrylicServicePresent {
     param(
         [Parameter(Mandatory = $true)]
@@ -169,6 +176,7 @@ Export-ModuleMember -Function @(
     'Assert-ContentContainsAll',
     'Initialize-FirewallRuleCaptureMocks',
     'Get-CapturedFirewallRules',
+    'Test-FirewallRuleTargetsAddress',
     'Set-FirewallAcrylicServicePresent',
     'Get-ContractFixturePath',
     'Get-ContractFixtureLines',

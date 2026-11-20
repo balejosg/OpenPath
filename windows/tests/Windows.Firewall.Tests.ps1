@@ -169,20 +169,44 @@ Describe "Firewall Module" {
             $result | Should -BeTrue
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '4.4.4.4' -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'TCP'
+                    (Test-FirewallRuleTargetsAddress $_ '4.4.4.4') -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'TCP'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '4.4.4.4' -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP'
+                    (Test-FirewallRuleTargetsAddress $_ '4.4.4.4') -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '5.5.5.5' -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'TCP'
+                    (Test-FirewallRuleTargetsAddress $_ '5.5.5.5') -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'TCP'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '5.5.5.5' -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP'
+                    (Test-FirewallRuleTargetsAddress $_ '5.5.5.5') -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP'
                 }).Count | Should -Be 1
+        }
+
+        It "Groups the resolver blocks into one rule per protocol and port" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    enableDohIpBlocking = $true
+                    dohResolverIps = @('4.4.4.4', '5.5.5.5', '2001:db8::53', '6.6.6.6')
+                }
+            } -ModuleName Firewall
+
+            Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy' | Should -BeTrue
+
+            foreach ($port in @('53', '443')) {
+                foreach ($protocol in @('TCP', 'UDP')) {
+                    $rules = @(Get-CapturedFirewallRules | Where-Object {
+                            $_.Action -eq 'Block' -and $_.RemotePort -eq $port -and $_.Protocol -eq $protocol -and
+                            (Test-FirewallRuleTargetsAddress $_ '4.4.4.4')
+                        })
+                    $rules.Count | Should -Be 1
+                    foreach ($address in @('5.5.5.5', '2001:db8::53', '6.6.6.6')) {
+                        Test-FirewallRuleTargetsAddress $rules[0] $address | Should -BeTrue
+                    }
+                }
+            }
         }
 
         It "Creates equivalent DNS and DoH blocks for configured IPv6 resolver addresses" {
@@ -200,11 +224,11 @@ Describe "Firewall Module" {
             foreach ($resolverIp in @('2001:4860:4860::8888', '2606:4700:4700::1111')) {
                 foreach ($protocol in @('TCP', 'UDP')) {
                     (@(Get-CapturedFirewallRules) | Where-Object {
-                            $_.RemoteAddress -eq $resolverIp -and $_.RemotePort -eq '443' -and $_.Protocol -eq $protocol
+                            (Test-FirewallRuleTargetsAddress $_ $resolverIp) -and $_.RemotePort -eq '443' -and $_.Protocol -eq $protocol
                         }).Count | Should -Be 1
 
                     (@(Get-CapturedFirewallRules) | Where-Object {
-                            $_.RemoteAddress -eq $resolverIp -and $_.RemotePort -eq '53' -and $_.Protocol -eq $protocol
+                            (Test-FirewallRuleTargetsAddress $_ $resolverIp) -and $_.RemotePort -eq '53' -and $_.Protocol -eq $protocol
                         }).Count | Should -Be 1
                 }
             }
@@ -223,22 +247,22 @@ Describe "Firewall Module" {
             $result | Should -BeTrue
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '443' -and $_.Program
+                    (Test-FirewallRuleTargetsAddress $_ '8.8.8.8') -and $_.RemotePort -eq '443' -and $_.Program
                 }).Count | Should -BeGreaterThan 0
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53' -and $_.Program
+                    (Test-FirewallRuleTargetsAddress $_ '8.8.8.8') -and $_.RemotePort -eq '53' -and $_.Program
                 }).Count | Should -BeGreaterThan 0
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '443' -and -not $_.Program
+                    (Test-FirewallRuleTargetsAddress $_ '8.8.8.8') -and $_.RemotePort -eq '443' -and -not $_.Program
                 }).Count | Should -Be 0
-            (@(Get-CapturedFirewallRules) | Where-Object { $_.RemoteAddress -eq 'invalid-ip' -and $_.RemotePort -eq '443' }).Count | Should -Be 0
+            (@(Get-CapturedFirewallRules) | Where-Object { (Test-FirewallRuleTargetsAddress $_ 'invalid-ip') -and $_.RemotePort -eq '443' }).Count | Should -Be 0
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '6.6.6.6' -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'TCP'
+                    (Test-FirewallRuleTargetsAddress $_ '6.6.6.6') -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'TCP'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '6.6.6.6' -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP'
+                    (Test-FirewallRuleTargetsAddress $_ '6.6.6.6') -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP'
                 }).Count | Should -Be 1
         }
 
@@ -261,25 +285,25 @@ Describe "Firewall Module" {
             foreach ($cloudflareResolver in @('1.1.1.1', '1.0.0.1')) {
                 foreach ($protocol in @('TCP', 'UDP')) {
                     (@(Get-CapturedFirewallRules) | Where-Object {
-                            $_.RemoteAddress -eq $cloudflareResolver -and $_.RemotePort -eq '443' -and $_.Protocol -eq $protocol -and $_.Action -eq 'Block'
+                            (Test-FirewallRuleTargetsAddress $_ $cloudflareResolver) -and $_.RemotePort -eq '443' -and $_.Protocol -eq $protocol -and $_.Action -eq 'Block'
                         }).Count | Should -Be 1
 
                     (@(Get-CapturedFirewallRules) | Where-Object {
-                            $_.RemoteAddress -eq $cloudflareResolver -and $_.RemotePort -eq '53' -and $_.Protocol -eq $protocol -and $_.Action -eq 'Block'
+                            (Test-FirewallRuleTargetsAddress $_ $cloudflareResolver) -and $_.RemotePort -eq '53' -and $_.Protocol -eq $protocol -and $_.Action -eq 'Block'
                         }).Count | Should -Be 1
                 }
             }
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-UDP' -and $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53' -and $_.Program -like '*AcrylicService.exe'
+                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-UDP' -and (Test-FirewallRuleTargetsAddress $_ '8.8.8.8') -and $_.RemotePort -eq '53' -and $_.Program -like '*AcrylicService.exe'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-TCP' -and $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53' -and $_.Program -like '*AcrylicService.exe'
+                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-TCP' -and (Test-FirewallRuleTargetsAddress $_ '8.8.8.8') -and $_.RemotePort -eq '53' -and $_.Program -like '*AcrylicService.exe'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53' -and $_.Action -eq 'Block' -and $_.Program -notlike '*AcrylicService.exe'
+                    (Test-FirewallRuleTargetsAddress $_ '8.8.8.8') -and $_.RemotePort -eq '53' -and $_.Action -eq 'Block' -and $_.Program -notlike '*AcrylicService.exe'
                 }).Count | Should -BeGreaterThan 0
         }
 
@@ -311,11 +335,11 @@ Describe "Firewall Module" {
             $result | Should -BeTrue
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '4.4.4.4' -and $_.RemotePort -eq '53' -and $_.Protocol -eq 'TCP'
+                    (Test-FirewallRuleTargetsAddress $_ '4.4.4.4') -and $_.RemotePort -eq '53' -and $_.Protocol -eq 'TCP'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.RemoteAddress -eq '4.4.4.4' -and $_.RemotePort -eq '53' -and $_.Protocol -eq 'UDP'
+                    (Test-FirewallRuleTargetsAddress $_ '4.4.4.4') -and $_.RemotePort -eq '53' -and $_.Protocol -eq 'UDP'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Block-DNS-UDP' }).Count | Should -Be 0
@@ -383,11 +407,11 @@ Describe "Firewall Module" {
             $result | Should -BeTrue
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-UDP' -and $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53'
+                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-UDP' -and (Test-FirewallRuleTargetsAddress $_ '8.8.8.8') -and $_.RemotePort -eq '53'
                 }).Count | Should -Be 1
 
             (@(Get-CapturedFirewallRules) | Where-Object {
-                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-TCP' -and $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53'
+                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-TCP' -and (Test-FirewallRuleTargetsAddress $_ '8.8.8.8') -and $_.RemotePort -eq '53'
                 }).Count | Should -Be 1
         }
     }
@@ -520,7 +544,7 @@ Describe "Firewall Module" {
             $result | Should -BeTrue
 
             $rules = @(Get-CapturedFirewallRules | Where-Object {
-                    $_.RemoteAddress -eq '172.23.136.5' -and $_.RemotePort -eq '53' -and $_.Action -eq 'Allow'
+                    (Test-FirewallRuleTargetsAddress $_ '172.23.136.5') -and $_.RemotePort -eq '53' -and $_.Action -eq 'Allow'
                 })
             (@($rules | Where-Object { $_.Protocol -eq 'UDP' })).Count | Should -Be 1
             (@($rules | Where-Object { $_.Protocol -eq 'TCP' })).Count | Should -Be 1
