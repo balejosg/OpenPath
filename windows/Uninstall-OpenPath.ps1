@@ -103,6 +103,46 @@ function Stop-OpenPathRootedProcess {
         }
 }
 
+function Enter-OpenPathUninstallUpdateLock {
+    # The watchdog takes Global\OpenPathUpdateLock without waiting before a
+    # protected-mode repair. Hold the same mutex through the AppControl removal
+    # and the install-root wipe so a watchdog that started before this uninstall
+    # cannot recreate OpenPath-Restricted or the AppLocker rules after they are
+    # removed. Wait for an in-flight cycle instead of racing it.
+    param([int]$TimeoutSeconds = 60)
+
+    $mutex = $null
+    $acquired = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, 'Global\OpenPathUpdateLock')
+        try {
+            $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+    }
+    catch {
+        if ($mutex) { $mutex.Dispose() }
+        Write-Warning "Could not open Global\OpenPathUpdateLock: $_"
+        return $null
+    }
+
+    if (-not $acquired) {
+        if ($mutex) { $mutex.Dispose() }
+        throw "Timed out after ${TimeoutSeconds}s waiting for Global\OpenPathUpdateLock; a watchdog or whitelist update is still running."
+    }
+    return $mutex
+}
+
+function Exit-OpenPathUninstallUpdateLock {
+    param([AllowNull()][object]$Mutex)
+
+    if (-not $Mutex) { return }
+    try { $Mutex.ReleaseMutex() } catch {}
+    try { $Mutex.Dispose() } catch {}
+}
+
 function Remove-OpenPathFallbackAppLockerRules {
     if (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
         try {
@@ -720,6 +760,14 @@ Write-Host "[1/6] Removing scheduled tasks..." -ForegroundColor Yellow
 Stop-OpenPathScheduledTask
 Write-Host "  Scheduled tasks removed" -ForegroundColor Green
 
+# A watchdog process may still be alive even though its task was stopped. It
+# takes Global\OpenPathUpdateLock without waiting before a protected-mode repair,
+# so hold the same mutex from here until the install root is gone. Otherwise it
+# can restore DNS or recreate the restricted group and AppLocker rules after the
+# steps below remove them (observed as rollback-group-remains and
+# rollback-openpath-rules-remain in the desktop-survival cleanup lane).
+$uninstallUpdateLock = Enter-OpenPathUninstallUpdateLock
+
 # Step 2: Restore DNS
 Write-Host "[2/6] Restoring DNS configuration..." -ForegroundColor Yellow
 Restore-OpenPathOriginalDns
@@ -743,6 +791,13 @@ else {
 
 if (Get-Command -Name Remove-OpenPathRestrictedGroup -ErrorAction SilentlyContinue) {
     Remove-OpenPathRestrictedGroup | Out-Null
+}
+
+# Remove-OpenPathRestrictedGroup intentionally swallows removal errors; fail the
+# uninstall if the group survived so a silent leftover cannot pass as success.
+if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
+    Exit-OpenPathUninstallUpdateLock -Mutex $uninstallUpdateLock
+    throw 'OpenPath-Restricted group still exists after uninstall.'
 }
 
 # Step 4: Remove browser policies
@@ -891,6 +946,9 @@ else {
 Write-Host "[6/6] Removing files..." -ForegroundColor Yellow
 if (Test-Path $OpenPathRoot) {
     Stop-OpenPathRootedProcess
+    # The agent binaries are gone and every rooted process was stopped, so no
+    # watchdog can recreate the AppControl state from here on.
+    Exit-OpenPathUninstallUpdateLock -Mutex $uninstallUpdateLock
     Remove-OpenPathUninstallDnsFailureArtifacts
 
     if ($KeepLogs) {
@@ -911,6 +969,11 @@ Write-Host ""
 Write-Host "The system has been restored to its original state."
 Write-Host "A restart may be required to apply all changes."
 Write-Host ""
+
+# Release the watchdog/whitelist serialization mutex on every path that reached
+# the end (the install root may already be absent, so the Step 6 release is not
+# guaranteed to run). Releasing twice is harmless.
+Exit-OpenPathUninstallUpdateLock -Mutex $uninstallUpdateLock
 
 # Report success explicitly: without this the process exit code is inherited
 # from the last native command (for example sc.exe deleting an already absent

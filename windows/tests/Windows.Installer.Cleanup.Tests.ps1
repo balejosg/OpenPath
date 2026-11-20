@@ -141,6 +141,30 @@ Describe "Installer cleanup helper" {
         )
     }
 
+    It "Serializes uninstall AppControl removal with the watchdog update lock" {
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $content = Get-Content $uninstallPath -Raw
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            'function Enter-OpenPathUninstallUpdateLock',
+            'function Exit-OpenPathUninstallUpdateLock',
+            '[System.Threading.Mutex]::new($false, ''Global\OpenPathUpdateLock'')',
+            'WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))',
+            '$uninstallUpdateLock = Enter-OpenPathUninstallUpdateLock',
+            'OpenPath-Restricted group still exists after uninstall.'
+        )
+
+        $lockIndex = $content.IndexOf('$uninstallUpdateLock = Enter-OpenPathUninstallUpdateLock')
+        $appControlIndex = $content.IndexOf('Remove-OpenPathNonAdminAppControl | Out-Null')
+        $groupIndex = $content.IndexOf('Remove-OpenPathRestrictedGroup | Out-Null')
+        $releaseIndex = $content.IndexOf('Exit-OpenPathUninstallUpdateLock -Mutex $uninstallUpdateLock')
+
+        $lockIndex | Should -BeGreaterThan -1
+        $appControlIndex | Should -BeGreaterThan $lockIndex
+        $groupIndex | Should -BeGreaterThan $appControlIndex
+        $releaseIndex | Should -BeGreaterThan $groupIndex
+    }
+
     It "Restores DNS from legacy snapshots with array interface indexes" {
         $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
         . $cleanupHelperPath
