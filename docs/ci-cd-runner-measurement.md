@@ -336,6 +336,21 @@ over-budget split, and a file timeout is reported as
 `file timed out (<file>, <s>)` instead of the empty-array parameter-binding
 error.
 
+## Windows Pester shard budget (2026-11-20)
+
+The remainder shards sit close to the 840 s budget after the Windows watchdog
+suite grew. In run `44797149152` (SHA `f05c13bc`) shard 5/6 spent 823 s before
+`Windows.Watchdog.Tests.ps1` and the per-file auto timeout clipped that file to
+192 s; the suite was killed with `file exceeded 192s and was killed`. The same
+file needed 225 s in the last green sample (`44526691212`, SHA `c06283bd`), so
+the shard cannot finish inside 840 s once the preceding files slow down by a
+few percent.
+
+The self-hosted lane now uses `-TimeoutSeconds 1200` with a 25 min step and a
+30 min job timeout, leaving the watchdog file its measured 240 s per-file
+allowance. The budget increase does not add tests or relax assertions; it keeps
+a genuinely hung file bounded by the per-file timeout.
+
 ## Remaining Optimization Questions
 
 - Measure sustained queue pressure with the hosted Windows gate before adding
