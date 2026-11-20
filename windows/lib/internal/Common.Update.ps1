@@ -6,6 +6,12 @@ $script:OpenPathAgentUpdateRepairClockSkewToleranceSeconds = 5
 # Same name as the AgentUpdate entry of internal\ScheduledTaskCatalog.ps1.
 $script:OpenPathAgentUpdateTaskName = 'OpenPath-AgentUpdate'
 
+function New-OpenPathAgentUpdateMutex {
+    # Opens or creates the machine-wide agent update mutex; separate so tests can
+    # simulate a lock owned by another security context.
+    return [System.Threading.Mutex]::new($false, $script:OpenPathAgentUpdateLockName)
+}
+
 function Enter-OpenPathAgentUpdateLock {
     <#
     .SYNOPSIS
@@ -20,14 +26,38 @@ function Enter-OpenPathAgentUpdateLock {
     #>
     [CmdletBinding()]
     param(
-        [int]$TimeoutMilliseconds = 0
+        [int]$TimeoutMilliseconds = 0,
+
+        [int]$RetryDelayMilliseconds = 250
     )
 
-    $mutex = [System.Threading.Mutex]::new($false, $script:OpenPathAgentUpdateLockName)
+    $timeout = [Math]::Max(0, $TimeoutMilliseconds)
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $mutex = $null
+    while (-not $mutex) {
+        try {
+            $mutex = New-OpenPathAgentUpdateMutex
+        }
+        catch [System.UnauthorizedAccessException] {
+            # The lock exists in another security context (the SYSTEM watchdog
+            # holds it around its integrity check) and its default DACL denies
+            # an elevated admin session: the lock is busy, not broken.
+            if ($stopwatch.ElapsedMilliseconds -ge $timeout) {
+                return [PSCustomObject]@{
+                    Acquired = $false
+                    Abandoned = $false
+                    Mutex = $null
+                }
+            }
+            Start-Sleep -Milliseconds ([Math]::Max(1, $RetryDelayMilliseconds))
+        }
+    }
+
+    $remaining = [int][Math]::Max(0, $timeout - $stopwatch.ElapsedMilliseconds)
     $acquired = $false
     $abandoned = $false
     try {
-        $acquired = $mutex.WaitOne($TimeoutMilliseconds)
+        $acquired = $mutex.WaitOne($remaining)
     }
     catch [System.Threading.AbandonedMutexException] {
         $acquired = $true

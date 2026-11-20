@@ -1591,6 +1591,48 @@ Describe "Update Script" {
             }
         }
 
+        It "Waits for an update lock held by another security context instead of failing" {
+            $commonPath = (Resolve-Path (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1")).Path
+            . $commonPath
+            $script:deniedOpens = 0
+            # A SYSTEM-owned mutex denies an elevated admin session until it is released.
+            function New-OpenPathAgentUpdateMutex {
+                if ($script:deniedOpens -lt 2) {
+                    $script:deniedOpens++
+                    throw [System.UnauthorizedAccessException]::new("Access to the path 'Global\OpenPathAgentUpdateLock' is denied.")
+                }
+                return [System.Threading.Mutex]::new($false)
+            }
+
+            $lock = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 5000 -RetryDelayMilliseconds 10
+            try {
+                $lock.Acquired | Should -BeTrue
+                $script:deniedOpens | Should -Be 2
+            }
+            finally {
+                Exit-OpenPathAgentUpdateLock -Lock $lock
+            }
+        }
+
+        It "Reports a lock held by another security context as busy without throwing" {
+            $commonPath = (Resolve-Path (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1")).Path
+            . $commonPath
+            $script:deniedOpens = 0
+            function New-OpenPathAgentUpdateMutex {
+                $script:deniedOpens++
+                throw [System.UnauthorizedAccessException]::new("Access to the path 'Global\OpenPathAgentUpdateLock' is denied.")
+            }
+
+            $busy = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 0
+            $busy.Acquired | Should -BeFalse
+            $busy.Mutex | Should -BeNullOrEmpty
+            $script:deniedOpens | Should -Be 1
+
+            $timedOut = Enter-OpenPathAgentUpdateLock -TimeoutMilliseconds 60 -RetryDelayMilliseconds 10
+            $timedOut.Acquired | Should -BeFalse
+            $script:deniedOpens | Should -BeGreaterThan 2
+        }
+
         It "Gates staged .ps1/.psm1 artifacts behind an opt-in Authenticode signature check" {
             $updateHelperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1"
             $content = Get-Content $updateHelperPath -Raw
