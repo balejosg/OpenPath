@@ -182,6 +182,19 @@ Describe "Update Script" {
             )
         }
 
+        It "Clears the cached whitelist ETag when an update cycle fails" {
+            $runtimeModulePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            $content = Get-Content $runtimeModulePath -Raw
+            $catchStart = $content.IndexOf('Write-UpdateCatchLog "Update failed: $_" -Level ERROR')
+            $etagClear = $content.IndexOf("Remove-Item -LiteralPath `$cachedEtagPath -Force", $catchStart)
+            $rollback = $content.IndexOf('$rollbackResult = Invoke-OpenPathUpdateRollback', $catchStart)
+
+            $catchStart | Should -BeGreaterThan 0
+            $content | Should -Match "\`$cachedEtagPath = Join-Path \`$OpenPathRoot 'data\\whitelist\.etag'"
+            $etagClear | Should -BeGreaterThan $catchStart
+            $etagClear | Should -BeLessThan $rollback
+        }
+
         It "Allows backup rollback when config was never loaded" {
             $runtimePath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Rollback.ps1"
             $runtimeContent = Get-Content $runtimePath -Raw
@@ -1612,6 +1625,33 @@ Describe "Update Script" {
             finally {
                 Exit-OpenPathAgentUpdateLock -Lock $lock
             }
+        }
+
+        It "Restarts only this installation's resident processes after an agent update" {
+            $commonPath = (Resolve-Path (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Common.Update.ps1")).Path
+            . $commonPath
+            $installRoot = Join-Path $TestDrive 'resident-root'
+            $otherRoot = Join-Path $TestDrive 'other-root'
+            $sse = Join-Path (Join-Path $installRoot 'scripts') 'Start-SSEListener.ps1'
+            $worker = Join-Path (Join-Path $installRoot 'scripts') 'Start-RuntimeDependencyWorker.ps1'
+            $foreignSse = Join-Path (Join-Path $otherRoot 'scripts') 'Start-SSEListener.ps1'
+            $script:residentProcesses = @(
+                [pscustomobject]@{ ProcessId = 4101; CommandLine = "PowerShell.exe -File `"$sse`"" },
+                [pscustomobject]@{ ProcessId = 4102; CommandLine = "PowerShell.exe -File `"$worker`"" },
+                [pscustomobject]@{ ProcessId = 4103; CommandLine = "PowerShell.exe -File `"$foreignSse`"" },
+                [pscustomobject]@{ ProcessId = $PID; CommandLine = "PowerShell.exe -File `"$sse`"" },
+                [pscustomobject]@{ ProcessId = 4104; CommandLine = 'PowerShell.exe -File "C:\Other\Tool.ps1"' }
+            )
+            $script:stoppedIds = @()
+            function Get-CimInstance { param($ClassName, $Filter, $ErrorAction) $script:residentProcesses }
+            function Stop-Process { param([int]$Id, [switch]$Force, $ErrorAction) $script:stoppedIds += $Id }
+            function Start-Sleep { param($Seconds, $Milliseconds) }
+            function Write-OpenPathLog { param([string]$Message, [string]$Level) }
+
+            $restarted = @(Restart-OpenPathResidentAgentProcesses -OpenPathRoot $installRoot)
+
+            @($script:stoppedIds | Sort-Object) | Should -Be @(4101, 4102)
+            @($restarted | Sort-Object) | Should -Be @('Start-RuntimeDependencyWorker.ps1', 'Start-SSEListener.ps1')
         }
 
         It "Reports a lock held by another security context as busy without throwing" {
@@ -3306,12 +3346,16 @@ Describe "Update Script" {
                 Mock Save-OpenPathIntegrityBackup { }
                 Mock New-OpenPathIntegrityBaseline { }
                 Mock Remove-OpenPathAgentUpdateBackupDirectories { }
+                Mock Restart-OpenPathResidentAgentProcesses { @('Start-SSEListener.ps1', 'Start-RuntimeDependencyWorker.ps1') }
 
                 $result = Complete-OpenPathAgentUpdateFinalization -OpenPathRoot $Root -Journal $Journal -Config $Config
 
                 $result.Success | Should -BeTrue
                 Should -Invoke Restore-OpenPathProtectedMode -Times $ExpectedRestores -Exactly
                 Should -Invoke Restart-AcrylicService -Times $ExpectedAcrylicRestarts -Exactly
+                Should -Invoke Restart-OpenPathResidentAgentProcesses -Times 1 -Exactly -ParameterFilter { $OpenPathRoot -eq $Root }
+                Should -Invoke Start-OpenPathTask -Times 1 -Exactly -ParameterFilter { $TaskType -eq 'RuntimeDependencyWorker' -or @($Rest) -contains 'RuntimeDependencyWorker' }
+                Should -Invoke Start-OpenPathTask -Times 1 -Exactly -ParameterFilter { $TaskType -eq 'SSE' -or @($Rest) -contains 'SSE' }
                 Should -Invoke Write-OpenPathLog -Times $ExpectedUnknownLogs -Exactly -ParameterFilter {
                     $Message -match 'classroom_state_unknown'
                 }

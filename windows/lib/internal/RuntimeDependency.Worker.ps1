@@ -461,6 +461,13 @@ function Start-OpenPathRuntimeDependencyWorker {
         [int]$DebounceMs = 100,
         [int]$RetryDelayMs = 500,
         [int]$HeartbeatSeconds = 5,
+        # When a batch leaves exactly the same queue files pending (for example a
+        # disabled classroom, where nothing is applied), back off instead of
+        # re-running the batch every sweep. The watcher still wakes the worker for a
+        # new or changed queue file. Capped by HeartbeatSeconds so the heartbeat that
+        # each cycle writes never goes stale for the native host.
+        [int]$NoProgressBackoffMs = 1000,
+        [int]$MaxNoProgressBackoffMs = 5000,
         [switch]$Once,
         [int]$MaxCycles = 0
     )
@@ -512,6 +519,8 @@ function Start-OpenPathRuntimeDependencyWorker {
         }
 
         $lastHeartbeat = [System.Diagnostics.Stopwatch]::StartNew()
+        $noProgressWaitMs = 0
+        $noProgressCapMs = [Math]::Max(200, [Math]::Min($MaxNoProgressBackoffMs, [Math]::Max(1, $HeartbeatSeconds) * 1000))
         while ($true) {
             $cycles = [int]$state['cycles'] + 1
             $state['cycles'] = $cycles
@@ -521,6 +530,9 @@ function Start-OpenPathRuntimeDependencyWorker {
                 $queueFiles = @([System.IO.Directory]::GetFiles($QueuePath, '*.json'))
             }
             $state['queueFiles'] = $queueFiles.Count
+            if ($queueFiles.Count -eq 0) {
+                $noProgressWaitMs = 0
+            }
 
             if ($queueFiles.Count -gt 0) {
                 # Phase 2D D3: expose how long the oldest queued request waited
@@ -590,6 +602,25 @@ function Start-OpenPathRuntimeDependencyWorker {
                 $state['busySince'] = ''
                 $state['busySinceEpochMs'] = 0
                 $state['busyStage'] = ''
+
+                $pendingAfter = @()
+                if ([System.IO.Directory]::Exists($QueuePath)) {
+                    $pendingAfter = @([System.IO.Directory]::GetFiles($QueuePath, '*.json'))
+                }
+                $namesBefore = (@($queueFiles | ForEach-Object { [System.IO.Path]::GetFileName($_) } | Sort-Object) -join '|')
+                $namesAfter = (@($pendingAfter | ForEach-Object { [System.IO.Path]::GetFileName($_) } | Sort-Object) -join '|')
+                if ($pendingAfter.Count -gt 0 -and $namesAfter -eq $namesBefore) {
+                    $nextWaitMs = if ($noProgressWaitMs -le 0) { [Math]::Max(200, $NoProgressBackoffMs) } else { $noProgressWaitMs * 2 }
+                    $nextWaitMs = [int][Math]::Min($noProgressCapMs, $nextWaitMs)
+                    if ($nextWaitMs -ne $noProgressWaitMs -and (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue)) {
+                        Write-OpenPathLog "Runtime dependency worker left the same $($pendingAfter.Count) queue file(s) pending; retrying every $nextWaitMs ms until the queue changes"
+                    }
+                    $noProgressWaitMs = $nextWaitMs
+                }
+                else {
+                    $noProgressWaitMs = 0
+                }
+                $state['noProgressBackoffMs'] = $noProgressWaitMs
                 Write-OpenPathRuntimeDependencyWorkerState -State $state -StatePath $StatePath | Out-Null
             }
             elseif ($lastHeartbeat.Elapsed.TotalSeconds -ge [Math]::Max(1, $HeartbeatSeconds)) {
@@ -601,18 +632,19 @@ function Start-OpenPathRuntimeDependencyWorker {
                 return 0
             }
 
+            $waitMs = if ($noProgressWaitMs -gt 0) { $noProgressWaitMs } else { [Math]::Max(200, $WatcherTimeoutMs) }
             if ($watcher) {
                 try {
-                    $null = $watcher.WaitForChanged([System.IO.WatcherChangeTypes]::All, [Math]::Max(200, $WatcherTimeoutMs))
+                    $null = $watcher.WaitForChanged([System.IO.WatcherChangeTypes]::All, $waitMs)
                 }
                 catch {
                     # Watcher errors (directory replaced, buffer overflow) must not kill the
                     # worker: fall back to a plain sleep for the sweep interval.
-                    Start-Sleep -Milliseconds ([Math]::Max(200, $WatcherTimeoutMs))
+                    Start-Sleep -Milliseconds $waitMs
                 }
             }
             else {
-                Start-Sleep -Milliseconds ([Math]::Max(200, $WatcherTimeoutMs))
+                Start-Sleep -Milliseconds $waitMs
             }
         }
     }

@@ -300,10 +300,13 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
         AcrylicHostUpdateMs = 0
         AcrylicHostWritten = $false
         AcrylicHostsChanged = $false
+        ClassroomDisabled = $false
     }
 
     $runtimeDependencyQueueSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
     if ($runtimeDependencyQueueSections.IsDisabled) {
+        # A disabled classroom is open: nothing to apply, the queue stays pending.
+        $result['ClassroomDisabled'] = $true
         if ($PassThru) { return [PSCustomObject]$result }
         return $false
     }
@@ -527,7 +530,9 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
             $metrics['changed'] = [bool]($metrics['changed'] -or [bool]$queueResult.Changed)
 
             if (-not $queueResult.AcrylicHostWritten) {
-                Write-OpenPathLog "Runtime dependency fast apply could not write the Acrylic hosts file; dependencies remain pending" -Level WARN
+                if (-not ($queueResult.PSObject.Properties['ClassroomDisabled'] -and [bool]$queueResult.ClassroomDisabled)) {
+                    Write-OpenPathLog "Runtime dependency fast apply could not write the Acrylic hosts file; dependencies remain pending" -Level WARN
+                }
                 break
             }
             if ($queueResult.AcrylicHostsChanged -or $overlayUnappliedBefore) {
@@ -936,6 +941,19 @@ function Invoke-OpenPathUpdateCycle {
     }
     catch {
         Write-UpdateCatchLog "Update failed: $_" -Level ERROR
+        # The download already cached the server ETag. Keeping it after a failed
+        # apply would turn every later cycle into a 304 on the old local state
+        # (for example a classroom stuck open after it was re-enabled), so force
+        # a full download next cycle.
+        $cachedEtagPath = Join-Path $OpenPathRoot 'data\whitelist.etag'
+        try {
+            if (Test-Path -LiteralPath $cachedEtagPath -ErrorAction SilentlyContinue) {
+                Remove-Item -LiteralPath $cachedEtagPath -Force -ErrorAction Stop
+            }
+        }
+        catch {
+            Write-UpdateCatchLog "Could not clear the cached whitelist ETag after a failed update: $_" -Level WARN
+        }
         $rollbackResult = Invoke-OpenPathUpdateRollback `
             -Config $config `
             -WhitelistPath $whitelistPath `

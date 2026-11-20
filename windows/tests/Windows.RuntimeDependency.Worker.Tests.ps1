@@ -191,6 +191,62 @@ Describe "Runtime dependency worker" {
             Test-OpenPathRuntimeDependencyWorkerFresh -StatePath $emptyState -MaxAgeSeconds 10 | Should -BeTrue
         }
 
+        It "backs off when a batch leaves the same queue files pending" {
+            $stuckQueue = Join-Path $TestDrive 'stuck-queue'
+            New-Item -ItemType Directory -Path $stuckQueue -Force | Out-Null
+            Set-Content -Path (Join-Path $stuckQueue 'stale.json') -Value '{}' -Encoding UTF8
+            $stuckState = Join-Path $TestDrive 'stuck-state.json'
+
+            # A disabled classroom applies nothing and leaves the queue untouched.
+            $script:stuckApplyCount = 0
+            $script:stuckLogs = @()
+            function Write-OpenPathLog {
+                param([string]$Message, [string]$Level = 'INFO')
+                $script:stuckLogs += [string]$Message
+            }
+
+            try {
+                $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+                Start-OpenPathRuntimeDependencyWorker `
+                    -QueuePath $stuckQueue `
+                    -StatePath $stuckState `
+                    -ApplyAction { $script:stuckApplyCount++; return @{ ExitCode = 0; LockBusy = $false } } `
+                    -MaxCycles 4 `
+                    -DebounceMs 0 `
+                    -WatcherTimeoutMs 200 `
+                    -NoProgressBackoffMs 200 `
+                    -MaxNoProgressBackoffMs 400 | Should -Be 0
+                $elapsed.Stop()
+            }
+            finally {
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+
+            $script:stuckApplyCount | Should -Be 4
+            (Get-Content $stuckState -Raw | ConvertFrom-Json).noProgressBackoffMs | Should -Be 400
+            # Waits after cycles 1-3 are 200, 400 and 400 ms instead of the 200 ms sweep.
+            $elapsed.ElapsedMilliseconds | Should -BeGreaterOrEqual 900
+            @($script:stuckLogs | Where-Object { $_ -match 'left the same 1 queue file\(s\) pending' }).Count | Should -Be 2
+        }
+
+        It "does not back off when the batch drains the queue" {
+            $drainQueue = Join-Path $TestDrive 'drain-queue'
+            New-Item -ItemType Directory -Path $drainQueue -Force | Out-Null
+            $drainFile = Join-Path $drainQueue 'request.json'
+            Set-Content -Path $drainFile -Value '{}' -Encoding UTF8
+            $drainState = Join-Path $TestDrive 'drain-state.json'
+
+            Start-OpenPathRuntimeDependencyWorker `
+                -QueuePath $drainQueue `
+                -StatePath $drainState `
+                -ApplyAction { Remove-Item -LiteralPath $drainFile -Force; return @{ ExitCode = 0; LockBusy = $false } } `
+                -Once `
+                -DebounceMs 0 `
+                -WatcherTimeoutMs 100 | Should -Be 0
+
+            (Get-Content $drainState -Raw | ConvertFrom-Json).noProgressBackoffMs | Should -Be 0
+        }
+
         It "writes a heartbeat before invoking the apply action" {
             # Runtime-probing this ordering through the worker loop fights Pester scoping;
             # assert the source ordering instead: the in-flight heartbeat write must come

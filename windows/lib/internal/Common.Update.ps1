@@ -6,6 +6,65 @@ $script:OpenPathAgentUpdateRepairClockSkewToleranceSeconds = 5
 # Same name as the AgentUpdate entry of internal\ScheduledTaskCatalog.ps1.
 $script:OpenPathAgentUpdateTaskName = 'OpenPath-AgentUpdate'
 
+function Restart-OpenPathResidentAgentProcesses {
+    <#
+    .SYNOPSIS
+        Stops the long-lived agent processes so their tasks start them on the updated tree.
+    .DESCRIPTION
+        The SSE listener and the runtime dependency worker load the agent modules once
+        and run for days. After an agent update they would dot-source new internal
+        scripts against old modules (for example a helper missing from the old Common
+        module), so every update they run fails. Only processes running the scripts of
+        this installation (OpenPathRoot\scripts) are stopped, never the current one.
+    .OUTPUTS
+        The script names whose processes were stopped.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenPathRoot,
+
+        [string[]]$ScriptNames = @('Start-SSEListener.ps1', 'Start-RuntimeDependencyWorker.ps1')
+    )
+
+    $stopped = [System.Collections.Generic.List[string]]::new()
+    if (-not (Get-Command -Name 'Get-CimInstance' -ErrorAction SilentlyContinue)) {
+        return @()
+    }
+
+    $processes = @()
+    try {
+        $processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction Stop)
+    }
+    catch {
+        Write-OpenPathLog "Agent update could not list resident processes to restart: $_" -Level WARN
+        return @()
+    }
+
+    foreach ($process in $processes) {
+        $commandLine = [string]$process.CommandLine
+        if (-not $commandLine -or [int]$process.ProcessId -eq $PID) { continue }
+        foreach ($scriptName in $ScriptNames) {
+            $scriptPath = Join-Path (Join-Path $OpenPathRoot 'scripts') $scriptName
+            if ($commandLine.IndexOf($scriptPath, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+            try {
+                Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop
+                Write-OpenPathLog "Agent update stopped resident process $scriptName (pid=$($process.ProcessId)) so it restarts on the updated tree"
+                if (-not $stopped.Contains($scriptName)) { $stopped.Add($scriptName) }
+            }
+            catch {
+                Write-OpenPathLog "Agent update could not stop resident process $scriptName (pid=$($process.ProcessId)): $_" -Level WARN
+            }
+        }
+    }
+
+    if ($stopped.Count -gt 0) {
+        # Let the scheduler mark the task instances as ended before they are started again.
+        Start-Sleep -Seconds 1
+    }
+    return @($stopped)
+}
+
 function New-OpenPathAgentUpdateMutex {
     # Opens or creates the machine-wide agent update mutex; separate so tests can
     # simulate a lock owned by another security context.
@@ -2040,7 +2099,13 @@ function Complete-OpenPathAgentUpdateFinalization {
                 Restart-AcrylicService | Out-Null
             }
         }
+        # Resident processes keep the modules they loaded at start and would run the
+        # new internal scripts against them; restart them on the updated tree.
+        $restartedResident = @(Restart-OpenPathResidentAgentProcesses -OpenPathRoot $OpenPathRoot)
         if (Get-Command -Name 'Start-OpenPathTask' -ErrorAction SilentlyContinue) {
+            if ($restartedResident -contains 'Start-RuntimeDependencyWorker.ps1') {
+                Start-OpenPathTask -TaskType RuntimeDependencyWorker | Out-Null
+            }
             Start-OpenPathTask -TaskType SSE | Out-Null
         }
 

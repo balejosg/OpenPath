@@ -69,25 +69,11 @@
         "isSemVerMajor": true
       }
     },
-    "@size-limit/file": {
-      "name": "@size-limit/file",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["size-limit"],
-      "effects": ["@size-limit/preset-app"],
-      "range": "11.1.5 - 12.1.0",
-      "nodes": ["node_modules/@size-limit/file"],
-      "fixAvailable": {
-        "name": "@size-limit/preset-app",
-        "version": "11.0.0",
-        "isSemVerMajor": true
-      }
-    },
     "@size-limit/preset-app": {
       "name": "@size-limit/preset-app",
       "severity": "high",
       "isDirect": true,
-      "via": ["@size-limit/file", "@size-limit/time", "size-limit"],
+      "via": ["@size-limit/time"],
       "effects": [],
       "range": "7.0.2 || 7.0.6 || 8.2.0 - 8.2.2 || 8.2.5 || >=11.0.1",
       "nodes": ["node_modules/@size-limit/preset-app"],
@@ -101,7 +87,7 @@
       "name": "@size-limit/time",
       "severity": "high",
       "isDirect": false,
-      "via": ["estimo", "size-limit"],
+      "via": ["estimo"],
       "effects": ["@size-limit/preset-app"],
       "range": ">=11.0.1",
       "nodes": ["node_modules/@size-limit/time"],
@@ -171,16 +157,16 @@
     },
     "@typescript-eslint/typescript-estree": {
       "name": "@typescript-eslint/typescript-estree",
-      "severity": "high",
+      "severity": "moderate",
       "isDirect": false,
-      "via": ["minimatch", "tinyglobby"],
+      "via": ["minimatch"],
       "effects": [
         "@typescript-eslint/parser",
         "@typescript-eslint/type-utils",
         "@typescript-eslint/utils",
         "typescript-eslint"
       ],
-      "range": ">=6.16.0",
+      "range": "6.16.0 - 8.72.2",
       "nodes": ["node_modules/@typescript-eslint/typescript-estree"],
       "fixAvailable": true
     },
@@ -764,20 +750,6 @@
         "isSemVerMajor": true
       }
     },
-    "fast-glob": {
-      "name": "fast-glob",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["micromatch"],
-      "effects": ["globby"],
-      "range": ">=3.0.0",
-      "nodes": ["node_modules/fast-glob"],
-      "fixAvailable": {
-        "name": "secretlint",
-        "version": "14.0.1",
-        "isSemVerMajor": true
-      }
-    },
     "fast-uri": {
       "name": "fast-uri",
       "severity": "high",
@@ -943,16 +915,6 @@
       "nodes": ["node_modules/fast-uri"],
       "fixAvailable": true
     },
-    "fdir": {
-      "name": "fdir",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["picomatch"],
-      "effects": ["vite"],
-      "range": ">=5.2.1",
-      "nodes": ["node_modules/tinyglobby/node_modules/fdir", "node_modules/vite/node_modules/fdir"],
-      "fixAvailable": true
-    },
     "find-chrome-bin": {
       "name": "find-chrome-bin",
       "severity": "high",
@@ -962,20 +924,6 @@
       "range": ">=2.0.0",
       "nodes": ["node_modules/find-chrome-bin"],
       "fixAvailable": true
-    },
-    "find-yarn-workspace-root": {
-      "name": "find-yarn-workspace-root",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["micromatch"],
-      "effects": ["patch-package"],
-      "range": ">=2.0.0",
-      "nodes": ["node_modules/find-yarn-workspace-root"],
-      "fixAvailable": {
-        "name": "patch-package",
-        "version": "6.4.5",
-        "isSemVerMajor": true
-      }
     },
     "firefox-profile": {
       "name": "firefox-profile",
@@ -1032,20 +980,6 @@
       "fixAvailable": {
         "name": "c8",
         "version": "9.1.0",
-        "isSemVerMajor": true
-      }
-    },
-    "globby": {
-      "name": "globby",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["fast-glob"],
-      "effects": ["secretlint"],
-      "range": ">=10.0.0",
-      "nodes": ["node_modules/globby"],
-      "fixAvailable": {
-        "name": "secretlint",
-        "version": "14.0.1",
         "isSemVerMajor": true
       }
     },
@@ -1253,30 +1187,6 @@
       "range": "4.0.0 - 4.3.1",
       "nodes": ["node_modules/js-yaml"],
       "fixAvailable": true
-    },
-    "lint-staged": {
-      "name": "lint-staged",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["micromatch"],
-      "effects": [],
-      "range": "9.0.0 - 16.3.4",
-      "nodes": ["node_modules/lint-staged"],
-      "fixAvailable": true
-    },
-    "micromatch": {
-      "name": "micromatch",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["picomatch"],
-      "effects": ["fast-glob", "find-yarn-workspace-root", "lint-staged"],
-      "range": ">=4.0.0",
-      "nodes": ["node_modules/micromatch"],
-      "fixAvailable": {
-        "name": "patch-package",
-        "version": "6.4.5",
-        "isSemVerMajor": true
-      }
     },
     "minimatch": {
       "name": "minimatch",
@@ -1748,54 +1658,6 @@
         "isSemVerMajor": true
       }
     },
-    "patch-package": {
-      "name": "patch-package",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["find-yarn-workspace-root"],
-      "effects": [],
-      "range": ">=6.4.6",
-      "nodes": ["node_modules/patch-package"],
-      "fixAvailable": {
-        "name": "patch-package",
-        "version": "6.4.5",
-        "isSemVerMajor": true
-      }
-    },
-    "picomatch": {
-      "name": "picomatch",
-      "severity": "high",
-      "isDirect": false,
-      "via": [
-        {
-          "source": 1247710,
-          "name": "picomatch",
-          "dependency": "picomatch",
-          "title": "picomatch vulnerable to ReDoS through single-branch repeated extglobs",
-          "url": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
-          "severity": "high",
-          "cwe": ["CWE-1333"],
-          "cvss": {
-            "score": 7.5,
-            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-          },
-          "range": "<=4.0.7"
-        }
-      ],
-      "effects": ["fdir", "micromatch", "tinyglobby", "vite", "vitest"],
-      "range": "*",
-      "nodes": [
-        "node_modules/picomatch",
-        "node_modules/tinyglobby/node_modules/picomatch",
-        "node_modules/vite/node_modules/picomatch",
-        "react-spa/node_modules/picomatch"
-      ],
-      "fixAvailable": {
-        "name": "size-limit",
-        "version": "11.1.4",
-        "isSemVerMajor": true
-      }
-    },
     "postcss": {
       "name": "postcss",
       "severity": "high",
@@ -1916,34 +1778,6 @@
       "nodes": ["node_modules/qs"],
       "fixAvailable": true
     },
-    "secretlint": {
-      "name": "secretlint",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["globby"],
-      "effects": [],
-      "range": "<=12.3.1",
-      "nodes": ["node_modules/secretlint"],
-      "fixAvailable": {
-        "name": "secretlint",
-        "version": "14.0.1",
-        "isSemVerMajor": true
-      }
-    },
-    "size-limit": {
-      "name": "size-limit",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["tinyglobby"],
-      "effects": ["@size-limit/file", "@size-limit/preset-app", "@size-limit/time"],
-      "range": "11.1.5 - 12.1.0",
-      "nodes": ["node_modules/size-limit"],
-      "fixAvailable": {
-        "name": "size-limit",
-        "version": "11.1.4",
-        "isSemVerMajor": true
-      }
-    },
     "source-map-js": {
       "name": "source-map-js",
       "severity": "high",
@@ -1990,20 +1824,6 @@
       "fixAvailable": {
         "name": "c8",
         "version": "9.1.0",
-        "isSemVerMajor": true
-      }
-    },
-    "tinyglobby": {
-      "name": "tinyglobby",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["fdir", "picomatch"],
-      "effects": ["@typescript-eslint/typescript-estree", "size-limit", "vitest"],
-      "range": "*",
-      "nodes": ["node_modules/tinyglobby"],
-      "fixAvailable": {
-        "name": "size-limit",
-        "version": "11.1.4",
         "isSemVerMajor": true
       }
     },
@@ -2429,19 +2249,16 @@
             "vectorString": null
           },
           "range": ">=7.0.0 <=7.3.6"
-        },
-        "fdir",
-        "picomatch",
-        "tinyglobby"
+        }
       ],
       "effects": [],
-      "range": ">=6.3.0-beta.0",
+      "range": "7.0.0 - 7.3.6",
       "nodes": ["node_modules/vite"],
       "fixAvailable": true
     },
     "vitest": {
       "name": "vitest",
-      "severity": "high",
+      "severity": "moderate",
       "isDirect": true,
       "via": [
         "@vitest/coverage-v8",
@@ -2459,12 +2276,10 @@
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
           },
           "range": ">=2.1.0 <4.1.11"
-        },
-        "picomatch",
-        "tinyglobby"
+        }
       ],
       "effects": ["@vitest/coverage-v8"],
-      "range": ">=2.1.0-beta.1",
+      "range": "2.1.0-beta.1 - 4.1.10",
       "nodes": ["react-spa/node_modules/vitest"],
       "fixAvailable": true
     },
@@ -2516,10 +2331,10 @@
     "vulnerabilities": {
       "info": 0,
       "low": 0,
-      "moderate": 22,
-      "high": 45,
+      "moderate": 24,
+      "high": 31,
       "critical": 0,
-      "total": 67
+      "total": 55
     },
     "dependencies": {
       "prod": 273,
