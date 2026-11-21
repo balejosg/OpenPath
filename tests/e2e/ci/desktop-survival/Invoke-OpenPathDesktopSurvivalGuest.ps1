@@ -108,6 +108,228 @@ function Test-PolicyHasOpenPathRules {
     return [bool]($xml -match 'OpenPath non-admin app control')
 }
 
+function Format-OpenPathLabDiagnosticText {
+    # Redacts machine tokens, whitelist URLs and the lab secret before agent or
+    # uninstaller text leaves the guest as evidence.
+    param([AllowNull()][string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return '' }
+    $redacted = $Text -replace '/w/[^/\s?#]+/whitelist\.txt', '/w/[redacted]/whitelist.txt'
+    $redacted = $redacted -replace '(?i)(token=)[^&\s]+', '$1[redacted]'
+    if (-not [string]::IsNullOrEmpty($Secret)) { $redacted = $redacted.Replace($Secret, '[redacted]') }
+    return $redacted
+}
+
+function Get-OpenPathLabTextTail {
+    param([AllowNull()][string]$Text, [int]$MaxLines = 300)
+    if ([string]::IsNullOrEmpty($Text)) { return @() }
+    $lines = @((Format-OpenPathLabDiagnosticText -Text $Text) -split "`r?`n" | Where-Object { $_ -ne '' })
+    return @($lines | Select-Object -Last $MaxLines)
+}
+
+function Read-OpenPathLabSharedFileText {
+    # Reads the tail of a file another process may be writing or deleting,
+    # sharing read/write/delete so neither side is blocked; $null when absent.
+    param([Parameter(Mandatory = $true)][string]$Path, [int64]$MaxBytes = 512KB)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $stream = $null
+    try {
+        $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+        $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share)
+        if ($stream.Length -gt $MaxBytes) { $stream.Seek(-$MaxBytes, [IO.SeekOrigin]::End) | Out-Null }
+        $reader = New-Object IO.StreamReader($stream, [Text.Encoding]::UTF8)
+        return $reader.ReadToEnd()
+    }
+    catch { return $null }
+    finally { if ($null -ne $stream) { $stream.Dispose() } }
+}
+
+function Get-OpenPathLabGroupSid {
+    try { return [string](Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop).SID.Value }
+    catch { return '' }
+}
+
+function Get-OpenPathLabRelatedProcesses {
+    # OpenPath-related processes (path or command line mentions OpenPath, or
+    # Acrylic), excluding this harness and the given ids.
+    param([int[]]$ExcludeIds = @())
+    $rows = @()
+    foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+        $processId = [int]$process.ProcessId
+        if ($processId -eq $PID -or $ExcludeIds -contains $processId) { continue }
+        $commandLine = [string]$process.CommandLine
+        $path = [string]$process.ExecutablePath
+        if ($commandLine -like '*openpath-desktop-survival*') { continue }
+        if ($commandLine -notlike '*OpenPath*' -and $path -notlike '*OpenPath*' -and [string]$process.Name -notlike '*Acrylic*') { continue }
+        $created = ''
+        try { if ($process.CreationDate) { $created = ([datetime]$process.CreationDate).ToUniversalTime().ToString('o') } } catch {}
+        $text = Format-OpenPathLabDiagnosticText -Text $commandLine
+        if ($text.Length -gt 400) { $text = $text.Substring(0, 400) + '...' }
+        $rows += [ordered]@{
+            pid         = $processId
+            ppid        = [int]$process.ParentProcessId
+            name        = [string]$process.Name
+            createdUtc  = $created
+            commandLine = $text
+        }
+    }
+    return @($rows)
+}
+
+function Get-OpenPathLabAppControlTransactions {
+    # File inventory of the AppControl transaction journal plus the scalar
+    # fields (state, operation, ids) of each JSON record; never policy XML.
+    $root = 'C:\OpenPath\data\appcontrol-transactions'
+    $rows = @()
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return @() }
+    foreach ($file in @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 40)) {
+        $row = [ordered]@{
+            path         = $file.FullName.Substring($root.Length).TrimStart('\')
+            length       = [int64]$file.Length
+            lastWriteUtc = $file.LastWriteTimeUtc.ToString('o')
+        }
+        if ($file.Extension -eq '.json' -and $file.Length -lt 256KB) {
+            try {
+                $parsed = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $fields = [ordered]@{}
+                foreach ($property in @($parsed.PSObject.Properties)) {
+                    $value = $property.Value
+                    if ($value -is [string] -and $value.Length -le 200) { $fields[$property.Name] = $value }
+                    elseif ($value -is [ValueType]) { $fields[$property.Name] = $value }
+                    elseif ($property.Name -eq 'ReasonCodes') { $fields[$property.Name] = @($value | ForEach-Object { [string]$_ }) }
+                }
+                $row.fields = $fields
+            }
+            catch { $row.parseError = $_.Exception.Message }
+        }
+        $rows += $row
+    }
+    return @($rows)
+}
+
+function Get-OpenPathLabGroupAuditEvents {
+    # Security-log create/delete/change events for OpenPath-Restricted, when
+    # security group management auditing is on.
+    param([Parameter(Mandatory = $true)][datetime]$Since)
+    $rows = @()
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = @(4731, 4732, 4733, 4734, 4735); StartTime = $Since } -MaxEvents 200 -ErrorAction Stop)
+    }
+    catch { return @([ordered]@{ error = [string]$_.Exception.Message }) }
+    foreach ($auditEvent in $events) {
+        $data = @{}
+        try {
+            foreach ($node in @(([xml]$auditEvent.ToXml()).Event.EventData.Data)) { $data[[string]$node.Name] = [string]$node.'#text' }
+        }
+        catch {}
+        if ([string]$data['TargetUserName'] -ne 'OpenPath-Restricted') { continue }
+        $rows += [ordered]@{
+            id              = [int]$auditEvent.Id
+            timeUtc         = $auditEvent.TimeCreated.ToUniversalTime().ToString('o')
+            targetSid       = [string]$data['TargetSid']
+            subjectUserName = [string]$data['SubjectUserName']
+            memberSid       = [string]$data['MemberSid']
+        }
+    }
+    return @($rows)
+}
+
+function Get-OpenPathLabUninstallProbe {
+    $policyXml = Get-AppLockerXmlText
+    return [ordered]@{
+        utc                    = (Get-Date).ToUniversalTime().ToString('o')
+        groupSid               = Get-OpenPathLabGroupSid
+        managedRuleCount       = ([regex]::Matches($policyXml, 'Name="OpenPath non-admin app control')).Count
+        processes              = @(Get-OpenPathLabRelatedProcesses)
+        appControlTransactions = @(Get-OpenPathLabAppControlTransactions)
+    }
+}
+
+function Invoke-OpenPathLabUninstallWithDiagnostics {
+    # Runs the installed uninstaller and records why a removal did not stick:
+    # its stdout/stderr, the agent log (where the uninstaller's own removal
+    # warnings go, and which step 6 deletes), group SID changes, OpenPath
+    # processes that start while it runs, and the AppControl journal before and
+    # after.
+    param(
+        [Parameter(Mandatory = $true)][string]$DiagnosticsDir,
+        [int]$TimeoutSeconds = 1500
+    )
+    New-Item -ItemType Directory -Path $DiagnosticsDir -Force | Out-Null
+    $stdoutPath = Join-Path $DiagnosticsDir 'uninstall-stdout.txt'
+    $stderrPath = Join-Path $DiagnosticsDir 'uninstall-stderr.txt'
+    $agentLogPath = 'C:\OpenPath\data\logs\openpath.log'
+    $auditSince = (Get-Date).AddMinutes(-15)
+    $before = Get-OpenPathLabUninstallProbe
+    $timeline = New-Object System.Collections.Generic.List[object]
+    $seenProcessIds = @{}
+    foreach ($row in @($before.processes)) { $seenProcessIds[[int]$row.pid] = $true }
+    $lastGroupSid = [string]$before.groupSid
+    $agentLogText = Read-OpenPathLabSharedFileText -Path $agentLogPath
+    $agentLogFrozen = $false
+    $timedOut = $false
+
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\OpenPath\Uninstall-OpenPath.ps1'
+    ) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+    # Cache the handle so ExitCode is still readable after the process exits.
+    $null = $process.Handle
+    $nextSampleMs = 0
+    while (-not $process.WaitForExit(250)) {
+        if (-not $agentLogFrozen) {
+            # Read the log, then stop once file removal has started so this
+            # harness never holds a handle while the install root is wiped.
+            # Step 6 stops processes before deleting, which leaves this last
+            # read the time it needs.
+            $current = Read-OpenPathLabSharedFileText -Path $agentLogPath
+            if ($null -ne $current) { $agentLogText = $current }
+            if ((Read-OpenPathLabSharedFileText -Path $stdoutPath) -match '\[6/6\]') { $agentLogFrozen = $true }
+        }
+        if ($stopwatch.ElapsedMilliseconds -ge $nextSampleMs) {
+            $nextSampleMs = $stopwatch.ElapsedMilliseconds + 1000
+            $groupSid = Get-OpenPathLabGroupSid
+            if ($groupSid -ne $lastGroupSid) {
+                $timeline.Add([ordered]@{ ms = $stopwatch.ElapsedMilliseconds; event = 'group'; sid = $groupSid })
+                $lastGroupSid = $groupSid
+            }
+            foreach ($row in @(Get-OpenPathLabRelatedProcesses -ExcludeIds @($process.Id))) {
+                if ($seenProcessIds.ContainsKey([int]$row.pid)) { continue }
+                $seenProcessIds[[int]$row.pid] = $true
+                $timeline.Add([ordered]@{ ms = $stopwatch.ElapsedMilliseconds; event = 'process-started'; process = $row })
+            }
+        }
+        if ($stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            $timedOut = $true
+            try { $process.Kill() } catch {}
+            break
+        }
+    }
+    $stopwatch.Stop()
+    $exitCode = $null
+    if (-not $timedOut) { $exitCode = [int]$process.ExitCode }
+    $after = Get-OpenPathLabUninstallProbe
+    $finalGroupSid = [string]$after.groupSid
+    if ($finalGroupSid -ne $lastGroupSid) {
+        $timeline.Add([ordered]@{ ms = $stopwatch.ElapsedMilliseconds; event = 'group'; sid = $finalGroupSid })
+    }
+
+    return [ordered]@{
+        exitCode    = $exitCode
+        timedOut    = $timedOut
+        seconds     = [math]::Round($stopwatch.Elapsed.TotalSeconds, 1)
+        diagnostics = [ordered]@{
+            before           = $before
+            after            = $after
+            timeline         = @($timeline)
+            groupAuditEvents = @(Get-OpenPathLabGroupAuditEvents -Since $auditSince)
+            agentLogFrozen   = $agentLogFrozen
+            stdoutTail       = @(Get-OpenPathLabTextTail -Text (Read-OpenPathLabSharedFileText -Path $stdoutPath) -MaxLines 200)
+            stderrTail       = @(Get-OpenPathLabTextTail -Text (Read-OpenPathLabSharedFileText -Path $stderrPath) -MaxLines 100)
+            agentLogTail     = @(Get-OpenPathLabTextTail -Text $agentLogText -MaxLines 400)
+        }
+    }
+}
+
 function Get-OpenPathStateSummary {
     $summary = [ordered]@{
         rootExists   = Test-Path -LiteralPath 'C:\OpenPath'
@@ -758,14 +980,13 @@ function Invoke-OpenPathLabStep {
             Clear-OpenPathAutologon | Out-Null
             $state.uninstallFailed = $false
             if (Test-Path -LiteralPath 'C:\OpenPath\Uninstall-OpenPath.ps1') {
-                $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-                $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
-                    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\OpenPath\Uninstall-OpenPath.ps1'
-                ) -Wait -PassThru
-                $stopwatch.Stop()
-                $state.uninstallExitCode = $process.ExitCode
-                $state.uninstallSeconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 1)
-                if ($process.ExitCode -ne 0) { $state.uninstallFailed = $true; Add-OpenPathLabFailure 'uninstall-nonzero-exit' }
+                $diagnosticsDir = Join-Path (Split-Path -Parent $StatePath) 'uninstall-diagnostics'
+                $run = Invoke-OpenPathLabUninstallWithDiagnostics -DiagnosticsDir $diagnosticsDir
+                $state.uninstallExitCode = $run.exitCode
+                $state.uninstallSeconds = $run.seconds
+                $state.uninstallDiagnostics = $run.diagnostics
+                if ($run.timedOut) { $state.uninstallFailed = $true; Add-OpenPathLabFailure 'uninstall-timeout' }
+                elseif ($run.exitCode -ne 0) { $state.uninstallFailed = $true; Add-OpenPathLabFailure 'uninstall-nonzero-exit' }
             }
             else { $state.uninstallFailed = $true; Add-OpenPathLabFailure 'uninstall-script-missing' }
             $summary = Get-OpenPathStateSummary

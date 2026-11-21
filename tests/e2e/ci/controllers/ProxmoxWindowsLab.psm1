@@ -519,6 +519,25 @@ function New-OpenPathLabAcceptanceObservation {
     return [pscustomobject]$observation
 }
 
+function Save-OpenPathLabGuestStepEvidence {
+    # Writes the guest harness result next to the phase evidence as
+    # guest-step-<phase>-<step>.json. Never fails the step itself.
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [Parameter(Mandatory = $true)][string]$Step,
+        [Parameter(Mandatory = $true)][string]$HarnessJson
+    )
+    try {
+        $artifactsRoot = [string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')
+        if ([string]::IsNullOrWhiteSpace($artifactsRoot)) { return }
+        if (-not (Test-Path -LiteralPath $artifactsRoot -PathType Container)) { New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null }
+        $target = Join-Path $artifactsRoot "guest-step-$Phase-$Step.json"
+        [IO.File]::WriteAllText($target, $HarnessJson, [Text.UTF8Encoding]::new($false))
+    }
+    catch { Write-Warning "desktop-lab-guest-step-evidence-unwritten-$Phase-$Step" }
+}
+
 function Send-OpenPathLabAcceptanceStep {
     param(
         [Parameter(Mandatory = $true)][object]$Payload,
@@ -558,9 +577,16 @@ function Send-OpenPathLabAcceptanceStep {
     $start = $jsonText.IndexOf('{')
     $end = $jsonText.LastIndexOf('}')
     if ($start -lt 0 -or $end -le $start) { throw "desktop-lab-guest-result-missing-$Phase-$Step" }
-    try { $harness = $jsonText.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop }
+    $harnessJson = $jsonText.Substring($start, $end - $start + 1)
+    try { $harness = $harnessJson | ConvertFrom-Json -ErrorAction Stop }
     catch { throw "desktop-lab-guest-result-invalid-$Phase-$Step" }
-    if ([string]$harness.status -ne 'passed' -or $exitCode -ne 0) {
+    $stepFailed = [string]$harness.status -ne 'passed' -or $exitCode -ne 0
+    if ($stepFailed -or "$Phase/$Step" -eq 'cleanup/uninstall') {
+        # The thrown failure keeps only the codes; the guest body (uninstall
+        # diagnostics included) is the evidence that says why.
+        Save-OpenPathLabGuestStepEvidence -Payload $Payload -Phase $Phase -Step $Step -HarnessJson $harnessJson
+    }
+    if ($stepFailed) {
         $failures = @($harness.failures) -join ','
         throw "desktop-lab-guest-step-failed-$Phase-$Step-$failures"
     }

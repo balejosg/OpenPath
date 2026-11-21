@@ -582,6 +582,35 @@ function Write-OpenPathLabTestConfigFile {
         ($calls -join ',') | Should -Match 'RollbackVm:107:base-snap'
     }
 
+    It 'keeps the guest step body as evidence when a step fails or uninstalls' {
+        $artifacts = New-OpenPathLabTestArtifacts -Root $TestDrive
+        $payload = New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'cleanup'
+        $script:LabState.HarnessResponses = @{
+            'cleanup/uninstall'    = @{ status = 'failed'; failures = @('uninstall-nonzero-exit'); body = @{ state = @{ uninstallExitCode = 1; uninstallDiagnostics = @{ stdoutTail = @('UNINSTALL INCOMPLETE:') } } } }
+            'cleanup/verify-clean' = @{ status = 'passed'; failures = @(); body = @{ clean = $true } }
+            'observe/admin-verify' = @{ status = 'passed'; failures = @(); body = @{ session = 'opadmin' } }
+        }
+        $transport = New-OpenPathLabTestTransport
+        $paths = [pscustomobject]@{ GuestDir = 'C:\Windows\Temp\openpath-desktop-survival\test' }
+        $settings = [pscustomobject]@{ StudentUserName = 'alumno'; AdminUserName = 'opadmin'; GuestSecret = 'LabTest!Secret1' }
+        $result = @{}
+        InModuleScope ProxmoxWindowsLab -Parameters @{ Payload = $payload; Transport = $transport; Paths = $paths; Settings = $settings; Result = $result } {
+            param($Payload, $Transport, $Paths, $Settings, $Result)
+            try {
+                Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid 107 -Paths $Paths -Phase 'cleanup' -Step 'uninstall' -Settings $Settings -HarnessGuestPath 'C:\h.ps1' | Out-Null
+            }
+            catch { $Result.Message = [string]$_.Exception.Message }
+            Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid 107 -Paths $Paths -Phase 'cleanup' -Step 'verify-clean' -Settings $Settings -HarnessGuestPath 'C:\h.ps1' | Out-Null
+            Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid 107 -Paths $Paths -Phase 'observe' -Step 'admin-verify' -Settings $Settings -HarnessGuestPath 'C:\h.ps1' | Out-Null
+        }
+        $result.Message | Should -Be 'desktop-lab-guest-step-failed-cleanup-uninstall-uninstall-nonzero-exit'
+        $evidence = Get-Content -LiteralPath (Join-Path $TestDrive 'guest-step-cleanup-uninstall.json') -Raw | ConvertFrom-Json
+        $evidence.body.state.uninstallExitCode | Should -Be 1
+        @($evidence.body.state.uninstallDiagnostics.stdoutTail) | Should -Contain 'UNINSTALL INCOMPLETE:'
+        (Test-Path -LiteralPath (Join-Path $TestDrive 'guest-step-cleanup-verify-clean.json')) | Should -BeFalse
+        (Test-Path -LiteralPath (Join-Path $TestDrive 'guest-step-observe-admin-verify.json')) | Should -BeFalse
+    }
+
     It 'bounds and redacts guest error details' {
         InModuleScope ProxmoxWindowsLab {
             $detail = Format-OpenPathLabGuestErrorDetail -Text ("line1`r`nline2 token=super-secret /w/machine-1/whitelist.txt " + ('x' * 400))

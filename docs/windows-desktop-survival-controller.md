@@ -104,6 +104,17 @@ owners, memory, non-informational AppLocker events from the four channels, and
 the watchdog log tail). The phase error carries the last per-attempt error and
 references both artifacts.
 
+The phase error of a failed guest step keeps only the failure codes, so the
+controller also writes the guest harness result as
+`guest-step-<phase>-<step>.json` for every failed step and for every
+`cleanup/uninstall`. The uninstall body carries `uninstallDiagnostics`: the
+redacted uninstaller stdout/stderr tails, the agent log tail captured before
+step 6 deletes it (where the AppControl and restricted-group removal warnings
+go), a timeline of `OpenPath-Restricted` SID changes and OpenPath processes
+started during the run, Security-log group events, and the group SID, managed
+AppLocker rule count, OpenPath processes and AppControl transaction journal
+before and after.
+
 Since Phase 3A the lock protocol is implemented once in
 `tests/e2e/ci/controllers/proxmox-lab-lock.sh`: `owner` + `created` +
 `heartbeat`, staleness decided **only** by the heartbeat age, a live lock is
