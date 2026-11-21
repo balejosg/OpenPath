@@ -73,171 +73,6 @@ function Get-OpenPathOriginalDnsSnapshotPath {
     return 'C:\OpenPath\data\original-dns.json'
 }
 
-function Select-OpenPathDnsScalarValue {
-    <#
-    .SYNOPSIS
-    Returns the first non-null item from a value that may be an array or a scalar.
-    #>
-    param([object]$Value)
-
-    foreach ($item in @($Value)) {
-        if ($null -ne $item) {
-            return $item
-        }
-    }
-
-    return $null
-}
-
-function ConvertTo-OpenPathDnsNullableInt {
-    <#
-    .SYNOPSIS
-    Converts a DNS adapter value to an integer, returning null when the value is absent or unparseable.
-    #>
-    param([object]$Value)
-
-    $scalarValue = Select-OpenPathDnsScalarValue -Value $Value
-    if ($null -eq $scalarValue) { return $null }
-
-    $stringValue = [string]$scalarValue
-    if ([string]::IsNullOrWhiteSpace($stringValue)) { return $null }
-
-    try {
-        return [int]$stringValue
-    }
-    catch {
-        return $null
-    }
-}
-
-function Get-OpenPathDnsNetworkFingerprint {
-    <#
-    .SYNOPSIS
-    Builds a stable string fingerprint from adapter identity and gateway fields for snapshot change detection.
-    #>
-    param([object[]]$Entries = @())
-
-    $parts = @(
-        foreach ($entry in @($Entries)) {
-            $gateway = if ($entry.PSObject.Properties['Gateway']) { [string]$entry.Gateway } else { '' }
-            @(
-                [string]$entry.InterfaceGuid,
-                [string]$entry.InterfaceAlias,
-                [string]$entry.InterfaceIndex,
-                [string]$gateway
-            ) -join '|'
-        }
-    ) | Sort-Object
-
-    return ($parts -join ';')
-}
-
-function ConvertFrom-OpenPathDnsNameServerValue {
-    <#
-    .SYNOPSIS
-    Splits a registry NameServer or DhcpNameServer value into individual address strings.
-    #>
-    param([object]$Value)
-
-    return @(
-        foreach ($part in ([string]$Value -split '[,\s]+')) {
-            $address = ([string]$part).Trim()
-            if ($address) { $address }
-        }
-    )
-}
-
-function Get-OpenPathDnsInterfaceRegistryState {
-    <#
-    .SYNOPSIS
-    Reads the static and DHCP DNS registry values for one adapter interface.
-    .DESCRIPTION
-    NameServer is the manual DNS value and is empty when DNS comes from DHCP. DhcpNameServer is
-    what DHCP offered. EnableDHCP tells whether the adapter currently uses DHCP. An unreadable
-    key returns Readable = false so callers can use the connectivity-safe DHCP direction.
-    #>
-    param([string]$InterfaceGuid)
-
-    $state = [PSCustomObject]@{
-        Readable = $false
-        EnableDhcp = $false
-        NameServer = @()
-        DhcpNameServer = @()
-    }
-    if ([string]::IsNullOrWhiteSpace($InterfaceGuid)) { return $state }
-
-    try {
-        $interfaceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$InterfaceGuid"
-        $properties = Get-ItemProperty -Path $interfaceKey -ErrorAction Stop
-        $state.Readable = $true
-        $state.NameServer = @(ConvertFrom-OpenPathDnsNameServerValue -Value $properties.NameServer)
-        $state.DhcpNameServer = @(ConvertFrom-OpenPathDnsNameServerValue -Value $properties.DhcpNameServer)
-        if ($null -ne $properties.EnableDHCP) {
-            $state.EnableDhcp = ([int]$properties.EnableDHCP -ne 0)
-        }
-    }
-    catch {
-        # A missing or unreadable key is treated as DHCP origin by the caller.
-    }
-
-    return $state
-}
-
-function Get-OpenPathCurrentDnsSnapshotEntries {
-    <#
-    .SYNOPSIS
-    Reads the current adapter list and returns a snapshot object per active adapter including its IPv4 DNS, gateway, and origin.
-    #>
-    if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return @() }
-    if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return @() }
-
-    return @(
-        Get-NetAdapter -ErrorAction Stop | ForEach-Object {
-            $adapter = $_
-            $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
-            $gateway = ''
-            try {
-                $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue |
-                    Select-Object -First 1
-                if ($route -and $route.NextHop) { $gateway = [string]$route.NextHop }
-            }
-            catch {
-                $gateway = ''
-            }
-
-            $registryState = Get-OpenPathDnsInterfaceRegistryState -InterfaceGuid ([string]$adapter.InterfaceGuid)
-            $nameServers = @($registryState.NameServer | Where-Object {
-                    $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
-                })
-            $dhcpNameServers = @($registryState.DhcpNameServer | Where-Object {
-                    $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
-                })
-            $effectiveServers = @($dns.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
-                    $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
-                })
-            $origin = if ($nameServers.Count -gt 0) { 'static' } else { 'dhcp' }
-            $serverAddresses = if ($origin -eq 'static') {
-                @($nameServers)
-            }
-            elseif ($dhcpNameServers.Count -gt 0) {
-                @($dhcpNameServers)
-            }
-            else {
-                @($effectiveServers)
-            }
-
-            [PSCustomObject]@{
-                InterfaceGuid = [string]$adapter.InterfaceGuid
-                InterfaceAlias = [string]$adapter.Name
-                InterfaceIndex = [int]$adapter.ifIndex
-                Gateway = [string]$gateway
-                Origin = [string]$origin
-                ServerAddresses = @($serverAddresses)
-            }
-        }
-    )
-}
-
 function Save-OpenPathOriginalDnsSnapshot {
     <#
     .SYNOPSIS
@@ -257,13 +92,10 @@ function Save-OpenPathOriginalDnsSnapshot {
     if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return $false }
 
     try {
-        $snapshot = @(Get-OpenPathCurrentDnsSnapshotEntries)
-        $networkFingerprint = Get-OpenPathDnsNetworkFingerprint -Entries $snapshot
-        $payload = [PSCustomObject]@{
-            version = 3
-            networkFingerprint = [string]$networkFingerprint
-            adapters = @($snapshot)
-        }
+        # The payload (version 3, networkFingerprint, adapters) is built by the
+        # DNS.AdapterSnapshot.ps1 leaf; this wrapper owns where and how it is written.
+        $payload = New-OpenPathOriginalDnsSnapshot
+        if ($null -eq $payload) { return $false }
 
         $directory = Split-Path $Path -Parent
         if (-not (Test-Path $directory)) {
@@ -337,57 +169,20 @@ function Update-OpenPathOriginalDnsSnapshotForCurrentNetwork {
     }
 }
 
-function Test-OpenPathDnsLoopbackAddress {
-    <#
-    .SYNOPSIS
-    Returns true for resolver addresses that point at the local machine instead of a real DNS server.
-    .DESCRIPTION
-    OpenPath pins adapters to 127.0.0.1 while Acrylic owns the local resolver. A loopback
-    address captured in the original snapshot is therefore OpenPath's own pin, not a user
-    setting, and must never be restored after the proxy is gone.
-    #>
-    param([object]$Address)
-
-    $text = ([string]$Address).Trim()
-    return ($text -eq '::1' -or $text -eq '0.0.0.0' -or $text -match '^127\.')
-}
-
-function Test-OpenPathDnsLegacyDhcpOrigin {
-    <#
-    .SYNOPSIS
-    Returns true when a live adapter still uses DHCP and has a DHCP-offered DNS server.
-    .DESCRIPTION
-    Legacy snapshots have no origin field. Resetting them to DHCP is the connectivity-safe rule
-    whenever the adapter is still DHCP-backed with a real DHCP DNS value.
-    #>
-    param([object]$Adapter)
-
-    $registryState = Get-OpenPathDnsInterfaceRegistryState -InterfaceGuid ([string]$Adapter.InterfaceGuid)
-    return [bool]($registryState.Readable -and $registryState.EnableDhcp -and @($registryState.DhcpNameServer).Count -gt 0)
-}
-
 function Reset-OpenPathDnsLoopbackResolvers {
     <#
     .SYNOPSIS
     Resets every adapter that still has a loopback resolver back to DHCP-assigned DNS.
     .DESCRIPTION
-    Final safety net for Restore-OriginalDNS: whatever the snapshot said, no adapter may keep
-    a loopback resolver once the local DNS proxy has been removed.
+    Logging wrapper over Reset-OpenPathDnsLoopbackResolverAddresses (DNS.AdapterSnapshot.ps1):
+    whatever the snapshot said, no adapter may keep a loopback resolver once the local DNS proxy
+    has been removed.
     #>
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return }
-    if (-not (Get-Command -Name Set-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return }
-
-    foreach ($dnsEntry in @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
-        $stillLoopback = @($dnsEntry.ServerAddresses | Where-Object {
-                $_ -and (Test-OpenPathDnsLoopbackAddress -Address $_)
-            })
-        if ($stillLoopback.Count -gt 0) {
-            Set-DnsClientServerAddress -InterfaceIndex $dnsEntry.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
-            Write-OpenPathLog "Reset loopback DNS for adapter index $($dnsEntry.InterfaceIndex)" -Level WARN
-        }
+    foreach ($interfaceIndex in @(Reset-OpenPathDnsLoopbackResolverAddresses)) {
+        Write-OpenPathLog "Reset loopback DNS for adapter index $interfaceIndex" -Level WARN
     }
 }
 
@@ -396,86 +191,34 @@ function Restore-OriginalDNS {
     .SYNOPSIS
     Restores each adapter to its pre-installation DNS addresses using the saved snapshot, falling back to a full reset.
     .DESCRIPTION
-    Matches adapters by GUID first, then by index, then by alias. Adapters with an empty saved address list
-    are reset to DHCP-assigned DNS rather than set to a specific address. Loopback addresses captured while
-    Acrylic was pinned are filtered out, and a final sweep resets any adapter that still points at loopback.
+    The restore rule (match by GUID, then index, then alias; drop loopback; static origin is set,
+    anything else is reset to DHCP; final loopback sweep) lives in Invoke-OpenPathOriginalDnsRestore
+    (DNS.AdapterSnapshot.ps1). This wrapper chooses the runtime policy: stop at the first failing
+    adapter, then reset every Up adapter, and logs the outcome.
     #>
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Network adapters", "Restore original DNS settings")) { return }
     Write-OpenPathLog "Restoring original DNS settings..."
 
     $snapshotPath = Get-OpenPathOriginalDnsSnapshotPath
-    if (Test-Path $snapshotPath) {
-        try {
-            $snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json
-            $snapshot = if ($snapshotPayload.PSObject.Properties['adapters']) { @($snapshotPayload.adapters) } else { @($snapshotPayload) }
-            $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
-            foreach ($entry in $snapshot) {
-                $adapter = $adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1
-                $entryInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $entry.InterfaceIndex
-                if (-not $adapter -and $null -ne $entryInterfaceIndex) {
-                    $adapter = $adapters | Where-Object {
-                        (ConvertTo-OpenPathDnsNullableInt -Value $_.ifIndex) -eq $entryInterfaceIndex
-                    } | Select-Object -First 1
-                }
-                if (-not $adapter -and $entry.InterfaceAlias) {
-                    $adapter = $adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1
-                }
-                if (-not $adapter) { continue }
+    $restore = Invoke-OpenPathOriginalDnsRestore -SnapshotPath $snapshotPath -OnAdapterError Stop -FallbackResetAllOnFailure
 
-                $adapterInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $adapter.ifIndex
-                if ($null -eq $adapterInterfaceIndex) { continue }
-
-                # A loopback entry is OpenPath's own pin (Acrylic); never restore it.
-                $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
-                        $_ -and -not (Test-OpenPathDnsLoopbackAddress -Address $_)
-                    })
-                $origin = ''
-                if ($entry.PSObject.Properties['Origin']) {
-                    $origin = ([string]$entry.Origin).Trim().ToLowerInvariant()
-                }
-
-                $resetToDhcp = $false
-                if ($origin -eq 'static') {
-                    # Keep an administrator-configured static DNS, but never a loopback-only one.
-                    $resetToDhcp = ($servers.Count -le 0)
-                }
-                elseif ($origin) {
-                    # v3 DHCP origin: returning to DHCP is the whole point of the origin field.
-                    $resetToDhcp = $true
-                }
-                elseif (Test-OpenPathDnsLegacyDhcpOrigin -Adapter $adapter) {
-                    # Legacy snapshot on a DHCP-backed adapter: do not freeze DHCP DNS as static.
-                    $resetToDhcp = $true
-                }
-                elseif ($servers.Count -le 0) {
-                    $resetToDhcp = $true
-                }
-
-                if ($resetToDhcp) {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses -ErrorAction Stop
-                    Write-OpenPathLog "Reset DNS for adapter: $($adapter.Name)"
-                }
-                else {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction Stop
-                    Write-OpenPathLog "Restored DNS for adapter: $($adapter.Name)"
-                }
-            }
-            Reset-OpenPathDnsLoopbackResolvers
-            Clear-DnsClientCache
-            return
+    foreach ($step in @($restore.Applied)) {
+        if ($step.Action -eq 'reset') {
+            Write-OpenPathLog "Reset DNS for adapter: $($step.AdapterName)"
         }
-        catch {
-            Write-OpenPathLog "Snapshot DNS restore failed: $_" -Level WARN
+        else {
+            Write-OpenPathLog "Restored DNS for adapter: $($step.AdapterName)"
         }
     }
-
-    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
-    foreach ($adapter in $adapters) {
-        Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+    if ($restore.UsedSnapshot) {
+        foreach ($restoreError in @($restore.Errors)) {
+            Write-OpenPathLog "Snapshot DNS restore failed: $restoreError" -Level WARN
+        }
     }
-    Reset-OpenPathDnsLoopbackResolvers
-    Clear-DnsClientCache
+    foreach ($interfaceIndex in @($restore.LoopbackResets)) {
+        Write-OpenPathLog "Reset loopback DNS for adapter index $interfaceIndex" -Level WARN
+    }
 }
 
 function Restore-OpenPathCaptivePortalDNS {

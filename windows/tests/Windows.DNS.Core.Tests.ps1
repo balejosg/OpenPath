@@ -135,11 +135,18 @@ Describe "DNS Module" {
         It "Snapshots adapter identity and IPv4 DNS before local DNS mutation" {
             $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
             $content = Get-Content $servicePath -Raw
-            $fingerprintBody = [regex]::Match($content, '(?s)function Get-OpenPathDnsNetworkFingerprint \{.*?\r?\n\}\r?\n\r?\nfunction Get-OpenPathCurrentDnsSnapshotEntries').Value
+            # The snapshot payload moved to the DNS.AdapterSnapshot.ps1 leaf (2026-11-17 reversion owners).
+            $leafPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.AdapterSnapshot.ps1"
+            $leafContent = Get-Content $leafPath -Raw
+            $fingerprintBody = [regex]::Match($leafContent, '(?s)function Get-OpenPathDnsNetworkFingerprint \{.*?\r?\n\}\r?\n\r?\nfunction ConvertFrom-OpenPathDnsNameServerValue').Value
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 'function Save-OpenPathOriginalDnsSnapshot',
                 "return 'C:\OpenPath\data\original-dns.json'",
+                '$payload = New-OpenPathOriginalDnsSnapshot',
+                '$snapshotSaved = Save-OpenPathOriginalDnsSnapshot'
+            )
+            Assert-ContentContainsAll -Content $leafContent -Needles @(
                 'InterfaceGuid = [string]$adapter.InterfaceGuid',
                 'InterfaceAlias = [string]$adapter.Name',
                 'InterfaceIndex = [int]$adapter.ifIndex',
@@ -149,9 +156,9 @@ Describe "DNS Module" {
                 'version = 3',
                 'Get-OpenPathDnsInterfaceRegistryState',
                 'DhcpNameServer',
-                'networkFingerprint',
-                '$snapshotSaved = Save-OpenPathOriginalDnsSnapshot'
+                'networkFingerprint'
             )
+            $fingerprintBody | Should -Not -BeNullOrEmpty
             $fingerprintBody | Should -Not -Match 'ServerAddresses'
         }
 
@@ -302,20 +309,24 @@ Describe "DNS Module" {
         It "Restores DNS by InterfaceGuid with index and alias fallback and resets empty server lists" {
             $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
             $content = Get-Content $servicePath -Raw
+            # The matching rule moved to the DNS.AdapterSnapshot.ps1 leaf (2026-11-17 reversion owners).
+            $leafContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.AdapterSnapshot.ps1") -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 'function Restore-OriginalDNS',
                 '$snapshotPath = Get-OpenPathOriginalDnsSnapshotPath',
-                'if (Test-Path $snapshotPath)',
-                '$snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json',
+                'Invoke-OpenPathOriginalDnsRestore -SnapshotPath $snapshotPath'
+            )
+            Assert-ContentContainsAll -Content $leafContent -Needles @(
+                'if (Test-Path -LiteralPath $SnapshotPath)',
                 '$snapshot = if ($snapshotPayload.PSObject.Properties[''adapters''])',
                 '[string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid',
                 '$entryInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $entry.InterfaceIndex',
                 '(ConvertTo-OpenPathDnsNullableInt -Value $_.ifIndex) -eq $entryInterfaceIndex',
                 '$_.Name -eq [string]$entry.InterfaceAlias',
                 '$adapterInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $adapter.ifIndex',
-                'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers',
-                'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses'
+                'Set-DnsClientServerAddress -InterfaceIndex $step.InterfaceIndex -ServerAddresses $step.ServerAddresses',
+                'Set-DnsClientServerAddress -InterfaceIndex $step.InterfaceIndex -ResetServerAddresses'
             )
         }
 
@@ -343,13 +354,11 @@ Describe "DNS Module" {
             $content = Get-Content $servicePath -Raw
             $restoreOriginalBody = [regex]::Match($content, '(?s)function Restore-OriginalDNS \{.*?\r?\n\}\r?\n\r?\nfunction Restore-OpenPathCaptivePortalDNS').Value
 
+            # The rollback behaviour is a wrapper over the leaf; it is exercised by the
+            # "Restore-OriginalDNS loopback safety" context below.
             Assert-ContentContainsAll -Content $restoreOriginalBody -Needles @(
-                '$snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json',
-                '$snapshot = if ($snapshotPayload.PSObject.Properties[''adapters''])',
-                'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers',
-                'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses',
-                'Reset-OpenPathDnsLoopbackResolvers',
-                'Clear-DnsClientCache'
+                'Invoke-OpenPathOriginalDnsRestore',
+                '-FallbackResetAllOnFailure'
             )
         }
     }

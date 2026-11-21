@@ -344,7 +344,12 @@ Describe "Operational Command Script" {
             $restoreBody = $serviceContent.Substring($restoreStart, $restoreEnd - $restoreStart)
 
             $disableBody | Should -Match 'Restore-OriginalDNS'
-            $restoreBody | Should -Match 'Reset-OpenPathDnsLoopbackResolvers'
+            # Restore-OriginalDNS wraps the DNS.AdapterSnapshot.ps1 leaf, whose restore ends with the sweep.
+            $leafContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.AdapterSnapshot.ps1") -Raw
+            $leafRestoreStart = $leafContent.IndexOf('function Invoke-OpenPathOriginalDnsRestore')
+            $leafRestoreBody = $leafContent.Substring($leafRestoreStart)
+            $restoreBody | Should -Match 'Invoke-OpenPathOriginalDnsRestore'
+            $leafRestoreBody | Should -Match 'Reset-OpenPathDnsLoopbackResolverAddresses'
         }
     }
 
