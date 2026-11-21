@@ -586,6 +586,55 @@ Describe "Installer cleanup helper" {
         }
     }
 
+    # Skipped until Task 6 of 2026-11-17-windows-reversion-owners (B2): today the installer
+    # cleanup deletes every OpenPath rule and leaves an egress-floor Block default in place.
+    It "Reinstall cleanup never leaves the outbound default at Block" -Skip {
+        . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+
+        $createdCDrive = $false
+        if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
+            New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
+            $createdCDrive = $true
+        }
+        $script:firewallEvents = [System.Collections.Generic.List[string]]::new()
+        function global:Get-NetFirewallProfile {
+            [CmdletBinding()] param([string]$Profile)
+            [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' }
+        }
+        function global:Set-NetFirewallProfile {
+            [CmdletBinding()] param([string]$Profile, [string]$DefaultOutboundAction)
+            $script:firewallEvents.Add("set:${Profile}:$DefaultOutboundAction")
+        }
+        function global:Get-NetFirewallRule {
+            [CmdletBinding()] param([string]$DisplayName, [string]$Group)
+            if ($Group) { return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' } }
+            return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-rule' }
+        }
+        function global:Remove-NetFirewallRule {
+            [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)]$InputObject)
+            process { $script:firewallEvents.Add("remove:$($InputObject.DisplayName)") }
+        }
+
+        try {
+            Remove-OpenPathInstallerFirewallRules
+
+            $events = @($script:firewallEvents)
+            $setEvents = @($events | Where-Object { $_ -like 'set:*' })
+            @($setEvents | Sort-Object) | Should -Be @('set:Domain:Allow', 'set:Private:Allow', 'set:Public:Allow')
+            $firstRemove = [array]::FindIndex([string[]]$events, [Predicate[string]] { param($e) $e -like 'remove:*' })
+            $lastSet = [array]::FindLastIndex([string[]]$events, [Predicate[string]] { param($e) $e -like 'set:*' })
+            $firstRemove | Should -BeGreaterThan $lastSet
+        }
+        finally {
+            Remove-Item Function:\Get-NetFirewallProfile, Function:\Set-NetFirewallProfile -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-NetFirewallRule, Function:\Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            Remove-Variable -Name firewallEvents -Scope Script -ErrorAction SilentlyContinue
+            if ($createdCDrive) {
+                Microsoft.PowerShell.Management\Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     It "Makes standalone uninstall independent of installed OpenPath modules" {
         $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
         $content = Get-Content $uninstallPath -Raw

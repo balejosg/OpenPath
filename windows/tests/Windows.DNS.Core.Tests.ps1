@@ -242,6 +242,63 @@ Describe "DNS Module" {
             Remove-Variable -Name openPathSnapshotPath -Scope Global -ErrorAction SilentlyContinue
         }
 
+        # Skipped until Task 3 of 2026-11-17-windows-reversion-owners: today the installer
+        # snapshot has no Gateway/networkFingerprint, so the refresh sees a "new" network and
+        # overwrites it with a capture taken while the adapter is pinned to 127.0.0.1.
+        It "A snapshot written by the installer is not replaced on the same network" -Skip {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Dns.ps1")
+            $snapshotRoot = Join-Path $TestDrive 'installer-same-network'
+            $snapshotPath = Join-Path $snapshotRoot 'data' 'original-dns.json'
+            $global:openPathSnapshotPath = $snapshotPath
+            $global:openPathDnsPinned = $false
+            if (-not (Get-Command -Name Get-NetRoute -ErrorAction SilentlyContinue)) {
+                function global:Get-NetRoute { param($DestinationPrefix, $InterfaceIndex) }
+                $removeNetRouteStub = $true
+            }
+
+            $adapterMock = { @([PSCustomObject]@{ InterfaceGuid = 'manual-guid'; Name = 'Ethernet'; ifIndex = 7; Status = 'Up' }) }
+            $dnsMock = {
+                if ($global:openPathDnsPinned) { [PSCustomObject]@{ ServerAddresses = @('127.0.0.1') } }
+                else { [PSCustomObject]@{ ServerAddresses = @('192.0.2.53') } }
+            }
+            $routeMock = { [PSCustomObject]@{ NextHop = '192.0.2.1' } }
+            $registryMock = {
+                if ($global:openPathDnsPinned) {
+                    [PSCustomObject]@{ NameServer = '127.0.0.1'; DhcpNameServer = '198.51.100.1'; EnableDHCP = 1 }
+                }
+                else {
+                    [PSCustomObject]@{ NameServer = '192.0.2.53'; DhcpNameServer = '198.51.100.1'; EnableDHCP = 1 }
+                }
+            }
+            Mock Get-NetAdapter $adapterMock
+            Mock Get-DnsClientServerAddress $dnsMock
+            Mock Get-NetRoute $routeMock
+            Mock Get-ItemProperty $registryMock
+            Mock Get-NetAdapter $adapterMock -ModuleName DNS
+            Mock Get-DnsClientServerAddress $dnsMock -ModuleName DNS
+            Mock Get-NetRoute $routeMock -ModuleName DNS
+            Mock Get-ItemProperty $registryMock -ModuleName DNS
+            Mock Write-OpenPathLog { } -ModuleName DNS
+
+            try {
+                Save-OpenPathInstallerOriginalDnsSnapshot -OpenPathRoot $snapshotRoot | Should -BeTrue
+                $global:openPathDnsPinned = $true
+
+                InModuleScope DNS {
+                    Update-OpenPathOriginalDnsSnapshotForCurrentNetwork -Path $global:openPathSnapshotPath | Should -BeTrue
+                }
+
+                $payload = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+                @($payload.adapters).Count | Should -Be 1
+                [string]$payload.adapters[0].Origin | Should -Be 'static'
+                (@($payload.adapters[0].ServerAddresses) -join ',') | Should -Be '192.0.2.53'
+            }
+            finally {
+                if ($removeNetRouteStub) { Remove-Item Function:\Get-NetRoute -ErrorAction SilentlyContinue }
+                Remove-Variable -Name openPathSnapshotPath, openPathDnsPinned -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Restores DNS by InterfaceGuid with index and alias fallback and resets empty server lists" {
             $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
             $content = Get-Content $servicePath -Raw
