@@ -88,6 +88,9 @@ Describe "Firewall Module" {
 
             Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
             Mock Write-OpenPathLog { } -ModuleName Firewall
+            # Never read, delete or apply the runner's real C:\OpenPath egress-floor state.
+            Mock Restore-OpenPathEgressFloorPreviousOutbound { } -ModuleName Firewall
+            Mock Disable-OpenPathEgressFloorAudit { } -ModuleName Firewall
             Mock Get-NetFirewallRule {
                 param(
                     [string]$DisplayName,
@@ -128,6 +131,9 @@ Describe "Firewall Module" {
                 $script:removedFirewallRules | Should -Contain 'OpenPath-group-rule'
                 $script:removedFirewallRules | Should -Contain 'OpenPath-DNS-fallback-rule'
                 Should -Invoke -CommandName Remove-NetFirewallRule -ModuleName Firewall -Times 2 -Exactly
+                # Never read, delete or apply the runner's real egress-floor state.
+                Should -Invoke -CommandName Restore-OpenPathEgressFloorPreviousOutbound -ModuleName Firewall -Times 1 -Exactly
+                Should -Invoke -CommandName Disable-OpenPathEgressFloorAudit -ModuleName Firewall -Times 1 -Exactly
                 Test-Path $manifestPath | Should -BeFalse
             }
             finally {

@@ -575,8 +575,24 @@ Describe "Installer cleanup helper" {
             param([string]$Message)
         }
 
+        # B2: the teardown now restores the outbound default and audit setting first. Keep both
+        # off the runner's real firewall profile and auditpol.
+        $createdProfileStubs = @()
+        foreach ($profileCommand in @('Get-NetFirewallProfile', 'Set-NetFirewallProfile')) {
+            if (-not (Get-Command -Name $profileCommand -ErrorAction SilentlyContinue)) {
+                New-Item -Path "Function:\global:$profileCommand" -Value { param($Profile, $DefaultOutboundAction) } -Force | Out-Null
+                $createdProfileStubs += $profileCommand
+            }
+        }
+        Mock Get-NetFirewallProfile { [PSCustomObject]@{ DefaultOutboundAction = 'Allow' } }
+        Mock Set-NetFirewallProfile { }
+        Mock Invoke-OpenPathAuditPol { }
+
         try {
             { Remove-OpenPathInstallerFirewallRules } | Should -Not -Throw
+            # The B2 outbound/audit restore must hit mocks, never the runner's real firewall profile.
+            Should -Invoke Get-NetFirewallProfile -Times 3 -Exactly
+            Should -Invoke Set-NetFirewallProfile -Times 0 -Exactly
             $script:manifestRead | Should -BeTrue
             $script:requestedFirewallRules | Should -Contain 'group:OpenPath'
             $script:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
@@ -590,6 +606,9 @@ Describe "Installer cleanup helper" {
             Microsoft.PowerShell.Management\Remove-Item Function:\Test-Path -ErrorAction SilentlyContinue
             Microsoft.PowerShell.Management\Remove-Item Function:\Get-Content -ErrorAction SilentlyContinue
             Microsoft.PowerShell.Management\Remove-Item Function:\Write-InstallerWarning -ErrorAction SilentlyContinue
+            foreach ($profileCommand in @($createdProfileStubs)) {
+                Microsoft.PowerShell.Management\Remove-Item "Function:\$profileCommand" -ErrorAction SilentlyContinue
+            }
             Remove-Variable -Name removedFirewallRules -Scope Script -ErrorAction SilentlyContinue
             Remove-Variable -Name requestedFirewallRules -Scope Script -ErrorAction SilentlyContinue
             Remove-Variable -Name manifestRead -Scope Script -ErrorAction SilentlyContinue
