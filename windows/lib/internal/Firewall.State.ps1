@@ -2,37 +2,15 @@ function Get-OpenPathFirewallManifestPath {
     return 'C:\OpenPath\data\firewall-rules.json'
 }
 
-function ConvertTo-OpenPathFirewallManifestRuleNames {
-    param([object]$Value)
-
-    $names = New-Object System.Collections.Generic.List[string]
-    foreach ($item in @($Value)) {
-        if ($null -eq $item) { continue }
-
-        $text = [string]$item
-        if ([string]::IsNullOrWhiteSpace($text)) { continue }
-
-        foreach ($name in @($text -split '\s+' | Where-Object { $_ })) {
-            [void]$names.Add([string]$name)
-        }
-    }
-
-    return @($names | Sort-Object -Unique)
-}
-
 function Get-OpenPathFirewallManifestRuleNames {
+    # Logging wrapper over Read-OpenPathFirewallManifestRuleNames (Firewall.Teardown.ps1).
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    if (-not (Test-Path $Path)) { return @() }
-
-    try {
-        $parsed = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        return ConvertTo-OpenPathFirewallManifestRuleNames -Value $parsed
+    $manifest = Read-OpenPathFirewallManifestRuleNames -Path $Path
+    if ($manifest.Error) {
+        Write-OpenPathLog "Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $($manifest.Error)" -Level WARN
     }
-    catch {
-        Write-OpenPathLog "Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $_" -Level WARN
-        return @()
-    }
+    return @($manifest.Names)
 }
 
 function Set-OpenPathFirewallManifestRuleNames {
@@ -149,18 +127,13 @@ function Remove-OpenPathFirewall {
             Disable-OpenPathEgressFloorAudit
         }
 
+        # Rule removal (manifest names, then group OpenPath, then the prefix) lives in the
+        # Firewall.Teardown.ps1 leaf; failures are ignored here, as before.
         $manifestPath = Get-OpenPathFirewallManifestPath
-        foreach ($ruleName in @(Get-OpenPathFirewallManifestRuleNames -Path $manifestPath)) {
-            Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)
+        $ruleRemoval = Remove-OpenPathFirewallOwnedRules -ManifestPath $manifestPath -RulePrefix $script:RulePrefix -RemoveManifest
+        if ($ruleRemoval.ManifestError) {
+            Write-OpenPathLog "Ignoring unreadable firewall manifest at $manifestPath; falling back to OpenPath firewall rule discovery. $($ruleRemoval.ManifestError)" -Level WARN
         }
-
-        if (Test-Path $manifestPath) {
-            Remove-Item $manifestPath -Force -ErrorAction SilentlyContinue
-        }
-
-        Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue)
-
-        Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -DisplayName "$script:RulePrefix-*" -ErrorAction SilentlyContinue)
 
         Write-OpenPathLog 'Firewall rules removed'
         return $true

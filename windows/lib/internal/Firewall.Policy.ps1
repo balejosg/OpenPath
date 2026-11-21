@@ -811,13 +811,7 @@ function Get-OpenPathEgressFloorStudentProgramsFromConfig {
 
 $script:OpenPathFilteringPlatformConnectionAuditGuid = '{0CCE9226-69AE-11D9-BED3-505054503030}'
 
-function Invoke-OpenPathAuditPol {
-    <# Runs auditpol.exe; returns its output lines, or $null where auditpol is unavailable. #>
-    param([string[]]$Arguments)
-
-    if (-not (Get-Command -Name 'auditpol.exe' -ErrorAction SilentlyContinue)) { return $null }
-    return @(& auditpol.exe @Arguments 2>$null)
-}
+# Invoke-OpenPathAuditPol lives in Firewall.Teardown.ps1 (loaded before this file).
 
 function Get-OpenPathAuditPolBackupLines {
     <#
@@ -911,16 +905,11 @@ function Disable-OpenPathEgressFloorAudit {
     [CmdletBinding()]
     param()
 
-    $statePath = Get-OpenPathEgressFloorAuditStatePath
-    if (-not (Test-Path -LiteralPath $statePath)) { return }
-    try {
-        $previous = [int]((Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).settingValue)
-        Set-OpenPathFilteringPlatformConnectionAudit -SettingValue $previous
+    # The restore rule lives in Invoke-OpenPathFirewallAuditRestore (Firewall.Teardown.ps1).
+    $restore = Invoke-OpenPathFirewallAuditRestore -StatePath (Get-OpenPathEgressFloorAuditStatePath)
+    if ($restore.Error) {
+        Write-OpenPathLog "Egress floor: could not restore the Filtering Platform Connection audit setting: $($restore.Error)" -Level WARN
     }
-    catch {
-        Write-OpenPathLog "Egress floor: could not restore the Filtering Platform Connection audit setting: $_" -Level WARN
-    }
-    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
 }
 
 function Get-OpenPathEgressFloorBlockedConnections {
@@ -1110,52 +1099,18 @@ function Restore-OpenPathEgressFloorPreviousOutbound {
         return
     }
 
-    $previous = @{}
-    try {
-        if (Test-Path $StatePath) {
-            # Read line-wise and re-join rather than -Raw: equivalent for a small JSON file
-            # and avoids a Pester mock-binding quirk around the -Raw parameter set in tests.
-            $stateText = (Get-Content $StatePath -ErrorAction Stop) -join "`n"
-            $parsed = $stateText | ConvertFrom-Json -ErrorAction Stop
-            if ($null -ne $parsed) {
-                foreach ($property in $parsed.PSObject.Properties) {
-                    $previous[$property.Name] = [string]$property.Value
-                }
-            }
-        }
+    # The restore rule (never Block; recorded Allow/NotConfigured honoured; no usable state
+    # means every profile to Allow) lives in Invoke-OpenPathFirewallOutboundRestore
+    # (Firewall.Teardown.ps1).
+    $restore = Invoke-OpenPathFirewallOutboundRestore -StatePath $StatePath -WhenNoState AllProfiles -RemoveState
+    if ($restore.StateUnreadable) {
+        Write-OpenPathLog "Egress floor: pre-floor DefaultOutboundAction state unreadable; restoring profiles to Allow. $($restore.StateError)" -Level WARN
     }
-    catch {
-        Write-OpenPathLog "Egress floor: pre-floor DefaultOutboundAction state unreadable; restoring profiles to Allow. $_" -Level WARN
-        $previous = @{}
+    foreach ($restoreError in @($restore.Errors)) {
+        Write-OpenPathLog "Egress floor: failed restoring $restoreError" -Level WARN
     }
-
     if (Get-Command -Name 'Set-NetFirewallProfile' -ErrorAction SilentlyContinue) {
-        foreach ($profileName in @(Get-OpenPathEgressFloorProfileNames)) {
-            $action = 'Allow'
-            if ($previous.ContainsKey($profileName) -and $previous[$profileName]) {
-                $candidate = [string]$previous[$profileName]
-                # Brick-guard: never restore to Block. Only a recognized non-Block action
-                # (Allow / NotConfigured) is honored; anything else falls back to Allow.
-                if ($candidate -in @('Allow', 'NotConfigured')) {
-                    $action = $candidate
-                }
-            }
-            try {
-                Set-NetFirewallProfile -Profile $profileName -DefaultOutboundAction $action -ErrorAction Stop
-            }
-            catch {
-                Write-OpenPathLog "Egress floor: failed restoring DefaultOutboundAction=$action on profile ${profileName}: $_" -Level WARN
-            }
-        }
         Write-OpenPathLog 'Egress floor: restored DefaultOutboundAction from pre-floor state (fallback Allow)'
-    }
-
-    try {
-        if (Test-Path $StatePath) {
-            Remove-Item $StatePath -Force -ErrorAction SilentlyContinue
-        }
-    }
-    catch {
     }
 }
 

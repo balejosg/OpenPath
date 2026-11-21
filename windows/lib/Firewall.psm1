@@ -9,6 +9,7 @@ $script:RulePrefix = 'OpenPath-DNS'
 $script:FirewallHelperRoot = Join-Path $PSScriptRoot 'internal'
 
 . (Join-Path $script:FirewallHelperRoot 'Firewall.Catalog.ps1')
+. (Join-Path $script:FirewallHelperRoot 'Firewall.Teardown.ps1')
 . (Join-Path $script:FirewallHelperRoot 'Firewall.Policy.ps1')
 . (Join-Path $script:FirewallHelperRoot 'Firewall.State.ps1')
 

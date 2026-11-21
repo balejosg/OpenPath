@@ -310,6 +310,7 @@ windows/lib/Network.psm1|windows/tests/Windows.Network.Tests.ps1
 windows/lib/internal/Network.BridgeFilters.ps1|windows/tests/Windows.Network.Tests.ps1
 windows/lib/internal/Firewall.Catalog.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/Firewall.Policy.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
+windows/lib/internal/Firewall.Teardown.ps1|windows/tests/Windows.Firewall.Teardown.Tests.ps1,windows/tests/Windows.Firewall.Tests.ps1
 windows/lib/internal/Firewall.State.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/Common.Http.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/Common.Http.Assembly.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats

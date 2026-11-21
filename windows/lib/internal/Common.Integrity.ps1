@@ -44,6 +44,7 @@ function Get-OpenPathCriticalFiles {
         # Reversion leaves: dot-sourced by DNS.psm1/Firewall.psm1 under SYSTEM and by the
         # installer and uninstaller; they decide how adapter DNS and the firewall are restored.
         "$script:OpenPathRoot\lib\internal\DNS.AdapterSnapshot.ps1",
+        "$script:OpenPathRoot\lib\internal\Firewall.Teardown.ps1",
         # W-5: WindowsRoot.ps1 is dot-sourced first by every SYSTEM-run script and module
         # to resolve $OpenPathRoot. The native-messaging host and the install/bootstrap
         # helpers are likewise dot-sourced under SYSTEM. Replacing any of them yields SYSTEM
