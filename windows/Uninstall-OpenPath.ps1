@@ -40,8 +40,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'lib\internal\WindowsRoot.ps1')
-# Shared reversion leaf: dependency-free, works with no OpenPath module loaded.
+# Shared reversion leaves: dependency-free, work with no OpenPath module loaded.
 . (Join-Path $PSScriptRoot 'lib\internal\DNS.AdapterSnapshot.ps1')
+. (Join-Path $PSScriptRoot 'lib\internal\Firewall.Teardown.ps1')
 $OpenPathRoot = Resolve-OpenPathWindowsRoot
 $script:OpenPathBrowserPolicyIssues = 0
 
@@ -228,39 +229,6 @@ function Remove-OpenPathFallbackAppLockerRules {
     Import-Module $modulePath -Force -Global -ErrorAction Stop
     if (-not (Remove-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Confirm:$false)) {
         throw 'Central AppControl removal did not verify; manual recovery is required.'
-    }
-}
-
-function ConvertTo-OpenPathUninstallFirewallManifestRuleNames {
-    param([object]$Value)
-
-    $names = New-Object System.Collections.Generic.List[string]
-    foreach ($item in @($Value)) {
-        if ($null -eq $item) { continue }
-
-        $text = [string]$item
-        if ([string]::IsNullOrWhiteSpace($text)) { continue }
-
-        foreach ($name in @($text -split '\s+' | Where-Object { $_ })) {
-            [void]$names.Add([string]$name)
-        }
-    }
-
-    return @($names | Sort-Object -Unique)
-}
-
-function Get-OpenPathUninstallFirewallManifestRuleNames {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path $Path)) { return @() }
-
-    try {
-        $parsed = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        return ConvertTo-OpenPathUninstallFirewallManifestRuleNames -Value $parsed
-    }
-    catch {
-        Write-Warning "Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $_"
-        return @()
     }
 }
 
@@ -453,79 +421,26 @@ function Remove-OpenPathFirefoxManagedExtension {
     }
 }
 
-function Restore-OpenPathOutboundDefault {
-    # The optional egress floor flips each profile's DefaultOutboundAction to Block; deleting
-    # its Allow rules without restoring the default would leave all egress blocked.
-    if (-not (Get-Command -Name Set-NetFirewallProfile -ErrorAction SilentlyContinue)) { return }
-
-    $previous = @{}
-    $statePath = Join-Path $OpenPathRoot 'data\egress-floor-prev-outbound.json'
-    $hasState = Test-Path $statePath
-    if ($hasState) {
-        try {
-            $parsed = (Get-Content $statePath -ErrorAction Stop) -join "`n" | ConvertFrom-Json -ErrorAction Stop
-            foreach ($property in $parsed.PSObject.Properties) {
-                $previous[$property.Name] = [string]$property.Value
-            }
-        }
-        catch {
-            Write-Warning "Ignoring unreadable egress-floor state at $statePath; restoring Allow. $_"
-        }
-    }
-
-    foreach ($profileName in @('Domain', 'Private', 'Public')) {
-        $current = $null
-        if (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue) {
-            $current = [string](Get-NetFirewallProfile -Profile $profileName -ErrorAction SilentlyContinue).DefaultOutboundAction
-        }
-        if (-not $hasState -and $current -ne 'Block') { continue }
-
-        # Never restore Block, even when a damaged state file records it.
-        $action = 'Allow'
-        if ($previous[$profileName] -in @('Allow', 'NotConfigured')) {
-            $action = $previous[$profileName]
-        }
-        Set-NetFirewallProfile -Profile $profileName -DefaultOutboundAction $action -ErrorAction SilentlyContinue
-    }
-}
-
-function Invoke-OpenPathUninstallAuditPol {
-    param([string[]]$Arguments)
-    if (-not (Get-Command -Name 'auditpol.exe' -ErrorAction SilentlyContinue)) { return }
-    & auditpol.exe @Arguments 2>$null | Out-Null
-}
-
-function Restore-OpenPathEgressFloorAudit {
-    # The egress floor turns on failure auditing for "Filtering Platform Connection"
-    # and saves the previous numeric setting; put it back (no-op when never enabled).
-    $statePath = Join-Path $OpenPathRoot 'data\egress-floor-audit-prev.json'
-    if (-not (Test-Path -LiteralPath $statePath)) { return }
-    try {
-        $previous = [int](((Get-Content -LiteralPath $statePath -ErrorAction Stop) -join "`n" | ConvertFrom-Json -ErrorAction Stop).settingValue)
-        $success = if ($previous -band 1) { 'enable' } else { 'disable' }
-        $failure = if ($previous -band 2) { 'enable' } else { 'disable' }
-        Invoke-OpenPathUninstallAuditPol -Arguments @('/set', '/subcategory:{0CCE9226-69AE-11D9-BED3-505054503030}', "/success:$success", "/failure:$failure")
-    }
-    catch {
-        Write-Warning "Could not restore the Filtering Platform Connection audit setting from ${statePath}: $_"
-    }
-    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
-}
-
 function Remove-OpenPathFirewallRules {
-    Restore-OpenPathOutboundDefault
-    Restore-OpenPathEgressFloorAudit
-
+    # The teardown (outbound default first, then the audit setting, then the rules) lives in
+    # Invoke-OpenPathFirewallTeardown (lib\internal\Firewall.Teardown.ps1). The optional egress
+    # floor flips each profile's DefaultOutboundAction to Block; deleting its Allow rules
+    # without restoring the default would leave all egress blocked. Uninstall policy: without
+    # usable state only profiles that are currently Block are set to Allow; failures warn.
+    $outboundStatePath = Join-Path $OpenPathRoot 'data\egress-floor-prev-outbound.json'
+    $auditStatePath = Join-Path $OpenPathRoot 'data\egress-floor-audit-prev.json'
     $manifestPath = Join-Path $OpenPathRoot 'data\firewall-rules.json'
-    foreach ($ruleName in @(Get-OpenPathUninstallFirewallManifestRuleNames -Path $manifestPath)) {
-        Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue |
-            Remove-NetFirewallRule -ErrorAction SilentlyContinue
-    }
+    $teardown = Invoke-OpenPathFirewallTeardown -OutboundStatePath $outboundStatePath -AuditStatePath $auditStatePath -ManifestPath $manifestPath -WhenNoState OnlyBlocked
 
-    Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue |
-        Remove-NetFirewallRule -ErrorAction SilentlyContinue
-    Get-NetFirewallRule -DisplayName "OpenPath-DNS-*" -ErrorAction SilentlyContinue |
-        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    if ($teardown.Outbound.StateUnreadable) {
+        Write-Warning "Ignoring unreadable egress-floor state at $outboundStatePath; restoring Allow. $($teardown.Outbound.StateError)"
+    }
+    if ($teardown.Audit.Error) {
+        Write-Warning "Could not restore the Filtering Platform Connection audit setting from ${auditStatePath}: $($teardown.Audit.Error)"
+    }
+    if ($teardown.Rules.ManifestError) {
+        Write-Warning "Ignoring unreadable firewall manifest at $manifestPath; falling back to OpenPath firewall rule discovery. $($teardown.Rules.ManifestError)"
+    }
 }
 
 function Remove-OpenPathUninstallDnsFailureArtifacts {

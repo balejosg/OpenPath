@@ -266,6 +266,54 @@ Describe "Firewall teardown leaf" {
         }
     }
 
+    Context "Through the standalone uninstaller wrapper" {
+        BeforeEach {
+            $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+            $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OpenPathFirewallRules' }, $true) | Select-Object -First 1
+            . ([scriptblock]::Create($fn.Extent.Text))
+
+            $OpenPathRoot = Join-Path $TestDrive "op-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Path (Join-Path $OpenPathRoot 'data') -Force | Out-Null
+            $global:openPathWrapperEvents = [System.Collections.Generic.List[string]]::new()
+            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
+            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathWrapperEvents.Add("set:${Profile}:$DefaultOutboundAction") }
+            Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
+            Mock Remove-NetFirewallRule {
+                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                process { $global:openPathWrapperEvents.Add('remove') }
+            }
+            Mock Write-Warning { }
+        }
+
+        AfterEach {
+            Remove-Variable -Name openPathWrapperEvents -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It "Ends a Block default with no state file at Allow and never writes Block" {
+            Remove-OpenPathFirewallRules
+
+            $sets = @($global:openPathWrapperEvents | Where-Object { $_ -like 'set:*' })
+            @($sets | Sort-Object) | Should -Be @('set:Domain:Allow', 'set:Private:Allow', 'set:Public:Allow')
+            @($sets | Where-Object { $_ -like '*:Block' }).Count | Should -Be 0
+        }
+
+        It "Treats a <Kind> state file as no usable state and still removes the rules" -ForEach @(
+            @{ Kind = 'empty'; Bytes = [byte[]]@() }
+            @{ Kind = 'cut'; Bytes = [System.Text.Encoding]::ASCII.GetBytes('{ "Domain": "Blo') }
+            @{ Kind = 'zero-filled'; Bytes = [byte[]](@(0) * 64) }
+        ) {
+            [System.IO.File]::WriteAllBytes((Join-Path $OpenPathRoot 'data\egress-floor-prev-outbound.json'), $Bytes)
+
+            { Remove-OpenPathFirewallRules } | Should -Not -Throw
+
+            @($global:openPathWrapperEvents | Where-Object { $_ -like 'set:*' } | Sort-Object) |
+                Should -Be @('set:Domain:Allow', 'set:Private:Allow', 'set:Public:Allow')
+            @($global:openPathWrapperEvents | Where-Object { $_ -eq 'remove' }).Count | Should -BeGreaterThan 0
+            Should -Invoke Write-Warning -ParameterFilter { $Message -like 'Ignoring unreadable egress-floor state*' } -Times 1 -Exactly
+        }
+    }
+
     Context "Teardown order" {
         It "Restores every profile before removing the first rule" {
             $global:openPathTeardownEvents = [System.Collections.Generic.List[string]]::new()

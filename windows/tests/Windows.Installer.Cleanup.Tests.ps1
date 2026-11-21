@@ -644,12 +644,11 @@ Describe "Installer cleanup helper" {
             'function Restore-OpenPathOriginalDns',
             'function Remove-OpenPathFirewallRules',
             'lib\internal\DNS.AdapterSnapshot.ps1',
-            'function Get-OpenPathUninstallFirewallManifestRuleNames',
+            'lib\internal\Firewall.Teardown.ps1',
             'ExtensionInstallForcelist',
             'Start-Process -FilePath "$acrylicPath\AcrylicService.exe" -ArgumentList ''/UNINSTALL''',
             'WaitForExit(120000)',
             '& sc.exe delete AcrylicDNSProxySvc',
-            "Get-NetFirewallRule -Group 'OpenPath'",
             "data\original-dns.json",
             "data\firewall-rules.json"
         )
@@ -877,35 +876,87 @@ Describe "Installer cleanup helper" {
         }
     }
 
-    It "Standalone uninstall restores the outbound firewall default left by the egress floor" {
-        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
-        $content = Get-Content $uninstallPath -Raw
+    Context "Standalone uninstall firewall teardown" {
+        BeforeAll {
+            $script:createdFirewallStubs = @()
+            $firewallStubs = @{
+                'Get-NetFirewallProfile' = { param($Profile) }
+                'Set-NetFirewallProfile' = { param($Profile, $DefaultOutboundAction) }
+                'Get-NetFirewallRule'    = { param($DisplayName, $Group) }
+                'Remove-NetFirewallRule' = { param([Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
+            }
+            foreach ($commandName in @($firewallStubs.Keys)) {
+                if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                    New-Item -Path "Function:\global:$commandName" -Value $firewallStubs[$commandName] -Force | Out-Null
+                    $script:createdFirewallStubs += @($commandName)
+                }
+            }
+        }
 
-        Assert-ContentContainsAll -Content $content -Needles @(
-            'function Restore-OpenPathOutboundDefault',
-            'egress-floor-prev-outbound.json',
-            'Set-NetFirewallProfile -Profile $profileName -DefaultOutboundAction $action'
-        )
-        $content | Should -Match '(?s)function Remove-OpenPathFirewallRules \{\s+Restore-OpenPathOutboundDefault'
-    }
-    It "Standalone uninstall restores the Filtering Platform Connection audit setting saved by the egress floor" {
-        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
-        $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Restore-OpenPathEgressFloorAudit' }, $true) | Select-Object -First 1
-        $fn | Should -Not -BeNullOrEmpty
-        $OpenPathRoot = Join-Path $TestDrive 'op'
-        New-Item -ItemType Directory -Path (Join-Path $OpenPathRoot 'data') -Force | Out-Null
-        $statePath = Join-Path $OpenPathRoot 'data\egress-floor-audit-prev.json'
-        Set-Content -LiteralPath $statePath -Value '{ "settingValue": 1 }'
-        $script:auditCalls = @()
-        function Invoke-OpenPathUninstallAuditPol { param([string[]]$Arguments) $script:auditCalls += ($Arguments -join ' ') }
-        . ([scriptblock]::Create($fn.Extent.Text))
-        Restore-OpenPathEgressFloorAudit
-        $script:auditCalls | Should -Be @('/set /subcategory:{0CCE9226-69AE-11D9-BED3-505054503030} /success:enable /failure:disable')
-        Test-Path -LiteralPath $statePath | Should -BeFalse
+        AfterAll {
+            foreach ($commandName in @($script:createdFirewallStubs)) {
+                if ($commandName) { Remove-Item -Path "Function:\$commandName" -ErrorAction SilentlyContinue }
+            }
+        }
 
-        $content = Get-Content $uninstallPath -Raw
-        $content | Should -Match '(?s)function Remove-OpenPathFirewallRules \{\s+Restore-OpenPathOutboundDefault\s+Restore-OpenPathEgressFloorAudit'
+        BeforeEach {
+            # The teardown rule lives in the shared leaf the uninstaller dot-sources; carve only its wrapper.
+            $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Teardown.ps1")
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
+            $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OpenPathFirewallRules' }, $true) | Select-Object -First 1
+            . ([scriptblock]::Create($fn.Extent.Text))
+
+            $OpenPathRoot = Join-Path $TestDrive "op-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Path (Join-Path $OpenPathRoot 'data') -Force | Out-Null
+            $global:openPathUninstallEvents = [System.Collections.Generic.List[string]]::new()
+            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
+            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathUninstallEvents.Add("set:${Profile}:$DefaultOutboundAction") }
+            Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
+            Mock Remove-NetFirewallRule {
+                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                process { $global:openPathUninstallEvents.Add('remove') }
+            }
+        }
+
+        AfterEach {
+            Remove-Variable -Name openPathUninstallEvents -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It "Standalone uninstall restores the outbound firewall default left by the egress floor" {
+            Set-Content -LiteralPath (Join-Path $OpenPathRoot 'data\egress-floor-prev-outbound.json') -Value '{ "Domain": "NotConfigured", "Private": "Allow", "Public": "Block" }'
+
+            Remove-OpenPathFirewallRules
+
+            @($global:openPathUninstallEvents | Where-Object { $_ -like 'set:*' } | Sort-Object) |
+                Should -Be @('set:Domain:NotConfigured', 'set:Private:Allow', 'set:Public:Allow')
+            $content = Get-Content $uninstallPath -Raw
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'egress-floor-prev-outbound.json',
+                'Invoke-OpenPathFirewallTeardown',
+                '-WhenNoState OnlyBlocked'
+            )
+        }
+
+        It "Standalone uninstall restores the Filtering Platform Connection audit setting saved by the egress floor" {
+            $statePath = Join-Path $OpenPathRoot 'data\egress-floor-audit-prev.json'
+            Set-Content -LiteralPath $statePath -Value '{ "settingValue": 1 }'
+            $script:auditCalls = @()
+            function Invoke-OpenPathAuditPol { param([string[]]$Arguments) $script:auditCalls += ($Arguments -join ' ') }
+
+            Remove-OpenPathFirewallRules
+
+            $script:auditCalls | Should -Be @('/set /subcategory:{0CCE9226-69AE-11D9-BED3-505054503030} /success:enable /failure:disable')
+            Test-Path -LiteralPath $statePath | Should -BeFalse
+        }
+
+        It "Standalone uninstall restores the outbound default before removing any rule" {
+            Remove-OpenPathFirewallRules
+
+            $events = @($global:openPathUninstallEvents)
+            @($events | Where-Object { $_ -like 'set:*' }).Count | Should -Be 3
+            [array]::IndexOf([string[]]$events, 'remove') | Should -BeGreaterThan 2
+        }
     }
 
     It "Standalone uninstall removes the Firefox force-install policy and schedules the add-on uninstall" {
