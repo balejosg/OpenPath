@@ -1,6 +1,7 @@
 # Shared reversion leaves (2026-11-17 reversion owners). Loaded relative to this
 # file so that any caller that dot-sources this helper alone gets a working file.
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'internal\DNS.AdapterSnapshot.ps1')
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'internal\Firewall.Teardown.ps1')
 
 function ConvertTo-OpenPathInstallerRegistryProviderPath {
     <#
@@ -275,79 +276,50 @@ function Remove-OpenPathInstallerRestrictedGroup {
     }
 }
 
-function ConvertTo-OpenPathInstallerFirewallManifestRuleNames {
-    <#
-    .SYNOPSIS
-        Normalises a firewall manifest value (string, array, or JSON array) into a sorted, unique list of rule name strings
-    .PARAMETER Value
-        Raw value read from the firewall-rules.json manifest
-    #>
-    param([object]$Value)
+function Write-OpenPathInstallerFirewallTeardownWarning {
+    # Installer warning when the installer UI helper is loaded, plain Write-Warning otherwise.
+    param([Parameter(Mandatory = $true)][string]$Message)
 
-    $names = New-Object System.Collections.Generic.List[string]
-    foreach ($item in @($Value)) {
-        if ($null -eq $item) { continue }
-
-        $text = [string]$item
-        if ([string]::IsNullOrWhiteSpace($text)) { continue }
-
-        foreach ($name in @($text -split '\s+' | Where-Object { $_ })) {
-            [void]$names.Add([string]$name)
-        }
+    if (Get-Command -Name Write-InstallerWarning -ErrorAction SilentlyContinue) {
+        Write-InstallerWarning "  WARNING: $Message"
     }
-
-    return @($names | Sort-Object -Unique)
-}
-
-function Get-OpenPathInstallerFirewallManifestRuleNames {
-    <#
-    .SYNOPSIS
-        Reads the firewall-rules.json manifest at Path and returns the list of rule names; returns an empty array when the file is absent or corrupt
-    .PARAMETER Path
-        Absolute path to the firewall manifest JSON file
-    #>
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path $Path)) { return @() }
-
-    try {
-        $parsed = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        return ConvertTo-OpenPathInstallerFirewallManifestRuleNames -Value $parsed
-    }
-    catch {
-        if (Get-Command -Name Write-InstallerWarning -ErrorAction SilentlyContinue) {
-            Write-InstallerWarning "  WARNING: Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $_"
-        }
-        else {
-            Write-Warning "Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $_"
-        }
-        return @()
+    else {
+        Write-Warning $Message
     }
 }
 
 function Remove-OpenPathInstallerFirewallRules {
     <#
     .SYNOPSIS
-        Removes all OpenPath firewall rules using the manifest file, the OpenPath group, and the OpenPath-DNS-* wildcard as fallback sources
+        Reverts OpenPath's firewall state for reinstall cleanup and install rollback: restores the outbound default and the audit setting left by the egress floor, then removes the OpenPath rules (manifest, OpenPath group, OpenPath-DNS-* wildcard)
+    .DESCRIPTION
+        The teardown lives in Invoke-OpenPathFirewallTeardown (lib\internal\Firewall.Teardown.ps1).
+        Installer policy: without usable state only profiles that are currently Block are set to
+        Allow, the manifest is deleted, and a failure of the final OpenPath-DNS-* removal is thrown.
     #>
     if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
     if (-not (Get-Command -Name Remove-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
 
+    $outboundStatePath = Join-Path 'C:\OpenPath' 'data\egress-floor-prev-outbound.json'
+    $auditStatePath = Join-Path 'C:\OpenPath' 'data\egress-floor-audit-prev.json'
     $manifestPath = Join-Path 'C:\OpenPath' 'data\firewall-rules.json'
-    foreach ($ruleName in @(Get-OpenPathInstallerFirewallManifestRuleNames -Path $manifestPath)) {
-        Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue |
-            Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    $teardown = Invoke-OpenPathFirewallTeardown -OutboundStatePath $outboundStatePath -AuditStatePath $auditStatePath -ManifestPath $manifestPath -WhenNoState OnlyBlocked -RemoveManifest
+
+    if ($teardown.Outbound.StateUnreadable) {
+        Write-OpenPathInstallerFirewallTeardownWarning "Ignoring unreadable egress-floor state at $outboundStatePath; restoring Allow. $($teardown.Outbound.StateError)"
     }
-
-    if (Test-Path $manifestPath) {
-        Remove-Item $manifestPath -Force -ErrorAction SilentlyContinue
+    foreach ($outboundError in @($teardown.Outbound.Errors)) {
+        Write-OpenPathInstallerFirewallTeardownWarning "Failed restoring $outboundError"
     }
-
-    Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue |
-        Remove-NetFirewallRule -ErrorAction SilentlyContinue
-
-    Get-NetFirewallRule -DisplayName 'OpenPath-DNS-*' -ErrorAction SilentlyContinue |
-        Remove-NetFirewallRule -ErrorAction Stop
+    if ($teardown.Audit.Error) {
+        Write-OpenPathInstallerFirewallTeardownWarning "Could not restore the Filtering Platform Connection audit setting from ${auditStatePath}: $($teardown.Audit.Error)"
+    }
+    if ($teardown.Rules.ManifestError) {
+        Write-OpenPathInstallerFirewallTeardownWarning "Ignoring unreadable firewall manifest at $manifestPath; falling back to OpenPath firewall rule discovery. $($teardown.Rules.ManifestError)"
+    }
+    if (@($teardown.Rules.PrefixErrors).Count -gt 0) {
+        throw @($teardown.Rules.PrefixErrors)[0]
+    }
 }
 
 function Restore-OpenPathInstallerDnsSettings {

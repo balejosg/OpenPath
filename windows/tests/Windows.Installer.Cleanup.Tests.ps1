@@ -10,7 +10,6 @@ Describe "Installer cleanup helper" {
             'function Test-OpenPathExistingInstallation',
             'function Copy-OpenPathInstallerSourceForReinstall',
             'function Invoke-OpenPathInstallerExistingInstallCleanup',
-            'function Get-OpenPathInstallerFirewallManifestRuleNames',
             '[switch]$KeepAcrylic',
             '[switch]$KeepLogs',
             'openpath-reinstall-source-',
@@ -586,52 +585,116 @@ Describe "Installer cleanup helper" {
         }
     }
 
-    # Skipped until Task 6 of 2026-11-17-windows-reversion-owners (B2): today the installer
-    # cleanup deletes every OpenPath rule and leaves an egress-floor Block default in place.
-    It "Reinstall cleanup never leaves the outbound default at Block" -Skip {
-        . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
-
-        $createdCDrive = $false
-        if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
-            New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
-            $createdCDrive = $true
-        }
-        $script:firewallEvents = [System.Collections.Generic.List[string]]::new()
-        function global:Get-NetFirewallProfile {
-            [CmdletBinding()] param([string]$Profile)
-            [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' }
-        }
-        function global:Set-NetFirewallProfile {
-            [CmdletBinding()] param([string]$Profile, [string]$DefaultOutboundAction)
-            $script:firewallEvents.Add("set:${Profile}:$DefaultOutboundAction")
-        }
-        function global:Get-NetFirewallRule {
-            [CmdletBinding()] param([string]$DisplayName, [string]$Group)
-            if ($Group) { return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' } }
-            return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-rule' }
-        }
-        function global:Remove-NetFirewallRule {
-            [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)]$InputObject)
-            process { $script:firewallEvents.Add("remove:$($InputObject.DisplayName)") }
+    Context "Installer firewall teardown (B2)" {
+        BeforeAll {
+            $script:createdInstallerFirewallStubs = @()
+            $firewallStubs = @{
+                'Get-NetFirewallProfile' = { param($Profile) }
+                'Set-NetFirewallProfile' = { param($Profile, $DefaultOutboundAction) }
+                'Get-NetFirewallRule'    = { param($DisplayName, $Group) }
+                'Remove-NetFirewallRule' = { param([Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
+            }
+            foreach ($commandName in @($firewallStubs.Keys)) {
+                if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                    New-Item -Path "Function:\global:$commandName" -Value $firewallStubs[$commandName] -Force | Out-Null
+                    $script:createdInstallerFirewallStubs += @($commandName)
+                }
+            }
         }
 
-        try {
+        AfterAll {
+            foreach ($commandName in @($script:createdInstallerFirewallStubs)) {
+                if ($commandName) { Remove-Item -Path "Function:\$commandName" -ErrorAction SilentlyContinue }
+            }
+        }
+
+        BeforeEach {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+
+            $script:createdCDrive = $false
+            if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
+                New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
+                $script:createdCDrive = $true
+            }
+
+            $global:openPathInstallerFirewallEvents = [System.Collections.Generic.List[string]]::new()
+            $global:openPathInstallerOutboundState = $null
+            # Never read or delete real C:\OpenPath state on a Windows runner: every data file is
+            # absent unless a test provides the outbound state text.
+            Mock Test-Path {
+                ([string]$Path + [string]$LiteralPath) -like '*egress-floor-prev-outbound.json' -and $null -ne $global:openPathInstallerOutboundState
+            } -ParameterFilter { ([string]$Path + [string]$LiteralPath) -like '*OpenPath*data*' }
+            Mock Get-Content { $global:openPathInstallerOutboundState } -ParameterFilter { ([string]$Path + [string]$LiteralPath) -like '*egress-floor-prev-outbound.json' }
+            Mock Remove-Item { } -ParameterFilter { ([string]$Path + [string]$LiteralPath) -like '*OpenPath*data*' }
+            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
+            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathInstallerFirewallEvents.Add("set:${Profile}:$DefaultOutboundAction") }
+            Mock Get-NetFirewallRule {
+                param($DisplayName, $Group)
+                if ($Group) { return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' } }
+                return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-rule' }
+            }
+            Mock Remove-NetFirewallRule {
+                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                process { $global:openPathInstallerFirewallEvents.Add("remove:$($InputObject.DisplayName)") }
+            }
+        }
+
+        AfterEach {
+            Remove-Variable -Name openPathInstallerFirewallEvents, openPathInstallerOutboundState -Scope Global -ErrorAction SilentlyContinue
+            if ($script:createdCDrive) {
+                Microsoft.PowerShell.Management\Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+
+        # Characterized as failing before B2 (2026-11-17-windows-reversion-owners Task 1): the
+        # installer cleanup deleted every OpenPath rule and left an egress-floor Block default.
+        It "Reinstall cleanup never leaves the outbound default at Block" {
             Remove-OpenPathInstallerFirewallRules
 
-            $events = @($script:firewallEvents)
+            $events = @($global:openPathInstallerFirewallEvents)
             $setEvents = @($events | Where-Object { $_ -like 'set:*' })
             @($setEvents | Sort-Object) | Should -Be @('set:Domain:Allow', 'set:Private:Allow', 'set:Public:Allow')
             $firstRemove = [array]::FindIndex([string[]]$events, [Predicate[string]] { param($e) $e -like 'remove:*' })
             $lastSet = [array]::FindLastIndex([string[]]$events, [Predicate[string]] { param($e) $e -like 'set:*' })
             $firstRemove | Should -BeGreaterThan $lastSet
         }
-        finally {
-            Remove-Item Function:\Get-NetFirewallProfile, Function:\Set-NetFirewallProfile -ErrorAction SilentlyContinue
-            Remove-Item Function:\Get-NetFirewallRule, Function:\Remove-NetFirewallRule -ErrorAction SilentlyContinue
-            Remove-Variable -Name firewallEvents -Scope Script -ErrorAction SilentlyContinue
-            if ($createdCDrive) {
-                Microsoft.PowerShell.Management\Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
+
+        It "Install rollback restores the outbound default when the cleanup already removed the install root" {
+            foreach ($name in @(
+                    'Stop-OpenPathInstallerScheduledTasks', 'Restore-OpenPathInstallerDnsSettings',
+                    'Remove-OpenPathInstallerAppLockerRules', 'Remove-OpenPathInstallerRestrictedGroup',
+                    'Remove-OpenPathInstallerBrowserArtifacts', 'Stop-OpenPathInstallerAcrylicService',
+                    'Remove-OpenPathInstallerDnsFailureArtifacts')) {
+                Mock $name { }
             }
+            Mock Get-Command { $null } -ParameterFilter { $Name -in @('Write-InstallerWarning', 'Get-ScheduledTask', 'Get-LocalGroup', 'Get-AppLockerPolicy') }
+            $script:OpenPathInstallerRollingBack = $false
+            $missingRoot = Join-Path $TestDrive 'removed-install-root'
+
+            $result = Invoke-OpenPathInstallRollback -OpenPathRoot $missingRoot
+
+            @($result.Errors | Where-Object { $_ -like 'firewall:*' }).Count | Should -Be 0
+            @($global:openPathInstallerFirewallEvents | Where-Object { $_ -like 'set:*' } | Sort-Object) |
+                Should -Be @('set:Domain:Allow', 'set:Private:Allow', 'set:Public:Allow')
+            $script:OpenPathInstallerRollingBack = $false
+        }
+
+        It "Reinstall cleanup honours a recorded NotConfigured" {
+            $global:openPathInstallerOutboundState = '{ "Domain": "NotConfigured", "Private": "NotConfigured", "Public": "NotConfigured" }'
+
+            Remove-OpenPathInstallerFirewallRules
+
+            @($global:openPathInstallerFirewallEvents | Where-Object { $_ -like 'set:*' } | Sort-Object) |
+                Should -Be @('set:Domain:NotConfigured', 'set:Private:NotConfigured', 'set:Public:NotConfigured')
+        }
+
+        It "Throws when the OpenPath-DNS-* removal fails, as before" {
+            Mock Remove-NetFirewallRule {
+                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                process { if ($InputObject.DisplayName -eq 'OpenPath-DNS-rule') { throw 'prefix removal refused' } }
+            }
+
+            { Remove-OpenPathInstallerFirewallRules } | Should -Throw '*prefix removal refused*'
         }
     }
 
