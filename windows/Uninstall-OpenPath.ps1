@@ -40,6 +40,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'lib\internal\WindowsRoot.ps1')
+# Shared reversion leaf: dependency-free, works with no OpenPath module loaded.
+. (Join-Path $PSScriptRoot 'lib\internal\DNS.AdapterSnapshot.ps1')
 $OpenPathRoot = Resolve-OpenPathWindowsRoot
 $script:OpenPathBrowserPolicyIssues = 0
 
@@ -229,35 +231,6 @@ function Remove-OpenPathFallbackAppLockerRules {
     }
 }
 
-function Select-OpenPathUninstallScalarValue {
-    param([object]$Value)
-
-    foreach ($item in @($Value)) {
-        if ($null -ne $item) {
-            return $item
-        }
-    }
-
-    return $null
-}
-
-function ConvertTo-OpenPathUninstallNullableInt {
-    param([object]$Value)
-
-    $scalarValue = Select-OpenPathUninstallScalarValue -Value $Value
-    if ($null -eq $scalarValue) { return $null }
-
-    $stringValue = [string]$scalarValue
-    if ([string]::IsNullOrWhiteSpace($stringValue)) { return $null }
-
-    try {
-        return [int]$stringValue
-    }
-    catch {
-        return $null
-    }
-}
-
 function ConvertTo-OpenPathUninstallFirewallManifestRuleNames {
     param([object]$Value)
 
@@ -291,142 +264,16 @@ function Get-OpenPathUninstallFirewallManifestRuleNames {
     }
 }
 
-function Test-OpenPathUninstallLoopbackAddress {
-    param([object]$Address)
-
-    $text = ([string]$Address).Trim()
-    return ($text -eq '::1' -or $text -eq '0.0.0.0' -or $text -match '^127\.')
-}
-
-function ConvertFrom-OpenPathUninstallDnsNameServerValue {
-    # splits a registry NameServer or DhcpNameServer value into individual address strings.
-    param([object]$Value)
-
-    return @(
-        foreach ($part in ([string]$Value -split '[,\s]+')) {
-            $address = ([string]$part).Trim()
-            if ($address) { $address }
-        }
-    )
-}
-
-function Get-OpenPathUninstallDnsInterfaceRegistryState {
-    # reads the static and dhcp dns registry values for one adapter interface; an unreadable
-    # key returns Readable = false so the caller can use the connectivity-safe dhcp direction.
-    param([string]$InterfaceGuid)
-
-    $state = [PSCustomObject]@{
-        Readable = $false
-        EnableDhcp = $false
-        NameServer = @()
-        DhcpNameServer = @()
-    }
-    if ([string]::IsNullOrWhiteSpace($InterfaceGuid)) { return $state }
-
-    try {
-        $interfaceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$InterfaceGuid"
-        $properties = Get-ItemProperty -Path $interfaceKey -ErrorAction Stop
-        $state.Readable = $true
-        $state.NameServer = @(ConvertFrom-OpenPathUninstallDnsNameServerValue -Value $properties.NameServer)
-        $state.DhcpNameServer = @(ConvertFrom-OpenPathUninstallDnsNameServerValue -Value $properties.DhcpNameServer)
-        if ($null -ne $properties.EnableDHCP) {
-            $state.EnableDhcp = ([int]$properties.EnableDHCP -ne 0)
-        }
-    }
-    catch {
-    }
-
-    return $state
-}
-
-function Test-OpenPathUninstallDnsLegacyDhcpOrigin {
-    # returns true when a live adapter still uses DHCP and has a DHCP-offered DNS server.
-    param([object]$Adapter)
-
-    $registryState = Get-OpenPathUninstallDnsInterfaceRegistryState -InterfaceGuid ([string]$Adapter.InterfaceGuid)
-    return [bool]($registryState.Readable -and $registryState.EnableDhcp -and @($registryState.DhcpNameServer).Count -gt 0)
-}
-
 function Restore-OpenPathOriginalDns {
+    # The restore rule lives in Invoke-OpenPathOriginalDnsRestore (lib\internal\DNS.AdapterSnapshot.ps1).
+    # Uninstall policy: keep going past a failing adapter and report each snapshot failure.
     $snapshotPath = Join-Path $OpenPathRoot 'data\original-dns.json'
-    if ((Test-Path $snapshotPath) -and (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) {
-        try {
-            # v2 snapshots wrap the per-adapter entries in an `adapters` property;
-            # legacy snapshots are a bare array of entries.
-            $snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json
-            $snapshot = if ($snapshotPayload.PSObject.Properties['adapters']) { @($snapshotPayload.adapters) } else { @($snapshotPayload) }
-            $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
-            foreach ($entry in $snapshot) {
-                $adapter = $adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1
-                $entryInterfaceIndex = ConvertTo-OpenPathUninstallNullableInt -Value $entry.InterfaceIndex
-                if (-not $adapter -and $null -ne $entryInterfaceIndex) {
-                    $adapter = $adapters | Where-Object {
-                        (ConvertTo-OpenPathUninstallNullableInt -Value $_.ifIndex) -eq $entryInterfaceIndex
-                    } | Select-Object -First 1
-                }
-                if (-not $adapter -and $entry.InterfaceAlias) {
-                    $adapter = $adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1
-                }
-                if (-not $adapter) { continue }
-
-                $adapterInterfaceIndex = ConvertTo-OpenPathUninstallNullableInt -Value $adapter.ifIndex
-                if ($null -eq $adapterInterfaceIndex) { continue }
-
-                # A loopback address in the snapshot is OpenPath's own pin (Acrylic), which is
-                # being removed: never restore it.
-                $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
-                        $_ -and -not (Test-OpenPathUninstallLoopbackAddress -Address $_)
-                    })
-                $origin = ''
-                if ($entry.PSObject.Properties['Origin']) {
-                    $origin = ([string]$entry.Origin).Trim().ToLowerInvariant()
-                }
-
-                $resetToDhcp = $false
-                if ($origin -eq 'static') {
-                    $resetToDhcp = ($servers.Count -le 0)
-                }
-                elseif ($origin) {
-                    $resetToDhcp = $true
-                }
-                elseif (Test-OpenPathUninstallDnsLegacyDhcpOrigin -Adapter $adapter) {
-                    $resetToDhcp = $true
-                }
-                elseif ($servers.Count -le 0) {
-                    $resetToDhcp = $true
-                }
-
-                if ($resetToDhcp) {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
-                }
-                else {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction SilentlyContinue
-                }
-            }
-        }
-        catch {
-            Write-Host "  Snapshot DNS restore failed: $_" -ForegroundColor Yellow
+    $restore = Invoke-OpenPathOriginalDnsRestore -SnapshotPath $snapshotPath -OnAdapterError Continue
+    if ($restore.UsedSnapshot) {
+        foreach ($restoreError in @($restore.Errors)) {
+            Write-Host "  Snapshot DNS restore failed: $restoreError" -ForegroundColor Yellow
         }
     }
-    else {
-        Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {
-            Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
-        }
-    }
-
-    # Safety net: whatever the snapshot said, no adapter may keep a loopback resolver once
-    # the local DNS proxy is gone, or the machine loses name resolution.
-    if (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue) {
-        foreach ($dnsEntry in @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
-            $stillLoopback = @($dnsEntry.ServerAddresses | Where-Object {
-                    $_ -and (Test-OpenPathUninstallLoopbackAddress -Address $_)
-                })
-            if ($stillLoopback.Count -gt 0) {
-                Set-DnsClientServerAddress -InterfaceIndex $dnsEntry.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
-            }
-        }
-    }
-    Clear-DnsClientCache -ErrorAction SilentlyContinue
 }
 
 function Remove-OpenPathFirefoxExtensionSettingsEntries {

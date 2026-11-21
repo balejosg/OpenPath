@@ -1,3 +1,7 @@
+# Shared reversion leaf (2026-11-17 reversion owners). Loaded relative to this file
+# so that any caller that dot-sources this helper alone gets a working file.
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'internal\DNS.AdapterSnapshot.ps1')
+
 function Test-InstallerDirectDnsServer {
     # returns $true if server is a reachable ipv4 dns server that can resolve probedomain;
     # loopback and all-zeros addresses always return $false.
@@ -122,55 +126,6 @@ function Get-OpenPathInstallerOriginalDnsSnapshotPath {
     return "$($OpenPathRoot.TrimEnd('\'))\data\original-dns.json"
 }
 
-function ConvertFrom-OpenPathInstallerDnsNameServerValue {
-    # splits a registry NameServer or DhcpNameServer value into individual address strings.
-    param([object]$Value)
-
-    return @(
-        foreach ($part in ([string]$Value -split '[,\s]+')) {
-            $address = ([string]$part).Trim()
-            if ($address) { $address }
-        }
-    )
-}
-
-function Get-OpenPathInstallerDnsInterfaceRegistryState {
-    # reads the static and dhcp dns registry values for one adapter interface; an unreadable
-    # key returns Readable = false so the caller can use the connectivity-safe dhcp direction.
-    param([string]$InterfaceGuid)
-
-    $state = [PSCustomObject]@{
-        Readable = $false
-        EnableDhcp = $false
-        NameServer = @()
-        DhcpNameServer = @()
-    }
-    if ([string]::IsNullOrWhiteSpace($InterfaceGuid)) { return $state }
-
-    try {
-        $interfaceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$InterfaceGuid"
-        $properties = Get-ItemProperty -Path $interfaceKey -ErrorAction Stop
-        $state.Readable = $true
-        $state.NameServer = @(ConvertFrom-OpenPathInstallerDnsNameServerValue -Value $properties.NameServer)
-        $state.DhcpNameServer = @(ConvertFrom-OpenPathInstallerDnsNameServerValue -Value $properties.DhcpNameServer)
-        if ($null -ne $properties.EnableDHCP) {
-            $state.EnableDhcp = ([int]$properties.EnableDHCP -ne 0)
-        }
-    }
-    catch {
-    }
-
-    return $state
-}
-
-function Test-OpenPathInstallerDnsLoopbackAddress {
-    # returns true for resolver addresses that point at the local machine instead of a real dns server.
-    param([object]$Address)
-
-    $text = ([string]$Address).Trim()
-    return ($text -eq '::1' -or $text -eq '0.0.0.0' -or $text -match '^127\.')
-}
-
 function Save-OpenPathInstallerOriginalDnsSnapshot {
     # captures current per-adapter ipv4 dns addresses and origin to original-dns.json; skips
     # silently if the snapshot already exists or the required net cmdlets are unavailable.
@@ -181,45 +136,11 @@ function Save-OpenPathInstallerOriginalDnsSnapshot {
     if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return $false }
     if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return $false }
 
-    $snapshot = @(
-        Get-NetAdapter -ErrorAction Stop | ForEach-Object {
-            $adapter = $_
-            $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
-            $registryState = Get-OpenPathInstallerDnsInterfaceRegistryState -InterfaceGuid ([string]$adapter.InterfaceGuid)
-            $nameServers = @($registryState.NameServer | Where-Object {
-                    $_ -and -not (Test-OpenPathInstallerDnsLoopbackAddress -Address $_)
-                })
-            $dhcpNameServers = @($registryState.DhcpNameServer | Where-Object {
-                    $_ -and -not (Test-OpenPathInstallerDnsLoopbackAddress -Address $_)
-                })
-            $effectiveServers = @($dns.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object {
-                    $_ -and -not (Test-OpenPathInstallerDnsLoopbackAddress -Address $_)
-                })
-            $origin = if ($nameServers.Count -gt 0) { 'static' } else { 'dhcp' }
-            $serverAddresses = if ($origin -eq 'static') {
-                @($nameServers)
-            }
-            elseif ($dhcpNameServers.Count -gt 0) {
-                @($dhcpNameServers)
-            }
-            else {
-                @($effectiveServers)
-            }
-
-            [PSCustomObject]@{
-                InterfaceGuid = [string]$adapter.InterfaceGuid
-                InterfaceAlias = [string]$adapter.Name
-                InterfaceIndex = [int]$adapter.ifIndex
-                Origin = [string]$origin
-                ServerAddresses = @($serverAddresses)
-            }
-        }
-    )
-
-    $payload = [PSCustomObject]@{
-        version = 3
-        adapters = @($snapshot)
-    }
+    # Same payload as the runtime snapshot (DNS.AdapterSnapshot.ps1): version 3, a
+    # networkFingerprint and a Gateway per entry, so the runtime refresh recognises the
+    # network and does not replace this pre-pin capture with a pinned one.
+    $payload = New-OpenPathOriginalDnsSnapshot
+    if ($null -eq $payload) { return $false }
 
     $snapshotDirectory = Split-Path $snapshotPath -Parent
     if (-not (Test-Path $snapshotDirectory)) {

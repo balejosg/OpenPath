@@ -380,11 +380,11 @@ function Invoke-OpenPathOriginalDnsRestore {
     $applied = [System.Collections.Generic.List[object]]::new()
     $errors = [System.Collections.Generic.List[string]]::new()
 
-    if (Test-Path -LiteralPath $SnapshotPath) {
+    if (Test-Path $SnapshotPath) {
         $result.UsedSnapshot = $true
         try {
             # v3 and v2 snapshots wrap the entries in an `adapters` property; legacy ones are a bare array.
-            $snapshotPayload = Get-Content -LiteralPath $SnapshotPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $snapshotPayload = Get-Content $SnapshotPath -Raw | ConvertFrom-Json
             if ($null -eq $snapshotPayload) { throw "DNS snapshot $SnapshotPath is empty" }
             $snapshot = if ($snapshotPayload.PSObject.Properties['adapters']) { @($snapshotPayload.adapters) } else { @($snapshotPayload) }
             $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)

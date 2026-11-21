@@ -259,9 +259,11 @@ Describe "DNS adapter snapshot leaf" {
         }
 
         It "Restores a legacy bare-array snapshot" {
-            @(
-                [PSCustomObject]@{ InterfaceGuid = 'g1'; InterfaceAlias = 'Ethernet'; InterfaceIndex = @(1); ServerAddresses = @('192.0.2.53') }
-            ) | ConvertTo-Json -Depth 6 -AsArray | Set-Content -LiteralPath $script:snapshotPath -Encoding UTF8
+            Set-Content -LiteralPath $script:snapshotPath -Encoding UTF8 -Value @'
+[
+  { "InterfaceGuid": "g1", "InterfaceAlias": "Ethernet", "InterfaceIndex": [1], "ServerAddresses": ["192.0.2.53"] }
+]
+'@
 
             $result = Invoke-OpenPathOriginalDnsRestore -SnapshotPath $script:snapshotPath -OnAdapterError Stop
 

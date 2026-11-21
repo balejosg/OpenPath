@@ -643,6 +643,7 @@ Describe "Installer cleanup helper" {
             'function Remove-OpenPathFallbackAppLockerRules',
             'function Restore-OpenPathOriginalDns',
             'function Remove-OpenPathFirewallRules',
+            'lib\internal\DNS.AdapterSnapshot.ps1',
             'function Get-OpenPathUninstallFirewallManifestRuleNames',
             'ExtensionInstallForcelist',
             'Start-Process -FilePath "$acrylicPath\AcrylicService.exe" -ArgumentList ''/UNINSTALL''',
@@ -656,15 +657,9 @@ Describe "Installer cleanup helper" {
     It "Standalone uninstall restores DNS from v2 snapshots and never keeps a loopback resolver" {
         $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
-        $wanted = @(
-            'Select-OpenPathUninstallScalarValue',
-            'ConvertTo-OpenPathUninstallNullableInt',
-            'Test-OpenPathUninstallLoopbackAddress',
-            'ConvertFrom-OpenPathUninstallDnsNameServerValue',
-            'Get-OpenPathUninstallDnsInterfaceRegistryState',
-            'Test-OpenPathUninstallDnsLegacyDhcpOrigin',
-            'Restore-OpenPathOriginalDns'
-        )
+        # The restore rule lives in the shared leaf the uninstaller dot-sources; carve only its wrapper.
+        . (Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.AdapterSnapshot.ps1")
+        $wanted = @('Restore-OpenPathOriginalDns')
         foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wanted }, $true)) {
             . ([scriptblock]::Create($fn.Extent.Text))
         }
@@ -754,15 +749,9 @@ Describe "Installer cleanup helper" {
         BeforeEach {
             $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
             $ast = [System.Management.Automation.Language.Parser]::ParseFile($uninstallPath, [ref]$null, [ref]$null)
-            $wanted = @(
-                'Select-OpenPathUninstallScalarValue',
-                'ConvertTo-OpenPathUninstallNullableInt',
-                'Test-OpenPathUninstallLoopbackAddress',
-                'ConvertFrom-OpenPathUninstallDnsNameServerValue',
-                'Get-OpenPathUninstallDnsInterfaceRegistryState',
-                'Test-OpenPathUninstallDnsLegacyDhcpOrigin',
-                'Restore-OpenPathOriginalDns'
-            )
+            # The restore rule lives in the shared leaf the uninstaller dot-sources; carve only its wrapper.
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.AdapterSnapshot.ps1")
+            $wanted = @('Restore-OpenPathOriginalDns')
             foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wanted }, $true)) {
                 . ([scriptblock]::Create($fn.Extent.Text))
             }

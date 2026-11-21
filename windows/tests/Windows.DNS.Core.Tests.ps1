@@ -249,10 +249,10 @@ Describe "DNS Module" {
             Remove-Variable -Name openPathSnapshotPath -Scope Global -ErrorAction SilentlyContinue
         }
 
-        # Skipped until Task 3 of 2026-11-17-windows-reversion-owners: today the installer
+        # Regression for B1 (2026-11-17-windows-reversion-owners): before Task 3 the installer
         # snapshot has no Gateway/networkFingerprint, so the refresh sees a "new" network and
         # overwrites it with a capture taken while the adapter is pinned to 127.0.0.1.
-        It "A snapshot written by the installer is not replaced on the same network" -Skip {
+        It "A snapshot written by the installer is not replaced on the same network" {
             . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Dns.ps1")
             $snapshotRoot = Join-Path $TestDrive 'installer-same-network'
             $snapshotPath = Join-Path $snapshotRoot 'data' 'original-dns.json'
@@ -318,7 +318,8 @@ Describe "DNS Module" {
                 'Invoke-OpenPathOriginalDnsRestore -SnapshotPath $snapshotPath'
             )
             Assert-ContentContainsAll -Content $leafContent -Needles @(
-                'if (Test-Path -LiteralPath $SnapshotPath)',
+                'if (Test-Path $SnapshotPath)',
+                '$snapshotPayload = Get-Content $SnapshotPath -Raw | ConvertFrom-Json',
                 '$snapshot = if ($snapshotPayload.PSObject.Properties[''adapters''])',
                 '[string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid',
                 '$entryInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $entry.InterfaceIndex',
