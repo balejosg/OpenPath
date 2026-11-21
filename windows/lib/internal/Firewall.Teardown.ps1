@@ -313,7 +313,10 @@ function Invoke-OpenPathFirewallTeardown {
         setting, then the rules, so the default never stays at Block once the rules are gone.
     .DESCRIPTION
         Returns Outbound, Audit and Rules: the results of Invoke-OpenPathFirewallOutboundRestore,
-        Invoke-OpenPathFirewallAuditRestore and Remove-OpenPathFirewallOwnedRules.
+        Invoke-OpenPathFirewallAuditRestore and Remove-OpenPathFirewallOwnedRules, plus RulesKept.
+        With -KeepRulesWhenOutboundFails a failed profile restore skips the rule removal
+        (RulesKept): a profile left at Block without OpenPath's non-student Allow would cut every
+        account off the network, while the kept rules still let non-student accounts out.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$OutboundStatePath,
@@ -322,16 +325,28 @@ function Invoke-OpenPathFirewallTeardown {
         [string]$RulePrefix = 'OpenPath-DNS',
         [ValidateSet('AllProfiles', 'OnlyBlocked')][string]$WhenNoState = 'OnlyBlocked',
         [switch]$RemoveOutboundState,
-        [switch]$RemoveManifest
+        [switch]$RemoveManifest,
+        [switch]$KeepRulesWhenOutboundFails
     )
 
     $outbound = Invoke-OpenPathFirewallOutboundRestore -StatePath $OutboundStatePath -WhenNoState $WhenNoState -RemoveState:$RemoveOutboundState
     $audit = Invoke-OpenPathFirewallAuditRestore -StatePath $AuditStatePath
-    $rules = Remove-OpenPathFirewallOwnedRules -ManifestPath $ManifestPath -RulePrefix $RulePrefix -RemoveManifest:$RemoveManifest
+    $rulesKept = [bool]($KeepRulesWhenOutboundFails -and @($outbound.Errors).Count -gt 0)
+    if ($rulesKept) {
+        $rules = [PSCustomObject]@{
+            ManifestError = ''
+            Errors = [string[]]@()
+            PrefixErrors = [string[]]@()
+        }
+    }
+    else {
+        $rules = Remove-OpenPathFirewallOwnedRules -ManifestPath $ManifestPath -RulePrefix $RulePrefix -RemoveManifest:$RemoveManifest
+    }
 
     return [PSCustomObject]@{
         Outbound = $outbound
         Audit = $audit
         Rules = $rules
+        RulesKept = $rulesKept
     }
 }

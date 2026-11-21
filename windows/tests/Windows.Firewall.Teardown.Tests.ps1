@@ -298,6 +298,15 @@ Describe "Firewall teardown leaf" {
             @($sets | Where-Object { $_ -like '*:Block' }).Count | Should -Be 0
         }
 
+        It "Keeps the rules and warns when a profile cannot leave Block" {
+            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) throw "profile $Profile refused" }
+
+            { Remove-OpenPathFirewallRules } | Should -Not -Throw
+
+            @($global:openPathWrapperEvents | Where-Object { $_ -eq 'remove' }).Count | Should -Be 0
+            Should -Invoke Write-Warning -ParameterFilter { $Message -like '*OpenPath firewall rules were kept*' } -Times 1 -Exactly
+        }
+
         It "Treats a <Kind> state file as no usable state and still removes the rules" -ForEach @(
             @{ Kind = 'empty'; Bytes = [byte[]]@() }
             @{ Kind = 'cut'; Bytes = [System.Text.Encoding]::ASCII.GetBytes('{ "Domain": "Blo') }
@@ -311,6 +320,48 @@ Describe "Firewall teardown leaf" {
                 Should -Be @('set:Domain:Allow', 'set:Private:Allow', 'set:Public:Allow')
             @($global:openPathWrapperEvents | Where-Object { $_ -eq 'remove' }).Count | Should -BeGreaterThan 0
             Should -Invoke Write-Warning -ParameterFilter { $Message -like 'Ignoring unreadable egress-floor state*' } -Times 1 -Exactly
+        }
+    }
+
+    Context "Keeping the rules when the outbound restore fails" {
+        BeforeEach {
+            $global:openPathKeepEvents = [System.Collections.Generic.List[string]]::new()
+            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
+            Mock Set-NetFirewallProfile {
+                param($Profile, $DefaultOutboundAction)
+                if ($Profile -eq 'Public') { throw 'profile Public refused' }
+                $global:openPathKeepEvents.Add("set:$Profile")
+            }
+            Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
+            Mock Remove-NetFirewallRule {
+                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                process { $global:openPathKeepEvents.Add('remove') }
+            }
+            $script:teardownArgs = @{
+                OutboundStatePath = (Join-Path $TestDrive 'missing-outbound.json')
+                AuditStatePath    = (Join-Path $TestDrive 'missing-audit.json')
+                ManifestPath      = (Join-Path $TestDrive 'missing-manifest.json')
+                WhenNoState       = 'OnlyBlocked'
+            }
+        }
+
+        AfterEach {
+            Remove-Variable -Name openPathKeepEvents -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It "Skips rule removal with -KeepRulesWhenOutboundFails when a profile could not be restored" {
+            $result = Invoke-OpenPathFirewallTeardown @script:teardownArgs -KeepRulesWhenOutboundFails
+
+            $result.RulesKept | Should -BeTrue
+            @($global:openPathKeepEvents | Where-Object { $_ -eq 'remove' }).Count | Should -Be 0
+            @($result.Outbound.Errors).Count | Should -Be 1
+        }
+
+        It "Still removes the rules without the switch" {
+            $result = Invoke-OpenPathFirewallTeardown @script:teardownArgs
+
+            $result.RulesKept | Should -BeFalse
+            @($global:openPathKeepEvents | Where-Object { $_ -eq 'remove' }).Count | Should -BeGreaterThan 0
         }
     }
 

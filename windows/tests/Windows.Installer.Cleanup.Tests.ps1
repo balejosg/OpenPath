@@ -721,6 +721,13 @@ Describe "Installer cleanup helper" {
                 Should -Be @('set:Domain:NotConfigured', 'set:Private:NotConfigured', 'set:Public:NotConfigured')
         }
 
+        It "Throws and keeps the rules when a profile cannot leave Block" {
+            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) throw "profile $Profile refused" }
+
+            { Remove-OpenPathInstallerFirewallRules } | Should -Throw '*OpenPath firewall rules were kept*'
+            @($global:openPathInstallerFirewallEvents | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
+        }
+
         It "Throws when the OpenPath-DNS-* removal fails, as before" {
             Mock Remove-NetFirewallRule {
                 param([Parameter(ValueFromPipeline = $true)]$InputObject)

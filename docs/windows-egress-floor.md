@@ -210,6 +210,9 @@ any rule. The rule lives once, in `windows/lib/internal/Firewall.Teardown.ps1`
 honoured, and Block is never written. Without a usable state file (missing,
 empty, cut or zero-filled), the agent sets every profile to Allow; the
 uninstaller and the installer set only the profiles that are currently Block.
+If the uninstaller or the installer cannot move a profile off Block, they keep
+the OpenPath rules (so non-student accounts still reach the network) and report
+the failure instead of deleting them.
 Verify:
 
 ```powershell

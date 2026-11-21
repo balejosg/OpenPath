@@ -82,7 +82,7 @@ test('Windows aggregate Pester entrypoint includes installer cleanup regressions
   );
   assert.match(
     cleanupSuite,
-    /Get-OpenPathInstallerFirewallManifestRuleNames/,
+    /Read-OpenPathFirewallManifestRuleNames/,
     'installer cleanup contracts should keep manifest parsing isolated from cleanup fallback removal'
   );
 });

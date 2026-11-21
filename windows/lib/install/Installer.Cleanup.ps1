@@ -296,6 +296,8 @@ function Remove-OpenPathInstallerFirewallRules {
         The teardown lives in Invoke-OpenPathFirewallTeardown (lib\internal\Firewall.Teardown.ps1).
         Installer policy: without usable state only profiles that are currently Block are set to
         Allow, the manifest is deleted, and a failure of the final OpenPath-DNS-* removal is thrown.
+        When a profile cannot be restored from Block the rules are kept and the failure is thrown,
+        so the install rollback records it instead of leaving the machine without egress.
     #>
     if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
     if (-not (Get-Command -Name Remove-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
@@ -303,7 +305,7 @@ function Remove-OpenPathInstallerFirewallRules {
     $outboundStatePath = Join-Path 'C:\OpenPath' 'data\egress-floor-prev-outbound.json'
     $auditStatePath = Join-Path 'C:\OpenPath' 'data\egress-floor-audit-prev.json'
     $manifestPath = Join-Path 'C:\OpenPath' 'data\firewall-rules.json'
-    $teardown = Invoke-OpenPathFirewallTeardown -OutboundStatePath $outboundStatePath -AuditStatePath $auditStatePath -ManifestPath $manifestPath -WhenNoState OnlyBlocked -RemoveManifest
+    $teardown = Invoke-OpenPathFirewallTeardown -OutboundStatePath $outboundStatePath -AuditStatePath $auditStatePath -ManifestPath $manifestPath -WhenNoState OnlyBlocked -RemoveManifest -KeepRulesWhenOutboundFails
 
     if ($teardown.Outbound.StateUnreadable) {
         Write-OpenPathInstallerFirewallTeardownWarning "Ignoring unreadable egress-floor state at $outboundStatePath; restoring Allow. $($teardown.Outbound.StateError)"
@@ -316,6 +318,9 @@ function Remove-OpenPathInstallerFirewallRules {
     }
     if ($teardown.Rules.ManifestError) {
         Write-OpenPathInstallerFirewallTeardownWarning "Ignoring unreadable firewall manifest at $manifestPath; falling back to OpenPath firewall rule discovery. $($teardown.Rules.ManifestError)"
+    }
+    if ($teardown.RulesKept) {
+        throw "OpenPath firewall rules were kept because a profile could not be restored from Block: $(@($teardown.Outbound.Errors)[0])"
     }
     if (@($teardown.Rules.PrefixErrors).Count -gt 0) {
         throw @($teardown.Rules.PrefixErrors)[0]

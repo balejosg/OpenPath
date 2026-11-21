@@ -430,8 +430,14 @@ function Remove-OpenPathFirewallRules {
     $outboundStatePath = Join-Path $OpenPathRoot 'data\egress-floor-prev-outbound.json'
     $auditStatePath = Join-Path $OpenPathRoot 'data\egress-floor-audit-prev.json'
     $manifestPath = Join-Path $OpenPathRoot 'data\firewall-rules.json'
-    $teardown = Invoke-OpenPathFirewallTeardown -OutboundStatePath $outboundStatePath -AuditStatePath $auditStatePath -ManifestPath $manifestPath -WhenNoState OnlyBlocked
+    $teardown = Invoke-OpenPathFirewallTeardown -OutboundStatePath $outboundStatePath -AuditStatePath $auditStatePath -ManifestPath $manifestPath -WhenNoState OnlyBlocked -KeepRulesWhenOutboundFails
 
+    foreach ($outboundError in @($teardown.Outbound.Errors)) {
+        Write-Warning "Failed restoring $outboundError"
+    }
+    if ($teardown.RulesKept) {
+        Write-Warning "OpenPath firewall rules were kept because a profile could not be restored from Block; restore it with Set-NetFirewallProfile -DefaultOutboundAction Allow, then remove the rules named OpenPath-DNS-*."
+    }
     if ($teardown.Outbound.StateUnreadable) {
         Write-Warning "Ignoring unreadable egress-floor state at $outboundStatePath; restoring Allow. $($teardown.Outbound.StateError)"
     }
