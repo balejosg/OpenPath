@@ -200,7 +200,17 @@ Set `"outboundEgressFloorEnabled": false` and run
 `& C:\OpenPath\OpenPath.ps1 enable` (or `update`). The floor restores the
 saved `DefaultOutboundAction`, removes every `*-EgressFloor-*` rule, and
 restores the previous audit setting. `OpenPath.ps1 disable` and uninstall do
-the same. Verify:
+the same.
+
+All three teardown paths (the agent's `Remove-OpenPathFirewall`, the
+standalone uninstaller, and the installer's reinstall cleanup and install
+rollback) restore the outbound default and the audit setting before they delete
+any rule. The rule lives once, in `windows/lib/internal/Firewall.Teardown.ps1`
+(`Invoke-OpenPathFirewallTeardown`): a recorded `Allow` or `NotConfigured` is
+honoured, and Block is never written. Without a usable state file (missing,
+empty, cut or zero-filled), the agent sets every profile to Allow; the
+uninstaller and the installer set only the profiles that are currently Block.
+Verify:
 
 ```powershell
 (Get-NetFirewallProfile -All).DefaultOutboundAction                 # pre-floor value

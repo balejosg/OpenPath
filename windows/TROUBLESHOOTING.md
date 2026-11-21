@@ -162,6 +162,11 @@ enters a DNS failure mode instead of leaving it without name resolution:
 - `FAIL_OPEN` is the opt-in escape hatch (`failureMode: "open"` in
   `C:\OpenPath\data\config.json`). It restores the original (filtered) DNS
   configuration and removes the DNS firewall. Browser policies are untouched.
+  The original adapter DNS comes from `C:\OpenPath\data\original-dns.json`
+  through `lib/internal/DNS.AdapterSnapshot.ps1`, the restore that the
+  uninstaller and the installer cleanup also use: an adapter recorded as
+  DHCP, or holding only a loopback resolver, is reset to DHCP; a recorded
+  static server is set again.
 
 Inspect the active mode:
 
@@ -231,7 +236,7 @@ Get-NetFirewallRule -DisplayName "OpenPath-DNS-*"
 Get-Service MpsSvc
 ```
 
-Firewall rules use the `OpenPath-DNS` prefix. If all rules are missing or the sinkhole is not active, run a full update to regenerate and reapply policy:
+Firewall rules use the `OpenPath-DNS` prefix. Removal (by the agent, the uninstaller, or the installer's reinstall cleanup and rollback) goes through `lib/internal/Firewall.Teardown.ps1`, which first restores the outbound default and audit setting saved by the egress floor, then deletes the rules listed in `C:\OpenPath\data\firewall-rules.json`, the `OpenPath` group, and `OpenPath-DNS-*`. If all rules are missing or the sinkhole is not active, run a full update to regenerate and reapply policy:
 
 ```powershell
 .\OpenPath.ps1 update

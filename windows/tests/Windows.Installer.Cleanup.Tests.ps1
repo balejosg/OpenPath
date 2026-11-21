@@ -495,6 +495,20 @@ Describe "Installer cleanup helper" {
         }
     }
 
+    It "Keeps firewall manifest parsing in the shared leaf instead of an installer copy" {
+        # Manifest parsing stays isolated from the cleanup fallback removal: it lives in
+        # Read-OpenPathFirewallManifestRuleNames (lib/internal/Firewall.Teardown.ps1), which replaced
+        # the installer's own Get-OpenPathInstallerFirewallManifestRuleNames copy.
+        $cleanupContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1") -Raw
+        $leafContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Teardown.ps1") -Raw
+
+        $cleanupContent | Should -Not -Match 'function Get-OpenPathInstallerFirewallManifestRuleNames'
+        $cleanupContent | Should -Match ([regex]::Escape("internal\Firewall.Teardown.ps1"))
+        $leafContent | Should -Match 'function Read-OpenPathFirewallManifestRuleNames'
+        $leafContent.IndexOf('$manifest = Read-OpenPathFirewallManifestRuleNames') |
+            Should -BeLessThan $leafContent.IndexOf("Get-NetFirewallRule -Group 'OpenPath'")
+    }
+
     It "Ignores a corrupt firewall manifest and still removes OpenPath firewall rules" {
         $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
         . $cleanupHelperPath
