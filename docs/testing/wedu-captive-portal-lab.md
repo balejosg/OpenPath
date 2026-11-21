@@ -31,6 +31,16 @@ full lab run.
 
 `.github/workflows/wedu-linux-client-smoke.yml` is manual-only.
 
+## Windows Target Base Snapshot
+
+The Windows target VM 110 is shared with the Desktop Survival lab, which leaves it
+stopped on its own `survival-pro-*` snapshot (no `pwsh`). The full lab therefore
+resets the VM to `OPENPATH_WEDU_CI_WINDOWS_BASE_SNAPSHOT` after taking the lab lock
+and before starting it. The workflow sets it from the repository variable of the
+same name, falling back to `wedu-golden-20261116`. When a new golden image is
+captured, update the variable (or the fallback). A missing snapshot fails the run
+with a clear message; an empty value keeps the VM as found.
+
 Both cheap lanes share the same remote lock as the full lab so they cannot
 overlap with VM mutation or gateway mode changes.
 

@@ -82,3 +82,29 @@ setup() {
 @test "WEDU lab direct runner is pinned to the lab VMID, not its 105 default" {
   grep -q -- '--vmid "$WINDOWS_VMID"' "$SCRIPT"
 }
+
+# Desktop Survival shares VM 110 and leaves it stopped on its own survival-pro-*
+# snapshot (no pwsh). A WEDU run that starts from that state fails the runner
+# baseline check ("pwsh is required on the Windows runner"). The lab must reset
+# the VM to its configured base snapshot itself, after taking the lab lock and
+# before starting the VM.
+@test "WEDU lab resets the Windows VM to its configured base snapshot before starting it" {
+  grep -q 'OPENPATH_WEDU_CI_WINDOWS_BASE_SNAPSHOT:-}' "$SCRIPT"
+  run awk '/^reset_windows_vm_to_base_snapshot\(\)/,/^}/' "$SCRIPT"
+  [[ "$output" == *'[ -z "$WINDOWS_BASE_SNAPSHOT" ]'* ]]
+  [[ "$output" == *'qm listsnapshot "$WINDOWS_VMID"'* ]]
+  [[ "$output" == *'qm stop "$WINDOWS_VMID"'* ]]
+  [[ "$output" == *'qm rollback "$WINDOWS_VMID" "$WINDOWS_BASE_SNAPSHOT"'* ]]
+  run awk '/^main\(\)/,/^}/' "$SCRIPT"
+  lock_line=$(printf '%s\n' "$output" | grep -n 'LOCK_ACQUIRED=1' | head -1 | cut -d: -f1)
+  reset_line=$(printf '%s\n' "$output" | grep -n 'reset_windows_vm_to_base_snapshot' | head -1 | cut -d: -f1)
+  start_line=$(printf '%s\n' "$output" | grep -n 'ensure_windows_vm_running' | head -1 | cut -d: -f1)
+  [ -n "$reset_line" ]
+  [ "$lock_line" -lt "$reset_line" ]
+  [ "$reset_line" -lt "$start_line" ]
+}
+
+@test "WEDU lab workflow pins the golden base snapshot for VM 110" {
+  grep -q "OPENPATH_WEDU_CI_WINDOWS_BASE_SNAPSHOT: \${{ vars.OPENPATH_WEDU_CI_WINDOWS_BASE_SNAPSHOT || 'wedu-golden-20261116' }}" \
+    "$PROJECT_DIR/.github/workflows/wedu-captive-portal-lab.yml"
+}
