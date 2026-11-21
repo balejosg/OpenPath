@@ -141,6 +141,27 @@ Describe "Installer cleanup helper" {
         )
     }
 
+    It "Imports AppControl after the modules that re-import it" {
+        # Browser.psm1 (through Browser.ReadinessFacts/EnforcementStatus) re-imports
+        # AppControl.psm1 with -Force into its own scope, which drops the global
+        # copy: on Windows PowerShell 5.1 Remove-OpenPathNonAdminAppControl and
+        # Remove-OpenPathRestrictedGroup were then undefined and both removals
+        # were silently skipped.
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $content = Get-Content $uninstallPath -Raw
+
+        $appControlImport = $content.IndexOf('Import-Module "$OpenPathRoot\lib\AppControl.psm1"')
+        $browserImport = $content.IndexOf('Import-Module "$OpenPathRoot\lib\Browser.psm1"')
+        $servicesImport = $content.IndexOf('Import-Module "$OpenPathRoot\lib\Services.psm1"')
+        $firstStep = $content.IndexOf('[1/6] Removing scheduled tasks')
+
+        $browserImport | Should -BeGreaterThan -1
+        $servicesImport | Should -BeGreaterThan -1
+        $appControlImport | Should -BeGreaterThan $browserImport
+        $appControlImport | Should -BeGreaterThan $servicesImport
+        $firstStep | Should -BeGreaterThan $appControlImport
+    }
+
     It "Stops OpenPath-rooted processes before removing AppControl and the restricted group" {
         # A surviving watchdog recreates the group and repairs the AppLocker rules
         # outside Global\OpenPathUpdateLock, so the process stop must come first.
@@ -216,6 +237,19 @@ Describe "Installer cleanup helper" {
             Get-OpenPathUninstallManagedAppLockerRuleCount -PolicyXml $policy | Should -Be 2
             Get-OpenPathUninstallManagedAppLockerRuleCount -PolicyXml '<AppLockerPolicy Version="1" />' | Should -Be 0
             Get-OpenPathUninstallManagedAppLockerRuleCount -PolicyXml '' | Should -Be 0
+        }
+
+        It "Reads the live local policy when no policy XML is passed" {
+            # Unbound, a [string] parameter is '' rather than $null; the no-argument
+            # call must still query AppLocker instead of reporting zero rules.
+            function global:Get-AppLockerPolicy {
+                param([switch]$Local, [switch]$Xml)
+                '<AppLockerPolicy Version="1"><RuleCollection Type="Exe"><FilePathRule Id="1" Name="OpenPath non-admin app control - a" /><FilePathRule Id="2" Name="OpenPath non-admin app control - b" /></RuleCollection></AppLockerPolicy>'
+            }
+            try {
+                Get-OpenPathUninstallManagedAppLockerRuleCount | Should -Be 2
+            }
+            finally { Remove-Item Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue }
         }
 
         It "Refuses to guess when the AppLocker policy is unreadable" {

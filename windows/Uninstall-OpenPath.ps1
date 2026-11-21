@@ -191,7 +191,9 @@ function Get-OpenPathUninstallManagedAppLockerRuleCount {
     # AppLocker cannot be queried on this machine.
     param([AllowNull()][string]$PolicyXml)
 
-    if ($null -eq $PolicyXml) {
+    # An unbound [string] parameter is '' (never $null), so test whether it was
+    # passed rather than whether it is null.
+    if (-not $PSBoundParameters.ContainsKey('PolicyXml')) {
         if (-not (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { return -1 }
         try {
             $PolicyXml = [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
@@ -802,14 +804,17 @@ if (Test-Path "$OpenPathRoot\lib\Network.psm1") {
 if (Test-Path "$OpenPathRoot\lib\Firewall.psm1") {
     Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force -ErrorAction SilentlyContinue
 }
-if (Test-Path "$OpenPathRoot\lib\AppControl.psm1") {
-    Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force -ErrorAction SilentlyContinue
-}
 if (Test-Path "$OpenPathRoot\lib\Browser.psm1") {
     Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force -ErrorAction SilentlyContinue
 }
 if (Test-Path "$OpenPathRoot\lib\Services.psm1") {
     Import-Module "$OpenPathRoot\lib\Services.psm1" -Force -ErrorAction SilentlyContinue
+}
+# Import AppControl last: Browser.psm1 re-imports it with -Force into its own
+# scope, which on Windows PowerShell 5.1 drops the copy imported here and leaves
+# Remove-OpenPathNonAdminAppControl and Remove-OpenPathRestrictedGroup undefined.
+if (Test-Path "$OpenPathRoot\lib\AppControl.psm1") {
+    Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force -ErrorAction SilentlyContinue
 }
 
 # Step 1: Remove scheduled tasks
