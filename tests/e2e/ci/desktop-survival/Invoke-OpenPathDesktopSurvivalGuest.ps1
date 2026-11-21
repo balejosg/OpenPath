@@ -252,6 +252,7 @@ function Invoke-OpenPathLabUninstallWithDiagnostics {
     # after.
     param(
         [Parameter(Mandatory = $true)][string]$DiagnosticsDir,
+        [string]$UninstallerPath = 'C:\OpenPath\Uninstall-OpenPath.ps1',
         [int]$TimeoutSeconds = 1500
     )
     New-Item -ItemType Directory -Path $DiagnosticsDir -Force | Out-Null
@@ -270,7 +271,7 @@ function Invoke-OpenPathLabUninstallWithDiagnostics {
 
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
     $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\OpenPath\Uninstall-OpenPath.ps1'
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $UninstallerPath
     ) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
     # Cache the handle so ExitCode is still readable after the process exits.
     $null = $process.Handle
@@ -320,7 +321,7 @@ function Invoke-OpenPathLabUninstallWithDiagnostics {
         diagnostics = [ordered]@{
             before           = $before
             after            = $after
-            timeline         = @($timeline)
+            timeline         = $timeline.ToArray()  # @() over a List fails in a PS 5.1 hashtable literal
             groupAuditEvents = @(Get-OpenPathLabGroupAuditEvents -Since $auditSince)
             agentLogFrozen   = $agentLogFrozen
             stdoutTail       = @(Get-OpenPathLabTextTail -Text (Read-OpenPathLabSharedFileText -Path $stdoutPath) -MaxLines 200)
