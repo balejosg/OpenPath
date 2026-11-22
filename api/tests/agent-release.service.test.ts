@@ -435,7 +435,7 @@ await describe('canary agent releases', { concurrency: false }, async () => {
     assert.ok(result.data.body.length > 0);
   });
 
-  await test('release validation rejects every malformed input branch', async () => {
+  await test('release validation rejects every malformed input branch', () => {
     const validFile = fileInput('lib/Alpha.psm1', 'alpha');
     const cases: {
       input: Parameters<typeof validateAgentReleaseInput>[0];
@@ -524,9 +524,7 @@ await describe('canary agent releases', { concurrency: false }, async () => {
     for (const { input, message } of cases) {
       const result = validateAgentReleaseInput(input);
       assert.equal(result.ok, false);
-      if (!result.ok) {
-        assert.match(result.error.message, message);
-      }
+      assert.match(result.error.message, message);
     }
   });
 
@@ -548,18 +546,14 @@ await describe('canary agent releases', { concurrency: false }, async () => {
 
     const missingFile = await getAgentReleaseFile(published.build, 'missing.ps1', repository);
     assert.equal(missingFile.ok, false);
-    if (!missingFile.ok) {
-      assert.equal(missingFile.error.code, 'NOT_FOUND');
-    }
+    assert.equal(missingFile.error.code, 'NOT_FOUND');
 
     const invalidBuild = await retireAgentRelease('not-a-build', repository);
     assert.equal(invalidBuild.ok, false);
 
     const missingBuild = await retireAgentRelease('f'.repeat(64), repository);
     assert.equal(missingBuild.ok, false);
-    if (!missingBuild.ok) {
-      assert.equal(missingBuild.error.code, 'NOT_FOUND');
-    }
+    assert.equal(missingBuild.error.code, 'NOT_FOUND');
 
     const updated = await setMachineAgentRing('  PC-Canary  ', 'canary', repository);
     assert.ok(updated.ok);
@@ -571,11 +565,9 @@ await describe('canary agent releases', { concurrency: false }, async () => {
     const badRing = await setMachineAgentRing('pc-canary', 'beta', repository);
     assert.equal(badRing.ok, false);
 
-    repository.setMachineRing = () => Promise.resolve(false);
+    repository.setMachineRing = (): Promise<boolean> => Promise.resolve(false);
     const unknownMachine = await setMachineAgentRing('pc-ghost', 'stable', repository);
     assert.equal(unknownMachine.ok, false);
-    if (!unknownMachine.ok) {
-      assert.equal(unknownMachine.error.code, 'NOT_FOUND');
-    }
+    assert.equal(unknownMachine.error.code, 'NOT_FOUND');
   });
 });
