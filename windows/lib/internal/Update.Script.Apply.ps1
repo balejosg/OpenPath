@@ -341,16 +341,35 @@ function Handle-OpenPathDownloadFailure {
         })
     $policyState = Get-OpenPathEndpointPolicyState `
         -WhitelistSections (Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath)
+
+    # A disabled classroom is fail-open by policy. A failed download must not
+    # let a cached-whitelist repair re-arm protection; if a previous fail-safe
+    # did, restore fail-open now.
+    $repairMode = 'CachedWhitelist'
+    if ($policyState.IsDisabled) {
+        $protectionActive = $false
+        try {
+            $protectionActive = [bool](Test-FirewallActive) -or [bool](Test-OpenPathAdapterDnsPinnedToLocalResolver)
+        }
+        catch {
+            Write-OpenPathLog "Could not check firewall state while fail-open is active: $_" -Level WARN
+        }
+        $repairMode = 'FailOpenMarkerOnly'
+        if ($protectionActive) {
+            $repairMode = 'FailOpen'
+            Write-OpenPathLog "Protection is active while the classroom is disabled; restoring fail-open after a download failure" -Level WARN
+        }
+    }
     $repairPlan = New-OpenPathEndpointStateRepairPlan `
         -PolicyState $policyState `
-        -Mode 'CachedWhitelist' `
+        -Mode $repairMode `
         -QueueChanged $runtimeDependencyQueueChanged
     Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
 
     $cachedAgeHours = Get-OpenPathCachedWhitelistAgeHours -WhitelistPath $WhitelistPath
     $ageThresholdReached = $EnableStaleFailsafe -and $StaleWhitelistMaxAgeHours -gt 0 -and $cachedAgeHours -ge $StaleWhitelistMaxAgeHours
     $failureThresholdReached = $consecutiveFailures -ge $failureThreshold
-    if ($ageThresholdReached -and ($staleFailsafeCurrentlyActive -or $failureThresholdReached)) {
+    if (-not $policyState.IsDisabled -and $ageThresholdReached -and ($staleFailsafeCurrentlyActive -or $failureThresholdReached)) {
         Enter-StaleWhitelistFailsafe -Config $Config -WhitelistAgeHours $cachedAgeHours -StaleFailsafeStatePath $StaleFailsafeStatePath
         $runtimeHealth = Get-OpenPathRuntimeHealth
         Send-OpenPathHealthReport -Status 'STALE_FAILSAFE' `
@@ -362,8 +381,18 @@ function Handle-OpenPathDownloadFailure {
         return
     }
 
+    if ($policyState.IsDisabled -and $staleFailsafeCurrentlyActive) {
+        # The cached whitelist is the remote disable marker, so there is no
+        # stale allowlist to protect. Drop the obsolete marker and stay open.
+        Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
+        Write-OpenPathLog "Cleared the stale fail-safe marker while the classroom is disabled; staying in fail-open mode" -Level WARN
+    }
+
     $healthAction = 'download_failed_cached_whitelist'
-    if ($ageThresholdReached -and -not $staleFailsafeCurrentlyActive) {
+    if ($policyState.IsDisabled) {
+        $healthAction = "$healthAction; stale_failsafe_skipped_classroom_disabled"
+    }
+    if ($ageThresholdReached -and ($policyState.IsDisabled -or -not $staleFailsafeCurrentlyActive)) {
         $healthAction = "$healthAction; stale_failsafe_progress=$consecutiveFailures/$failureThreshold"
     }
 
@@ -373,7 +402,12 @@ function Handle-OpenPathDownloadFailure {
         -DnsResolving $runtimeHealth.DnsResolving `
         -FailCount 0 `
         -Actions (Join-OpenPathUpdateHealthActions -Action $healthAction -Suffix $HealthActionSuffix) | Out-Null
-    Write-OpenPathLog "Using cached whitelist (age=$cachedAgeHours h, failures=$consecutiveFailures/$failureThreshold) until next successful download" -Level WARN
+    if ($policyState.IsDisabled) {
+        Write-OpenPathLog "Using the cached disable marker (age=$cachedAgeHours h, failures=$consecutiveFailures/$failureThreshold); stale fail-safe skipped while the classroom is disabled" -Level WARN
+    }
+    else {
+        Write-OpenPathLog "Using cached whitelist (age=$cachedAgeHours h, failures=$consecutiveFailures/$failureThreshold) until next successful download" -Level WARN
+    }
 }
 
 function Handle-OpenPathNotModified {

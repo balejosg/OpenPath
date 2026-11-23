@@ -579,6 +579,76 @@ Describe "Update Script" {
                 Test-Path $script:stalePath | Should -BeFalse
             }
 
+            It "Does not enter the stale fail-safe on a failed download while the classroom is disabled" {
+                Set-Content -Path $script:whitelistPath -Value '# DESACTIVADO'
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-93)
+                Set-Content -Path $script:stalePath -Value '{}'
+                $script:repairModes = @()
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) $script:repairModes += $Mode; [pscustomobject]@{ Actions = @() } }
+                function Test-FirewallActive { $false }
+                function Get-NetAdapter { param($ErrorAction) [pscustomobject]@{ Status = 'Up'; ifIndex = 7 } }
+                function Get-DnsClientServerAddress { param($AddressFamily, $InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('192.0.2.53') } }
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath
+
+                $script:failsafeEntries | Should -Be 0
+                Test-Path $script:stalePath | Should -BeFalse
+                $script:healthStatuses[-1] | Should -Be 'DEGRADED'
+                $script:healthActions[-1] | Should -Match 'stale_failsafe_skipped_classroom_disabled'
+                $script:healthActions[-1] | Should -Match 'stale_failsafe_progress=1/6'
+                $script:repairModes | Should -Contain 'FailOpenMarkerOnly'
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 1
+            }
+
+            It "Restores fail-open on a failed download while the classroom is disabled and protection is still active" {
+                Set-Content -Path $script:whitelistPath -Value '# DESACTIVADO'
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-93)
+                Set-Content -Path $script:stalePath -Value '{}'
+                $script:repairModes = @()
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) $script:repairModes += $Mode; [pscustomobject]@{ Actions = @() } }
+                function Test-FirewallActive { $true }
+
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath
+
+                $script:repairModes | Should -Be @('FailOpen')
+                $script:failsafeEntries | Should -Be 0
+                Test-Path $script:stalePath | Should -BeFalse
+                $script:healthStatuses[-1] | Should -Be 'DEGRADED'
+            }
+
+            It "Does not enter the stale fail-safe after six failures while the classroom is disabled" {
+                Set-Content -Path $script:whitelistPath -Value '# DESACTIVADO'
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-93)
+                $script:repairModes = @()
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function New-OpenPathEndpointStateRepairPlan { param($PolicyState, $Mode, $QueueChanged) $script:repairModes += $Mode; [pscustomobject]@{ Actions = @() } }
+                function Test-FirewallActive { $false }
+                function Get-NetAdapter { param($ErrorAction) [pscustomobject]@{ Status = 'Up'; ifIndex = 7 } }
+                function Get-DnsClientServerAddress { param($AddressFamily, $InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('192.0.2.53') } }
+                $t0 = [datetime]::SpecifyKind([datetime]'2026-11-23T08:00:00', [System.DateTimeKind]::Utc)
+
+                for ($i = 0; $i -lt 6; $i++) {
+                    Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                        -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                        -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath -Now $t0.AddMinutes(5 * $i)
+                }
+
+                $script:failsafeEntries | Should -Be 0
+                Test-Path $script:stalePath | Should -BeFalse
+                $script:healthStatuses[-1] | Should -Be 'DEGRADED'
+                $script:healthActions[-1] | Should -Match 'stale_failsafe_progress=6/6'
+                (Get-OpenPathWhitelistDownloadFailureState -StatePath $script:failureStatePath).ConsecutiveFailures | Should -Be 6
+            }
+
             It "Does not restore protected mode on an ordinary 304 cycle" {
                 Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
 
