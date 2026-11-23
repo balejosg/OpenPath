@@ -1024,16 +1024,23 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = ${JSON.stringify(repoRoot)}
 $runnerPath = ${JSON.stringify(isolatedRunnerPath)}
 $resultsPath = ${JSON.stringify(resultsPath)}
+$logPath = 'C:\\Windows\\TEMP\\openpath-direct-pester.log'
 
 if (-not (Test-Path $runnerPath)) {
   throw 'run-windows-pester-isolated.ps1 is missing on the Windows runner checkout.'
 }
 
-Set-Location $repoRoot
-& pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $runnerPath -RepoRoot $repoRoot -ResultsPath $resultsPath -TimeoutSeconds ${Number.parseInt(options.timeoutSeconds, 10)}
-if ($LASTEXITCODE -ne 0) {
-  throw "run-windows-pester-isolated.ps1 exited with code $LASTEXITCODE"
+if (Test-Path -LiteralPath $logPath) {
+  Remove-Item -LiteralPath $logPath -Force
 }
+Set-Location $repoRoot
+& pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $runnerPath -RepoRoot $repoRoot -ResultsPath $resultsPath -TimeoutSeconds ${Number.parseInt(options.timeoutSeconds, 10)} *> $logPath
+$pesterExitCode = $LASTEXITCODE
+if ($pesterExitCode -ne 0) {
+  if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Tail 120 }
+  throw "run-windows-pester-isolated.ps1 exited with code $pesterExitCode"
+}
+if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Tail 20 }
 `;
   runGuestPowerShellAsync(options, script, {
     timeoutSeconds: Number.parseInt(options.timeoutSeconds, 10) + 300,
@@ -2667,6 +2674,7 @@ function getWindowsDirectArtifactSpecsForModes(
 
   if (modeSet.has('pester')) {
     addText(`${runnerRoot}\\${resultsPath.replace(/\//g, '\\')}`, DEFAULT_RESULTS_ARTIFACT_NAME);
+    addText('C:\\Windows\\TEMP\\openpath-direct-pester.log', 'windows-direct-pester.log', 500000);
   }
 
   if (modeSet.has('pester') || modeSet.has('browser-boundary')) {

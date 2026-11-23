@@ -349,6 +349,20 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       /runGuestPowerShell\(options, script,/,
       'the direct Pester step must not block on the synchronous guest helper'
     );
+    assert.match(directPesterMatch[0], /\*> \$logPath/);
+    assert.match(directPesterMatch[0], /openpath-direct-pester\.log/);
+  });
+
+  test('pester artifacts include the bounded direct log', () => {
+    const specs = getWindowsDirectArtifactSpecsForModes(['pester'], {
+      runnerRoot: 'C:\\runner',
+      resultsPath: 'windows-test-results.xml',
+    });
+
+    assert.ok(
+      specs.some((spec) => spec.localName === 'windows-direct-pester.log'),
+      'the direct Pester log should be collected even when the suite fails'
+    );
   });
 
   test('browser enforcement report option invokes the Phase 5 report and collects artifacts', () => {
