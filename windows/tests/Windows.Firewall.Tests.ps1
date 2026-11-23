@@ -41,11 +41,13 @@ Describe "Firewall Module" {
                 'function Remove-OpenPathFirewallRuleObjects',
                 'Remove-OpenPathFirewallOwnedRules -ManifestPath $manifestPath -RulePrefix $script:RulePrefix -RemoveManifest'
             )
-            # Removal by manifest, group and prefix lives in the Firewall.Teardown.ps1 leaf (2026-11-17 reversion owners).
+            # Bulk removal by group, manifest names and prefix lives in the Firewall.Teardown.ps1
+            # leaf (2026-11-17 reversion owners). Group and manifest deletes are single calls.
             $teardownContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Teardown.ps1") -Raw
             Assert-ContentContainsAll -Content $teardownContent -Needles @(
-                "Get-NetFirewallRule -Group 'OpenPath'",
-                'Get-NetFirewallRule -DisplayName "$RulePrefix-*"'
+                "Remove-OpenPathFirewallRuleSelection -Group 'OpenPath'",
+                'Remove-OpenPathFirewallRuleSelection -DisplayName $manifest.Names',
+                'Remove-OpenPathFirewallRuleSelection -DisplayName "$RulePrefix-*"'
             )
         }
 
@@ -71,74 +73,65 @@ Describe "Firewall Module" {
             Get-ChildItem -Path $TestDrive -Filter '*.tmp' | Should -BeNullOrEmpty
         }
 
-        It "Ignores corrupt firewall manifests and still removes grouped and DNS-prefixed rules" {
+        It "Ignores corrupt firewall manifests and still removes grouped and DNS-prefixed rules in bulk" {
             $manifestPath = Join-Path $TestDrive 'firewall-rules.json'
             Set-Content -Path $manifestPath -Value '[ "OpenPath-DNS-Allow-Loopback-TCP", ' -Encoding UTF8
-            $script:requestedFirewallRules = @()
-            $script:removedFirewallRules = @()
+            $script:firewallTeardownEvents = @()
 
             if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
                 function global:Get-NetFirewallRule { }
             }
             $createdRemoveRuleStub = $false
             if (-not (Get-Command -Name Remove-NetFirewallRule -ErrorAction SilentlyContinue)) {
-                function global:Remove-NetFirewallRule { param([Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
+                function global:Remove-NetFirewallRule { param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
                 $createdRemoveRuleStub = $true
             }
 
             Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
             Mock Write-OpenPathLog { } -ModuleName Firewall
             # Never read, delete or apply the runner's real C:\OpenPath egress-floor state.
-            Mock Restore-OpenPathEgressFloorPreviousOutbound { } -ModuleName Firewall
-            Mock Disable-OpenPathEgressFloorAudit { } -ModuleName Firewall
+            Mock Restore-OpenPathEgressFloorPreviousOutbound { $script:firewallTeardownEvents += 'restore' } -ModuleName Firewall
+            Mock Disable-OpenPathEgressFloorAudit { $script:firewallTeardownEvents += 'audit' } -ModuleName Firewall
             Mock Get-NetFirewallRule {
                 param(
                     [string]$DisplayName,
                     [string]$Group
                 )
 
-                if ($DisplayName) {
-                    $script:requestedFirewallRules += $DisplayName
-                    if ($DisplayName -eq 'OpenPath-DNS-*') {
-                        return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-fallback-rule' }
-                    }
-                    return [PSCustomObject]@{ DisplayName = $DisplayName }
-                }
-
-                if ($Group -eq 'OpenPath') {
-                    $script:requestedFirewallRules += 'group:OpenPath'
-                    return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' }
+                if ($DisplayName -eq 'OpenPath-DNS-*') {
+                    return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-fallback-rule' }
                 }
             } -ModuleName Firewall
-            # Rule removal goes through Remove-OpenPathFirewallOwnedRules (Firewall.Teardown.ps1),
-            # which pipes each rule to Remove-NetFirewallRule.
+            # Rule removal goes through Remove-OpenPathFirewallOwnedRules (Firewall.Teardown.ps1):
+            # one bulk call for the group and one bulk call for the prefix sweep.
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                param([string[]]$DisplayName, [string]$Group)
 
-                process {
-                    if ($null -ne $InputObject -and $InputObject.PSObject.Properties['DisplayName']) {
-                        $script:removedFirewallRules += @($InputObject.DisplayName)
-                    }
+                if ($Group) {
+                    $script:firewallTeardownEvents += "remove:group:$Group"
+                    return
                 }
+                $script:firewallTeardownEvents += "remove:names:$($DisplayName -join ',')"
             } -ModuleName Firewall
 
             try {
                 $result = InModuleScope Firewall { Remove-OpenPathFirewall }
 
                 $result | Should -BeTrue
-                $script:requestedFirewallRules | Should -Contain 'group:OpenPath'
-                $script:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
-                $script:removedFirewallRules | Should -Contain 'OpenPath-group-rule'
-                $script:removedFirewallRules | Should -Contain 'OpenPath-DNS-fallback-rule'
+                $events = @($script:firewallTeardownEvents)
+                # Brick-guard: restore the outbound default and the audit setting before any delete.
+                $events[0] | Should -Be 'restore'
+                $events[1] | Should -Be 'audit'
+                $events | Should -Contain 'remove:group:OpenPath'
+                $events | Should -Contain 'remove:names:OpenPath-DNS-*'
+                @($events | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 2
                 Should -Invoke -CommandName Remove-NetFirewallRule -ModuleName Firewall -Times 2 -Exactly
-                # Never read, delete or apply the runner's real egress-floor state.
                 Should -Invoke -CommandName Restore-OpenPathEgressFloorPreviousOutbound -ModuleName Firewall -Times 1 -Exactly
                 Should -Invoke -CommandName Disable-OpenPathEgressFloorAudit -ModuleName Firewall -Times 1 -Exactly
                 Test-Path $manifestPath | Should -BeFalse
             }
             finally {
-                Remove-Variable -Name requestedFirewallRules -Scope Script -ErrorAction SilentlyContinue
-                Remove-Variable -Name removedFirewallRules -Scope Script -ErrorAction SilentlyContinue
+                Remove-Variable -Name firewallTeardownEvents -Scope Script -ErrorAction SilentlyContinue
                 Microsoft.PowerShell.Management\Remove-Item Function:\Get-NetFirewallRule -ErrorAction SilentlyContinue
                 if ($createdRemoveRuleStub) {
                     Microsoft.PowerShell.Management\Remove-Item Function:\Remove-NetFirewallRule -ErrorAction SilentlyContinue

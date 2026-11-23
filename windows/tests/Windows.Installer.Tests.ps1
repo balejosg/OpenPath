@@ -1348,7 +1348,11 @@ function global:Get-NetFirewallRule {
 }
 function global:Remove-NetFirewallRule {
     [CmdletBinding()]
-    param([Parameter(ValueFromPipeline = `$true)]`$InputObject)
+    param(
+        [string[]]`$DisplayName,
+        [string]`$Group,
+        [Parameter(ValueFromPipeline = `$true)]`$InputObject
+    )
     process {
         Add-OpenPathInstallerTestTrace 'mutate:firewall:remove'
     }

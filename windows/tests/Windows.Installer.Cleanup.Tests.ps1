@@ -506,7 +506,7 @@ Describe "Installer cleanup helper" {
         $cleanupContent | Should -Match ([regex]::Escape("internal\Firewall.Teardown.ps1"))
         $leafContent | Should -Match 'function Read-OpenPathFirewallManifestRuleNames'
         $leafContent.IndexOf('$manifest = Read-OpenPathFirewallManifestRuleNames') |
-            Should -BeLessThan $leafContent.IndexOf("Get-NetFirewallRule -Group 'OpenPath'")
+            Should -BeLessThan $leafContent.IndexOf("Remove-OpenPathFirewallRuleSelection -Group 'OpenPath'")
     }
 
     It "Ignores a corrupt firewall manifest and still removes OpenPath firewall rules" {
@@ -547,11 +547,19 @@ Describe "Installer cleanup helper" {
 
         function global:Remove-NetFirewallRule {
             [CmdletBinding()]
-            param([Parameter(ValueFromPipeline = $true)]$InputObject)
+            param(
+                [string[]]$DisplayName,
+                [string]$Group,
+                [Parameter(ValueFromPipeline = $true)]$InputObject
+            )
 
             process {
-                if ($InputObject -and $InputObject.DisplayName) {
-                    $script:removedFirewallRules += [string]$InputObject.DisplayName
+                if ($Group) {
+                    $script:removedFirewallRules += "group:$Group"
+                    return
+                }
+                foreach ($name in @($DisplayName)) {
+                    if ($name) { $script:removedFirewallRules += [string]$name }
                 }
             }
         }
@@ -594,10 +602,10 @@ Describe "Installer cleanup helper" {
             Should -Invoke Get-NetFirewallProfile -Times 3 -Exactly
             Should -Invoke Set-NetFirewallProfile -Times 0 -Exactly
             $script:manifestRead | Should -BeTrue
-            $script:requestedFirewallRules | Should -Contain 'group:OpenPath'
+            # Bulk removal: the group and the prefix are one call each; no per-rule queries.
             $script:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
-            $script:removedFirewallRules | Should -Contain 'OpenPath-group-rule'
-            $script:removedFirewallRules | Should -Contain 'OpenPath-DNS-fallback-rule'
+            $script:removedFirewallRules | Should -Contain 'group:OpenPath'
+            $script:removedFirewallRules | Should -Contain 'OpenPath-DNS-*'
         }
         finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -625,7 +633,7 @@ Describe "Installer cleanup helper" {
                 'Get-NetFirewallProfile' = { param($Profile) }
                 'Set-NetFirewallProfile' = { param($Profile, $DefaultOutboundAction) }
                 'Get-NetFirewallRule'    = { param($DisplayName, $Group) }
-                'Remove-NetFirewallRule' = { param([Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
+                'Remove-NetFirewallRule' = { param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
             }
             foreach ($commandName in @($firewallStubs.Keys)) {
                 if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
@@ -667,8 +675,12 @@ Describe "Installer cleanup helper" {
                 return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-rule' }
             }
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
-                process { $global:openPathInstallerFirewallEvents.Add("remove:$($InputObject.DisplayName)") }
+                param([string[]]$DisplayName, [string]$Group)
+                if ($Group) {
+                    $global:openPathInstallerFirewallEvents.Add("remove:group:$Group")
+                    return
+                }
+                $global:openPathInstallerFirewallEvents.Add("remove:$(@($DisplayName) -join ',')")
             }
         }
 
@@ -730,8 +742,9 @@ Describe "Installer cleanup helper" {
 
         It "Throws when the OpenPath-DNS-* removal fails, as before" {
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
-                process { if ($InputObject.DisplayName -eq 'OpenPath-DNS-rule') { throw 'prefix removal refused' } }
+                param([string[]]$DisplayName, [string]$Group)
+                if ($Group) { return }
+                if (@($DisplayName) -contains 'OpenPath-DNS-*') { throw 'prefix removal refused' }
             }
 
             { Remove-OpenPathInstallerFirewallRules } | Should -Throw '*prefix removal refused*'
@@ -986,7 +999,7 @@ Describe "Installer cleanup helper" {
                 'Get-NetFirewallProfile' = { param($Profile) }
                 'Set-NetFirewallProfile' = { param($Profile, $DefaultOutboundAction) }
                 'Get-NetFirewallRule'    = { param($DisplayName, $Group) }
-                'Remove-NetFirewallRule' = { param([Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
+                'Remove-NetFirewallRule' = { param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
             }
             foreach ($commandName in @($firewallStubs.Keys)) {
                 if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
@@ -1017,8 +1030,8 @@ Describe "Installer cleanup helper" {
             Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathUninstallEvents.Add("set:${Profile}:$DefaultOutboundAction") }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
-                process { $global:openPathUninstallEvents.Add('remove') }
+                param([string[]]$DisplayName, [string]$Group)
+                $global:openPathUninstallEvents.Add('remove')
             }
         }
 

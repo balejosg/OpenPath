@@ -9,7 +9,7 @@ Describe "Firewall teardown leaf" {
             'Get-NetFirewallProfile' = { param($Profile) }
             'Set-NetFirewallProfile' = { param($Profile, $DefaultOutboundAction) }
             'Get-NetFirewallRule'    = { param($DisplayName, $Group) }
-            'Remove-NetFirewallRule' = { param([Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
+            'Remove-NetFirewallRule' = { param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject) process { } }
         }
         foreach ($commandName in @($stubs.Keys)) {
             if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
@@ -205,35 +205,65 @@ Describe "Firewall teardown leaf" {
         BeforeEach {
             $script:manifestPath = Join-Path $TestDrive "firewall-rules-$([guid]::NewGuid().ToString('N')).json"
             $global:openPathRuleEvents = [System.Collections.Generic.List[string]]::new()
+            $global:openPathRemainingRules = [System.Collections.Generic.List[object]]::new()
             Mock Get-NetFirewallRule {
                 param($DisplayName, $Group)
-                if ($Group) {
-                    $global:openPathRuleEvents.Add("get:group:$Group")
-                    return [PSCustomObject]@{ DisplayName = "group-rule" }
-                }
-                $global:openPathRuleEvents.Add("get:name:$DisplayName")
-                return [PSCustomObject]@{ DisplayName = $DisplayName }
+                $names = @($DisplayName | ForEach-Object { [string]$_ })
+                $global:openPathRuleEvents.Add("get:name:$($names -join ',')")
+                return @($global:openPathRemainingRules)
             }
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
-                process { $global:openPathRuleEvents.Add("remove:$($InputObject.DisplayName)") }
+                param($DisplayName, $Group)
+                if ($Group) {
+                    $global:openPathRuleEvents.Add("remove:group:$Group")
+                    return
+                }
+                $names = @($DisplayName | ForEach-Object { [string]$_ })
+                $global:openPathRuleEvents.Add("remove:names:$($names -join ',')")
             }
         }
 
         AfterEach {
-            Remove-Variable -Name openPathRuleEvents -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name openPathRuleEvents, openPathRemainingRules -Scope Global -ErrorAction SilentlyContinue
         }
 
-        It "Removes manifest names first, then the group, then the prefix, and deletes the manifest" {
-            Set-Content -LiteralPath $script:manifestPath -Value '["OpenPath-DNS-B", "OpenPath-DNS-A"]' -Encoding ASCII
+        It "Uses a constant number of bulk calls for <Count> manifest rules" -ForEach @(
+            @{ Count = 2 }
+            @{ Count = 87 }
+        ) {
+            $names = @(1..$Count | ForEach-Object { "OpenPath-DNS-Rule-$_" })
+            Set-Content -LiteralPath $script:manifestPath -Value (ConvertTo-Json -InputObject $names) -Encoding ASCII
 
             $result = Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS' -RemoveManifest
 
             $result.ManifestError | Should -BeNullOrEmpty
             @($result.Errors).Count | Should -Be 0
-            @($global:openPathRuleEvents | Where-Object { $_ -like 'get:*' }) | Should -Be @(
-                'get:name:OpenPath-DNS-A', 'get:name:OpenPath-DNS-B', 'get:group:OpenPath', 'get:name:OpenPath-DNS-*'
-            )
+            $events = @($global:openPathRuleEvents)
+            # One bulk group delete and two leftover probes (manifest names + prefix): constant.
+            @($events | Where-Object { $_ -eq 'remove:group:OpenPath' }).Count | Should -Be 1
+            @($events | Where-Object { $_ -like 'get:name:*' }).Count | Should -Be 2
+            # Nothing was left, so neither backup delete was issued.
+            @($events | Where-Object { $_ -like 'remove:names:*' }).Count | Should -Be 0
+            # The manifest names were probed together, never one Get per rule.
+            $manifestProbes = @($events | Where-Object { $_ -like 'get:name:*' -and $_ -ne 'get:name:OpenPath-DNS-*' })
+            $manifestProbes.Count | Should -Be 1
+            ($manifestProbes[0] -split ',').Count | Should -Be $Count
+            Test-Path -LiteralPath $script:manifestPath | Should -BeFalse
+        }
+
+        It "Removes the group, leftover manifest names, then leftover prefix rules, and deletes the manifest last" {
+            Set-Content -LiteralPath $script:manifestPath -Value '["OpenPath-DNS-B", "OpenPath-DNS-A"]' -Encoding ASCII
+            $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-A' })
+            $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-B' })
+
+            Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS' -RemoveManifest | Out-Null
+
+            $events = @($global:openPathRuleEvents)
+            $events[0] | Should -Be 'remove:group:OpenPath'
+            $events[1] | Should -Be 'get:name:OpenPath-DNS-A,OpenPath-DNS-B'
+            $events[2] | Should -Be 'remove:names:OpenPath-DNS-A,OpenPath-DNS-B'
+            $events[3] | Should -Be 'get:name:OpenPath-DNS-*'
+            $events[4] | Should -Be 'remove:names:OpenPath-DNS-*'
             Test-Path -LiteralPath $script:manifestPath | Should -BeFalse
         }
 
@@ -247,22 +277,38 @@ Describe "Firewall teardown leaf" {
 
         It "Sets ManifestError for an unreadable manifest and still removes the group and the prefix" {
             Set-Content -LiteralPath $script:manifestPath -Value '[ "OpenPath-DNS-A", ' -Encoding ASCII
+            $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-legacy-rule' })
 
             $result = Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS' -RemoveManifest
 
             $result.ManifestError | Should -Not -BeNullOrEmpty
-            @($global:openPathRuleEvents | Where-Object { $_ -like 'get:*' }) | Should -Be @('get:group:OpenPath', 'get:name:OpenPath-DNS-*')
+            @($global:openPathRuleEvents) | Should -Contain 'remove:group:OpenPath'
+            @($global:openPathRuleEvents) | Should -Contain 'remove:names:OpenPath-DNS-*'
+        }
+
+        It "Removes leftover ungrouped prefix rules with one wildcard call" {
+            $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-legacy-1' })
+            $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-legacy-2' })
+
+            $result = Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS'
+
+            @($result.Errors).Count | Should -Be 0
+            @($global:openPathRuleEvents | Where-Object { $_ -eq 'get:name:OpenPath-DNS-*' }).Count | Should -Be 1
+            @($global:openPathRuleEvents | Where-Object { $_ -eq 'remove:names:OpenPath-DNS-*' }).Count | Should -Be 1
+            @($global:openPathRuleEvents | Where-Object { $_ -like 'remove:names:OpenPath-DNS-legacy-*' }).Count | Should -Be 0
         }
 
         It "Collects removal failures instead of throwing" {
+            $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-legacy-rule' })
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
-                process { throw "cannot remove $($InputObject.DisplayName)" }
+                param($DisplayName, $Group)
+                throw 'firewall refused'
             }
 
             $result = Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS'
 
             @($result.Errors).Count | Should -Be 2
+            @($result.PrefixErrors).Count | Should -Be 1
         }
     }
 
@@ -280,7 +326,7 @@ Describe "Firewall teardown leaf" {
             Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathWrapperEvents.Add("set:${Profile}:$DefaultOutboundAction") }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
                 process { $global:openPathWrapperEvents.Add('remove') }
             }
             Mock Write-Warning { }
@@ -334,7 +380,7 @@ Describe "Firewall teardown leaf" {
             }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
                 process { $global:openPathKeepEvents.Add('remove') }
             }
             $script:teardownArgs = @{
@@ -372,7 +418,7 @@ Describe "Firewall teardown leaf" {
             Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathTeardownEvents.Add("set:$Profile") }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
-                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
                 process { $global:openPathTeardownEvents.Add('remove') }
             }
 
