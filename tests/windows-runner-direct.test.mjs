@@ -334,6 +334,23 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(script, /\[string\]::IsNullOrWhiteSpace\(\$ProgressPath\)/);
   });
 
+  test('direct Pester polls the guest asynchronously for long suites', () => {
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const directPesterMatch = script.match(/function runDirectPester\([\s\S]*?\n}\n\nfunction /);
+
+    assert.ok(directPesterMatch, 'the direct Pester helper should remain defined');
+    assert.match(
+      directPesterMatch[0],
+      /runGuestPowerShellAsync\(options, script,[\s\S]*?label: 'Run isolated Windows Pester'/,
+      'the full Pester suite can outlive a synchronous qm guest exec status wait'
+    );
+    assert.doesNotMatch(
+      directPesterMatch[0],
+      /runGuestPowerShell\(options, script,/,
+      'the direct Pester step must not block on the synchronous guest helper'
+    );
+  });
+
   test('browser enforcement report option invokes the Phase 5 report and collects artifacts', () => {
     const result = runDirectDiagnostic(['--browser-enforcement-report']);
     const script = readText('scripts/run-windows-runner-direct.mjs');

@@ -1035,8 +1035,8 @@ if ($LASTEXITCODE -ne 0) {
   throw "run-windows-pester-isolated.ps1 exited with code $LASTEXITCODE"
 }
 `;
-  runGuestPowerShell(options, script, {
-    timeoutSeconds: Number.parseInt(options.timeoutSeconds, 10) + 120,
+  runGuestPowerShellAsync(options, script, {
+    timeoutSeconds: Number.parseInt(options.timeoutSeconds, 10) + 300,
     label: 'Run isolated Windows Pester',
   });
 }
