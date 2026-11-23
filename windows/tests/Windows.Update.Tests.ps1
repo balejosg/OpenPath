@@ -523,6 +523,62 @@ Describe "Update Script" {
                 (Get-Content -LiteralPath $script:whitelistPath -Raw) | Should -Match '# DESACTIVADO'
             }
 
+            It "Records the server confirmation and clears the stale fail-safe when the classroom is disabled" {
+                Set-Content -Path $script:whitelistPath -Value '# DESACTIVADO'
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-93)
+                Set-Content -Path $script:stalePath -Value '{}'
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function Test-FirewallActive { $false }
+                function Get-NetAdapter { param($ErrorAction) [pscustomobject]@{ Status = 'Up'; ifIndex = 7 } }
+                function Get-DnsClientServerAddress { param($AddressFamily, $InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('192.0.2.53') } }
+
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+
+                Test-Path (Join-Path $script:dataDir 'whitelist.verified') | Should -BeTrue
+                Get-OpenPathCachedWhitelistAgeHours -WhitelistPath $script:whitelistPath | Should -BeLessThan 1
+                Test-Path $script:stalePath | Should -BeFalse
+                $script:protectedModeRestores | Should -Be 0
+            }
+
+            It "Does not re-enter the stale fail-safe after one failed download following a disabled-classroom 304" {
+                Set-Content -Path $script:whitelistPath -Value '# DESACTIVADO'
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-93)
+                Set-Content -Path $script:stalePath -Value '{}'
+                function Get-OpenPathWhitelistSectionsFromFile { param([string]$Path) [pscustomobject]@{ IsDisabled = $true } }
+                function Get-OpenPathEndpointPolicyState { param($WhitelistSections) [pscustomobject]@{ IsDisabled = $true; ProtectedModeEligible = $false } }
+                function Test-FirewallActive { $false }
+                function Get-NetAdapter { param($ErrorAction) [pscustomobject]@{ Status = 'Up'; ifIndex = 7 } }
+                function Get-DnsClientServerAddress { param($AddressFamily, $InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('192.0.2.53') } }
+
+                Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
+                Handle-OpenPathDownloadFailure -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath -StaleWhitelistMaxAgeHours 24 -EnableStaleFailsafe $true `
+                    -StaleFailsafeMinConsecutiveFailures 6 -DownloadFailureStatePath $script:failureStatePath
+
+                $script:failsafeEntries | Should -Be 0
+                Test-Path $script:stalePath | Should -BeFalse
+                $script:healthStatuses[-1] | Should -Be 'DEGRADED'
+            }
+
+            It "Clears the stale fail-safe when the server answers the remote disable with a 200" {
+                (Get-Item $script:whitelistPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddHours(-93)
+                Set-Content -Path $script:stalePath -Value '{}'
+                function Invoke-OpenPathUpdateWritersLockScope { param([string]$Stage, [scriptblock]$Action) return (& $Action) }
+                function Test-FirewallActive { $false }
+                function Get-NetAdapter { param($ErrorAction) [pscustomobject]@{ Status = 'Up'; ifIndex = 7 } }
+                function Get-DnsClientServerAddress { param($AddressFamily, $InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('192.0.2.53') } }
+
+                Handle-OpenPathDisabledWhitelist -Config ([pscustomobject]@{ enableFirewall = $false }) `
+                    -WhitelistPath $script:whitelistPath `
+                    -StaleFailsafeStatePath $script:stalePath `
+                    -DownloadFailureStatePath $script:failureStatePath
+
+                (Get-Content -LiteralPath $script:whitelistPath -Raw) | Should -Match '# DESACTIVADO'
+                Get-OpenPathCachedWhitelistAgeHours -WhitelistPath $script:whitelistPath | Should -BeLessThan 1
+                Test-Path $script:stalePath | Should -BeFalse
+            }
+
             It "Does not restore protected mode on an ordinary 304 cycle" {
                 Handle-OpenPathNotModified -Config ([pscustomobject]@{}) -WhitelistPath $script:whitelistPath -StaleFailsafeStatePath $script:stalePath
 

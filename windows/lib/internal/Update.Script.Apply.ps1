@@ -418,6 +418,17 @@ function Handle-OpenPathNotModified {
             try { Clear-OpenPathCaptivePortalMarker | Out-Null } catch { Write-OpenPathLog "Could not clear the captive portal marker while the classroom is disabled: $_" -Level WARN }
         }
         Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist
+
+        # The server just confirmed the cached whitelist (here, the disable
+        # marker) is current. Record the verification and drop the stale
+        # fail-safe marker, so a later download failure cannot re-enter the
+        # fail-safe through a stale marker; keep fail-open active because a
+        # disabled classroom must not restore protection.
+        Set-OpenPathWhitelistVerified -WhitelistPath $WhitelistPath
+        if ($staleFailsafeWasActive) {
+            Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
+            Write-OpenPathLog "Server confirmed the cached whitelist is current; left stale fail-safe mode while fail-open remains active"
+        }
         Write-OpenPathLog "Whitelist not modified and local fail-open marker remains active"
 
         try {
