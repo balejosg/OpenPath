@@ -53,7 +53,6 @@ function Invoke-IsolatedPesterHost {
         [Parameter(Mandatory = $true)]
         [int]$FileTimeoutSeconds,
 
-        [Parameter(Mandatory = $true)]
         [string]$ProgressPath,
 
         [Parameter(Mandatory = $true)]
@@ -192,7 +191,7 @@ function Invoke-IsolatedPesterHost {
 
 function Export-ProgressFile {
     param(
-        [Parameter(Mandatory = $true)][string]$ProgressPath,
+        [string]$ProgressPath,
         [Parameter(Mandatory = $true)][object]$Progress
     )
     if ([string]::IsNullOrWhiteSpace($ProgressPath)) { return }
@@ -335,7 +334,6 @@ function Invoke-WindowsPesterSuite {
         [Parameter(Mandatory = $true)]
         [int]$FileTimeoutSeconds,
 
-        [Parameter(Mandatory = $true)]
         [string]$ProgressPath,
 
         [Parameter(Mandatory = $true)]

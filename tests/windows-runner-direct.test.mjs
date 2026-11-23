@@ -323,6 +323,17 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(script, /qm guest exec/);
   });
 
+  test('isolated Pester runner accepts an omitted progress path', () => {
+    const script = readText('tests/e2e/ci/run-windows-pester-isolated.ps1');
+
+    assert.doesNotMatch(
+      script,
+      /\[Parameter\(Mandatory = \$true\)\]\s*\[string\]\$ProgressPath/,
+      'the direct runner omits ProgressPath, so the isolated runner must not require it'
+    );
+    assert.match(script, /\[string\]::IsNullOrWhiteSpace\(\$ProgressPath\)/);
+  });
+
   test('browser enforcement report option invokes the Phase 5 report and collects artifacts', () => {
     const result = runDirectDiagnostic(['--browser-enforcement-report']);
     const script = readText('scripts/run-windows-runner-direct.mjs');
