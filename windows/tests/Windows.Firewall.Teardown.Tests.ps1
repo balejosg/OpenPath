@@ -219,8 +219,14 @@ Describe "Firewall teardown leaf" {
             $script:manifestPath = Join-Path $TestDrive "firewall-rules-$([guid]::NewGuid().ToString('N')).json"
             $global:openPathRuleEvents = [System.Collections.Generic.List[string]]::new()
             $global:openPathRemainingRules = [System.Collections.Generic.List[object]]::new()
+            $global:openPathGroupRules = [System.Collections.Generic.List[object]]::new()
+            $global:openPathGroupRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' })
             Mock Get-NetFirewallRule {
                 param($DisplayName, $Group)
+                if ($Group) {
+                    $global:openPathRuleEvents.Add("get:group:$Group")
+                    return @($global:openPathGroupRules)
+                }
                 $names = @($DisplayName | ForEach-Object { [string]$_ })
                 $global:openPathRuleEvents.Add("get:name:$($names -join ',')")
                 return @($global:openPathRemainingRules)
@@ -237,7 +243,7 @@ Describe "Firewall teardown leaf" {
         }
 
         AfterEach {
-            Remove-Variable -Name openPathRuleEvents, openPathRemainingRules -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name openPathRuleEvents, openPathRemainingRules, openPathGroupRules -Scope Global -ErrorAction SilentlyContinue
         }
 
         It "Uses a constant number of bulk calls for <Count> manifest rules" -ForEach @(
@@ -272,11 +278,12 @@ Describe "Firewall teardown leaf" {
             Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS' -RemoveManifest | Out-Null
 
             $events = @($global:openPathRuleEvents)
-            $events[0] | Should -Be 'remove:group:OpenPath'
-            $events[1] | Should -Be 'get:name:OpenPath-DNS-A,OpenPath-DNS-B'
-            $events[2] | Should -Be 'remove:names:OpenPath-DNS-A,OpenPath-DNS-B'
-            $events[3] | Should -Be 'get:name:OpenPath-DNS-*'
-            $events[4] | Should -Be 'remove:names:OpenPath-DNS-*'
+            $events[0] | Should -Be 'get:group:OpenPath'
+            $events[1] | Should -Be 'remove:group:OpenPath'
+            $events[2] | Should -Be 'get:name:OpenPath-DNS-A,OpenPath-DNS-B'
+            $events[3] | Should -Be 'remove:names:OpenPath-DNS-A,OpenPath-DNS-B'
+            $events[4] | Should -Be 'get:name:OpenPath-DNS-*'
+            $events[5] | Should -Be 'remove:names:OpenPath-DNS-*'
             Test-Path -LiteralPath $script:manifestPath | Should -BeFalse
         }
 

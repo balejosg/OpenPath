@@ -279,10 +279,11 @@ function Remove-OpenPathFirewallOwnedRules {
         names, then a display-name <RulePrefix>-* sweep for legacy ungrouped rules.
     .DESCRIPTION
         Every rule New-OpenPathFirewallRule creates carries Group = OpenPath, so one
-        Remove-NetFirewallRule -Group call removes the current set without the per-rule
-        Get-NetFirewallRule store scans that made teardown take about a second per rule. The
-        manifest names and the prefix sweep are bulk backups for rules created before the
-        group existed; each backup only runs when one Get still finds matching leftover rules.
+        Get-NetFirewallRule probe plus one Remove-NetFirewallRule -Group call removes the
+        current set without the per-rule store scans that made teardown take about a second
+        per rule. The manifest names and the prefix sweep are bulk backups for rules created
+        before the group existed; each backup only runs when one Get still finds matching
+        leftover rules.
         An unreadable manifest sets ManifestError and the group and prefix removal still run.
         Removal failures are collected in Errors, never thrown; PrefixErrors holds the ones of
         the final prefix sweep. With -RemoveManifest the manifest is deleted after the rule
@@ -306,9 +307,13 @@ function Remove-OpenPathFirewallOwnedRules {
     $manifest = Read-OpenPathFirewallManifestRuleNames -Path $ManifestPath
     $result.ManifestError = [string]$manifest.Error
 
-    # Fast path: one bulk delete for the rules the agent owns today.
-    $message = Remove-OpenPathFirewallRuleSelection -Group 'OpenPath'
-    if ($message) { $errors.Add($message) }
+    # Fast path: one bulk delete for the rules the agent owns today. Probe first because
+    # Remove-NetFirewallRule raises a CIM error when the selection is empty, which would
+    # turn a clean uninstall into a rollback failure on a machine without the group.
+    if (@(Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue).Count -gt 0) {
+        $message = Remove-OpenPathFirewallRuleSelection -Group 'OpenPath'
+        if ($message) { $errors.Add($message) }
+    }
 
     # Backup for rules created before Group=OpenPath existed: the manifest records their
     # exact display names. One Get decides whether anything is left; the whole name array is

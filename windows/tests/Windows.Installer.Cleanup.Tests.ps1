@@ -513,9 +513,9 @@ Describe "Installer cleanup helper" {
         $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
         . $cleanupHelperPath
 
-        $script:removedFirewallRules = @()
-        $script:requestedFirewallRules = @()
-        $script:manifestRead = $false
+        $global:removedFirewallRules = @()
+        $global:requestedFirewallRules = @()
+        $global:manifestRead = $false
         $createdCDrive = $false
         if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
             New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
@@ -532,7 +532,7 @@ Describe "Installer cleanup helper" {
             )
 
             if ($DisplayName) {
-                $script:requestedFirewallRules += $DisplayName
+                $global:requestedFirewallRules += $DisplayName
                 if ($DisplayName -eq 'OpenPath-DNS-*') {
                     return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-fallback-rule' }
                 }
@@ -540,7 +540,7 @@ Describe "Installer cleanup helper" {
             }
 
             if ($Group -eq 'OpenPath') {
-                $script:requestedFirewallRules += 'group:OpenPath'
+                $global:requestedFirewallRules += 'group:OpenPath'
                 return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' }
             }
         }
@@ -555,11 +555,11 @@ Describe "Installer cleanup helper" {
 
             process {
                 if ($Group) {
-                    $script:removedFirewallRules += "group:$Group"
+                    $global:removedFirewallRules += "group:$Group"
                     return
                 }
                 foreach ($name in @($DisplayName)) {
-                    if ($name) { $script:removedFirewallRules += [string]$name }
+                    if ($name) { $global:removedFirewallRules += [string]$name }
                 }
             }
         }
@@ -575,7 +575,7 @@ Describe "Installer cleanup helper" {
                 [switch]$Raw
             )
 
-            $script:manifestRead = $true
+            $global:manifestRead = $true
             return '[ "OpenPath-DNS-Allow-Loopback-TCP", '
         }
 
@@ -601,11 +601,11 @@ Describe "Installer cleanup helper" {
             # The B2 outbound/audit restore must hit mocks, never the runner's real firewall profile.
             Should -Invoke Get-NetFirewallProfile -Times 3 -Exactly
             Should -Invoke Set-NetFirewallProfile -Times 0 -Exactly
-            $script:manifestRead | Should -BeTrue
+            $global:manifestRead | Should -BeTrue
             # Bulk removal: the group and the prefix are one call each; no per-rule queries.
-            $script:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
-            $script:removedFirewallRules | Should -Contain 'group:OpenPath'
-            $script:removedFirewallRules | Should -Contain 'OpenPath-DNS-*'
+            $global:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
+            $global:removedFirewallRules | Should -Contain 'group:OpenPath'
+            $global:removedFirewallRules | Should -Contain 'OpenPath-DNS-*'
         }
         finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -617,9 +617,9 @@ Describe "Installer cleanup helper" {
             foreach ($profileCommand in @($createdProfileStubs)) {
                 Microsoft.PowerShell.Management\Remove-Item "Function:\$profileCommand" -ErrorAction SilentlyContinue
             }
-            Remove-Variable -Name removedFirewallRules -Scope Script -ErrorAction SilentlyContinue
-            Remove-Variable -Name requestedFirewallRules -Scope Script -ErrorAction SilentlyContinue
-            Remove-Variable -Name manifestRead -Scope Script -ErrorAction SilentlyContinue
+            Remove-Variable -Name removedFirewallRules -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name requestedFirewallRules -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name manifestRead -Scope Global -ErrorAction SilentlyContinue
             if ($createdCDrive) {
                 Microsoft.PowerShell.Management\Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
             }
@@ -667,8 +667,18 @@ Describe "Installer cleanup helper" {
             } -ParameterFilter { ([string]$Path + [string]$LiteralPath) -like '*OpenPath*data*' }
             Mock Get-Content { $global:openPathInstallerOutboundState } -ParameterFilter { ([string]$Path + [string]$LiteralPath) -like '*egress-floor-prev-outbound.json' }
             Mock Remove-Item { } -ParameterFilter { ([string]$Path + [string]$LiteralPath) -like '*OpenPath*data*' }
-            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
-            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathInstallerFirewallEvents.Add("set:${Profile}:$DefaultOutboundAction") }
+            Mock Get-NetFirewallProfile {
+                param($Name, $Profile)
+                [PSCustomObject]@{
+                    Name = $(if ($Name) { [string]$Name } else { [string]$Profile })
+                    DefaultOutboundAction = 'Block'
+                }
+            }
+            Mock Set-NetFirewallProfile {
+                param($Name, $Profile, $DefaultOutboundAction)
+                $profileName = if ($Name) { [string]$Name } else { [string]$Profile }
+                $global:openPathInstallerFirewallEvents.Add("set:${profileName}:$DefaultOutboundAction")
+            }
             Mock Get-NetFirewallRule {
                 param($DisplayName, $Group)
                 if ($Group) { return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' } }
@@ -734,7 +744,11 @@ Describe "Installer cleanup helper" {
         }
 
         It "Throws and keeps the rules when a profile cannot leave Block" {
-            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) throw "profile $Profile refused" }
+            Mock Set-NetFirewallProfile {
+                param($Name, $Profile, $DefaultOutboundAction)
+                $profileName = if ($Name) { [string]$Name } else { [string]$Profile }
+                throw "profile $profileName refused"
+            }
 
             { Remove-OpenPathInstallerFirewallRules } | Should -Throw '*OpenPath firewall rules were kept*'
             @($global:openPathInstallerFirewallEvents | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
@@ -1026,8 +1040,18 @@ Describe "Installer cleanup helper" {
             $OpenPathRoot = Join-Path $TestDrive "op-$([guid]::NewGuid().ToString('N'))"
             New-Item -ItemType Directory -Path (Join-Path $OpenPathRoot 'data') -Force | Out-Null
             $global:openPathUninstallEvents = [System.Collections.Generic.List[string]]::new()
-            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
-            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathUninstallEvents.Add("set:${Profile}:$DefaultOutboundAction") }
+            Mock Get-NetFirewallProfile {
+                param($Name, $Profile)
+                [PSCustomObject]@{
+                    Name = $(if ($Name) { [string]$Name } else { [string]$Profile })
+                    DefaultOutboundAction = 'Block'
+                }
+            }
+            Mock Set-NetFirewallProfile {
+                param($Name, $Profile, $DefaultOutboundAction)
+                $profileName = if ($Name) { [string]$Name } else { [string]$Profile }
+                $global:openPathUninstallEvents.Add("set:${profileName}:$DefaultOutboundAction")
+            }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
                 param([string[]]$DisplayName, [string]$Group)
