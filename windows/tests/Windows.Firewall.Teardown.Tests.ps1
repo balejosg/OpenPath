@@ -226,9 +226,12 @@ Describe "Firewall teardown leaf" {
                 return @($global:openPathRemainingRules)
             }
             Mock Remove-NetFirewallRule {
-                param($DisplayName, $Group)
-                $names = @($DisplayName | ForEach-Object { [string]$_ })
-                $global:openPathRuleEvents.Add("remove:names:$($names -join ',')")
+                param($DisplayName, $Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
+                process {
+                    if ($null -ne $InputObject) {
+                        $global:openPathRuleEvents.Add("remove:rule:$($InputObject.DisplayName)")
+                    }
+                }
             }
         }
 
@@ -236,7 +239,7 @@ Describe "Firewall teardown leaf" {
             Remove-Variable -Name openPathRuleEvents, openPathRemainingRules -Scope Global -ErrorAction SilentlyContinue
         }
 
-        It "Uses a constant number of bulk calls for <Count> manifest rules" -ForEach @(
+        It "Uses one selector Get regardless of the manifest size" -ForEach @(
             @{ Count = 2 }
             @{ Count = 87 }
         ) {
@@ -247,28 +250,21 @@ Describe "Firewall teardown leaf" {
 
             $result.ManifestError | Should -BeNullOrEmpty
             @($result.Errors).Count | Should -Be 0
-            $events = @($global:openPathRuleEvents)
-            # No Get probes: the manifest and prefix deletes are one bulk call each.
-            @($events | Where-Object { $_ -like 'get:name:*' }).Count | Should -Be 0
-            @($events | Where-Object { $_ -like 'remove:names:*' }).Count | Should -Be 2
-            # The manifest names were removed together, never one Remove per rule.
-            $manifestRemoves = @($events | Where-Object { $_ -like 'remove:names:*' -and $_ -ne 'remove:names:OpenPath-DNS-*' })
-            $manifestRemoves.Count | Should -Be 1
-            ($manifestRemoves[0] -split ',').Count | Should -Be $Count
+            @($global:openPathRuleEvents | Where-Object { $_ -like 'get:name:*' }).Count | Should -Be 1
+            @($global:openPathRuleEvents | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
             Test-Path -LiteralPath $script:manifestPath | Should -BeFalse
         }
 
-        It "Removes leftover manifest names, then leftover prefix rules, and deletes the manifest last" {
-            Set-Content -LiteralPath $script:manifestPath -Value '["OpenPath-DNS-B", "OpenPath-DNS-A"]' -Encoding ASCII
+        It "Removes every rule returned by the prefix selector through the pipeline" {
             $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-A' })
             $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-B' })
 
-            Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS' -RemoveManifest | Out-Null
+            Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS' | Out-Null
 
             $events = @($global:openPathRuleEvents)
-            $events[0] | Should -Be 'remove:names:OpenPath-DNS-A,OpenPath-DNS-B'
-            $events[1] | Should -Be 'remove:names:OpenPath-DNS-*'
-            Test-Path -LiteralPath $script:manifestPath | Should -BeFalse
+            $events[0] | Should -Be 'get:name:OpenPath-DNS-*'
+            $events[1] | Should -Be 'remove:rule:OpenPath-DNS-A'
+            $events[2] | Should -Be 'remove:rule:OpenPath-DNS-B'
         }
 
         It "Keeps the manifest without -RemoveManifest" {
@@ -286,26 +282,14 @@ Describe "Firewall teardown leaf" {
             $result = Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS' -RemoveManifest
 
             $result.ManifestError | Should -Not -BeNullOrEmpty
-            @($global:openPathRuleEvents) | Should -Contain 'remove:names:OpenPath-DNS-*'
-        }
-
-        It "Removes leftover ungrouped prefix rules with one wildcard call" {
-            $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-legacy-1' })
-            $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-legacy-2' })
-
-            $result = Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS'
-
-            @($result.Errors).Count | Should -Be 0
-            @($global:openPathRuleEvents | Where-Object { $_ -eq 'get:name:OpenPath-DNS-*' }).Count | Should -Be 0
-            @($global:openPathRuleEvents | Where-Object { $_ -eq 'remove:names:OpenPath-DNS-*' }).Count | Should -Be 1
-            @($global:openPathRuleEvents | Where-Object { $_ -like 'remove:names:OpenPath-DNS-legacy-*' }).Count | Should -Be 0
+            @($global:openPathRuleEvents) | Should -Contain 'remove:rule:OpenPath-DNS-legacy-rule'
         }
 
         It "Collects removal failures instead of throwing" {
             $global:openPathRemainingRules.Add([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-legacy-rule' })
             Mock Remove-NetFirewallRule {
-                param($DisplayName, $Group)
-                throw 'firewall refused'
+                param($DisplayName, $Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
+                process { throw 'firewall refused' }
             }
 
             $result = Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS'

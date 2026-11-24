@@ -246,47 +246,18 @@ function Invoke-OpenPathFirewallAuditRestore {
     return $result
 }
 
-function Remove-OpenPathFirewallRuleSelection {
-    <#
-    .SYNOPSIS
-        Deletes every rule matched by an array of display names in one Remove-NetFirewallRule call.
-    .DESCRIPTION
-        Each Get-NetFirewallRule call scans the whole firewall store, so a Get + Remove per rule
-        costs roughly a second per rule. Remove-NetFirewallRule accepts an array of names (and
-        wildcards) on -DisplayName, so one bulk call removes the whole selection. Returns the
-        error text, or '' when the selection was removed.
-    #>
-    param([string[]]$DisplayName)
-
-    $names = @($DisplayName | Where-Object { $_ } | ForEach-Object { [string]$_ })
-    if ($names.Count -eq 0) { return '' }
-
-    try {
-        Remove-NetFirewallRule -DisplayName $names -ErrorAction Stop
-        return ''
-    }
-    catch {
-        # An empty selection is not a removal failure; the NetSecurity provider reports it as
-        # CmdletizationQuery_NotFound_DisplayName. Any other failure is returned to the caller.
-        if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return '' }
-        return [string]$_
-    }
-}
-
 function Remove-OpenPathFirewallOwnedRules {
     <#
     .SYNOPSIS
-        Removes the OpenPath-owned firewall rules in bulk: the manifest names, then a
-        display-name <RulePrefix>-* sweep for legacy ungrouped rules.
+        Removes the OpenPath-owned firewall rules with one display-name <RulePrefix>-* sweep.
     .DESCRIPTION
-        The manifest names are removed with one Remove-NetFirewallRule -DisplayName call and
-        the prefix sweep with one wildcard call, so teardown no longer pays a Get + Remove
-        store scan per rule. An absent selection is reported as NotFound and treated as done.
-        The Get probes and the group selector are intentionally not used: the NetSecurity
-        provider reports a generic CIM failure for them on some partially installed machines.
-        An unreadable manifest sets ManifestError and the group and prefix removal still run.
-        Removal failures are collected in Errors, never thrown; PrefixErrors holds the ones of
-        the final prefix sweep. With -RemoveManifest the manifest is deleted after the rule
+        One Get-NetFirewallRule selector call finds the whole RulePrefix-* set and the
+        pipeline removes each rule object, so teardown no longer pays a Get + Remove store
+        scan per rule. The group selector is intentionally not used: the NetSecurity provider
+        reports a generic CIM failure for it on some partially installed machines. An
+        unreadable manifest sets ManifestError and the prefix removal still runs. Removal
+        failures are collected in Errors, never thrown; PrefixErrors holds the ones of the
+        final prefix sweep. With -RemoveManifest the manifest is deleted after the rule
         removal. Returns at once when the firewall rule cmdlets are unavailable.
     #>
     param(
@@ -307,20 +278,25 @@ function Remove-OpenPathFirewallOwnedRules {
     $manifest = Read-OpenPathFirewallManifestRuleNames -Path $ManifestPath
     $result.ManifestError = [string]$manifest.Error
 
-    # The manifest records the exact display names of the current rules. The whole name array
-    # is removed in one call; an absent selection is reported as NotFound and treated as done.
-    if (@($manifest.Names).Count -gt 0) {
-        $message = Remove-OpenPathFirewallRuleSelection -DisplayName $manifest.Names
-        if ($message) { $errors.Add($message) }
-    }
-
-    # Last sweep: one wildcard delete removes ungrouped or mangled rules that are neither in
-    # the manifest nor in the OpenPath group.
+    # One selector Get finds every OpenPath rule (all display names share RulePrefix) and the
+    # pipeline removes each rule object, so teardown pays one store scan instead of one per
+    # rule. The group selector is not used: the NetSecurity provider reports a generic CIM
+    # failure for it on some partially installed machines.
     $prefixErrors = [System.Collections.Generic.List[string]]::new()
-    $message = Remove-OpenPathFirewallRuleSelection -DisplayName "$RulePrefix-*"
-    if ($message) { $prefixErrors.Add($message) }
-    foreach ($message in $prefixErrors) {
-        $errors.Add($message)
+    try {
+        Get-NetFirewallRule -DisplayName "$RulePrefix-*" -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction Stop
+    }
+    catch {
+        $message = [string]$_
+        # The CIM provider can be unavailable while a partial install is still settling. The old
+        # manifest/group sweeps were best-effort in that state, so do not fail the rollback on
+        # this provider error; real removal failures are still reported below.
+        $providerUnavailable = $message -match 'A general error occurred that is not covered by a more specific error code'
+        if (-not $providerUnavailable -and $_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound*') {
+            $prefixErrors.Add($message)
+            $errors.Add($message)
+        }
     }
 
     if ($RemoveManifest -and (Test-Path $ManifestPath)) {

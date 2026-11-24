@@ -506,7 +506,7 @@ Describe "Installer cleanup helper" {
         $cleanupContent | Should -Match ([regex]::Escape("internal\Firewall.Teardown.ps1"))
         $leafContent | Should -Match 'function Read-OpenPathFirewallManifestRuleNames'
         $leafContent.IndexOf('$manifest = Read-OpenPathFirewallManifestRuleNames') |
-            Should -BeLessThan $leafContent.IndexOf("Remove-OpenPathFirewallRuleSelection -DisplayName `$manifest.Names")
+            Should -BeLessThan $leafContent.IndexOf('Get-NetFirewallRule -DisplayName "$RulePrefix-*"')
     }
 
     It "Ignores a corrupt firewall manifest and still removes OpenPath firewall rules" {
@@ -571,8 +571,7 @@ Describe "Installer cleanup helper" {
             # Bulk removal: the prefix is one call; no per-rule queries.
             Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly
             Should -Invoke Remove-NetFirewallRule -ParameterFilter {
-                (@($PesterBoundParameters['Name']) -contains 'OpenPath-DNS-*') -or
-                (@($PesterBoundParameters['DisplayName']) -contains 'OpenPath-DNS-*')
+                [string]$PesterBoundParameters['InputObject'].DisplayName -eq 'OpenPath-DNS-fallback-rule'
             } -Times 1 -Exactly
         }
         finally {
@@ -716,9 +715,11 @@ Describe "Installer cleanup helper" {
 
         It "Throws when the OpenPath-DNS-* removal fails, as before" {
             Mock Remove-NetFirewallRule {
-                param([string[]]$DisplayName, [string]$Group)
-                if ($Group) { return }
-                if (@($DisplayName) -contains 'OpenPath-DNS-*') { throw 'prefix removal refused' }
+                param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
+                process {
+                    if ($null -ne $InputObject) { throw 'prefix removal refused' }
+                    if (@($DisplayName) -contains 'OpenPath-DNS-*') { throw 'prefix removal refused' }
+                }
             }
 
             { Remove-OpenPathInstallerFirewallRules } | Should -Throw '*prefix removal refused*'

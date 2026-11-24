@@ -41,12 +41,12 @@ Describe "Firewall Module" {
                 'function Remove-OpenPathFirewallRuleObjects',
                 'Remove-OpenPathFirewallOwnedRules -ManifestPath $manifestPath -RulePrefix $script:RulePrefix -RemoveManifest'
             )
-            # Bulk removal by manifest names and prefix lives in the Firewall.Teardown.ps1 leaf
-            # (2026-11-17 reversion owners). Both deletes are single calls.
+            # Bulk removal by prefix lives in the Firewall.Teardown.ps1 leaf (2026-11-17
+            # reversion owners): one selector Get and a pipeline Remove.
             $teardownContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Teardown.ps1") -Raw
             Assert-ContentContainsAll -Content $teardownContent -Needles @(
-                'Remove-OpenPathFirewallRuleSelection -DisplayName $manifest.Names',
-                'Remove-OpenPathFirewallRuleSelection -DisplayName "$RulePrefix-*"'
+                'Get-NetFirewallRule -DisplayName "$RulePrefix-*"',
+                'Remove-NetFirewallRule -ErrorAction Stop'
             )
         }
 
@@ -233,15 +233,16 @@ Describe "Firewall Module" {
                 }
             } -ModuleName Firewall
             # Rule removal goes through Remove-OpenPathFirewallOwnedRules (Firewall.Teardown.ps1):
-            # one bulk call for the group and one bulk call for the prefix sweep.
+            # one prefix selector Get and a pipeline Remove per rule.
             Mock Remove-NetFirewallRule {
-                param([string[]]$DisplayName, [string]$Group)
-
-                if ($Group) {
-                    $script:firewallTeardownEvents += "remove:group:$Group"
-                    return
+                param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
+                process {
+                    if ($null -ne $InputObject) {
+                        $script:firewallTeardownEvents += "remove:rule:$($InputObject.DisplayName)"
+                        return
+                    }
+                    $script:firewallTeardownEvents += "remove:names:$($DisplayName -join ',')"
                 }
-                $script:firewallTeardownEvents += "remove:names:$($DisplayName -join ',')"
             } -ModuleName Firewall
 
             try {
@@ -252,7 +253,7 @@ Describe "Firewall Module" {
                 # Brick-guard: restore the outbound default and the audit setting before any delete.
                 $events[0] | Should -Be 'restore'
                 $events[1] | Should -Be 'audit'
-                $events | Should -Contain 'remove:names:OpenPath-DNS-*'
+                $events | Should -Contain 'remove:rule:OpenPath-DNS-fallback-rule'
                 @($events | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 1
                 Should -Invoke -CommandName Remove-NetFirewallRule -ModuleName Firewall -Times 1 -Exactly
                 Should -Invoke -CommandName Restore-OpenPathEgressFloorPreviousOutbound -ModuleName Firewall -Times 1 -Exactly
