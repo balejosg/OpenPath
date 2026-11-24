@@ -554,7 +554,10 @@ Describe "Installer cleanup helper" {
                 return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-fallback-rule' }
             }
         }
-        Mock Remove-NetFirewallRule { }
+        Mock Remove-NetFirewallRule {
+            param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
+            process { }
+        } -RemoveParameterType InputObject
 
         # B2: the teardown restores the outbound default and the audit setting first. Keep both
         # off the runner's real firewall profile and auditpol.
@@ -644,13 +647,19 @@ Describe "Installer cleanup helper" {
                 return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-rule' }
             }
             Mock Remove-NetFirewallRule {
-                param([string[]]$DisplayName, [string]$Group)
-                if ($Group) {
-                    $global:openPathInstallerFirewallEvents.Add("remove:group:$Group")
-                    return
+                param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
+                process {
+                    if ($null -ne $InputObject) {
+                        $global:openPathInstallerFirewallEvents.Add("remove:$($InputObject.DisplayName)")
+                        return
+                    }
+                    if ($Group) {
+                        $global:openPathInstallerFirewallEvents.Add("remove:group:$Group")
+                        return
+                    }
+                    $global:openPathInstallerFirewallEvents.Add("remove:$(@($DisplayName) -join ',')")
                 }
-                $global:openPathInstallerFirewallEvents.Add("remove:$(@($DisplayName) -join ',')")
-            }
+            } -RemoveParameterType InputObject
         }
 
         AfterEach {
@@ -720,7 +729,7 @@ Describe "Installer cleanup helper" {
                     if ($null -ne $InputObject) { throw 'prefix removal refused' }
                     if (@($DisplayName) -contains 'OpenPath-DNS-*') { throw 'prefix removal refused' }
                 }
-            }
+            } -RemoveParameterType InputObject
 
             { Remove-OpenPathInstallerFirewallRules } | Should -Throw '*prefix removal refused*'
         }
@@ -1015,9 +1024,9 @@ Describe "Installer cleanup helper" {
             }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
-                param([string[]]$DisplayName, [string]$Group)
-                $global:openPathUninstallEvents.Add('remove')
-            }
+                param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
+                process { $global:openPathUninstallEvents.Add('remove') }
+            } -RemoveParameterType InputObject
         }
 
         AfterEach {

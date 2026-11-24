@@ -243,7 +243,7 @@ Describe "Firewall Module" {
                     }
                     $script:firewallTeardownEvents += "remove:names:$($DisplayName -join ',')"
                 }
-            } -ModuleName Firewall
+            } -ModuleName Firewall -RemoveParameterType InputObject
 
             try {
                 $result = InModuleScope Firewall { Remove-OpenPathFirewall }

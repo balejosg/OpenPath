@@ -232,7 +232,7 @@ Describe "Firewall teardown leaf" {
                         $global:openPathRuleEvents.Add("remove:rule:$($InputObject.DisplayName)")
                     }
                 }
-            }
+            } -RemoveParameterType InputObject
         }
 
         AfterEach {
@@ -290,7 +290,7 @@ Describe "Firewall teardown leaf" {
             Mock Remove-NetFirewallRule {
                 param($DisplayName, $Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
                 process { throw 'firewall refused' }
-            }
+            } -RemoveParameterType InputObject
 
             $result = Remove-OpenPathFirewallOwnedRules -ManifestPath $script:manifestPath -RulePrefix 'OpenPath-DNS'
 
@@ -321,7 +321,7 @@ Describe "Firewall teardown leaf" {
             Mock Remove-NetFirewallRule {
                 param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
                 process { $global:openPathWrapperEvents.Add('remove') }
-            }
+            } -RemoveParameterType InputObject
             Mock Write-Warning { }
         }
 
@@ -382,7 +382,7 @@ Describe "Firewall teardown leaf" {
             Mock Remove-NetFirewallRule {
                 param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
                 process { $global:openPathKeepEvents.Add('remove') }
-            }
+            } -RemoveParameterType InputObject
             $script:teardownArgs = @{
                 OutboundStatePath = (Join-Path $TestDrive 'missing-outbound.json')
                 AuditStatePath    = (Join-Path $TestDrive 'missing-audit.json')
@@ -426,7 +426,7 @@ Describe "Firewall teardown leaf" {
             Mock Remove-NetFirewallRule {
                 param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
                 process { $global:openPathTeardownEvents.Add('remove') }
-            }
+            } -RemoveParameterType InputObject
 
             try {
                 $result = Invoke-OpenPathFirewallTeardown `
