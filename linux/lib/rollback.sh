@@ -126,7 +126,7 @@ save_checkpoint() {
     "timestamp_id": "$timestamp",
     "label": "$label",
     "files_saved": $saved,
-    "version": "${VERSION:-4.2.0}"
+    "version": "${VERSION:-4.2.1}"
 }
 EOF
     
