@@ -24,7 +24,7 @@ Describe "Firewall Module" {
     }
 
     Context "Firewall cleanup manifest" {
-        It "Creates OpenPath grouped rules and removes by manifest, group, and DNS prefix" {
+        It "Creates OpenPath grouped rules and removes by manifest and DNS prefix" {
             $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Policy.ps1"
             $statePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.State.ps1"
             $policyContent = Get-Content $policyPath -Raw
@@ -41,11 +41,10 @@ Describe "Firewall Module" {
                 'function Remove-OpenPathFirewallRuleObjects',
                 'Remove-OpenPathFirewallOwnedRules -ManifestPath $manifestPath -RulePrefix $script:RulePrefix -RemoveManifest'
             )
-            # Bulk removal by group, manifest names and prefix lives in the Firewall.Teardown.ps1
-            # leaf (2026-11-17 reversion owners). Group and manifest deletes are single calls.
+            # Bulk removal by manifest names and prefix lives in the Firewall.Teardown.ps1 leaf
+            # (2026-11-17 reversion owners). Both deletes are single calls.
             $teardownContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Teardown.ps1") -Raw
             Assert-ContentContainsAll -Content $teardownContent -Needles @(
-                "Remove-OpenPathFirewallRuleSelection -Group 'OpenPath'",
                 'Remove-OpenPathFirewallRuleSelection -DisplayName $manifest.Names',
                 'Remove-OpenPathFirewallRuleSelection -DisplayName "$RulePrefix-*"'
             )
@@ -253,10 +252,9 @@ Describe "Firewall Module" {
                 # Brick-guard: restore the outbound default and the audit setting before any delete.
                 $events[0] | Should -Be 'restore'
                 $events[1] | Should -Be 'audit'
-                $events | Should -Contain 'remove:group:OpenPath'
                 $events | Should -Contain 'remove:names:OpenPath-DNS-*'
-                @($events | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 2
-                Should -Invoke -CommandName Remove-NetFirewallRule -ModuleName Firewall -Times 2 -Exactly
+                @($events | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 1
+                Should -Invoke -CommandName Remove-NetFirewallRule -ModuleName Firewall -Times 1 -Exactly
                 Should -Invoke -CommandName Restore-OpenPathEgressFloorPreviousOutbound -ModuleName Firewall -Times 1 -Exactly
                 Should -Invoke -CommandName Disable-OpenPathEgressFloorAudit -ModuleName Firewall -Times 1 -Exactly
                 Test-Path $manifestPath | Should -BeFalse

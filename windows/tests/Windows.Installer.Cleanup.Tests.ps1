@@ -506,16 +506,13 @@ Describe "Installer cleanup helper" {
         $cleanupContent | Should -Match ([regex]::Escape("internal\Firewall.Teardown.ps1"))
         $leafContent | Should -Match 'function Read-OpenPathFirewallManifestRuleNames'
         $leafContent.IndexOf('$manifest = Read-OpenPathFirewallManifestRuleNames') |
-            Should -BeLessThan $leafContent.IndexOf("Remove-OpenPathFirewallRuleSelection -Group 'OpenPath'")
+            Should -BeLessThan $leafContent.IndexOf("Remove-OpenPathFirewallRuleSelection -DisplayName `$manifest.Names")
     }
 
     It "Ignores a corrupt firewall manifest and still removes OpenPath firewall rules" {
         $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
         . $cleanupHelperPath
 
-        $global:removedFirewallRules = @()
-        $global:requestedFirewallRules = @()
-        $global:manifestRead = $false
         $createdCDrive = $false
         if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
             New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
@@ -524,74 +521,43 @@ Describe "Installer cleanup helper" {
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = 'Stop'
 
-        function global:Get-NetFirewallRule {
-            [CmdletBinding()]
-            param(
-                [string]$DisplayName,
-                [string]$Group
-            )
-
-            if ($DisplayName) {
-                $global:requestedFirewallRules += $DisplayName
-                if ($DisplayName -eq 'OpenPath-DNS-*') {
-                    return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-fallback-rule' }
-                }
-                return [PSCustomObject]@{ DisplayName = $DisplayName }
+        $createdStubs = @()
+        foreach ($commandName in @('Get-NetFirewallRule', 'Remove-NetFirewallRule')) {
+            if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                New-Item -Path "Function:\global:$commandName" -Value {
+                    param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
+                    process { }
+                } -Force | Out-Null
+                $createdStubs += $commandName
             }
+        }
+        if (-not (Get-Command -Name Write-InstallerWarning -ErrorAction SilentlyContinue)) {
+            New-Item -Path "Function:\global:Write-InstallerWarning" -Value { param($Message) } -Force | Out-Null
+            $createdStubs += 'Write-InstallerWarning'
+        }
+        foreach ($commandName in @('Get-NetFirewallProfile', 'Set-NetFirewallProfile')) {
+            if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+                New-Item -Path "Function:\global:$commandName" -Value { param($Profile, $DefaultOutboundAction) } -Force | Out-Null
+                $createdStubs += $commandName
+            }
+        }
 
-            if ($Group -eq 'OpenPath') {
-                $global:requestedFirewallRules += 'group:OpenPath'
+        Mock Test-Path { $false }
+        Mock Test-Path { $true } -ParameterFilter { (([string]$Path) + ([string]$LiteralPath)) -like '*OpenPath*data*firewall-rules.json' }
+        Mock Get-Content { '[ "OpenPath-DNS-Allow-Loopback-TCP", ' }
+        Mock Write-InstallerWarning { }
+        Mock Get-NetFirewallRule {
+            if (@($Group) -contains 'OpenPath') {
                 return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' }
             }
-        }
-
-        function global:Remove-NetFirewallRule {
-            [CmdletBinding()]
-            param(
-                [string[]]$DisplayName,
-                [string]$Group,
-                [Parameter(ValueFromPipeline = $true)]$InputObject
-            )
-
-            process {
-                if ($Group) {
-                    $global:removedFirewallRules += "group:$Group"
-                    return
-                }
-                foreach ($name in @($DisplayName)) {
-                    if ($name) { $global:removedFirewallRules += [string]$name }
-                }
+            if (@($DisplayName) -contains 'OpenPath-DNS-*') {
+                return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-fallback-rule' }
             }
         }
+        Mock Remove-NetFirewallRule { }
 
-        function global:Test-Path {
-            param([string]$Path)
-            return ([string]$Path).Replace('/', '\') -eq 'C:\OpenPath\data\firewall-rules.json'
-        }
-
-        function global:Get-Content {
-            param(
-                [string]$Path,
-                [switch]$Raw
-            )
-
-            $global:manifestRead = $true
-            return '[ "OpenPath-DNS-Allow-Loopback-TCP", '
-        }
-
-        function global:Write-InstallerWarning {
-            param([string]$Message)
-        }
-
-        # B2: the teardown now restores the outbound default and audit setting first. Keep both
+        # B2: the teardown restores the outbound default and the audit setting first. Keep both
         # off the runner's real firewall profile and auditpol.
-        $createdProfileStubs = @()
-        foreach ($profileCommand in @('Get-NetFirewallProfile', 'Set-NetFirewallProfile')) {
-            if (-not (Get-Command -Name $profileCommand -ErrorAction SilentlyContinue)) {
-                New-Item -Path "Function:\global:$profileCommand" -Value { param($Profile, $DefaultOutboundAction) } -Force | Out-Null
-                $createdProfileStubs += $profileCommand
-            }
-        }
         Mock Get-NetFirewallProfile { [PSCustomObject]@{ DefaultOutboundAction = 'Allow' } }
         Mock Set-NetFirewallProfile { }
         Mock Invoke-OpenPathAuditPol { }
@@ -601,25 +567,19 @@ Describe "Installer cleanup helper" {
             # The B2 outbound/audit restore must hit mocks, never the runner's real firewall profile.
             Should -Invoke Get-NetFirewallProfile -Times 3 -Exactly
             Should -Invoke Set-NetFirewallProfile -Times 0 -Exactly
-            $global:manifestRead | Should -BeTrue
-            # Bulk removal: the group and the prefix are one call each; no per-rule queries.
-            $global:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
-            $global:removedFirewallRules | Should -Contain 'group:OpenPath'
-            $global:removedFirewallRules | Should -Contain 'OpenPath-DNS-*'
+            Should -Invoke Get-Content -Times 1 -Exactly
+            # Bulk removal: the prefix is one call; no per-rule queries.
+            Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly
+            Should -Invoke Remove-NetFirewallRule -ParameterFilter {
+                (@($PesterBoundParameters['Name']) -contains 'OpenPath-DNS-*') -or
+                (@($PesterBoundParameters['DisplayName']) -contains 'OpenPath-DNS-*')
+            } -Times 1 -Exactly
         }
         finally {
             $ErrorActionPreference = $previousErrorActionPreference
-            Microsoft.PowerShell.Management\Remove-Item Function:\Get-NetFirewallRule -ErrorAction SilentlyContinue
-            Microsoft.PowerShell.Management\Remove-Item Function:\Remove-NetFirewallRule -ErrorAction SilentlyContinue
-            Microsoft.PowerShell.Management\Remove-Item Function:\Test-Path -ErrorAction SilentlyContinue
-            Microsoft.PowerShell.Management\Remove-Item Function:\Get-Content -ErrorAction SilentlyContinue
-            Microsoft.PowerShell.Management\Remove-Item Function:\Write-InstallerWarning -ErrorAction SilentlyContinue
-            foreach ($profileCommand in @($createdProfileStubs)) {
-                Microsoft.PowerShell.Management\Remove-Item "Function:\$profileCommand" -ErrorAction SilentlyContinue
+            foreach ($commandName in @($createdStubs)) {
+                Microsoft.PowerShell.Management\Remove-Item "Function:\$commandName" -ErrorAction SilentlyContinue
             }
-            Remove-Variable -Name removedFirewallRules -Scope Global -ErrorAction SilentlyContinue
-            Remove-Variable -Name requestedFirewallRules -Scope Global -ErrorAction SilentlyContinue
-            Remove-Variable -Name manifestRead -Scope Global -ErrorAction SilentlyContinue
             if ($createdCDrive) {
                 Microsoft.PowerShell.Management\Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
             }

@@ -133,7 +133,8 @@ function Invoke-OpenPathFirewallOutboundRestore {
     <#
     .SYNOPSIS
         Restores each profile's DefaultOutboundAction from the pre-floor state file (see
-        Get-OpenPathFirewallOutboundRestorePlan for the rule).
+        Get-OpenPathFirewallOutboundRestorePlan for the rule). A profile that cannot be read
+        during a transient CIM failure is left unchanged.
     .DESCRIPTION
         Returns Applied (plan entries that were set), StateUnreadable, StateError and Errors (one
         per failing profile; the other profiles are still applied). With -RemoveState the state
@@ -162,7 +163,15 @@ function Invoke-OpenPathFirewallOutboundRestore {
     if (-not $state.HasState -and $WhenNoState -eq 'OnlyBlocked' -and
         (Get-Command -Name 'Get-NetFirewallProfile' -ErrorAction SilentlyContinue)) {
         foreach ($profileName in @(Get-OpenPathFirewallTeardownProfileNames)) {
-            $current[$profileName] = [string](Get-NetFirewallProfile -Profile $profileName -ErrorAction SilentlyContinue).DefaultOutboundAction
+            try {
+                $current[$profileName] = [string](Get-NetFirewallProfile -Profile $profileName -ErrorAction Stop).DefaultOutboundAction
+            }
+            catch {
+                # A transient CIM failure while the installer is mid-flight must not turn a
+                # clean rollback into a firewall error. Without a readable profile we leave it
+                # unchanged instead of guessing that it was Block. This leaf never logs.
+                $current[$profileName] = 'Allow'
+            }
         }
     }
 
@@ -240,34 +249,26 @@ function Invoke-OpenPathFirewallAuditRestore {
 function Remove-OpenPathFirewallRuleSelection {
     <#
     .SYNOPSIS
-        Deletes every rule matched by one selector in a single Remove-NetFirewallRule call.
+        Deletes every rule matched by an array of display names in one Remove-NetFirewallRule call.
     .DESCRIPTION
         Each Get-NetFirewallRule call scans the whole firewall store, so a Get + Remove per rule
-        costs roughly a second per rule. The NetSecurity cmdlets accept an array of names (and
-        wildcards) on -DisplayName and a group on -Group, so one bulk call removes the whole
-        selection. Returns the error text, or '' when the selection was removed.
+        costs roughly a second per rule. Remove-NetFirewallRule accepts an array of names (and
+        wildcards) on -DisplayName, so one bulk call removes the whole selection. Returns the
+        error text, or '' when the selection was removed.
     #>
-    param(
-        [string[]]$DisplayName,
-        [string]$Group
-    )
+    param([string[]]$DisplayName)
 
-    $parameters = @{ ErrorAction = 'Stop' }
-    if ($PSBoundParameters.ContainsKey('DisplayName') -and @($DisplayName).Count -gt 0) {
-        $parameters['DisplayName'] = [string[]]$DisplayName
-    }
-    elseif (-not [string]::IsNullOrWhiteSpace($Group)) {
-        $parameters['Group'] = $Group
-    }
-    else {
-        return ''
-    }
+    $names = @($DisplayName | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    if ($names.Count -eq 0) { return '' }
 
     try {
-        Remove-NetFirewallRule @parameters
+        Remove-NetFirewallRule -DisplayName $names -ErrorAction Stop
         return ''
     }
     catch {
+        # An empty selection is not a removal failure; the NetSecurity provider reports it as
+        # CmdletizationQuery_NotFound_DisplayName. Any other failure is returned to the caller.
+        if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return '' }
         return [string]$_
     }
 }
@@ -275,15 +276,14 @@ function Remove-OpenPathFirewallRuleSelection {
 function Remove-OpenPathFirewallOwnedRules {
     <#
     .SYNOPSIS
-        Removes the OpenPath-owned firewall rules in bulk: group OpenPath, then the manifest
-        names, then a display-name <RulePrefix>-* sweep for legacy ungrouped rules.
+        Removes the OpenPath-owned firewall rules in bulk: the manifest names, then a
+        display-name <RulePrefix>-* sweep for legacy ungrouped rules.
     .DESCRIPTION
-        Every rule New-OpenPathFirewallRule creates carries Group = OpenPath, so one
-        Get-NetFirewallRule probe plus one Remove-NetFirewallRule -Group call removes the
-        current set without the per-rule store scans that made teardown take about a second
-        per rule. The manifest names and the prefix sweep are bulk backups for rules created
-        before the group existed; each backup only runs when one Get still finds matching
-        leftover rules.
+        The manifest names are removed with one Remove-NetFirewallRule -DisplayName call and
+        the prefix sweep with one wildcard call, so teardown no longer pays a Get + Remove
+        store scan per rule. An absent selection is reported as NotFound and treated as done.
+        The Get probes and the group selector are intentionally not used: the NetSecurity
+        provider reports a generic CIM failure for them on some partially installed machines.
         An unreadable manifest sets ManifestError and the group and prefix removal still run.
         Removal failures are collected in Errors, never thrown; PrefixErrors holds the ones of
         the final prefix sweep. With -RemoveManifest the manifest is deleted after the rule
@@ -307,33 +307,18 @@ function Remove-OpenPathFirewallOwnedRules {
     $manifest = Read-OpenPathFirewallManifestRuleNames -Path $ManifestPath
     $result.ManifestError = [string]$manifest.Error
 
-    # Fast path: one bulk delete for the rules the agent owns today. Probe first because
-    # Remove-NetFirewallRule raises a CIM error when the selection is empty, which would
-    # turn a clean uninstall into a rollback failure on a machine without the group.
-    if (@(Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue).Count -gt 0) {
-        $message = Remove-OpenPathFirewallRuleSelection -Group 'OpenPath'
+    # The manifest records the exact display names of the current rules. The whole name array
+    # is removed in one call; an absent selection is reported as NotFound and treated as done.
+    if (@($manifest.Names).Count -gt 0) {
+        $message = Remove-OpenPathFirewallRuleSelection -DisplayName $manifest.Names
         if ($message) { $errors.Add($message) }
     }
 
-    # Backup for rules created before Group=OpenPath existed: the manifest records their
-    # exact display names. One Get decides whether anything is left; the whole name array is
-    # removed in one call, not a Get + Remove per name.
-    if (@($manifest.Names).Count -gt 0) {
-        $manifestRules = @(Get-NetFirewallRule -DisplayName $manifest.Names -ErrorAction SilentlyContinue)
-        if ($manifestRules.Count -gt 0) {
-            $message = Remove-OpenPathFirewallRuleSelection -DisplayName $manifest.Names
-            if ($message) { $errors.Add($message) }
-        }
-    }
-
-    # Last sweep: one Get finds ungrouped rules that are neither in the manifest nor grouped
-    # (legacy or mangled state); one wildcard delete removes them in a single call.
+    # Last sweep: one wildcard delete removes ungrouped or mangled rules that are neither in
+    # the manifest nor in the OpenPath group.
     $prefixErrors = [System.Collections.Generic.List[string]]::new()
-    $remainingRules = @(Get-NetFirewallRule -DisplayName "$RulePrefix-*" -ErrorAction SilentlyContinue)
-    if ($remainingRules.Count -gt 0) {
-        $message = Remove-OpenPathFirewallRuleSelection -DisplayName "$RulePrefix-*"
-        if ($message) { $prefixErrors.Add($message) }
-    }
+    $message = Remove-OpenPathFirewallRuleSelection -DisplayName "$RulePrefix-*"
+    if ($message) { $prefixErrors.Add($message) }
     foreach ($message in $prefixErrors) {
         $errors.Add($message)
     }
