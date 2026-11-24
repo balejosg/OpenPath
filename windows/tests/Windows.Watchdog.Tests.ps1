@@ -4257,6 +4257,56 @@ Describe "Watchdog protected-mode repairs re-check the classroom state" {
     }
 }
 
+Describe "Watchdog captive portal close takes the update cycle lock" {
+    # 2026-11-24 pc18: an update cycle and a watchdog closing captive portal recovery
+    # ("marker is absent - verifying protected DNS mode") rebuilt the firewall at the
+    # same time; both removed and re-added every rule, leaving each OpenPath rule twice.
+    BeforeAll {
+        . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")
+        function Disable-OpenPathCaptivePortalMode { param($Config) $script:ccCloses++; return $script:ccCloseResult }
+        function Enter-OpenPathPostureNamedMutex { param($Name) $script:ccLockName = $Name; [pscustomobject]@{ Acquired = $script:ccLockAvailable; Mutex = $null } }
+        function Exit-OpenPathPostureNamedMutex { param($Lock) if ($Lock.Acquired) { $script:ccLockReleased++ } }
+        function Write-OpenPathLog { param($Message, $Level) $script:ccLogs += $Message }
+    }
+
+    BeforeEach {
+        $script:ccCloses = 0
+        $script:ccCloseResult = $true
+        $script:ccLockAvailable = $true
+        $script:ccLockReleased = 0
+        $script:ccLockName = ''
+        $script:ccLogs = @()
+    }
+
+    It "closes portal mode under the update cycle lock and releases it" {
+        $result = Invoke-OpenPathWatchdogCaptivePortalClose -Config ([pscustomobject]@{})
+        $result | Should -Be $true
+        $script:ccCloses | Should -Be 1
+        $script:ccLockName | Should -Be 'Global\OpenPathUpdateLock'
+        $script:ccLockReleased | Should -Be 1
+    }
+
+    It "passes a failed close through so callers keep warning" {
+        $script:ccCloseResult = $false
+        Invoke-OpenPathWatchdogCaptivePortalClose -Config ([pscustomobject]@{}) | Should -Be $false
+        $script:ccLockReleased | Should -Be 1
+    }
+
+    It "defers the close while an update cycle holds the lock" {
+        $script:ccLockAvailable = $false
+        $result = Invoke-OpenPathWatchdogCaptivePortalClose -Config ([pscustomobject]@{})
+        $result | Should -BeNullOrEmpty
+        $script:ccCloses | Should -Be 0
+        ($script:ccLogs -join "`n") | Should -Match 'update cycle is running'
+    }
+
+    It "has no watchdog path that closes portal mode without the helper" {
+        $source = Get-Content -Raw (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")
+        $direct = [regex]::Matches($source, 'Disable-OpenPathCaptivePortalMode\s+-Config')
+        $direct.Count | Should -Be 1
+    }
+}
+
 Describe "Watchdog committed update journal" {
     BeforeAll {
         . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1")

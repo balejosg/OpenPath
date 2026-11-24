@@ -419,6 +419,33 @@ function Get-OpenPathWatchdogTaskHealth {
     }
 }
 
+function Invoke-OpenPathWatchdogCaptivePortalClose {
+    # Closes captive portal mode from the watchdog only while the whitelist update
+    # cycle lock is free (taken without waiting and held through the close).
+    # Closing restores protected mode, which rebuilds the firewall: on 2026-11-24
+    # (pc18) a watchdog close ran in parallel with an update cycle and both removed
+    # and re-added every rule, leaving each OpenPath firewall rule twice.
+    # Returns the close result, or $null when deferred to the next cycle (the
+    # marker is untouched, so the close is retried).
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [PSCustomObject]$Config
+    )
+
+    $cycleLock = Enter-OpenPathPostureNamedMutex -Name 'Global\OpenPathUpdateLock'
+    if (-not $cycleLock.Acquired) {
+        Write-OpenPathLog 'Watchdog: an update cycle is running; deferring the captive portal close to the next cycle' -Level WARN
+        return $null
+    }
+    try {
+        return [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
+    }
+    finally {
+        Exit-OpenPathPostureNamedMutex -Lock $cycleLock
+    }
+}
+
 function Invoke-OpenPathWatchdogPrechecks {
     # runs before every main watchdog cycle
     # probes the captive portal state and decides whether to enter, refresh, or exit portal mode
@@ -545,8 +572,8 @@ function Invoke-OpenPathWatchdogPrechecks {
         # owns the portal -- the drift refresh in Invoke-OpenPathWatchdogChecks
         # keeps the third upstream applied.
         if ($portalModeActive) {
-            $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
-            if (-not $disabled) {
+            $disabled = Invoke-OpenPathWatchdogCaptivePortalClose -Config $Config
+            if ($disabled -eq $false) {
                 Write-OpenPathLog 'Watchdog: split DNS active; failed to close a legacy captive portal marker' -Level WARN
             }
         }
@@ -555,8 +582,8 @@ function Invoke-OpenPathWatchdogPrechecks {
         }
     }
     elseif ($captivityOutcome -eq 'closeAuthenticated') {
-        $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
-        if (-not $disabled) {
+        $disabled = Invoke-OpenPathWatchdogCaptivePortalClose -Config $Config
+        if ($disabled -eq $false) {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
         }
     }
@@ -573,8 +600,8 @@ function Invoke-OpenPathWatchdogPrechecks {
         Enable-OpenPathCaptivePortalMode -State $captiveState | Out-Null
     }
     elseif ($captivityOutcome -eq 'restoreProtected') {
-        $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
-        if (-not $disabled) {
+        $disabled = Invoke-OpenPathWatchdogCaptivePortalClose -Config $Config
+        if ($disabled -eq $false) {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
         }
     }
@@ -587,8 +614,8 @@ function Invoke-OpenPathWatchdogPrechecks {
         # marker would sit in limbo until a native-host request or the update
         # runtime happened to run. Disable is gated by local-posture evidence and
         # is safe to retry every cycle.
-        $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
-        if (-not $disabled) {
+        $disabled = Invoke-OpenPathWatchdogCaptivePortalClose -Config $Config
+        if ($disabled -eq $false) {
             Write-OpenPathLog 'Watchdog: failed to close expired captive portal marker; marker preserved' -Level WARN
         }
     }
@@ -716,8 +743,8 @@ function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
         -CaptiveState $CaptiveState `
         -PassthroughLocalDnsConfigured $localDnsConfigured
     if ($passthroughOutcome -eq 'emergencyPassthrough') {
-        $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
-        if (-not $disabled) {
+        $disabled = Invoke-OpenPathWatchdogCaptivePortalClose -Config $Config
+        if ($disabled -eq $false) {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
         }
     }
