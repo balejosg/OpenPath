@@ -26,6 +26,15 @@ Describe "DNS adapter snapshot leaf" {
             [PSCustomObject]@{ InterfaceGuid = $Guid; Name = $Name; ifIndex = $Index; Status = $Status }
         }
 
+        function Get-MockDnsInterfaceIndex {
+            # Set-DnsClientServerAddress/Get-NetRoute take UInt32[] on Windows; Pester injects
+            # the real parameter type, so the mock sees a one-element array, not an int.
+            param($InterfaceIndex)
+            $values = @($InterfaceIndex | Where-Object { $null -ne $_ })
+            if ($values.Count -eq 0) { return 0 }
+            return [int]$values[0]
+        }
+
         function Write-TestSnapshot {
             param([string]$Path, [object[]]$Entries)
             [PSCustomObject]@{ version = 3; adapters = @($Entries) } |
@@ -172,13 +181,14 @@ Describe "DNS adapter snapshot leaf" {
             }
             Mock Set-DnsClientServerAddress {
                 param($InterfaceIndex, $ServerAddresses, [switch]$ResetServerAddresses)
+                $adapterIndex = Get-MockDnsInterfaceIndex -InterfaceIndex $InterfaceIndex
                 $global:openPathDnsCalls.Add([PSCustomObject]@{
-                        InterfaceIndex = [int]$InterfaceIndex
+                        InterfaceIndex = $adapterIndex
                         ServerAddresses = @($ServerAddresses)
                         Reset = [bool]$ResetServerAddresses
                     })
-                if ([int]$InterfaceIndex -in $global:openPathFailingIndexes) {
-                    throw "adapter $InterfaceIndex refused"
+                if ($adapterIndex -in $global:openPathFailingIndexes) {
+                    throw "adapter $adapterIndex refused"
                 }
             }
             Mock Get-DnsClientServerAddress { @($global:openPathLoopbackEntries) }
@@ -334,7 +344,9 @@ Describe "DNS adapter snapshot leaf" {
             }
             Mock Get-DnsClientServerAddress { [PSCustomObject]@{ ServerAddresses = @('192.0.2.53') } }
             Mock Get-NetRoute {
-                if ([int]$InterfaceIndex -eq 1) { [PSCustomObject]@{ NextHop = '192.0.2.1' } }
+                if ((Get-MockDnsInterfaceIndex -InterfaceIndex $InterfaceIndex) -eq 1) {
+                    [PSCustomObject]@{ NextHop = '192.0.2.1' }
+                }
             }
             Mock Get-ItemProperty { [PSCustomObject]@{ NameServer = ''; DhcpNameServer = '192.0.2.53'; EnableDHCP = 1 } }
 
