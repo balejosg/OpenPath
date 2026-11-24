@@ -14,14 +14,17 @@ function New-OpenPathEndpointStateRepairPlan {
     )
 
     $actions = @()
+    # Learned runtime dependencies survive a disabled classroom: they carry their
+    # own TTL and are re-filtered against the current whitelist whenever Acrylic
+    # hosts are generated, so clearing them here only forced every class to
+    # relearn each first visit (Linux never clears them either).
     if ($Mode -eq 'FailOpen') {
-        $actions += 'ClearRuntimeDependencyOverlay'
         $actions += 'RestoreOriginalDns'
         $actions += 'RemoveFirewall'
         $actions += 'RemoveBrowserPolicy'
     }
     elseif ($Mode -eq 'FailOpenMarkerOnly') {
-        $actions += 'ClearRuntimeDependencyOverlay'
+        # Marker-only fail-open has nothing to repair.
     }
     elseif ($Mode -eq 'ApplyWhitelist') {
         $failureModeOpen = [bool]($PolicyState.PSObject.Properties['FailureModeOpenActive'] -and $PolicyState.FailureModeOpenActive)
@@ -164,11 +167,6 @@ function Invoke-OpenPathEndpointStateRepairPlan {
     $dnsFlushed = $null
     foreach ($action in @($Plan.Actions)) {
         switch ($action) {
-            'ClearRuntimeDependencyOverlay' {
-                if (Get-Command -Name 'Clear-OpenPathRuntimeDependencyOverlay' -ErrorAction SilentlyContinue) {
-                    Clear-OpenPathRuntimeDependencyOverlay | Out-Null
-                }
-            }
             'RestoreOriginalDns' {
                 Restore-OriginalDNS
             }

@@ -2147,5 +2147,21 @@ Describe "DNS Module" {
             )
             $content | Should -Match '(?s)Handle-OpenPathWhitelistApply.*?-BlockedPaths \$Whitelist\.BlockedPaths.*?Get-OpenPathRuntimeHealth'
         }
+
+        It "Keeps learned runtime dependencies when the classroom is disabled" {
+            # Learned dependencies carry their own TTL and are re-filtered against
+            # the current whitelist when Acrylic hosts are generated, so wiping them
+            # on fail-open only forces every class to relearn first visits (Linux
+            # parity: the Linux agent never clears the overlay on disable).
+            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+            . $reconcilerPath
+
+            foreach ($mode in @('FailOpen', 'FailOpenMarkerOnly')) {
+                $plan = New-OpenPathEndpointStateRepairPlan `
+                    -PolicyState ([PSCustomObject]@{ ProtectedModeEligible = $false; IsDisabled = $true }) `
+                    -Mode $mode
+                $plan.Actions | Should -Not -Contain 'ClearRuntimeDependencyOverlay'
+            }
+        }
     }
 }
