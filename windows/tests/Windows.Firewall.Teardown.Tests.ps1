@@ -33,6 +33,15 @@ Describe "Firewall teardown leaf" {
             param([object[]]$Plan)
             return (@($Plan | ForEach-Object { "$($_.Profile)=$($_.Action)" } | Sort-Object) -join ',')
         }
+
+        function Resolve-MockFirewallProfileName {
+            # The real NetSecurity cmdlets expose the profile as -Name with the -Profile alias;
+            # Pester injects the real parameter name on Windows, while the local stubs use
+            # -Profile. Accept either so the mocks capture the profile on both platforms.
+            param($Name, $Profile)
+            if (-not [string]::IsNullOrWhiteSpace([string]$Name)) { return [string]$Name }
+            return [string]$Profile
+        }
     }
 
     AfterAll {
@@ -88,11 +97,15 @@ Describe "Firewall teardown leaf" {
             $script:statePath = Join-Path $TestDrive "egress-floor-prev-outbound-$([guid]::NewGuid().ToString('N')).json"
             $global:openPathProfileCalls = [System.Collections.Generic.List[string]]::new()
             $global:openPathFailingProfile = ''
-            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
+            Mock Get-NetFirewallProfile {
+                param($Name, $Profile)
+                [PSCustomObject]@{ Name = (Resolve-MockFirewallProfileName -Name $Name -Profile $Profile); DefaultOutboundAction = 'Block' }
+            }
             Mock Set-NetFirewallProfile {
-                param($Profile, $DefaultOutboundAction)
-                $global:openPathProfileCalls.Add("${Profile}:$DefaultOutboundAction")
-                if ($Profile -eq $global:openPathFailingProfile) { throw "profile $Profile refused" }
+                param($Name, $Profile, $DefaultOutboundAction)
+                $profileName = Resolve-MockFirewallProfileName -Name $Name -Profile $Profile
+                $global:openPathProfileCalls.Add("${profileName}:$DefaultOutboundAction")
+                if ($profileName -eq $global:openPathFailingProfile) { throw "profile $profileName refused" }
             }
         }
 
@@ -322,8 +335,14 @@ Describe "Firewall teardown leaf" {
             $OpenPathRoot = Join-Path $TestDrive "op-$([guid]::NewGuid().ToString('N'))"
             New-Item -ItemType Directory -Path (Join-Path $OpenPathRoot 'data') -Force | Out-Null
             $global:openPathWrapperEvents = [System.Collections.Generic.List[string]]::new()
-            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
-            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathWrapperEvents.Add("set:${Profile}:$DefaultOutboundAction") }
+            Mock Get-NetFirewallProfile {
+                param($Name, $Profile)
+                [PSCustomObject]@{ Name = (Resolve-MockFirewallProfileName -Name $Name -Profile $Profile); DefaultOutboundAction = 'Block' }
+            }
+            Mock Set-NetFirewallProfile {
+                param($Name, $Profile, $DefaultOutboundAction)
+                $global:openPathWrapperEvents.Add("set:$(Resolve-MockFirewallProfileName -Name $Name -Profile $Profile):$DefaultOutboundAction")
+            }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
                 param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
@@ -345,7 +364,10 @@ Describe "Firewall teardown leaf" {
         }
 
         It "Keeps the rules and warns when a profile cannot leave Block" {
-            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) throw "profile $Profile refused" }
+            Mock Set-NetFirewallProfile {
+                param($Name, $Profile, $DefaultOutboundAction)
+                throw "profile $(Resolve-MockFirewallProfileName -Name $Name -Profile $Profile) refused"
+            }
 
             { Remove-OpenPathFirewallRules } | Should -Not -Throw
 
@@ -372,11 +394,15 @@ Describe "Firewall teardown leaf" {
     Context "Keeping the rules when the outbound restore fails" {
         BeforeEach {
             $global:openPathKeepEvents = [System.Collections.Generic.List[string]]::new()
-            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
+            Mock Get-NetFirewallProfile {
+                param($Name, $Profile)
+                [PSCustomObject]@{ Name = (Resolve-MockFirewallProfileName -Name $Name -Profile $Profile); DefaultOutboundAction = 'Block' }
+            }
             Mock Set-NetFirewallProfile {
-                param($Profile, $DefaultOutboundAction)
-                if ($Profile -eq 'Public') { throw 'profile Public refused' }
-                $global:openPathKeepEvents.Add("set:$Profile")
+                param($Name, $Profile, $DefaultOutboundAction)
+                $profileName = Resolve-MockFirewallProfileName -Name $Name -Profile $Profile
+                if ($profileName -eq 'Public') { throw 'profile Public refused' }
+                $global:openPathKeepEvents.Add("set:$profileName")
             }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
@@ -414,8 +440,14 @@ Describe "Firewall teardown leaf" {
     Context "Teardown order" {
         It "Restores every profile before removing the first rule" {
             $global:openPathTeardownEvents = [System.Collections.Generic.List[string]]::new()
-            Mock Get-NetFirewallProfile { param($Profile) [PSCustomObject]@{ Name = $Profile; DefaultOutboundAction = 'Block' } }
-            Mock Set-NetFirewallProfile { param($Profile, $DefaultOutboundAction) $global:openPathTeardownEvents.Add("set:$Profile") }
+            Mock Get-NetFirewallProfile {
+                param($Name, $Profile)
+                [PSCustomObject]@{ Name = (Resolve-MockFirewallProfileName -Name $Name -Profile $Profile); DefaultOutboundAction = 'Block' }
+            }
+            Mock Set-NetFirewallProfile {
+                param($Name, $Profile, $DefaultOutboundAction)
+                $global:openPathTeardownEvents.Add("set:$(Resolve-MockFirewallProfileName -Name $Name -Profile $Profile)")
+            }
             Mock Get-NetFirewallRule { param($DisplayName, $Group) [PSCustomObject]@{ DisplayName = 'rule' } }
             Mock Remove-NetFirewallRule {
                 param([string[]]$DisplayName, [string]$Group, [Parameter(ValueFromPipeline = $true)]$InputObject)
