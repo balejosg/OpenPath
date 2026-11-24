@@ -73,6 +73,137 @@ Describe "Firewall Module" {
             Get-ChildItem -Path $TestDrive -Filter '*.tmp' | Should -BeNullOrEmpty
         }
 
+        It "Buffers manifest names during a batch and writes them once at completion" {
+            $manifestPath = Join-Path $TestDrive 'firewall-rules-batch.json'
+            $global:manifestBatchWrites = 0
+            $global:manifestBatchNames = @()
+
+            Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
+            Mock Write-OpenPathLog { } -ModuleName Firewall
+            Mock Set-OpenPathFirewallManifestRuleNames {
+                param($Path, $Names)
+                $global:manifestBatchWrites++
+                $global:manifestBatchNames = @($Names)
+            } -ModuleName Firewall
+
+            try {
+                $outcome = InModuleScope Firewall -Parameters @{ ManifestPath = $manifestPath } {
+                    param($ManifestPath)
+                    $owner = Start-OpenPathFirewallManifestBatch -Path $ManifestPath
+                    Add-OpenPathFirewallManifestRule -Name 'OpenPath-DNS-B'
+                    Add-OpenPathFirewallManifestRule -Name 'OpenPath-DNS-A'
+                    Add-OpenPathFirewallManifestRule -Name 'OpenPath-DNS-A'
+                    $before = $global:manifestBatchWrites
+                    Complete-OpenPathFirewallManifestBatch
+                    [pscustomobject]@{
+                        Owner  = $owner
+                        Before = $before
+                        Writes = $global:manifestBatchWrites
+                        Names  = @($global:manifestBatchNames)
+                    }
+                }
+
+                $outcome.Owner | Should -BeTrue
+                $outcome.Before | Should -Be 0
+                $outcome.Writes | Should -Be 1
+                @($outcome.Names | Sort-Object) | Should -Be @('OpenPath-DNS-A', 'OpenPath-DNS-B')
+            }
+            finally {
+                Remove-Variable -Name manifestBatchWrites, manifestBatchNames -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Writes the batched manifest as one sorted JSON array" {
+            $manifestPath = Join-Path $TestDrive 'firewall-rules-batch-real.json'
+            Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
+            Mock Write-OpenPathLog { } -ModuleName Firewall
+
+            InModuleScope Firewall -Parameters @{ ManifestPath = $manifestPath } {
+                param($ManifestPath)
+                $null = Start-OpenPathFirewallManifestBatch -Path $ManifestPath
+                Add-OpenPathFirewallManifestRule -Name 'OpenPath-DNS-B'
+                Add-OpenPathFirewallManifestRule -Name 'OpenPath-DNS-A'
+                Complete-OpenPathFirewallManifestBatch
+            }
+
+            $parsed = @(Get-Content $manifestPath -Raw | ConvertFrom-Json)
+            $parsed | Should -Be @('OpenPath-DNS-A', 'OpenPath-DNS-B')
+            Get-ChildItem -Path $TestDrive -Filter '*.tmp' | Should -BeNullOrEmpty
+        }
+
+        It "A nested batch joins the owner and does not flush the buffered names early" {
+            $manifestPath = Join-Path $TestDrive 'firewall-rules-batch-nested.json'
+            $global:manifestBatchWrites = 0
+
+            Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
+            Mock Write-OpenPathLog { } -ModuleName Firewall
+            Mock Set-OpenPathFirewallManifestRuleNames { $global:manifestBatchWrites++ } -ModuleName Firewall
+
+            try {
+                $outcome = InModuleScope Firewall -Parameters @{ ManifestPath = $manifestPath } {
+                    param($ManifestPath)
+                    $outer = Start-OpenPathFirewallManifestBatch -Path $ManifestPath
+                    Add-OpenPathFirewallManifestRule -Name 'OpenPath-DNS-A'
+                    $inner = Start-OpenPathFirewallManifestBatch -Path $ManifestPath
+                    Add-OpenPathFirewallManifestRule -Name 'OpenPath-DNS-B'
+                    $afterInnerStart = $global:manifestBatchWrites
+                    if ($inner) { Complete-OpenPathFirewallManifestBatch }
+                    $beforeOuterComplete = $global:manifestBatchWrites
+                    Complete-OpenPathFirewallManifestBatch
+                    [pscustomobject]@{
+                        Outer               = $outer
+                        Inner               = $inner
+                        AfterInnerStart     = $afterInnerStart
+                        BeforeOuterComplete = $beforeOuterComplete
+                        Writes              = $global:manifestBatchWrites
+                    }
+                }
+
+                $outcome.Outer | Should -BeTrue
+                $outcome.Inner | Should -BeFalse
+                $outcome.AfterInnerStart | Should -Be 0
+                $outcome.BeforeOuterComplete | Should -Be 0
+                $outcome.Writes | Should -Be 1
+            }
+            finally {
+                Remove-Variable -Name manifestBatchWrites -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Set-OpenPathFirewall owns the batch and flushes it in a finally block" {
+            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Policy.ps1"
+            $policyContent = Get-Content $policyPath -Raw
+
+            $policyContent | Should -Match '\$ownsFirewallManifestBatch\s*=\s*Start-OpenPathFirewallManifestBatch'
+            $policyContent | Should -Match '(?s)finally\s*\{\s*if\s*\(\$ownsFirewallManifestBatch\)\s*\{\s*Complete-OpenPathFirewallManifestBatch\s*\}\s*\}'
+        }
+
+        It "Set-OpenPathFirewall writes the manifest once for all created rules" {
+            $manifestPath = Join-Path $TestDrive 'firewall-rules-set.json'
+            $global:manifestBatchWrites = 0
+            $global:manifestBatchNames = @()
+
+            Initialize-FirewallRuleCaptureMocks
+            Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
+            Mock Get-OpenPathConfig { [PSCustomObject]@{} } -ModuleName Firewall
+            Mock Set-OpenPathFirewallManifestRuleNames {
+                param($Path, $Names)
+                $global:manifestBatchWrites++
+                $global:manifestBatchNames = @($Names)
+            } -ModuleName Firewall
+
+            try {
+                $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+
+                $result | Should -BeTrue
+                $global:manifestBatchWrites | Should -Be 1
+                @($global:manifestBatchNames).Count | Should -BeGreaterThan 1
+            }
+            finally {
+                Remove-Variable -Name manifestBatchWrites, manifestBatchNames -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Ignores corrupt firewall manifests and still removes grouped and DNS-prefixed rules in bulk" {
             $manifestPath = Join-Path $TestDrive 'firewall-rules.json'
             Set-Content -Path $manifestPath -Value '[ "OpenPath-DNS-Allow-Loopback-TCP", ' -Encoding UTF8

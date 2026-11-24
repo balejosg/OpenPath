@@ -1269,6 +1269,9 @@ function Set-OpenPathFirewall {
     Write-OpenPathLog 'Configuring Windows Firewall...'
     Remove-OpenPathFirewall
 
+    # One manifest write for the whole apply instead of one per rule: Add-... only buffers
+    # while this batch is active, and the finally writes the sorted names once.
+    $ownsFirewallManifestBatch = Start-OpenPathFirewallManifestBatch
     try {
         $secondaryDns = '8.8.4.4'
         $declaredPortalDomains = @()
@@ -1579,5 +1582,10 @@ function Set-OpenPathFirewall {
     catch {
         Write-OpenPathLog "Failed to configure firewall: $_" -Level ERROR
         return $false
+    }
+    finally {
+        if ($ownsFirewallManifestBatch) {
+            Complete-OpenPathFirewallManifestBatch
+        }
     }
 }

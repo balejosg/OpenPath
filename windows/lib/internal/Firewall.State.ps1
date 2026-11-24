@@ -2,6 +2,9 @@ function Get-OpenPathFirewallManifestPath {
     return 'C:\OpenPath\data\firewall-rules.json'
 }
 
+$script:FirewallManifestBatch = $null
+$script:FirewallManifestBatchPath = ''
+
 function Get-OpenPathFirewallManifestRuleNames {
     # Logging wrapper over Read-OpenPathFirewallManifestRuleNames (Firewall.Teardown.ps1).
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -32,8 +35,71 @@ function Set-OpenPathFirewallManifestRuleNames {
     }
 }
 
+function Start-OpenPathFirewallManifestBatch {
+    <#
+    .SYNOPSIS
+        Starts a manifest write batch for a multi-rule apply.
+    .DESCRIPTION
+        Returns $true when this call owns the batch. A nested call returns $false and joins
+        the active batch, so only the owner writes the manifest and clears the batch.
+    #>
+    param([string]$Path)
+
+    if ($null -ne $script:FirewallManifestBatch) { return $false }
+    if ([string]::IsNullOrWhiteSpace($Path)) { $Path = Get-OpenPathFirewallManifestPath }
+    $script:FirewallManifestBatch = [System.Collections.Generic.List[string]]::new()
+    $script:FirewallManifestBatchPath = [string]$Path
+    return $true
+}
+
+function Complete-OpenPathFirewallManifestBatch {
+    <#
+    .SYNOPSIS
+        Writes the names buffered by Start-OpenPathFirewallManifestBatch once and clears it.
+    .DESCRIPTION
+        Merges the buffered names with any manifest written in the meantime, writes one sorted
+        JSON array, and never throws: a failure is logged and the caller keeps its result.
+    #>
+    param([string]$Path)
+
+    if ($null -eq $script:FirewallManifestBatch) { return }
+    if ([string]::IsNullOrWhiteSpace($Path)) { $Path = [string]$script:FirewallManifestBatchPath }
+    $buffered = @($script:FirewallManifestBatch)
+    $script:FirewallManifestBatch = $null
+    $script:FirewallManifestBatchPath = ''
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($Path)) { return }
+        $existing = @()
+        if (Test-Path $Path) {
+            $existing = @(Get-OpenPathFirewallManifestRuleNames -Path $Path)
+        }
+        $names = @($existing + $buffered | Where-Object { $_ } | Sort-Object -Unique)
+        if ($names.Count -eq 0) { return }
+
+        $directory = Split-Path $Path -Parent
+        if ($directory -match '^([A-Za-z]):[\\/]' -and -not (Get-PSDrive -Name $Matches[1] -ErrorAction SilentlyContinue)) {
+            return
+        }
+        if ($directory -and -not (Test-Path $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        Set-OpenPathFirewallManifestRuleNames -Path $Path -Names $names
+    }
+    catch {
+        Write-OpenPathLog "Failed to write firewall manifest batch: $_" -Level WARN
+    }
+}
+
 function Add-OpenPathFirewallManifestRule {
     param([Parameter(Mandatory = $true)][string]$Name)
+
+    if ($null -ne $script:FirewallManifestBatch) {
+        if (-not [string]::IsNullOrWhiteSpace($Name)) {
+            $script:FirewallManifestBatch.Add($Name)
+        }
+        return
+    }
 
     try {
         $path = Get-OpenPathFirewallManifestPath
