@@ -1,6 +1,7 @@
 import * as storage from '../lib/storage.js';
 import * as groupsStorage from '../lib/groups-storage.js';
 import * as auth from '../lib/auth.js';
+import { getRequestBlockCauses, requestBlockCauseKey } from '../lib/request-block-cause.js';
 import type { JWTPayload } from '../lib/auth.js';
 import type { RequestStats } from '../types/storage.js';
 import type { DomainRequest, RequestStatus } from '../types/index.js';
@@ -24,6 +25,26 @@ export async function getRequestStatus(
   };
 }
 
+async function attachBlockCauses(requests: DomainRequest[]): Promise<DomainRequest[]> {
+  const pending = requests.filter((request) => request.status === 'pending');
+  if (pending.length === 0) {
+    return requests;
+  }
+
+  const causes = await getRequestBlockCauses(pending);
+
+  return requests.map((request) => {
+    if (request.status !== 'pending') {
+      return request;
+    }
+
+    return {
+      ...request,
+      blockCause: causes.get(requestBlockCauseKey(request.groupId, request.domain)),
+    };
+  });
+}
+
 export async function listRequests(
   status: RequestStatus | null,
   user: JWTPayload
@@ -35,7 +56,7 @@ export async function listRequests(
     requests = requests.filter((request) => groups.includes(request.groupId));
   }
 
-  return requests;
+  return attachBlockCauses(requests);
 }
 
 export async function getRequest(
@@ -55,7 +76,8 @@ export async function getRequest(
     };
   }
 
-  return { ok: true, data: request };
+  const [requestWithCause] = await attachBlockCauses([request]);
+  return { ok: true, data: requestWithCause ?? request };
 }
 
 export async function getStats(): Promise<RequestStats> {
