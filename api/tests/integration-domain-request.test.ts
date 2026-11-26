@@ -49,7 +49,7 @@ await describe('integration domain request workflow', async () => {
     assert.equal(rejectResponse.status, 200, 'Request rejection should succeed');
   });
 
-  await test('approving a legacy pending subdomain creates a root whitelist rule', async () => {
+  await test('approving a legacy pending subdomain creates an exact-host whitelist rule', async () => {
     const suffix = Date.now().toString();
     const groupId = `legacy-root-group-${suffix}`;
     const requestId = `legacy-root-request-${suffix}`;
@@ -81,7 +81,7 @@ await describe('integration domain request workflow', async () => {
     );
     assert.deepEqual(
       createdRules.map((row) => row.value),
-      ['wikipedia.org']
+      ['es.wikipedia.org']
     );
   });
 });
