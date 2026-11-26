@@ -108,7 +108,7 @@ void describe('Blocked domains - approval matrix', () => {
     assert.ok(!whitelist.includes(host), 'exact host rule must not be created');
   });
 
-  void test('teacher cannot approve a host blocked by a subdomain rule', async (): Promise<void> => {
+  void test('teacher must explicitly unblock a host blocked by a subdomain rule', async (): Promise<void> => {
     const current = getHarness();
     const host = uniqueHost('teacher-blocked');
     await addRule(current.teacherGroupId, 'blocked_subdomain', host);
@@ -117,16 +117,27 @@ void describe('Blocked domains - approval matrix', () => {
       groupId: current.teacherGroupId,
     });
 
-    const response = await current.trpcMutate(
+    const blockedResponse = await current.trpcMutate(
       'requests.approve',
       { id: requestId, groupId: current.teacherGroupId },
       bearerAuth(current.teacherToken)
     );
 
-    assert.strictEqual(response.status, 403);
-    const payload = (await response.json()) as { error?: { message?: string } };
+    assert.strictEqual(blockedResponse.status, 400);
+    const payload = (await blockedResponse.json()) as { error?: { message?: string } };
     assert.match(payload.error?.message ?? '', new RegExp(host.replace(/\./g, '\\.')));
     assert.ok(!(await ruleValues(current.teacherGroupId, 'whitelist')).includes(host));
+
+    const unblockResponse = await current.trpcMutate(
+      'requests.approve',
+      { id: requestId, groupId: current.teacherGroupId, unblock: true },
+      bearerAuth(current.teacherToken)
+    );
+
+    assert.strictEqual(unblockResponse.status, 200, await unblockResponse.clone().text());
+    const blocked = await ruleValues(current.teacherGroupId, 'blocked_subdomain');
+    assert.ok(!blocked.includes(host), 'teacher unblock should remove the matching rule');
+    assert.ok((await ruleValues(current.teacherGroupId, 'whitelist')).includes(host));
   });
 
   void test('admin approve without unblock is rejected with the matching rule', async (): Promise<void> => {

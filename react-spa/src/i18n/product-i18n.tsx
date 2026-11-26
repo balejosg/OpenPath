@@ -306,9 +306,9 @@ export const productI18nCatalogs = {
     'domainRequests.dialogs.approvalScope': 'Approval scope',
     'domainRequests.dialogs.scopeHost': 'Only {host}',
     'domainRequests.dialogs.scopeFamily': 'All {root} and its subdomains',
-    'domainRequests.dialogs.blockedByRuleTeacher':
-      'Explicitly blocked by rule {rule}; only an administrator can lift it',
-    'domainRequests.dialogs.blockedByRuleAdmin': 'Remove the blocking rule {rule}',
+    'domainRequests.dialogs.blockedByRuleWarning':
+      'Explicitly blocked by rule {rule}; approve with unblock to lift it',
+    'domainRequests.dialogs.blockedByRuleUnblock': 'Remove the blocking rule {rule}',
     'domainRequests.dialogs.alreadyAllowedWarning':
       'Already allowed by {rule}; the block comes from somewhere else',
     'domainRequests.dialogs.originalGroup':
@@ -1089,9 +1089,9 @@ export const productI18nCatalogs = {
     'domainRequests.dialogs.approvalScope': 'Alcance de la aprobación',
     'domainRequests.dialogs.scopeHost': 'Solo {host}',
     'domainRequests.dialogs.scopeFamily': 'Todo {root} y sus subdominios',
-    'domainRequests.dialogs.blockedByRuleTeacher':
-      'Bloqueado expresamente por la regla {rule}; solo un administrador puede levantarlo',
-    'domainRequests.dialogs.blockedByRuleAdmin': 'Quitar la regla de bloqueo {rule}',
+    'domainRequests.dialogs.blockedByRuleWarning':
+      'Bloqueado expresamente por la regla {rule}; aprueba con desbloqueo para levantarla',
+    'domainRequests.dialogs.blockedByRuleUnblock': 'Quitar la regla de bloqueo {rule}',
     'domainRequests.dialogs.alreadyAllowedWarning':
       'Ya está permitido por {rule}; el bloqueo viene de otro sitio',
     'domainRequests.dialogs.originalGroup':

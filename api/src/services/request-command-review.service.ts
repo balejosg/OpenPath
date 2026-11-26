@@ -60,28 +60,15 @@ export async function approveRequest(
   }
 
   const blockCause = await getRequestBlockCause(resolvedTarget.id, request.domain);
-  const isAdmin = auth.isAdminToken(user);
 
-  if (blockCause.kind === 'blocked_by_rule') {
-    if (!isAdmin) {
-      return {
-        ok: false,
-        error: {
-          code: 'FORBIDDEN',
-          message: `This domain is explicitly blocked by rule ${blockCause.matchedRule}`,
-        },
-      };
-    }
-
-    if (!options.unblock) {
-      return {
-        ok: false,
-        error: {
-          code: 'BAD_REQUEST',
-          message: `Blocked by rule ${blockCause.matchedRule}; approve with unblock to remove it`,
-        },
-      };
-    }
+  if (blockCause.kind === 'blocked_by_rule' && !options.unblock) {
+    return {
+      ok: false,
+      error: {
+        code: 'BAD_REQUEST',
+        message: `Blocked by rule ${blockCause.matchedRule}; approve with unblock to remove it`,
+      },
+    };
   }
 
   const host = normalizeRequestHost(request.domain);

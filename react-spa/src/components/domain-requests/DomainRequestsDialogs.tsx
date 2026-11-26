@@ -14,7 +14,7 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
   const blockedRule = blockCause?.kind === 'blocked_by_rule' ? blockCause.matchedRule : null;
   const alreadyAllowedRule = blockCause?.kind === 'already_allowed' ? blockCause.matchedRule : null;
   const approvalRoot = approveRequest ? getRootDomain(approveRequest.domain) : '';
-  const disableApprove = blockedRule !== null && (!model.isAdmin || !model.approveUnblock);
+  const disableApprove = blockedRule !== null && !model.approveUnblock;
 
   return (
     <>
@@ -122,7 +122,10 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
           </fieldset>
 
           {blockedRule ? (
-            model.isAdmin ? (
+            <div className="space-y-2">
+              <p className="text-sm text-red-700">
+                {t('domainRequests.dialogs.blockedByRuleWarning', { rule: blockedRule })}
+              </p>
               <label className="flex items-center gap-2 text-sm text-red-700">
                 <input
                   type="checkbox"
@@ -130,18 +133,12 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
                   onChange={(event) => model.onApproveUnblockChange(event.target.checked)}
                 />
                 <span>
-                  {t('domainRequests.dialogs.blockedByRuleAdmin', {
+                  {t('domainRequests.dialogs.blockedByRuleUnblock', {
                     rule: blockedRule,
                   })}
                 </span>
               </label>
-            ) : (
-              <p className="text-sm text-red-700">
-                {t('domainRequests.dialogs.blockedByRuleTeacher', {
-                  rule: blockedRule,
-                })}
-              </p>
-            )
+            </div>
           ) : null}
 
           {alreadyAllowedRule ? (

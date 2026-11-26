@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import type { DomainRequest, RequestStatus } from '@openpath/api';
 import type { RequestBlockCause } from '@openpath/shared/schemas';
 import { STATUS_COLORS } from '../views/domain-requests.constants';
-import { isAdmin } from '../lib/auth';
 import { useDomainRequestsBulkActions } from './useDomainRequestsBulkActions';
 import { useDomainRequestsData } from './useDomainRequestsData';
 import { useDomainRequestsDialogs } from './useDomainRequestsDialogs';
@@ -47,7 +46,6 @@ export function useDomainRequestsViewModel({
   canDeleteRequests,
 }: UseDomainRequestsViewModelOptions) {
   const { locale, t } = useOpenPathI18n();
-  const admin = isAdmin();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [statusFilter, setStatusFilter] = useState<RequestStatus | 'all'>('all');
 
@@ -251,7 +249,6 @@ export function useDomainRequestsViewModel({
         open: dialogs.approveModal.open,
         request: toDialogRequest(dialogs.approveModal.request),
       },
-      isAdmin: admin,
       approveScope: dialogs.approveScope,
       approveUnblock: dialogs.approveUnblock,
       onApproveScopeChange: dialogs.setApproveScope,
