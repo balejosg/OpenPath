@@ -19,6 +19,11 @@ function buildModel(
     deleteModal: { open: false, request: null },
     rejectionReason: '',
     actionsLoading: false,
+    isAdmin: false,
+    approveScope: 'host',
+    approveUnblock: false,
+    onApproveScopeChange: vi.fn(),
+    onApproveUnblockChange: vi.fn(),
     onBulkConfirmClose: vi.fn(),
     onBulkApproveConfirm: vi.fn(),
     onBulkRejectConfirm: vi.fn(),
@@ -49,7 +54,11 @@ describe('DomainRequestsDialogs', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Approve requests' })).getByRole('button', {
+        name: 'Confirm',
+      })
+    );
     fireEvent.change(screen.getByPlaceholderText('Explain why this request is rejected...'), {
       target: { value: 'No aplica' },
     });
@@ -73,7 +82,7 @@ describe('DomainRequestsDialogs', () => {
     );
 
     const dialog = screen.getByRole('dialog', { name: 'Approve requests' });
-    expect(within(dialog).getByRole('button', { name: 'Approve' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Confirm' })).toBeDisabled();
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
@@ -97,7 +106,7 @@ describe('DomainRequestsDialogs', () => {
     );
 
     let dialog = screen.getByRole('dialog', { name: 'Reject requests' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
 
     expect(screen.getByText('Duplicado')).toBeInTheDocument();
     expect(onBulkRejectConfirm).toHaveBeenCalledWith(['req-1', 'req-2'], 'Duplicado');
@@ -112,10 +121,57 @@ describe('DomainRequestsDialogs', () => {
     );
 
     dialog = screen.getByRole('dialog', { name: 'Reject requests' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
 
     expect(screen.getByText('Reason (optional): (no reason)')).toBeInTheDocument();
     expect(onBulkRejectConfirm).toHaveBeenLastCalledWith(['req-3'], undefined);
+  });
+
+  it('disables approve for teachers on blocked_by_rule and requires admin unblock', () => {
+    const onApproveUnblockChange = vi.fn();
+    const blockedRequest = {
+      ...request,
+      blockCause: { kind: 'blocked_by_rule' as const, matchedRule: '*.google.com' },
+    };
+
+    const { rerender } = render(
+      <DomainRequestsDialogs
+        model={buildModel({
+          approveModal: { open: true, request: blockedRequest },
+          isAdmin: false,
+        })}
+      />
+    );
+
+    expect(screen.getByText(/Explicitly blocked by rule \*\.google\.com/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+
+    rerender(
+      <DomainRequestsDialogs
+        model={buildModel({
+          approveModal: { open: true, request: blockedRequest },
+          isAdmin: true,
+          onApproveUnblockChange,
+        })}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onApproveUnblockChange).toHaveBeenCalledWith(true);
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+
+    rerender(
+      <DomainRequestsDialogs
+        model={buildModel({
+          approveModal: { open: true, request: blockedRequest },
+          isAdmin: true,
+          approveUnblock: true,
+        })}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
   });
 
   it('confirms single approve and delete dialogs', () => {
@@ -137,7 +193,7 @@ describe('DomainRequestsDialogs', () => {
 
     fireEvent.click(
       within(screen.getByRole('dialog', { name: 'Approve Request' })).getByRole('button', {
-        name: 'Approve',
+        name: 'Confirm',
       })
     );
     fireEvent.click(

@@ -1,15 +1,29 @@
 import { useEffect, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { DomainRequest } from '@openpath/api';
+import type { ApprovalScope } from '@openpath/shared/schemas';
 
 import { useT } from '../i18n/product-i18n';
+
+export interface BulkFailure {
+  id: string;
+  message: string;
+}
 
 interface UseDomainRequestsBulkActionsOptions {
   requests: DomainRequest[];
   selectedPendingRequests: DomainRequest[];
   setSelectedRequestIds: Dispatch<SetStateAction<string[]>>;
-  approveRequest: (id: string) => Promise<unknown>;
+  approveRequest: (input: {
+    id: string;
+    scope: ApprovalScope;
+    unblock: boolean;
+  }) => Promise<unknown>;
   rejectRequest: (input: { id: string; reason?: string }) => Promise<unknown>;
+}
+
+function toFailureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function useDomainRequestsBulkActions({
@@ -29,6 +43,7 @@ export function useDomainRequestsBulkActions({
   } | null>(null);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [bulkFailedIds, setBulkFailedIds] = useState<string[]>([]);
+  const [bulkFailures, setBulkFailures] = useState<BulkFailure[]>([]);
   const [bulkFailedMode, setBulkFailedMode] = useState<'approve' | 'reject' | null>(null);
   const [bulkConfirm, setBulkConfirm] = useState<{
     mode: 'approve' | 'reject';
@@ -70,14 +85,16 @@ export function useDomainRequestsBulkActions({
     let failedCount = 0;
     let processedCount = 0;
     const failedIds: string[] = [];
+    const failures: BulkFailure[] = [];
 
     for (const id of requestIds) {
       try {
-        await approveRequest(id);
+        await approveRequest({ id, scope: 'host', unblock: false });
         successCount++;
-      } catch {
+      } catch (error) {
         failedCount++;
         failedIds.push(id);
+        failures.push({ id, message: toFailureMessage(error) });
       }
       processedCount++;
       setBulkProgress({
@@ -97,6 +114,7 @@ export function useDomainRequestsBulkActions({
         : t('domainRequests.bulk.approvedAll', { successCount })
     );
     setBulkFailedIds(failedIds);
+    setBulkFailures(failures);
     setBulkFailedMode(failedCount > 0 ? 'approve' : null);
     setBulkProgress(null);
     setBulkLoading(false);
@@ -112,14 +130,16 @@ export function useDomainRequestsBulkActions({
     let failedCount = 0;
     let processedCount = 0;
     const failedIds: string[] = [];
+    const failures: BulkFailure[] = [];
 
     for (const id of requestIds) {
       try {
         await rejectRequest({ id, reason });
         successCount++;
-      } catch {
+      } catch (error) {
         failedCount++;
         failedIds.push(id);
+        failures.push({ id, message: toFailureMessage(error) });
       }
       processedCount++;
       setBulkProgress({
@@ -140,6 +160,7 @@ export function useDomainRequestsBulkActions({
         : t('domainRequests.bulk.rejectedAll', { successCount })
     );
     setBulkFailedIds(failedIds);
+    setBulkFailures(failures);
     setBulkFailedMode(failedCount > 0 ? 'reject' : null);
     setBulkProgress(null);
     setBulkLoading(false);
@@ -154,6 +175,7 @@ export function useDomainRequestsBulkActions({
     if (retryCandidates.length === 0) {
       setBulkMessage(t('domainRequests.bulk.noFailedToRetry'));
       setBulkFailedIds([]);
+      setBulkFailures([]);
       setBulkFailedMode(null);
       return;
     }
@@ -179,6 +201,7 @@ export function useDomainRequestsBulkActions({
   const clearBulkSelection = () => {
     setSelectedRequestIds([]);
     setBulkFailedIds([]);
+    setBulkFailures([]);
     setBulkFailedMode(null);
     setBulkRejectReason('');
   };
@@ -190,6 +213,7 @@ export function useDomainRequestsBulkActions({
     bulkProgress,
     bulkMessage,
     bulkFailedIds,
+    bulkFailures,
     bulkConfirm,
     setBulkConfirm,
     openBulkApproveConfirm,

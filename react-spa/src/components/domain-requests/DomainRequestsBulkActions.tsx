@@ -7,12 +7,18 @@ interface BulkProgress {
   total: number;
 }
 
+interface BulkFailure {
+  id: string;
+  message: string;
+}
+
 interface DomainRequestsBulkActionsProps {
   selectedCount: number;
   bulkRejectReason: string;
   bulkLoading: boolean;
   bulkProgress: BulkProgress | null;
   bulkFailedIds: string[];
+  bulkFailures?: BulkFailure[];
   bulkMessage: string | null;
   onBulkRejectReasonChange: (value: string) => void;
   onApproveSelected: () => void;
@@ -28,6 +34,7 @@ export function DomainRequestsBulkActions({
   bulkLoading,
   bulkProgress,
   bulkFailedIds,
+  bulkFailures = [],
   bulkMessage,
   onBulkRejectReasonChange,
   onApproveSelected,
@@ -118,6 +125,13 @@ export function DomainRequestsBulkActions({
                 {t('domainRequests.bulk.retryFailed')}
               </button>
             </div>
+          )}
+          {bulkFailures.length > 0 && (
+            <ul className="space-y-1 text-xs text-red-700">
+              {bulkFailures.map((failure) => (
+                <li key={failure.id}>{failure.message}</li>
+              ))}
+            </ul>
           )}
         </div>
       )}

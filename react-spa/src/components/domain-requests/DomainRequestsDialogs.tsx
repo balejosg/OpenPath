@@ -1,3 +1,4 @@
+import { getRootDomain } from '@openpath/shared/domain';
 import type { DomainRequestsDialogsModel } from '../../hooks/useDomainRequestsViewModel';
 import { useT } from '../../i18n/product-i18n';
 import { ConfirmDialog, DangerConfirmDialog } from '../ui/ConfirmDialog';
@@ -8,6 +9,12 @@ interface DomainRequestsDialogsProps {
 
 export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
   const t = useT();
+  const approveRequest = model.approveModal.request;
+  const blockCause = approveRequest?.blockCause;
+  const blockedRule = blockCause?.kind === 'blocked_by_rule' ? blockCause.matchedRule : null;
+  const alreadyAllowedRule = blockCause?.kind === 'already_allowed' ? blockCause.matchedRule : null;
+  const approvalRoot = approveRequest ? getRootDomain(approveRequest.domain) : '';
+  const disableApprove = blockedRule !== null && (!model.isAdmin || !model.approveUnblock);
 
   return (
     <>
@@ -16,7 +23,7 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
           <ConfirmDialog
             isOpen
             title={t('domainRequests.dialogs.approveRequestsTitle')}
-            confirmLabel={t('domainRequests.table.approve')}
+            confirmLabel={t('common.confirm')}
             cancelLabel={t('common.cancel')}
             disableConfirm={model.bulkConfirm.requestIds.length === 0}
             onClose={model.onBulkConfirmClose}
@@ -37,7 +44,7 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
           <DangerConfirmDialog
             isOpen
             title={t('domainRequests.dialogs.rejectRequestsTitle')}
-            confirmLabel={t('domainRequests.table.reject')}
+            confirmLabel={t('common.confirm')}
             cancelLabel={t('common.cancel')}
             disableConfirm={model.bulkConfirm.requestIds.length === 0}
             onClose={model.onBulkConfirmClose}
@@ -67,27 +74,83 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
         )
       ) : null}
 
-      {model.approveModal.open && model.approveModal.request && (
+      {model.approveModal.open && approveRequest && (
         <ConfirmDialog
           isOpen
           title={t('domainRequests.dialogs.approveRequestTitle')}
-          confirmLabel={t('domainRequests.table.approve')}
+          confirmLabel={t('common.confirm')}
           cancelLabel={t('common.cancel')}
           isLoading={model.actionsLoading}
+          disableConfirm={disableApprove}
           onClose={model.onApproveClose}
           onConfirm={model.onApproveConfirm}
         >
           <p className="text-sm text-slate-600">
             {t('domainRequests.dialogs.approveAccess', {
-              domain: model.approveModal.request.domain,
-              machine: model.approveModal.request.machineHostname,
+              domain: approveRequest.domain,
+              machine: approveRequest.machineHostname,
             })}
           </p>
           <p className="text-sm text-slate-600">
             {t('domainRequests.dialogs.originalGroup', {
-              group: model.approveModal.request.groupName,
+              group: approveRequest.groupName,
             })}
           </p>
+
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-slate-700">
+              {t('domainRequests.dialogs.approvalScope')}
+            </legend>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="radio"
+                name="approval-scope"
+                checked={model.approveScope === 'host'}
+                onChange={() => model.onApproveScopeChange('host')}
+              />
+              <span>{t('domainRequests.dialogs.scopeHost', { host: approveRequest.domain })}</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="radio"
+                name="approval-scope"
+                checked={model.approveScope === 'family'}
+                onChange={() => model.onApproveScopeChange('family')}
+              />
+              <span>{t('domainRequests.dialogs.scopeFamily', { root: approvalRoot })}</span>
+            </label>
+          </fieldset>
+
+          {blockedRule ? (
+            model.isAdmin ? (
+              <label className="flex items-center gap-2 text-sm text-red-700">
+                <input
+                  type="checkbox"
+                  checked={model.approveUnblock}
+                  onChange={(event) => model.onApproveUnblockChange(event.target.checked)}
+                />
+                <span>
+                  {t('domainRequests.dialogs.blockedByRuleAdmin', {
+                    rule: blockedRule,
+                  })}
+                </span>
+              </label>
+            ) : (
+              <p className="text-sm text-red-700">
+                {t('domainRequests.dialogs.blockedByRuleTeacher', {
+                  rule: blockedRule,
+                })}
+              </p>
+            )
+          ) : null}
+
+          {alreadyAllowedRule ? (
+            <p className="text-sm text-amber-700">
+              {t('domainRequests.dialogs.alreadyAllowedWarning', {
+                rule: alreadyAllowedRule,
+              })}
+            </p>
+          ) : null}
         </ConfirmDialog>
       )}
 
@@ -95,7 +158,7 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
         <DangerConfirmDialog
           isOpen
           title={t('domainRequests.dialogs.rejectRequestTitle')}
-          confirmLabel={t('domainRequests.table.reject')}
+          confirmLabel={t('common.confirm')}
           cancelLabel={t('common.cancel')}
           isLoading={model.actionsLoading}
           onClose={model.onRejectClose}

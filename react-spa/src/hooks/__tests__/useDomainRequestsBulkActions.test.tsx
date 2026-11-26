@@ -57,7 +57,11 @@ describe('useDomainRequestsBulkActions', () => {
       await result.current.runBulkApprove(['req-1']);
     });
 
-    expect(approveRequest).toHaveBeenCalledWith('req-1');
+    expect(approveRequest).toHaveBeenCalledWith({
+      id: 'req-1',
+      scope: 'host',
+      unblock: false,
+    });
     expect(setSelectedRequestIds).toHaveBeenCalledWith([]);
   });
 
@@ -201,6 +205,59 @@ describe('useDomainRequestsBulkActions', () => {
     // setSelectedRequestIds called because one succeeded
     expect(setSelectedRequestIds).toHaveBeenCalledWith([]);
     expect(result.current.bulkMessage).not.toBeNull();
+  });
+
+  it('bulk approve keeps going and reports blocked rows with the API message', async () => {
+    const setSelectedRequestIds = vi.fn();
+    const approveRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true })
+      .mockRejectedValueOnce(new Error('This domain is explicitly blocked by rule *.google.com'))
+      .mockResolvedValueOnce({ success: true });
+
+    const threeRequests = [
+      pendingRequest,
+      { ...pendingRequest, id: 'req-2', domain: 'gemini.google.com' },
+      { ...pendingRequest, id: 'req-3', domain: 'docs.google.com' },
+    ];
+
+    const { result } = renderHook(() =>
+      useDomainRequestsBulkActions({
+        requests: threeRequests,
+        selectedPendingRequests: threeRequests,
+        setSelectedRequestIds,
+        approveRequest,
+        rejectRequest: vi.fn(),
+      })
+    );
+
+    await act(async () => {
+      await result.current.runBulkApprove(['req-1', 'req-2', 'req-3']);
+    });
+
+    expect(approveRequest).toHaveBeenNthCalledWith(1, {
+      id: 'req-1',
+      scope: 'host',
+      unblock: false,
+    });
+    expect(approveRequest).toHaveBeenNthCalledWith(2, {
+      id: 'req-2',
+      scope: 'host',
+      unblock: false,
+    });
+    expect(approveRequest).toHaveBeenNthCalledWith(3, {
+      id: 'req-3',
+      scope: 'host',
+      unblock: false,
+    });
+    expect(result.current.bulkFailedIds).toEqual(['req-2']);
+    expect(result.current.bulkFailures).toEqual([
+      {
+        id: 'req-2',
+        message: 'This domain is explicitly blocked by rule *.google.com',
+      },
+    ]);
+    expect(setSelectedRequestIds).toHaveBeenCalledWith([]);
   });
 
   it('runBulkApprove all fail does not call setSelectedRequestIds and bulkFailedIds is populated', async () => {

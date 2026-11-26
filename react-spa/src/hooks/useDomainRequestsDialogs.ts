@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { DomainRequest } from '@openpath/api';
+import type { ApprovalScope } from '@openpath/shared/schemas';
 import { reportError } from '../lib/reportError';
 
 interface RequestModalState {
@@ -8,7 +9,11 @@ interface RequestModalState {
 }
 
 interface UseDomainRequestsDialogsOptions {
-  approveRequest: (id: string) => Promise<unknown>;
+  approveRequest: (input: {
+    id: string;
+    scope: ApprovalScope;
+    unblock: boolean;
+  }) => Promise<unknown>;
   rejectRequest: (input: { id: string; reason?: string }) => Promise<unknown>;
   deleteRequest: (id: string) => Promise<unknown>;
 }
@@ -22,6 +27,8 @@ export function useDomainRequestsDialogs({
     open: false,
     request: null,
   });
+  const [approveScope, setApproveScope] = useState<ApprovalScope>('host');
+  const [approveUnblock, setApproveUnblock] = useState(false);
   const [rejectModal, setRejectModal] = useState<RequestModalState>({
     open: false,
     request: null,
@@ -32,10 +39,21 @@ export function useDomainRequestsDialogs({
   });
   const [rejectionReason, setRejectionReason] = useState('');
 
+  useEffect(() => {
+    if (!approveModal.open) {
+      setApproveScope('host');
+      setApproveUnblock(false);
+    }
+  }, [approveModal.open]);
+
   const handleApprove = async () => {
     if (!approveModal.request) return;
     try {
-      await approveRequest(approveModal.request.id);
+      await approveRequest({
+        id: approveModal.request.id,
+        scope: approveScope,
+        unblock: approveUnblock,
+      });
       setApproveModal({ open: false, request: null });
     } catch (err) {
       reportError('Error approving request:', err);
@@ -69,6 +87,10 @@ export function useDomainRequestsDialogs({
   return {
     approveModal,
     setApproveModal,
+    approveScope,
+    setApproveScope,
+    approveUnblock,
+    setApproveUnblock,
     rejectModal,
     setRejectModal,
     deleteModal,

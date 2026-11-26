@@ -285,6 +285,9 @@ export const productI18nCatalogs = {
     'domainRequests.table.approve': 'Approve',
     'domainRequests.table.reject': 'Reject',
     'domainRequests.table.delete': 'Delete',
+    'domainRequests.cause.blockedByRule': 'Blocked by rule {rule}',
+    'domainRequests.cause.alreadyAllowed': 'Already allowed by {rule}',
+    'domainRequests.cause.notAllowed': 'Not allowed',
     'domainRequests.pagination.showing': 'Showing {start}-{end} of {total}',
     'domainRequests.pagination.page': 'Page {current} of {total}',
     'domainRequests.dialogs.approveRequestsTitle': 'Approve requests',
@@ -300,6 +303,14 @@ export const productI18nCatalogs = {
     'domainRequests.dialogs.deleteRequestTitle': 'Delete Request',
     'domainRequests.dialogs.approveAccess': 'Approve access to {domain} requested by {machine}',
     'domainRequests.dialogs.rejectAccess': 'Reject access to {domain} requested by {machine}',
+    'domainRequests.dialogs.approvalScope': 'Approval scope',
+    'domainRequests.dialogs.scopeHost': 'Only {host}',
+    'domainRequests.dialogs.scopeFamily': 'All {root} and its subdomains',
+    'domainRequests.dialogs.blockedByRuleTeacher':
+      'Explicitly blocked by rule {rule}; only an administrator can lift it',
+    'domainRequests.dialogs.blockedByRuleAdmin': 'Remove the blocking rule {rule}',
+    'domainRequests.dialogs.alreadyAllowedWarning':
+      'Already allowed by {rule}; the block comes from somewhere else',
     'domainRequests.dialogs.originalGroup':
       'The request will be approved in the original group: {group}',
     'domainRequests.dialogs.rejectionReasonLabel': 'Rejection reason (optional)',
@@ -1057,6 +1068,9 @@ export const productI18nCatalogs = {
     'domainRequests.table.approve': 'Aprobar',
     'domainRequests.table.reject': 'Rechazar',
     'domainRequests.table.delete': 'Eliminar',
+    'domainRequests.cause.blockedByRule': 'Bloqueado por regla {rule}',
+    'domainRequests.cause.alreadyAllowed': 'Ya permitido por {rule}',
+    'domainRequests.cause.notAllowed': 'No permitido',
     'domainRequests.pagination.showing': 'Mostrando {start}-{end} de {total}',
     'domainRequests.pagination.page': 'Página {current} de {total}',
     'domainRequests.dialogs.approveRequestsTitle': 'Aprobar solicitudes',
@@ -1072,6 +1086,14 @@ export const productI18nCatalogs = {
     'domainRequests.dialogs.deleteRequestTitle': 'Eliminar solicitud',
     'domainRequests.dialogs.approveAccess': 'Aprobar acceso a {domain} solicitado por {machine}',
     'domainRequests.dialogs.rejectAccess': 'Rechazar acceso a {domain} solicitado por {machine}',
+    'domainRequests.dialogs.approvalScope': 'Alcance de la aprobación',
+    'domainRequests.dialogs.scopeHost': 'Solo {host}',
+    'domainRequests.dialogs.scopeFamily': 'Todo {root} y sus subdominios',
+    'domainRequests.dialogs.blockedByRuleTeacher':
+      'Bloqueado expresamente por la regla {rule}; solo un administrador puede levantarlo',
+    'domainRequests.dialogs.blockedByRuleAdmin': 'Quitar la regla de bloqueo {rule}',
+    'domainRequests.dialogs.alreadyAllowedWarning':
+      'Ya está permitido por {rule}; el bloqueo viene de otro sitio',
     'domainRequests.dialogs.originalGroup':
       'La solicitud se aprobará en el grupo original: {group}',
     'domainRequests.dialogs.rejectionReasonLabel': 'Motivo del rechazo (opcional)',

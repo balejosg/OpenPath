@@ -14,6 +14,7 @@ const pendingRow = {
   groupName: 'Grupo 1',
   sourceSummary: 'Manual/API · Origen: teacher.local · Host: host-1',
   formattedCreatedAt: '01/04/2026',
+  blockCauseLabel: null,
   selected: false,
   selectable: true,
   reviewable: true,
@@ -129,6 +130,28 @@ describe('DomainRequestsTable', () => {
     expect(onOpenApprove).toHaveBeenCalledWith('req-1');
     expect(onOpenReject).toHaveBeenCalledWith('req-1');
     expect(onOpenDelete).toHaveBeenCalledWith('req-1');
+  });
+
+  it('renders a cause badge only when blockCause is present', () => {
+    const { rerender } = render(
+      <DomainRequestsTable
+        model={buildModel({
+          rows: [{ ...pendingRow, blockCauseLabel: 'Bloqueado por regla *.google.com' }],
+        })}
+      />
+    );
+
+    expect(screen.getByText('Bloqueado por regla *.google.com')).toBeInTheDocument();
+
+    rerender(
+      <DomainRequestsTable
+        model={buildModel({
+          rows: [{ ...pendingRow, blockCauseLabel: null }],
+        })}
+      />
+    );
+
+    expect(screen.queryByText(/Bloqueado por regla/)).not.toBeInTheDocument();
   });
 
   it('can hide delete actions while keeping approve and reject available', () => {

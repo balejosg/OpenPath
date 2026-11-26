@@ -85,7 +85,7 @@ describe('DomainRequests - Original group approval', () => {
     mockReject.mockResolvedValue({ success: true });
   });
 
-  it('approves using request id only and shows original group', async () => {
+  it('approves the exact host by default and shows original group', async () => {
     renderDomainRequests();
 
     await screen.findByText('example.com');
@@ -94,15 +94,14 @@ describe('DomainRequests - Original group approval', () => {
     expect(await screen.findByText(/original group/i)).toBeInTheDocument();
     expect(screen.queryByText('Target group')).not.toBeInTheDocument();
 
-    const approveButtons = screen.getAllByRole('button', { name: 'Approve' });
-    const modalApproveButton = approveButtons.at(-1);
-    if (!modalApproveButton) {
-      throw new Error('Modal approve button not found');
-    }
-    fireEvent.click(modalApproveButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
     await waitFor(() => {
-      expect(mockApprove).toHaveBeenCalledWith({ id: 'req-1' });
+      expect(mockApprove).toHaveBeenCalledWith({
+        id: 'req-1',
+        scope: 'host',
+        unblock: false,
+      });
     });
   });
 

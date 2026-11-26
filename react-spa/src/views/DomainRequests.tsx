@@ -47,6 +47,7 @@ export default function DomainRequests({ canDeleteRequests = true }: DomainReque
         bulkLoading={viewModel.bulkActions.loading}
         bulkProgress={viewModel.bulkActions.progress}
         bulkFailedIds={viewModel.bulkActions.failedIds}
+        bulkFailures={viewModel.bulkActions.failures}
         bulkMessage={viewModel.bulkActions.message}
         onBulkRejectReasonChange={viewModel.bulkActions.onRejectReasonChange}
         onApproveSelected={viewModel.bulkActions.onApproveSelected}

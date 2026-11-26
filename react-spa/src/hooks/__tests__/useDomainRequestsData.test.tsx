@@ -56,4 +56,24 @@ describe('useDomainRequestsData', () => {
     expect(result.current.groups).toEqual([{ id: 'group-1', name: 'Grupo 1', path: 'group-1' }]);
     expect(result.current.error).toBeNull();
   });
+
+  it('sends scope and unblock in approve mutations', async () => {
+    mockList.mockResolvedValue([]);
+    mockListGroups.mockResolvedValue([]);
+    mockApprove.mockResolvedValue({ success: true });
+
+    const { result } = renderHookWithQueryClient(() => useDomainRequestsData('all'));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await result.current.approveRequest({ id: 'req-1', scope: 'family', unblock: true });
+
+    expect(mockApprove).toHaveBeenCalledWith({
+      id: 'req-1',
+      scope: 'family',
+      unblock: true,
+    });
+  });
 });

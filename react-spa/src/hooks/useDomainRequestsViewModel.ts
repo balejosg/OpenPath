@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import type { DomainRequest, RequestStatus } from '@openpath/api';
+import type { RequestBlockCause } from '@openpath/shared/schemas';
 import { STATUS_COLORS } from '../views/domain-requests.constants';
+import { isAdmin } from '../lib/auth';
 import { useDomainRequestsBulkActions } from './useDomainRequestsBulkActions';
 import { useDomainRequestsData } from './useDomainRequestsData';
 import { useDomainRequestsDialogs } from './useDomainRequestsDialogs';
@@ -21,6 +23,7 @@ interface DialogRequestViewModel {
   domain: string;
   groupName: string;
   machineHostname: string;
+  blockCause?: RequestBlockCause;
 }
 
 export interface DomainRequestsRowViewModel {
@@ -34,6 +37,7 @@ export interface DomainRequestsRowViewModel {
   statusClassName: string;
   sourceSummary: string;
   formattedCreatedAt: string;
+  blockCauseLabel: string | null;
   selected: boolean;
   selectable: boolean;
   reviewable: boolean;
@@ -43,6 +47,7 @@ export function useDomainRequestsViewModel({
   canDeleteRequests,
 }: UseDomainRequestsViewModelOptions) {
   const { locale, t } = useOpenPathI18n();
+  const admin = isAdmin();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [statusFilter, setStatusFilter] = useState<RequestStatus | 'all'>('all');
 
@@ -98,7 +103,21 @@ export function useDomainRequestsViewModel({
       domain: request.domain,
       groupName: state.getGroupName(request.groupId),
       machineHostname: request.machineHostname ?? t('domainRequests.machine.unknown'),
+      ...(request.blockCause ? { blockCause: request.blockCause } : {}),
     };
+  };
+
+  const getBlockCauseLabel = (cause: RequestBlockCause | undefined): string | null => {
+    if (!cause) return null;
+
+    switch (cause.kind) {
+      case 'blocked_by_rule':
+        return t('domainRequests.cause.blockedByRule', { rule: cause.matchedRule });
+      case 'already_allowed':
+        return t('domainRequests.cause.alreadyAllowed', { rule: cause.matchedRule });
+      case 'not_allowed':
+        return t('domainRequests.cause.notAllowed');
+    }
   };
 
   const clearSearch = () => {
@@ -145,6 +164,7 @@ export function useDomainRequestsViewModel({
       statusClassName: STATUS_COLORS[request.status],
       sourceSummary: metadata.join(' · '),
       formattedCreatedAt: formatDate(request.createdAt),
+      blockCauseLabel: getBlockCauseLabel(request.blockCause),
       selected: state.selectedRequestIds.includes(request.id),
       selectable: request.status === 'pending',
       reviewable: request.status === 'pending',
@@ -216,6 +236,7 @@ export function useDomainRequestsViewModel({
       progress: bulkActions.bulkProgress,
       failedIds: bulkActions.bulkFailedIds,
       failedCount: bulkActions.bulkFailedIds.length,
+      failures: bulkActions.bulkFailures,
       message: bulkActions.bulkMessage,
       onRejectReasonChange: bulkActions.setBulkRejectReason,
       onApproveSelected: bulkActions.openBulkApproveConfirm,
@@ -230,6 +251,11 @@ export function useDomainRequestsViewModel({
         open: dialogs.approveModal.open,
         request: toDialogRequest(dialogs.approveModal.request),
       },
+      isAdmin: admin,
+      approveScope: dialogs.approveScope,
+      approveUnblock: dialogs.approveUnblock,
+      onApproveScopeChange: dialogs.setApproveScope,
+      onApproveUnblockChange: dialogs.setApproveUnblock,
       rejectModal: {
         open: dialogs.rejectModal.open,
         request: toDialogRequest(dialogs.rejectModal.request),

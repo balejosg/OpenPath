@@ -1,11 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DomainRequest, RequestStatus } from '@openpath/api';
+import type { ApprovalScope } from '@openpath/shared/schemas';
 import { trpc } from '../lib/trpc';
 
 export interface DomainRequestGroup {
   id: string;
   name: string;
   path: string;
+}
+
+export interface ApproveDomainRequestInput {
+  id: string;
+  scope: ApprovalScope;
+  unblock: boolean;
 }
 
 const EMPTY_REQUESTS: DomainRequest[] = [];
@@ -35,8 +42,8 @@ export function useDomainRequestsData(statusFilter: RequestStatus | 'all') {
     queryClient.invalidateQueries({ queryKey: ['domain-requests', 'requests'] });
 
   const approveMutation = useMutation({
-    mutationFn: async (id: string) => {
-      return await trpc.requests.approve.mutate({ id });
+    mutationFn: async (input: ApproveDomainRequestInput) => {
+      return await trpc.requests.approve.mutate(input);
     },
     onSuccess: () => {
       void invalidateRequests();

@@ -108,6 +108,14 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                           {request.reason}
                         </div>
                       )}
+                      {request.blockCauseLabel ? (
+                        <div
+                          data-testid="block-cause"
+                          className="text-xs text-amber-700 mt-0.5 truncate max-w-xs"
+                        >
+                          {request.blockCauseLabel}
+                        </div>
+                      ) : null}
                       <div className="text-xs text-slate-400 mt-0.5 truncate max-w-xs">
                         {request.sourceSummary}
                       </div>
