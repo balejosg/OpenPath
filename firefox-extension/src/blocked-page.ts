@@ -308,6 +308,21 @@ function getHostnameFromUrl(url: string | null): string | null {
   }
 }
 
+function buildAncestorHosts(host: string): string[] {
+  const labels = host.split('.').filter(Boolean);
+  const hosts: string[] = [];
+
+  for (let index = 0; index <= labels.length - 2; index += 1) {
+    hosts.push(labels.slice(index).join('.'));
+  }
+
+  if (hosts.length === 0 && host) {
+    hosts.push(host);
+  }
+
+  return hosts;
+}
+
 async function pollRequestStatus(requestId: string): Promise<RequestStatusResult> {
   const nativeRuntime = getNativeRuntime();
   const sendNativeMessage = (message: unknown): Promise<unknown> =>
@@ -374,7 +389,12 @@ async function refreshAndVerifyLocalAccess(input: {
 
   const originalHost = getHostnameFromUrl(input.originalUrl);
   const approvedDomain = input.approvedDomain.trim().toLowerCase();
-  const domains = Array.from(new Set([originalHost, approvedDomain].filter(Boolean))) as string[];
+  const domains = Array.from(
+    new Set([
+      ...buildAncestorHosts(approvedDomain),
+      ...(originalHost ? buildAncestorHosts(originalHost) : []),
+    ])
+  );
   const updateDomains = approvedDomain ? [approvedDomain] : domains;
 
   const update = (await runtime.sendMessage({

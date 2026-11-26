@@ -431,13 +431,13 @@ void describe('blocked page entrypoint', () => {
     assert.ok(elements.get('request-status')?.classes.has('error'));
   });
 
-  void test('updates the local whitelist for the approved root domain before reloading', async () => {
+  void test('reloads after a family approval of the blocked host', async () => {
     clearBlockedPageGlobals();
 
     const { elements, navigations, runtimeMessages } = installSubmitFixture({
       blockedDomain: 'es.wikipedia.org',
       originalUrl: 'https://es.wikipedia.org/wiki/Aula',
-      statusPayloads: [{ success: true, status: 'approved', domain: 'wikipedia.org' }],
+      statusPayloads: [{ success: true, status: 'approved', domain: 'es.wikipedia.org' }],
       verifyResponse: {
         success: true,
         results: [
@@ -455,7 +455,7 @@ void describe('blocked page entrypoint', () => {
       runtimeMessages.find(
         (message) => (message as { action?: string }).action === 'triggerWhitelistUpdate'
       ),
-      { action: 'triggerWhitelistUpdate', domains: ['wikipedia.org'] }
+      { action: 'triggerWhitelistUpdate', domains: ['es.wikipedia.org'] }
     );
     assert.deepEqual(
       runtimeMessages.find(
@@ -464,6 +464,63 @@ void describe('blocked page entrypoint', () => {
       { action: 'verifyDomains', domains: ['es.wikipedia.org', 'wikipedia.org'] }
     );
     assert.deepEqual(navigations, ['https://es.wikipedia.org/wiki/Aula']);
+  });
+
+  void test('reloads after an exact-host approval', async () => {
+    clearBlockedPageGlobals();
+
+    const { elements, navigations, runtimeMessages } = installSubmitFixture({
+      blockedDomain: 'es.wikipedia.org',
+      originalUrl: 'https://es.wikipedia.org/wiki/Aula',
+      statusPayloads: [{ success: true, status: 'approved', domain: 'es.wikipedia.org' }],
+      verifyResponse: {
+        success: true,
+        results: [{ domain: 'es.wikipedia.org', inWhitelist: true }],
+      },
+    });
+
+    main();
+    elements.get('submit-unblock-request')?.click();
+    await waitUntil(() => navigations.length > 0);
+
+    assert.deepEqual(
+      runtimeMessages.find(
+        (message) => (message as { action?: string }).action === 'triggerWhitelistUpdate'
+      ),
+      { action: 'triggerWhitelistUpdate', domains: ['es.wikipedia.org'] }
+    );
+    assert.deepEqual(navigations, ['https://es.wikipedia.org/wiki/Aula']);
+  });
+
+  void test('still errors when no ancestor is allowed', async () => {
+    clearBlockedPageGlobals();
+
+    const { elements, navigations, runtimeMessages } = installSubmitFixture({
+      blockedDomain: 'es.wikipedia.org',
+      originalUrl: 'https://es.wikipedia.org/wiki/Aula',
+      statusPayloads: [{ success: true, status: 'approved', domain: 'es.wikipedia.org' }],
+      verifyResponse: {
+        success: true,
+        results: [
+          { domain: 'es.wikipedia.org', inWhitelist: false },
+          { domain: 'wikipedia.org', inWhitelist: false },
+        ],
+      },
+    });
+
+    main();
+    elements.get('submit-unblock-request')?.click();
+    await waitUntil(() =>
+      (elements.get('request-status')?.textContent ?? '').includes('still does not allow')
+    );
+
+    assert.deepEqual(navigations, []);
+    assert.deepEqual(
+      runtimeMessages.find(
+        (message) => (message as { action?: string }).action === 'verifyDomains'
+      ),
+      { action: 'verifyDomains', domains: ['es.wikipedia.org', 'wikipedia.org'] }
+    );
   });
 });
 
