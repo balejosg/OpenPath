@@ -34,15 +34,15 @@ await describe('public-requests routes', async () => {
     }
   });
 
-  await test('POST /api/requests/submit normalizes manual requests to root domain and exposes public status', async () => {
-    const suffix = `${Date.now().toString()}-submit-root-domain`;
+  await test('POST /api/requests/submit preserves the exact blocked host and exposes public status', async () => {
+    const suffix = `${Date.now().toString()}-submit-exact-host`;
     const groupId = `grp-${suffix}`;
     const classroomId = `cls-${suffix}`;
     const machineId = `mach-${suffix}`;
     const hostname = `host-${suffix}`;
     const token = `machine-token-${suffix}`;
 
-    await db.execute(sql.raw("DELETE FROM requests WHERE domain='wikipedia.org'"));
+    await db.execute(sql.raw("DELETE FROM requests WHERE domain='es.wikipedia.org'"));
 
     await db.execute(
       sql.raw(
@@ -81,7 +81,7 @@ await describe('public-requests routes', async () => {
       status?: string;
     };
     assert.strictEqual(payload.success, true);
-    assert.strictEqual(payload.domain, 'wikipedia.org');
+    assert.strictEqual(payload.domain, 'es.wikipedia.org');
     assert.strictEqual(payload.status, 'pending');
     assert.ok(payload.id);
 
@@ -97,7 +97,7 @@ await describe('public-requests routes', async () => {
     };
     assert.strictEqual(statusPayload.success, true);
     assert.strictEqual(statusPayload.id, payload.id);
-    assert.strictEqual(statusPayload.domain, 'wikipedia.org');
+    assert.strictEqual(statusPayload.domain, 'es.wikipedia.org');
     assert.strictEqual(statusPayload.status, 'pending');
   });
 

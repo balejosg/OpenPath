@@ -12,6 +12,34 @@ void test('request-command service exports expected mutation entrypoints', () =>
   assert.equal(typeof requestCommandService.deleteRequest, 'function');
 });
 
+void test('request-command service dedupes pending requests per normalized host', async () => {
+  const suffix = Date.now().toString();
+  const host = `gemini-${suffix}.google.com`;
+
+  const first = await requestCommandService.createRequest({
+    domain: `Gemini-${suffix}.Google.com.`,
+    reason: 'Exact host request',
+    requesterEmail: 'student@example.test',
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.data.domain, host);
+
+  const duplicate = await requestCommandService.createRequest({
+    domain: host,
+    reason: 'Duplicate exact host request',
+    requesterEmail: 'student@example.test',
+  });
+  assert.equal(duplicate.ok, false);
+  assert.equal(duplicate.error.code, 'CONFLICT');
+
+  const otherHost = await requestCommandService.createRequest({
+    domain: `docs-${suffix}.google.com`,
+    reason: 'Different subdomain in the same group',
+    requesterEmail: 'student@example.test',
+  });
+  assert.equal(otherHost.ok, true);
+});
+
 void test('request-command service deletes existing requests and reports missing ids', async () => {
   const created = await requestCommandService.createRequest({
     domain: `delete-service-${Date.now().toString()}.example.com`,

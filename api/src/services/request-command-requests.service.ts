@@ -1,7 +1,7 @@
 import * as push from '../lib/push.js';
 import * as storage from '../lib/storage.js';
 import { logger } from '../lib/logger.js';
-import { normalizeManualRequestDomain } from '@openpath/shared/domain';
+import { normalizeRequestHost } from '@openpath/shared/domain';
 import { resolveRequestGroupId } from '../lib/request-storage-legacy.js';
 
 import type { RequestResult } from './request-service-shared.js';
@@ -17,7 +17,7 @@ export async function createRequest(
 ): Promise<RequestResult<StoredDomainRequest>> {
   const normalizedInput = {
     ...input,
-    domain: normalizeManualRequestDomain(input.domain),
+    domain: normalizeRequestHost(input.domain),
   };
 
   // Resolve (and thereby validate) the request-eligible group BEFORE the pending

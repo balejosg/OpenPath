@@ -30,11 +30,11 @@ void describe('Request API tests - tRPC request procedures', async () => {
       assert.strictEqual(data.status, 'pending');
     });
 
-    await test('normalizes subdomain requests to the root domain', async () => {
-      const rootDomain = `wikipedia-${Date.now().toString()}.org`;
+    await test('stores the exact blocked host', async () => {
+      const exactHost = `gemini-${Date.now().toString()}.google.com`;
       const response = await trpcMutate('requests.create', {
-        domain: `es.${rootDomain}`,
-        reason: 'Testing root domain normalization',
+        domain: exactHost,
+        reason: 'Testing exact host preservation',
         requesterEmail: 'test@example.com',
       });
       assert.strictEqual(response.status, 200);
@@ -43,7 +43,7 @@ void describe('Request API tests - tRPC request procedures', async () => {
         data?: { domain: string; id: string; status: string };
       };
       assert.ok(data);
-      assert.strictEqual(data.domain, rootDomain);
+      assert.strictEqual(data.domain, exactHost);
       assert.strictEqual(data.status, 'pending');
     });
 

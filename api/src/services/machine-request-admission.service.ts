@@ -1,4 +1,4 @@
-import { normalizeManualRequestDomain } from '@openpath/shared/domain';
+import { normalizeRequestHost } from '@openpath/shared/domain';
 import * as classroomStorage from '../lib/classroom-storage.js';
 import { logger } from '../lib/logger.js';
 import { normalizeHostInput } from '../lib/machine-proof.js';
@@ -158,7 +158,7 @@ async function createMachineRequestFromContext(
   context: MachineRequestContext,
   deps: MachineRequestAdmissionDeps
 ): Promise<PublicRequestResult<PendingMachineRequestOutcome>> {
-  const domain = normalizeManualRequestDomain(context.domain);
+  const domain = normalizeRequestHost(context.domain);
   const created = await deps.createRequest({
     domain,
     reason: input.reason ?? 'Submitted via Firefox extension',

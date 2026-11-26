@@ -92,7 +92,7 @@ await describe('machine request admission service — submit path', async () => 
     });
   });
 
-  await test('manual submissions normalize subdomains to the root request domain', async () => {
+  await test('manual submissions return the exact request host', async () => {
     const { deps, createdRequests } = createDeps();
 
     const result = await createSubmittedMachineRequest(
@@ -101,11 +101,11 @@ await describe('machine request admission service — submit path', async () => 
     );
 
     assert.ok(result.ok);
-    assert.equal(result.data.domain, 'example.com');
+    assert.equal(result.data.domain, 'video.cdn.example.com');
     assert.equal(createdRequests.length, 1);
     const createdRequest = createdRequests[0];
     assert.ok(createdRequest);
-    assert.equal(createdRequest.domain, 'example.com');
+    assert.equal(createdRequest.domain, 'video.cdn.example.com');
     assert.equal(createdRequest.source, 'firefox-extension');
   });
 });
