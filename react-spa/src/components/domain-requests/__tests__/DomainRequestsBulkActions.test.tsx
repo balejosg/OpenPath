@@ -45,4 +45,31 @@ describe('DomainRequestsBulkActions', () => {
     expect(onRetryFailed).toHaveBeenCalled();
     expect(screen.getByText('Aprobadas 1. Fallaron 1.')).toBeInTheDocument();
   });
+
+  it('renders reject progress and API failure messages', () => {
+    render(
+      <DomainRequestsBulkActions
+        selectedCount={3}
+        bulkRejectReason=""
+        bulkLoading
+        bulkProgress={{ mode: 'reject', done: 2, total: 3 }}
+        bulkFailedIds={['req-2']}
+        bulkFailures={[
+          { id: 'req-2', message: 'This domain is explicitly blocked by rule *.google.com' },
+        ]}
+        bulkMessage={null}
+        onBulkRejectReasonChange={vi.fn()}
+        onApproveSelected={vi.fn()}
+        onRejectSelected={vi.fn()}
+        onClearSelection={vi.fn()}
+        onSelectFailed={vi.fn()}
+        onRetryFailed={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Bulk rejection in progress...')).toBeInTheDocument();
+    expect(
+      screen.getByText('This domain is explicitly blocked by rule *.google.com')
+    ).toBeInTheDocument();
+  });
 });

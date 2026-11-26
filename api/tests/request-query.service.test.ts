@@ -82,4 +82,41 @@ void describe('request-query block cause', () => {
       matchedRule: 'gemini.google.com',
     });
   });
+
+  void test('exposes status, stats, groups, blocked domains and approval scope helpers', async () => {
+    const status = await requestQueryService.getRequestStatus(REQUEST_IDS[0] ?? '');
+    assert.equal(status.ok, true);
+    assert.equal(status.ok ? status.data.domain : '', 'gemini.google.com');
+    assert.equal(status.ok ? status.data.status : '', 'pending');
+
+    const missingStatus = await requestQueryService.getRequestStatus('missing-request');
+    assert.deepEqual(missingStatus, {
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'Request not found' },
+    });
+
+    const stats = await requestQueryService.getStats();
+    assert.equal(typeof stats.total, 'number');
+    assert.equal(typeof stats.pending, 'number');
+
+    const groups = await requestQueryService.listGroupsForUser(adminUser);
+    assert.ok(groups.some((group) => group.id === GROUP_ID));
+
+    const blockedDomains = await requestQueryService.listBlockedDomains(GROUP_ID);
+    assert.deepEqual(blockedDomains, ['gemini.google.com']);
+
+    const blockedCheck = await requestQueryService.checkDomainBlocked(
+      GROUP_ID,
+      'gemini.google.com'
+    );
+    assert.deepEqual(blockedCheck, { blocked: true, matchedRule: 'gemini.google.com' });
+
+    assert.equal(requestQueryService.getApprovalGroupsForUser(adminUser), 'all');
+
+    const missing = await requestQueryService.getRequest('missing-request', adminUser);
+    assert.deepEqual(missing, {
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'Request not found' },
+    });
+  });
 });

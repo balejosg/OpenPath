@@ -13,6 +13,7 @@ const { mockApprove, mockReject, mockRequests } = vi.hoisted(() => {
       groupId: 'group-1',
       status: 'pending',
       source: 'manual',
+      blockCause: { kind: 'blocked_by_rule', matchedRule: '*.google.com' },
       originHost: null,
       clientVersion: null,
       errorType: null,
@@ -30,6 +31,7 @@ const { mockApprove, mockReject, mockRequests } = vi.hoisted(() => {
       groupId: 'group-2',
       status: 'pending',
       source: 'firefox-extension',
+      blockCause: { kind: 'already_allowed', matchedRule: 'google.com' },
       originHost: null,
       clientVersion: '1.2.3',
       errorType: null,
@@ -93,6 +95,27 @@ describe('useDomainRequestsViewModel', () => {
     expect(result.current.table.rows[0]?.groupName).toBe('Grupo 1');
     expect(result.current.table.rows[0]?.formattedCreatedAt).toMatch(/01/);
     expect(result.current.table.canDeleteRequests).toBe(false);
+    expect(result.current.table.rows[0]?.blockCauseLabel).toBe('Blocked by rule *.google.com');
+    expect(result.current.table.rows[1]?.blockCauseLabel).toBe('Already allowed by google.com');
+    expect(result.current.table.rows[2]?.blockCauseLabel).toBeNull();
+
+    act(() => {
+      result.current.table.onOpenApprove('req-old-pending');
+    });
+
+    expect(result.current.dialogs.approveModal.request?.blockCause).toEqual({
+      kind: 'blocked_by_rule',
+      matchedRule: '*.google.com',
+    });
+    expect(result.current.dialogs.approveScope).toBe('host');
+
+    act(() => {
+      result.current.dialogs.onApproveScopeChange('family');
+      result.current.dialogs.onApproveUnblockChange(true);
+    });
+
+    expect(result.current.dialogs.approveScope).toBe('family');
+    expect(result.current.dialogs.approveUnblock).toBe(true);
 
     act(() => {
       result.current.filters.onSearchChange('new.example.com');
