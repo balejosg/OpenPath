@@ -3,6 +3,8 @@
  * Used by both frontend (hierarchical view) and backend (grouped pagination).
  */
 
+import type { ApprovalScope } from './schemas/index.js';
+
 /**
  * Common country-code second-level domains (ccSLDs)
  * These require 3 parts to identify the root domain (e.g., example.co.uk)
@@ -184,9 +186,37 @@ export const getRootDomain = (value: string): string => {
 };
 
 /**
- * Normalize manually submitted request domains to the root domain.
- * Manual approvals intentionally whitelist the domain family, while automatic
- * machine requests keep exact-host behavior at the caller.
+ * Normalize a host submitted in an unblock request.
+ * Strips scheme, credentials, port, path, query, fragment and the final dot,
+ * lowercases, but keeps the exact subdomain (no root reduction).
+ */
+export const normalizeRequestHost = (value: string): string => {
+  let host = value.trim().toLowerCase();
+  host = host.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+
+  const credentialsEnd = host.lastIndexOf('@');
+  if (credentialsEnd >= 0) {
+    host = host.slice(credentialsEnd + 1);
+  }
+
+  const [hostname] = host.split(/[/?#]/);
+  host = hostname ?? host;
+  host = host.replace(/:\d+$/, '');
+  host = host.replace(/\.+$/, '');
+
+  return host;
+};
+
+/**
+ * Resolve the whitelist rule value for an approval scope.
+ * `host` keeps the exact submitted host; `family` reduces to its root domain.
+ */
+export const ruleValueForApprovalScope = (host: string, scope: ApprovalScope): string =>
+  scope === 'family' ? getRootDomain(host) : host;
+
+/**
+ * Transitional alias kept until every API caller moves to
+ * `normalizeRequestHost` (Tasks 2 and 4). Remove once no callers remain.
  */
 export const normalizeManualRequestDomain = (value: string): string => getRootDomain(value);
 

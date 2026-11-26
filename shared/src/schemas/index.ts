@@ -8,6 +8,12 @@ export const RequestStatus = z.enum(['pending', 'approved', 'rejected']);
 
 export const UserRole = z.enum(['admin', 'teacher', 'student']);
 export const GroupVisibility = z.enum(['private', 'instance_public']);
+export const ApprovalScope = z.enum(['host', 'family']);
+export const RequestBlockCause = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('blocked_by_rule'), matchedRule: z.string() }),
+  z.object({ kind: z.literal('already_allowed'), matchedRule: z.string() }),
+  z.object({ kind: z.literal('not_allowed') }),
+]);
 export const MachineStatus = z.enum(['online', 'offline', 'unknown']);
 export const HealthStatus = z.enum([
   'HEALTHY',
@@ -35,6 +41,7 @@ export const DomainRequest = z.object({
   originPage: z.string().nullable().optional(),
   clientVersion: z.string().nullable().optional(),
   errorType: z.string().nullable().optional(),
+  blockCause: RequestBlockCause.optional(),
 
   status: RequestStatus,
   createdAt: z.string(),
@@ -315,6 +322,8 @@ export type RequestStatus = z.infer<typeof RequestStatus>;
 
 export type UserRole = z.infer<typeof UserRole>;
 export type GroupVisibility = z.infer<typeof GroupVisibility>;
+export type ApprovalScope = z.infer<typeof ApprovalScope>;
+export type RequestBlockCause = z.infer<typeof RequestBlockCause>;
 export type MachineStatus = z.infer<typeof MachineStatus>;
 export type HealthStatus = z.infer<typeof HealthStatus>;
 

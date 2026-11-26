@@ -4,7 +4,8 @@ import {
   getRootDomain,
   groupByRootDomain,
   CC_SLDS,
-  normalizeManualRequestDomain,
+  normalizeRequestHost,
+  ruleValueForApprovalScope,
 } from '../src/domain.js';
 
 describe('getRootDomain', () => {
@@ -127,10 +128,30 @@ describe('getRootDomain', () => {
   });
 });
 
-describe('normalizeManualRequestDomain', () => {
-  it('normalizes manual request subdomains to their root domain', () => {
-    assert.strictEqual(normalizeManualRequestDomain('es.wikipedia.org'), 'wikipedia.org');
-    assert.strictEqual(normalizeManualRequestDomain('mail.google.com'), 'google.com');
+describe('normalizeRequestHost', () => {
+  it('keeps subdomains', () => {
+    assert.strictEqual(normalizeRequestHost('gemini.google.com'), 'gemini.google.com');
+  });
+
+  it('strips url noise', () => {
+    assert.strictEqual(
+      normalizeRequestHost('HTTPS://Gemini.Google.com.:443/app?x=1'),
+      'gemini.google.com'
+    );
+  });
+});
+
+describe('ruleValueForApprovalScope', () => {
+  it('returns the exact host for host scope', () => {
+    assert.strictEqual(ruleValueForApprovalScope('gemini.google.com', 'host'), 'gemini.google.com');
+  });
+
+  it('returns the root domain for family scope', () => {
+    assert.strictEqual(ruleValueForApprovalScope('gemini.google.com', 'family'), 'google.com');
+  });
+
+  it('handles ccTLDs for family scope', () => {
+    assert.strictEqual(ruleValueForApprovalScope('www.bbc.co.uk', 'family'), 'bbc.co.uk');
   });
 });
 
