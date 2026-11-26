@@ -14,7 +14,11 @@ interface RequestResult {
 
 export interface BlockedDomainsTestHarness extends HttpTestHarness {
   adminToken: string;
-  createPendingRequest: (input?: { domain?: string; requesterEmail?: string }) => Promise<string>;
+  createPendingRequest: (input?: {
+    domain?: string;
+    requesterEmail?: string;
+    groupId?: string;
+  }) => Promise<string>;
   teacherGroupId: string;
   teacherGroupName: string;
   teacherToken: string;
@@ -111,6 +115,7 @@ export async function startBlockedDomainsTestHarness(): Promise<BlockedDomainsTe
         domain: input.domain ?? uniqueBlockedDomain(TEST_RUN_ID),
         reason: 'Test request for domain approval',
         requesterEmail: input.requesterEmail ?? `student-${TEST_RUN_ID}@test.com`,
+        ...(input.groupId ? { groupId: input.groupId } : {}),
       });
       assertStatus(response, 200);
       const payload = (await parseTRPC(response)) as { data?: RequestResult };

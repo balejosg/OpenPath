@@ -10,6 +10,7 @@ export interface WhitelistRuleCommandDependencies {
   bulkDeleteRules: typeof groupsStorage.bulkDeleteRules;
   createTransactionalWriter?: typeof DomainEventsService.createTransactionalWriter;
   createRule: typeof groupsStorage.createRule;
+  deleteBlockedRule: typeof groupsStorage.deleteBlockedRule;
   deleteRule: typeof groupsStorage.deleteRule;
   publishWhitelistChanged: (groupId: string) => void;
   updateRequestStatus: typeof updateStoredRequestStatus;
@@ -32,6 +33,9 @@ export interface ApproveWhitelistRequestInput {
     id: string;
     name: string;
   };
+  removeBlockedRule?: string;
+  resolutionNote?: string;
+  skipRuleCreation?: boolean;
 }
 
 export interface ApprovedWhitelistRequestCommandResult {
@@ -83,6 +87,7 @@ type RequestApprovalDeps = Pick<
   WhitelistRuleCommandDependencies,
   | 'createRule'
   | 'createTransactionalWriter'
+  | 'deleteBlockedRule'
   | 'publishWhitelistChanged'
   | 'updateRequestStatus'
   | 'writeTransactionalCommand'
@@ -92,6 +97,7 @@ type RequestApprovalDeps = Pick<
 export const defaultWhitelistRuleCommandDependencies: WhitelistRuleCommandDependencies = {
   bulkDeleteRules: groupsStorage.bulkDeleteRules,
   createRule: groupsStorage.createRule,
+  deleteBlockedRule: groupsStorage.deleteBlockedRule,
   deleteRule: groupsStorage.deleteRule,
   publishWhitelistChanged: DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
   updateRequestStatus: updateStoredRequestStatus,
@@ -182,23 +188,36 @@ export async function approveWhitelistRequest(
   deps: RequestApprovalDeps = defaultWhitelistRuleCommandDependencies
 ): Promise<ApprovedWhitelistRequestCommandResult> {
   return withWhitelistEvents(deps, async (tx, events) => {
-    const ruleResult = await deps.createRule(
-      input.targetGroup.id,
-      'whitelist',
-      input.domain,
-      null,
-      tx
-    );
+    if (input.removeBlockedRule) {
+      const removed = await deps.deleteBlockedRule(
+        input.targetGroup.id,
+        input.removeBlockedRule,
+        tx
+      );
+      if (!removed) {
+        throw new Error(`Blocking rule ${input.removeBlockedRule} no longer exists`);
+      }
+    }
+
+    const ruleResult = input.skipRuleCreation
+      ? { success: false, error: 'Rule already exists' }
+      : await deps.createRule(input.targetGroup.id, 'whitelist', input.domain, null, tx);
 
     if (!ruleResult.success && ruleResult.error !== 'Rule already exists') {
       throw new Error(ruleResult.error ?? 'Failed to add domain to whitelist');
     }
 
+    const resolutionNote =
+      input.resolutionNote ??
+      (input.removeBlockedRule
+        ? `Added to ${input.targetGroup.name}; removed blocking rule ${input.removeBlockedRule}`
+        : `Added to ${input.targetGroup.name}`);
+
     const updated = await deps.updateRequestStatus(
       input.requestId,
       'approved',
       input.resolvedBy,
-      `Added to ${input.targetGroup.name}`,
+      resolutionNote,
       {
         executor: tx,
         expectedStatus: 'pending',
@@ -209,7 +228,7 @@ export async function approveWhitelistRequest(
       throw new Error('Request is no longer pending');
     }
 
-    if (ruleResult.success) {
+    if (ruleResult.success || input.removeBlockedRule) {
       events.publishWhitelistChanged(input.targetGroup.id);
     }
 

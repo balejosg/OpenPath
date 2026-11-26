@@ -215,12 +215,6 @@ export const ruleValueForApprovalScope = (host: string, scope: ApprovalScope): s
   scope === 'family' ? getRootDomain(host) : host;
 
 /**
- * Transitional alias kept until every API caller moves to
- * `normalizeRequestHost` (Tasks 2 and 4). Remove once no callers remain.
- */
-export const normalizeManualRequestDomain = (value: string): string => getRootDomain(value);
-
-/**
  * Group rules by their root domain.
  * Returns a Map where keys are root domains and values are arrays of rules.
  */

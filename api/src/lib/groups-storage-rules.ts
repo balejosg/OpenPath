@@ -14,6 +14,7 @@ export {
   bulkDeleteRules,
   bulkSetRulesEnabled,
   createRule,
+  deleteBlockedRule,
   deleteRule,
   setRuleEnabled,
   updateRule,

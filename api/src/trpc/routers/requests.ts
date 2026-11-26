@@ -7,6 +7,7 @@ import {
   adminProcedure,
 } from '../trpc.js';
 import { RequestStatusSchema, CreateRequestDTOSchema } from '../../types/index.js';
+import { ApprovalScope } from '@openpath/shared/schemas';
 import { TRPCError } from '@trpc/server';
 import { CreateRequestData } from '../../types/storage.js';
 import { stripUndefined } from '../../lib/utils.js';
@@ -96,9 +97,19 @@ export const requestsRouter = router({
    * Teacher/Admin endpoint.
    */
   approve: teacherProcedure
-    .input(z.object({ id: z.string(), groupId: z.string().optional() }))
+    .input(
+      z.object({
+        id: z.string(),
+        groupId: z.string().optional(),
+        scope: ApprovalScope.optional(),
+        unblock: z.boolean().optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      const result = await RequestService.approveRequest(input.id, input.groupId, ctx.user);
+      const result = await RequestService.approveRequest(input.id, input.groupId, ctx.user, {
+        scope: input.scope ?? 'host',
+        unblock: input.unblock ?? false,
+      });
       if (!result.ok) {
         throw new TRPCError({ code: result.error.code, message: result.error.message });
       }

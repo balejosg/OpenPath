@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
+import { and, eq } from 'drizzle-orm';
 
+import { db, whitelistRules } from '../src/db/index.js';
 import {
   parseTRPC,
   provisionTeacherScenario,
@@ -19,10 +21,11 @@ await describe('E2E teacher request approval flow', { timeout: 75_000 }, async (
 
   await test('teacher can approve a request created for the assigned group', async () => {
     const scenario = await provisionTeacherScenario();
-    const testDomain = `test-${Date.now().toString()}.org`;
+    const rootDomain = `test-${Date.now().toString()}.org`;
+    const exactHost = `es.${rootDomain}`;
 
     const createResponse = await trpcMutate('requests.create', {
-      domain: testDomain,
+      domain: exactHost,
       reason: 'I need this for homework',
       requesterEmail: 'student@test.com',
       groupId: scenario.teacherGroupId,
@@ -37,10 +40,27 @@ await describe('E2E teacher request approval flow', { timeout: 75_000 }, async (
       {
         id: createData.id,
         groupId: scenario.teacherGroupId,
+        scope: 'host',
       },
       { Authorization: `Bearer ${scenario.teacherToken}` }
     );
 
-    assert.ok([200, 400].includes(approveResponse.status));
+    assert.equal(approveResponse.status, 200);
+
+    const rules = await db
+      .select({ value: whitelistRules.value })
+      .from(whitelistRules)
+      .where(
+        and(
+          eq(whitelistRules.groupId, scenario.teacherGroupId),
+          eq(whitelistRules.type, 'whitelist')
+        )
+      );
+
+    assert.deepEqual(
+      rules.map((rule) => rule.value),
+      [exactHost],
+      'approval should whitelist only the exact host'
+    );
   });
 });

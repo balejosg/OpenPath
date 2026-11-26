@@ -108,6 +108,33 @@ export async function deleteRule(id: string, executor: DbExecutor = db): Promise
   return deleted;
 }
 
+export async function deleteBlockedRule(
+  groupId: string,
+  value: string,
+  executor: DbExecutor = db
+): Promise<boolean> {
+  const normalizedValue = normalizeRuleValue('blocked_subdomain', value);
+  const deleted =
+    getRowCount(
+      await executor
+        .delete(whitelistRules)
+        .where(
+          and(
+            eq(whitelistRules.groupId, groupId),
+            eq(whitelistRules.type, 'blocked_subdomain'),
+            eq(whitelistRules.value, normalizedValue)
+          )
+        )
+    ) > 0;
+
+  if (deleted) {
+    await touchGroupUpdatedAt(groupId, executor);
+    logger.debug('Deleted blocked rule', { groupId, value: normalizedValue });
+  }
+
+  return deleted;
+}
+
 export async function bulkDeleteRules(ids: string[], executor: DbExecutor = db): Promise<number> {
   if (ids.length === 0) return 0;
 

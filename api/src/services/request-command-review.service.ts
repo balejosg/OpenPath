@@ -1,6 +1,7 @@
 import * as auth from '../lib/auth.js';
-import * as groupsStorage from '../lib/groups-storage.js';
-import { normalizeManualRequestDomain } from '@openpath/shared/domain';
+import { getRequestBlockCause } from '../lib/request-block-cause.js';
+import { normalizeRequestHost, ruleValueForApprovalScope } from '@openpath/shared/domain';
+import type { ApprovalScope } from '@openpath/shared/schemas';
 
 import type { RequestResult } from './request-service-shared.js';
 import {
@@ -14,10 +15,16 @@ import {
 import { approveWhitelistRequest } from './whitelist-rule-command.service.js';
 import type { JWTPayload } from '../lib/auth.js';
 
+export interface ApproveRequestOptions {
+  scope: ApprovalScope;
+  unblock: boolean;
+}
+
 export async function approveRequest(
   id: string,
   groupId: string | undefined,
-  user: JWTPayload
+  user: JWTPayload,
+  options: ApproveRequestOptions
 ): Promise<RequestResult<StoredDomainRequest>> {
   const request = await getStoredRequestById(id);
   if (!request) {
@@ -52,22 +59,51 @@ export async function approveRequest(
     };
   }
 
-  if (!auth.isAdminToken(user)) {
-    const blocked = await groupsStorage.isDomainBlocked(resolvedTarget.id, request.domain);
-    if (blocked.blocked) {
+  const blockCause = await getRequestBlockCause(resolvedTarget.id, request.domain);
+  const isAdmin = auth.isAdminToken(user);
+
+  if (blockCause.kind === 'blocked_by_rule') {
+    if (!isAdmin) {
       return {
         ok: false,
-        error: { code: 'FORBIDDEN', message: 'This domain is explicitly blocked' },
+        error: {
+          code: 'FORBIDDEN',
+          message: `This domain is explicitly blocked by rule ${blockCause.matchedRule}`,
+        },
+      };
+    }
+
+    if (!options.unblock) {
+      return {
+        ok: false,
+        error: {
+          code: 'BAD_REQUEST',
+          message: `Blocked by rule ${blockCause.matchedRule}; approve with unblock to remove it`,
+        },
       };
     }
   }
 
+  const host = normalizeRequestHost(request.domain);
+
   try {
     const approval = await approveWhitelistRequest({
-      domain: normalizeManualRequestDomain(request.domain),
+      domain: ruleValueForApprovalScope(host, options.scope),
       requestId: request.id,
       resolvedBy: user.name,
       targetGroup: resolvedTarget,
+      ...(blockCause.kind === 'blocked_by_rule'
+        ? {
+            removeBlockedRule: blockCause.matchedRule,
+            resolutionNote: `Added to ${resolvedTarget.name}; removed blocking rule ${blockCause.matchedRule}`,
+          }
+        : {}),
+      ...(blockCause.kind === 'already_allowed'
+        ? {
+            skipRuleCreation: true,
+            resolutionNote: `Already allowed by ${blockCause.matchedRule}`,
+          }
+        : {}),
     });
 
     return { ok: true, data: approval.updated };

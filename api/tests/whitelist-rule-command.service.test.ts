@@ -88,6 +88,10 @@ function createDeps(
       calls.push(`delete:${id}`);
       return Promise.resolve(true);
     },
+    deleteBlockedRule: (groupId, value, executor) => {
+      calls.push(`delete-blocked:${groupId}:${value}:${executor === tx ? 'tx' : 'root'}`);
+      return Promise.resolve(true);
+    },
     publishWhitelistChanged: (groupId) => {
       calls.push(`event:${groupId}`);
     },
@@ -172,6 +176,62 @@ await describe('whitelist rule command service', async () => {
       'commit',
       'event:group-a',
     ]);
+  });
+
+  await test('removes the matching blocked rule before creating the whitelist rule', async () => {
+    const { calls, createdRules, deps } = createDeps();
+
+    const result = await approveWhitelistRequest(
+      {
+        domain: 'gemini.google.com',
+        requestId: 'request-1',
+        resolvedBy: 'admin@example.com',
+        targetGroup: { id: 'group-a', name: 'Science' },
+        removeBlockedRule: '*.google.com',
+        resolutionNote: 'Added to Science; removed blocking rule *.google.com',
+      },
+      deps
+    );
+
+    assert.equal(result.updated.status, 'approved');
+    assert.equal(result.createdRule, true);
+    assert.deepEqual(createdRules, [
+      {
+        comment: null,
+        groupId: 'group-a',
+        tx,
+        type: 'whitelist',
+        value: 'gemini.google.com',
+      },
+    ]);
+    assert.deepEqual(calls, [
+      'begin',
+      'delete-blocked:group-a:*.google.com:tx',
+      'create:manual:whitelist',
+      'request:request-1:approved:pending',
+      'commit',
+      'event:group-a',
+    ]);
+  });
+
+  await test('skips rule creation for an already allowed host', async () => {
+    const { calls, createdRules, deps } = createDeps();
+
+    const result = await approveWhitelistRequest(
+      {
+        domain: 'maps.google.com',
+        requestId: 'request-1',
+        resolvedBy: 'teacher@example.com',
+        targetGroup: { id: 'group-a', name: 'Science' },
+        skipRuleCreation: true,
+        resolutionNote: 'Already allowed by google.com',
+      },
+      deps
+    );
+
+    assert.equal(result.createdRule, false);
+    assert.deepEqual(createdRules, []);
+    assert.deepEqual(calls, ['begin', 'request:request-1:approved:pending', 'commit']);
   });
 
   await test('bulk deletion publishes each affected group after commit', async () => {
