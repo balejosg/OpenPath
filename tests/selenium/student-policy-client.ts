@@ -149,9 +149,11 @@ export class StudentPolicyServerClient {
   }
 
   public async approveRequest(requestId: string, groupId: string): Promise<void> {
+    // Host scope: the scenarios clean up by the exact requested host, while the
+    // product default (family) would create the parent-domain rule instead.
     await this.trpcMutate(
       'requests.approve',
-      { id: requestId, groupId },
+      { id: requestId, groupId, scope: 'host' },
       this.scenario.auth.teacher.accessToken
     );
   }

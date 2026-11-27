@@ -1037,9 +1037,9 @@ async function runRequestLifecycleScenarioSet(
   });
 
   await client.approveRequest(pending.id, driver.scenario.groups.restricted.id);
-  // The API normalizes an approved request to its parent domain, and the lab
-  // upstream resolver does not resolve sslip.io names, so pin the exact host as
-  // well: the product only emits static DNS mappings for exact whitelist entries.
+  // The approval uses host scope (see StudentPolicyServerClient.approveRequest).
+  // The lab upstream resolver does not resolve sslip.io names, so keep pinning the
+  // exact host: the product only emits static DNS mappings for exact whitelist entries.
   await client.ensureWhitelistRule(
     driver.scenario.groups.restricted.id,
     targets.hosts.request,
@@ -2837,9 +2837,9 @@ export async function runFallbackPropagationProbe(
 
   const pending = await client.findPendingRequestByDomain(targets.hosts.request);
   await client.approveRequest(pending.id, driver.scenario.groups.restricted.id);
-  // The API normalizes an approved request to its parent domain, and the lab
-  // upstream resolver does not resolve sslip.io names, so pin the exact host as
-  // well: the product only emits static DNS mappings for exact whitelist entries.
+  // The approval uses host scope (see StudentPolicyServerClient.approveRequest).
+  // The lab upstream resolver does not resolve sslip.io names, so keep pinning the
+  // exact host: the product only emits static DNS mappings for exact whitelist entries.
   await client.ensureWhitelistRule(
     driver.scenario.groups.restricted.id,
     targets.hosts.request,
