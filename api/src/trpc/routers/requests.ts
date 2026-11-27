@@ -7,7 +7,7 @@ import {
   adminProcedure,
 } from '../trpc.js';
 import { RequestStatusSchema, CreateRequestDTOSchema } from '../../types/index.js';
-import { ApprovalScope } from '@openpath/shared/schemas';
+import { ApprovalScope, DEFAULT_APPROVAL_SCOPE } from '@openpath/shared/schemas';
 import { TRPCError } from '@trpc/server';
 import { CreateRequestData } from '../../types/storage.js';
 import { stripUndefined } from '../../lib/utils.js';
@@ -107,7 +107,7 @@ export const requestsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const result = await RequestService.approveRequest(input.id, input.groupId, ctx.user, {
-        scope: input.scope ?? 'host',
+        scope: input.scope ?? DEFAULT_APPROVAL_SCOPE,
         unblock: input.unblock ?? false,
       });
       if (!result.ok) {

@@ -86,8 +86,8 @@ void describe('request-query block cause', () => {
   void test('exposes status, stats, groups, blocked domains and approval scope helpers', async () => {
     const status = await requestQueryService.getRequestStatus(REQUEST_IDS[0] ?? '');
     assert.equal(status.ok, true);
-    assert.equal(status.ok ? status.data.domain : '', 'gemini.google.com');
-    assert.equal(status.ok ? status.data.status : '', 'pending');
+    assert.equal(status.data.domain, 'gemini.google.com');
+    assert.equal(status.data.status, 'pending');
 
     const missingStatus = await requestQueryService.getRequestStatus('missing-request');
     assert.deepEqual(missingStatus, {

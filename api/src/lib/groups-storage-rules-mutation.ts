@@ -135,6 +135,40 @@ export async function deleteBlockedRule(
   return deleted;
 }
 
+/**
+ * Re-enable a disabled rule identified by group, type and value.
+ * Returns true only when a disabled rule was actually switched on.
+ */
+export async function enableRuleByValue(
+  groupId: string,
+  type: RuleType,
+  value: string,
+  executor: DbExecutor = db
+): Promise<boolean> {
+  const normalizedValue = normalizeRuleValue(type, value);
+  const enabled =
+    getRowCount(
+      await executor
+        .update(whitelistRules)
+        .set({ enabled: 1 })
+        .where(
+          and(
+            eq(whitelistRules.groupId, groupId),
+            eq(whitelistRules.type, type),
+            eq(whitelistRules.value, normalizedValue),
+            eq(whitelistRules.enabled, 0)
+          )
+        )
+    ) > 0;
+
+  if (enabled) {
+    await touchGroupUpdatedAt(groupId, executor);
+    logger.debug('Re-enabled rule', { groupId, type, value: normalizedValue });
+  }
+
+  return enabled;
+}
+
 export async function bulkDeleteRules(ids: string[], executor: DbExecutor = db): Promise<number> {
   if (ids.length === 0) return 0;
 

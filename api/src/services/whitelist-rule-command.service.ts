@@ -12,6 +12,7 @@ export interface WhitelistRuleCommandDependencies {
   createRule: typeof groupsStorage.createRule;
   deleteBlockedRule: typeof groupsStorage.deleteBlockedRule;
   deleteRule: typeof groupsStorage.deleteRule;
+  enableRuleByValue: typeof groupsStorage.enableRuleByValue;
   publishWhitelistChanged: (groupId: string) => void;
   updateRequestStatus: typeof updateStoredRequestStatus;
   writeTransactionalCommand?: typeof DomainEventsService.writeTransactionalCommand;
@@ -88,6 +89,7 @@ type RequestApprovalDeps = Pick<
   | 'createRule'
   | 'createTransactionalWriter'
   | 'deleteBlockedRule'
+  | 'enableRuleByValue'
   | 'publishWhitelistChanged'
   | 'updateRequestStatus'
   | 'writeTransactionalCommand'
@@ -99,6 +101,7 @@ export const defaultWhitelistRuleCommandDependencies: WhitelistRuleCommandDepend
   createRule: groupsStorage.createRule,
   deleteBlockedRule: groupsStorage.deleteBlockedRule,
   deleteRule: groupsStorage.deleteRule,
+  enableRuleByValue: groupsStorage.enableRuleByValue,
   publishWhitelistChanged: DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
   updateRequestStatus: updateStoredRequestStatus,
   writeTransactionalCommand: DomainEventsService.writeTransactionalCommand,
@@ -207,6 +210,12 @@ export async function approveWhitelistRequest(
       throw new Error(ruleResult.error ?? 'Failed to add domain to whitelist');
     }
 
+    // An identical rule may exist but be disabled; approving must switch it back on.
+    const reenabledRule =
+      !input.skipRuleCreation && !ruleResult.success
+        ? await deps.enableRuleByValue(input.targetGroup.id, 'whitelist', input.domain, tx)
+        : false;
+
     const resolutionNote =
       input.resolutionNote ??
       (input.removeBlockedRule
@@ -228,7 +237,7 @@ export async function approveWhitelistRequest(
       throw new Error('Request is no longer pending');
     }
 
-    if (ruleResult.success || input.removeBlockedRule) {
+    if (ruleResult.success || reenabledRule || input.removeBlockedRule) {
       events.publishWhitelistChanged(input.targetGroup.id);
     }
 

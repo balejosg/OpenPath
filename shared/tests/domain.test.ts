@@ -6,6 +6,7 @@ import {
   CC_SLDS,
   normalizeRequestHost,
   ruleValueForApprovalScope,
+  getBroaderBlockRuleBase,
 } from '../src/domain.js';
 
 describe('getRootDomain', () => {
@@ -152,6 +153,26 @@ describe('ruleValueForApprovalScope', () => {
 
   it('handles ccTLDs for family scope', () => {
     assert.strictEqual(ruleValueForApprovalScope('www.bbc.co.uk', 'family'), 'bbc.co.uk');
+  });
+});
+
+describe('getBroaderBlockRuleBase', () => {
+  it('returns the base of a wildcard rule above the host', () => {
+    assert.strictEqual(getBroaderBlockRuleBase('*.google.com', 'gemini.google.com'), 'google.com');
+  });
+
+  it('returns an ancestor rule that covers sibling hosts', () => {
+    assert.strictEqual(getBroaderBlockRuleBase('google.com', 'gemini.google.com'), 'google.com');
+  });
+
+  it('returns null when the rule targets exactly the host', () => {
+    assert.strictEqual(getBroaderBlockRuleBase('gemini.google.com', 'gemini.google.com'), null);
+    assert.strictEqual(getBroaderBlockRuleBase('*.gemini.google.com', 'gemini.google.com'), null);
+  });
+
+  it('compares case-insensitively', () => {
+    assert.strictEqual(getBroaderBlockRuleBase('*.Google.COM', 'Gemini.google.com'), 'google.com');
+    assert.strictEqual(getBroaderBlockRuleBase('Gemini.Google.com', 'gemini.google.com'), null);
   });
 });
 

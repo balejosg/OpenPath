@@ -215,6 +215,20 @@ export const ruleValueForApprovalScope = (host: string, scope: ApprovalScope): s
   scope === 'family' ? getRootDomain(host) : host;
 
 /**
+ * When a blocking rule reaches beyond the requested host (a wildcard or an
+ * ancestor domain), return the base domain whose whole family is unblocked if
+ * that rule is removed. Returns null when the rule targets only the host itself.
+ * Agents do not all let a more specific allow rule beat a broader block, so
+ * unblocking a host can only be done by removing the broader rule.
+ */
+export const getBroaderBlockRuleBase = (rule: string, host: string): string | null => {
+  const normalizedHost = normalizeRequestHost(host);
+  const normalizedRule = rule.trim().toLowerCase();
+  const base = normalizedRule.startsWith('*.') ? normalizedRule.slice(2) : normalizedRule;
+  return base === normalizedHost ? null : base;
+};
+
+/**
  * Group rules by their root domain.
  * Returns a Map where keys are root domains and values are arrays of rules.
  */

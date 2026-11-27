@@ -85,7 +85,7 @@ describe('DomainRequests - Original group approval', () => {
     mockReject.mockResolvedValue({ success: true });
   });
 
-  it('approves the exact host by default and shows original group', async () => {
+  it('approves the whole family by default and shows original group', async () => {
     renderDomainRequests();
 
     await screen.findByText('example.com');
@@ -99,7 +99,7 @@ describe('DomainRequests - Original group approval', () => {
     await waitFor(() => {
       expect(mockApprove).toHaveBeenCalledWith({
         id: 'req-1',
-        scope: 'host',
+        scope: 'family',
         unblock: false,
       });
     });

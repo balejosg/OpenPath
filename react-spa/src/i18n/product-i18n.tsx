@@ -309,6 +309,10 @@ export const productI18nCatalogs = {
     'domainRequests.dialogs.blockedByRuleWarning':
       'Explicitly blocked by rule {rule}; approve with unblock to lift it',
     'domainRequests.dialogs.blockedByRuleUnblock': 'Remove the blocking rule {rule}',
+    'domainRequests.dialogs.blockedByRuleUnblockBroader':
+      'Remove the blocking rule {rule} (unblocks all of {base})',
+    'domainRequests.dialogs.broaderBlockWarning':
+      'Removing {rule} unblocks all of {base} and its subdomains, not only {host}',
     'domainRequests.dialogs.alreadyAllowedWarning':
       'Already allowed by {rule}; the block comes from somewhere else',
     'domainRequests.dialogs.originalGroup':
@@ -1092,6 +1096,10 @@ export const productI18nCatalogs = {
     'domainRequests.dialogs.blockedByRuleWarning':
       'Bloqueado expresamente por la regla {rule}; aprueba con desbloqueo para levantarla',
     'domainRequests.dialogs.blockedByRuleUnblock': 'Quitar la regla de bloqueo {rule}',
+    'domainRequests.dialogs.blockedByRuleUnblockBroader':
+      'Quitar la regla de bloqueo {rule} (desbloquea todo {base})',
+    'domainRequests.dialogs.broaderBlockWarning':
+      'Quitar {rule} desbloquea todo {base} y sus subdominios, no solo {host}',
     'domainRequests.dialogs.alreadyAllowedWarning':
       'Ya está permitido por {rule}; el bloqueo viene de otro sitio',
     'domainRequests.dialogs.originalGroup':

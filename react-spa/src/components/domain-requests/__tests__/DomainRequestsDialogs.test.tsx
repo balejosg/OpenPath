@@ -162,6 +162,50 @@ describe('DomainRequestsDialogs', () => {
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
   });
 
+  it('warns that removing a broader blocking rule unblocks the whole family', () => {
+    const broaderRequest = {
+      ...request,
+      domain: 'gemini.google.com',
+      blockCause: { kind: 'blocked_by_rule' as const, matchedRule: '*.google.com' },
+    };
+
+    render(
+      <DomainRequestsDialogs
+        model={buildModel({ approveModal: { open: true, request: broaderRequest } })}
+      />
+    );
+
+    expect(
+      screen.getByText(
+        /Removing \*\.google\.com unblocks all of google\.com and its subdomains, not only gemini\.google\.com/i
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', {
+        name: /Remove the blocking rule \*\.google\.com \(unblocks all of google\.com\)/i,
+      })
+    ).toBeInTheDocument();
+  });
+
+  it('does not warn about the family when the blocking rule targets only the host', () => {
+    const exactRequest = {
+      ...request,
+      domain: 'gemini.google.com',
+      blockCause: { kind: 'blocked_by_rule' as const, matchedRule: 'gemini.google.com' },
+    };
+
+    render(
+      <DomainRequestsDialogs
+        model={buildModel({ approveModal: { open: true, request: exactRequest } })}
+      />
+    );
+
+    expect(screen.queryByText(/unblocks all of/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', { name: 'Remove the blocking rule gemini.google.com' })
+    ).toBeInTheDocument();
+  });
+
   it('confirms single approve and delete dialogs', () => {
     const onApproveConfirm = vi.fn();
     const onDeleteConfirm = vi.fn();

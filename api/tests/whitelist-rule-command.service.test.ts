@@ -92,6 +92,10 @@ function createDeps(
       calls.push(`delete-blocked:${groupId}:${value}:${executor === tx ? 'tx' : 'root'}`);
       return Promise.resolve(true);
     },
+    enableRuleByValue: (groupId, type, value, executor) => {
+      calls.push(`enable:${groupId}:${type}:${value}:${executor === tx ? 'tx' : 'root'}`);
+      return Promise.resolve(false);
+    },
     publishWhitelistChanged: (groupId) => {
       calls.push(`event:${groupId}`);
     },
@@ -232,6 +236,60 @@ await describe('whitelist rule command service', async () => {
     assert.equal(result.createdRule, false);
     assert.deepEqual(createdRules, []);
     assert.deepEqual(calls, ['begin', 'request:request-1:approved:pending', 'commit']);
+  });
+
+  await test('re-enables an existing disabled rule and publishes the change', async () => {
+    const { calls, deps } = createDeps(
+      {
+        enableRuleByValue: (groupId, type, value, executor) => {
+          calls.push(`enable:${groupId}:${type}:${value}:${executor === tx ? 'tx' : 'root'}`);
+          return Promise.resolve(true);
+        },
+      },
+      { success: false, error: 'Rule already exists' }
+    );
+
+    const result = await approveWhitelistRequest(
+      {
+        domain: 'cdn.example.com',
+        requestId: 'request-1',
+        resolvedBy: 'teacher@example.com',
+        targetGroup: { id: 'group-a', name: 'Science' },
+      },
+      deps
+    );
+
+    assert.equal(result.createdRule, false);
+    assert.deepEqual(calls, [
+      'begin',
+      'create:manual:whitelist',
+      'enable:group-a:whitelist:cdn.example.com:tx',
+      'request:request-1:approved:pending',
+      'commit',
+      'event:group-a',
+    ]);
+  });
+
+  await test('does not publish when the existing rule was already enabled', async () => {
+    const { calls, deps } = createDeps({}, { success: false, error: 'Rule already exists' });
+
+    await approveWhitelistRequest(
+      {
+        domain: 'cdn.example.com',
+        requestId: 'request-1',
+        resolvedBy: 'teacher@example.com',
+        targetGroup: { id: 'group-a', name: 'Science' },
+      },
+      deps
+    );
+
+    assert.deepEqual(calls, [
+      'begin',
+      'create:manual:whitelist',
+      'enable:group-a:whitelist:cdn.example.com:tx',
+      'request:request-1:approved:pending',
+      'commit',
+    ]);
   });
 
   await test('bulk deletion publishes each affected group after commit', async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { DomainRequest } from '@openpath/api';
-import type { ApprovalScope } from '@openpath/shared/schemas';
+import { DEFAULT_APPROVAL_SCOPE, type ApprovalScope } from '@openpath/shared/schemas';
 import { reportError } from '../lib/reportError';
 
 interface RequestModalState {
@@ -27,7 +27,7 @@ export function useDomainRequestsDialogs({
     open: false,
     request: null,
   });
-  const [approveScope, setApproveScope] = useState<ApprovalScope>('host');
+  const [approveScope, setApproveScope] = useState<ApprovalScope>(DEFAULT_APPROVAL_SCOPE);
   const [approveUnblock, setApproveUnblock] = useState(false);
   const [rejectModal, setRejectModal] = useState<RequestModalState>({
     open: false,
@@ -41,7 +41,7 @@ export function useDomainRequestsDialogs({
 
   useEffect(() => {
     if (!approveModal.open) {
-      setApproveScope('host');
+      setApproveScope(DEFAULT_APPROVAL_SCOPE);
       setApproveUnblock(false);
     }
   }, [approveModal.open]);

@@ -107,14 +107,14 @@ describe('useDomainRequestsViewModel', () => {
       kind: 'blocked_by_rule',
       matchedRule: '*.google.com',
     });
-    expect(result.current.dialogs.approveScope).toBe('host');
+    expect(result.current.dialogs.approveScope).toBe('family');
 
     act(() => {
-      result.current.dialogs.onApproveScopeChange('family');
+      result.current.dialogs.onApproveScopeChange('host');
       result.current.dialogs.onApproveUnblockChange(true);
     });
 
-    expect(result.current.dialogs.approveScope).toBe('family');
+    expect(result.current.dialogs.approveScope).toBe('host');
     expect(result.current.dialogs.approveUnblock).toBe(true);
 
     act(() => {

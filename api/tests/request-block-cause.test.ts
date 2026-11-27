@@ -4,7 +4,11 @@ import { eq, sql } from 'drizzle-orm';
 
 import { db, whitelistRules } from '../src/db/index.js';
 import * as groupsStorage from '../src/lib/groups-storage.js';
-import { getRequestBlockCause, getRequestBlockCauses } from '../src/lib/request-block-cause.js';
+import {
+  findAllowingRule,
+  getRequestBlockCause,
+  getRequestBlockCauses,
+} from '../src/lib/request-block-cause.js';
 import { insertWhitelistGroup, registerRequestApiLifecycle } from './request-api-test-harness.js';
 
 const GROUP_ID = `rbc-${Math.random().toString(36).slice(2, 8)}`;
@@ -65,6 +69,36 @@ void describe('request block cause', () => {
       kind: 'blocked_by_rule',
       matchedRule: 'gemini.google.com',
     });
+  });
+
+  void test('ignores disabled rules', async () => {
+    const blocked = await groupsStorage.createRule(
+      GROUP_ID,
+      'blocked_subdomain',
+      'gemini.google.com',
+      null
+    );
+    const allowed = await groupsStorage.createRule(GROUP_ID, 'whitelist', 'google.com', null);
+    assert.ok(blocked.id && allowed.id);
+    await groupsStorage.setRuleEnabled(blocked.id, false);
+    await groupsStorage.setRuleEnabled(allowed.id, false);
+
+    assert.deepEqual(await getRequestBlockCause(GROUP_ID, 'gemini.google.com'), {
+      kind: 'not_allowed',
+    });
+  });
+
+  void test('findAllowingRule ignores blocking rules and disabled whitelist rules', async () => {
+    await addRule('whitelist', 'google.com');
+    await addRule('blocked_subdomain', 'gemini.google.com');
+    assert.equal(await findAllowingRule(GROUP_ID, 'gemini.google.com'), 'google.com');
+    assert.equal(await findAllowingRule(GROUP_ID, 'google.com'), 'google.com');
+    assert.equal(await findAllowingRule(GROUP_ID, 'example.org'), null);
+
+    const disabled = await groupsStorage.createRule(GROUP_ID, 'whitelist', 'example.org', null);
+    assert.ok(disabled.id);
+    await groupsStorage.setRuleEnabled(disabled.id, false);
+    assert.equal(await findAllowingRule(GROUP_ID, 'example.org'), null);
   });
 
   void test('reports not_allowed without rules', async () => {

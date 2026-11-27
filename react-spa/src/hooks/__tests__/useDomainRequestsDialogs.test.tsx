@@ -48,7 +48,7 @@ describe('useDomainRequestsDialogs', () => {
     expect(result.current.rejectionReason).toBe('');
   });
 
-  it('approve modal defaults to host scope', async () => {
+  it('approve modal defaults to family scope', async () => {
     const approveRequest = vi.fn().mockResolvedValue({ success: true });
 
     const { result } = renderHook(() =>
@@ -61,33 +61,6 @@ describe('useDomainRequestsDialogs', () => {
 
     act(() => {
       result.current.setApproveModal({ open: true, request });
-    });
-
-    await act(async () => {
-      await result.current.handleApprove();
-    });
-
-    expect(approveRequest).toHaveBeenCalledWith({
-      id: 'req-1',
-      scope: 'host',
-      unblock: false,
-    });
-  });
-
-  it('choosing family sends family scope', async () => {
-    const approveRequest = vi.fn().mockResolvedValue({ success: true });
-
-    const { result } = renderHook(() =>
-      useDomainRequestsDialogs({
-        approveRequest,
-        rejectRequest: vi.fn(),
-        deleteRequest: vi.fn(),
-      })
-    );
-
-    act(() => {
-      result.current.setApproveModal({ open: true, request });
-      result.current.setApproveScope('family');
     });
 
     await act(async () => {
@@ -97,6 +70,33 @@ describe('useDomainRequestsDialogs', () => {
     expect(approveRequest).toHaveBeenCalledWith({
       id: 'req-1',
       scope: 'family',
+      unblock: false,
+    });
+  });
+
+  it('choosing host sends host scope', async () => {
+    const approveRequest = vi.fn().mockResolvedValue({ success: true });
+
+    const { result } = renderHook(() =>
+      useDomainRequestsDialogs({
+        approveRequest,
+        rejectRequest: vi.fn(),
+        deleteRequest: vi.fn(),
+      })
+    );
+
+    act(() => {
+      result.current.setApproveModal({ open: true, request });
+      result.current.setApproveScope('host');
+    });
+
+    await act(async () => {
+      await result.current.handleApprove();
+    });
+
+    expect(approveRequest).toHaveBeenCalledWith({
+      id: 'req-1',
+      scope: 'host',
       unblock: false,
     });
   });
@@ -123,7 +123,7 @@ describe('useDomainRequestsDialogs', () => {
 
     expect(approveRequest).toHaveBeenCalledWith({
       id: 'req-1',
-      scope: 'host',
+      scope: 'family',
       unblock: true,
     });
   });
@@ -152,7 +152,7 @@ describe('useDomainRequestsDialogs', () => {
 
     act(() => {
       result.current.setApproveModal({ open: true, request });
-      result.current.setApproveScope('family');
+      result.current.setApproveScope('host');
       result.current.setApproveUnblock(true);
     });
 
@@ -164,7 +164,7 @@ describe('useDomainRequestsDialogs', () => {
       await Promise.resolve();
     });
 
-    expect(result.current.approveScope).toBe('host');
+    expect(result.current.approveScope).toBe('family');
     expect(result.current.approveUnblock).toBe(false);
   });
 

@@ -9,6 +9,8 @@ export const RequestStatus = z.enum(['pending', 'approved', 'rejected']);
 export const UserRole = z.enum(['admin', 'teacher', 'student']);
 export const GroupVisibility = z.enum(['private', 'instance_public']);
 export const ApprovalScope = z.enum(['host', 'family']);
+/** Approvals whitelist the whole domain family unless the reviewer narrows it to the host. */
+export const DEFAULT_APPROVAL_SCOPE = 'family' satisfies z.infer<typeof ApprovalScope>;
 export const RequestBlockCause = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('blocked_by_rule'), matchedRule: z.string() }),
   z.object({ kind: z.literal('already_allowed'), matchedRule: z.string() }),

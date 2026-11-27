@@ -21,14 +21,19 @@ function getHarness(): BlockedDomainsTestHarness {
   return harness;
 }
 
-function uniqueHost(label: string): string {
-  sequence += 1;
-  return `${label}-${Date.now().toString()}-${String(sequence)}.example.com`;
-}
-
+// Every scenario gets its own registrable root so family approvals never leak
+// into other scenarios that share the teacher group.
 function uniqueRoot(label: string): string {
   sequence += 1;
-  return `${label}-${Date.now().toString()}-${String(sequence)}.example.com`;
+  return `${label}-${Date.now().toString()}-${String(sequence)}.org`;
+}
+
+function uniqueHost(label: string): string {
+  return `app.${uniqueRoot(label)}`;
+}
+
+function rootOf(host: string): string {
+  return host.slice(host.indexOf('.') + 1);
 }
 
 async function addRule(
@@ -68,9 +73,9 @@ void describe('Blocked domains - approval matrix', () => {
     harness = undefined;
   });
 
-  void test('approve defaults to exact host', async (): Promise<void> => {
+  void test('approve defaults to the whole family', async (): Promise<void> => {
     const current = getHarness();
-    const host = uniqueHost('exact-host');
+    const host = uniqueHost('default-family');
     const requestId = await current.createPendingRequest({
       domain: host,
       groupId: current.teacherGroupId,
@@ -84,13 +89,13 @@ void describe('Blocked domains - approval matrix', () => {
 
     assert.strictEqual(response.status, 200, await response.clone().text());
     const whitelist = await ruleValues(current.teacherGroupId, 'whitelist');
-    assert.ok(whitelist.includes(host), 'exact host rule should be created');
-    assert.ok(!whitelist.includes('example.com'), 'root rule must not be created');
+    assert.ok(whitelist.includes(rootOf(host)), 'family root rule should be created');
+    assert.ok(!whitelist.includes(host), 'exact host rule must not be created');
   });
 
-  void test('approve family scope whitelists the root', async (): Promise<void> => {
+  void test('approve host scope whitelists only the exact host', async (): Promise<void> => {
     const current = getHarness();
-    const host = `es-${Date.now().toString()}.wikipedia.org`;
+    const host = uniqueHost('host-scope');
     const requestId = await current.createPendingRequest({
       domain: host,
       groupId: current.teacherGroupId,
@@ -98,14 +103,14 @@ void describe('Blocked domains - approval matrix', () => {
 
     const response = await current.trpcMutate(
       'requests.approve',
-      { id: requestId, groupId: current.teacherGroupId, scope: 'family' },
+      { id: requestId, groupId: current.teacherGroupId, scope: 'host' },
       bearerAuth(current.teacherToken)
     );
 
     assert.strictEqual(response.status, 200, await response.clone().text());
     const whitelist = await ruleValues(current.teacherGroupId, 'whitelist');
-    assert.ok(whitelist.includes('wikipedia.org'), 'root rule should be created');
-    assert.ok(!whitelist.includes(host), 'exact host rule must not be created');
+    assert.ok(whitelist.includes(host), 'exact host rule should be created');
+    assert.ok(!whitelist.includes(rootOf(host)), 'family root rule must not be created');
   });
 
   void test('teacher must explicitly unblock a host blocked by a subdomain rule', async (): Promise<void> => {
@@ -126,7 +131,7 @@ void describe('Blocked domains - approval matrix', () => {
     assert.strictEqual(blockedResponse.status, 400);
     const payload = (await blockedResponse.json()) as { error?: { message?: string } };
     assert.match(payload.error?.message ?? '', new RegExp(host.replace(/\./g, '\\.')));
-    assert.ok(!(await ruleValues(current.teacherGroupId, 'whitelist')).includes(host));
+    assert.ok(!(await ruleValues(current.teacherGroupId, 'whitelist')).includes(rootOf(host)));
 
     const unblockResponse = await current.trpcMutate(
       'requests.approve',
@@ -137,7 +142,7 @@ void describe('Blocked domains - approval matrix', () => {
     assert.strictEqual(unblockResponse.status, 200, await unblockResponse.clone().text());
     const blocked = await ruleValues(current.teacherGroupId, 'blocked_subdomain');
     assert.ok(!blocked.includes(host), 'teacher unblock should remove the matching rule');
-    assert.ok((await ruleValues(current.teacherGroupId, 'whitelist')).includes(host));
+    assert.ok((await ruleValues(current.teacherGroupId, 'whitelist')).includes(rootOf(host)));
   });
 
   void test('admin approve without unblock is rejected with the matching rule', async (): Promise<void> => {
@@ -189,7 +194,7 @@ void describe('Blocked domains - approval matrix', () => {
     assert.ok(blocked.includes(otherBlocked), 'unrelated blocking rule must stay');
 
     const whitelist = await ruleValues(current.teacherGroupId, 'whitelist');
-    assert.ok(whitelist.includes(host), 'exact host rule should be created');
+    assert.ok(whitelist.includes(root), 'family root rule should be created');
 
     const row = await requestRow(requestId);
     assert.strictEqual(row.status, 'approved');
@@ -237,7 +242,7 @@ void describe('Blocked domains - approval matrix', () => {
 
   void test('already allowed host approves without a redundant rule', async (): Promise<void> => {
     const current = getHarness();
-    const root = `allowed-${Date.now().toString()}.example.org`;
+    const root = uniqueRoot('allowed');
     const host = `maps.${root}`;
     await addRule(current.teacherGroupId, 'whitelist', root);
     const requestId = await current.createPendingRequest({
@@ -254,9 +259,101 @@ void describe('Blocked domains - approval matrix', () => {
     assert.strictEqual(response.status, 200, await response.clone().text());
     const whitelist = await ruleValues(current.teacherGroupId, 'whitelist');
     assert.ok(!whitelist.includes(host), 'no redundant exact rule should be created');
+    assert.strictEqual(
+      whitelist.filter((value) => value === root).length,
+      1,
+      'no duplicate family rule'
+    );
 
     const row = await requestRow(requestId);
     assert.strictEqual(row.status, 'approved');
     assert.strictEqual(row.resolutionNote, `Already allowed by ${root}`);
+  });
+
+  void test('family scope creates the root even when the exact host is already allowed', async (): Promise<void> => {
+    const current = getHarness();
+    const root = `family-${Date.now().toString()}.org`;
+    const host = `docs.${root}`;
+    await addRule(current.teacherGroupId, 'whitelist', host);
+    const requestId = await current.createPendingRequest({
+      domain: host,
+      groupId: current.teacherGroupId,
+    });
+
+    const response = await current.trpcMutate(
+      'requests.approve',
+      { id: requestId, groupId: current.teacherGroupId, scope: 'family' },
+      bearerAuth(current.teacherToken)
+    );
+
+    assert.strictEqual(response.status, 200, await response.clone().text());
+    const whitelist = await ruleValues(current.teacherGroupId, 'whitelist');
+    assert.ok(whitelist.includes(root), 'family root rule should be created');
+    assert.strictEqual((await requestRow(requestId)).resolutionNote.startsWith('Already'), false);
+  });
+
+  void test('approval re-enables a disabled matching whitelist rule', async (): Promise<void> => {
+    const current = getHarness();
+    const host = uniqueHost('disabled-allow');
+    const created = await groupsStorage.createRule(
+      current.teacherGroupId,
+      'whitelist',
+      rootOf(host),
+      null
+    );
+    assert.ok(created.id);
+    await groupsStorage.setRuleEnabled(created.id, false);
+    const requestId = await current.createPendingRequest({
+      domain: host,
+      groupId: current.teacherGroupId,
+    });
+
+    const response = await current.trpcMutate(
+      'requests.approve',
+      { id: requestId, groupId: current.teacherGroupId },
+      bearerAuth(current.teacherToken)
+    );
+
+    assert.strictEqual(response.status, 200, await response.clone().text());
+    const enabled = await groupsStorage.getRulesByGroup(current.teacherGroupId, 'whitelist', true);
+    assert.ok(
+      enabled.some((rule) => rule.value === rootOf(host)),
+      'disabled rule should be enabled again'
+    );
+    assert.strictEqual(
+      (await requestRow(requestId)).resolutionNote,
+      `Added to ${current.teacherGroupName}`
+    );
+  });
+
+  void test('unblocking an exact host only removes its rule when the family is already allowed', async (): Promise<void> => {
+    const current = getHarness();
+    const root = uniqueRoot('surgical');
+    const host = `gemini.${root}`;
+    const sibling = `bard.${root}`;
+    await addRule(current.teacherGroupId, 'whitelist', root);
+    await addRule(current.teacherGroupId, 'blocked_subdomain', host);
+    await addRule(current.teacherGroupId, 'blocked_subdomain', sibling);
+    const requestId = await current.createPendingRequest({
+      domain: host,
+      groupId: current.teacherGroupId,
+    });
+
+    const response = await current.trpcMutate(
+      'requests.approve',
+      { id: requestId, groupId: current.teacherGroupId, unblock: true },
+      bearerAuth(current.teacherToken)
+    );
+
+    assert.strictEqual(response.status, 200, await response.clone().text());
+    const blocked = await ruleValues(current.teacherGroupId, 'blocked_subdomain');
+    assert.ok(!blocked.includes(host), 'the exact blocking rule is removed');
+    assert.ok(blocked.includes(sibling), 'sibling blocking rules stay');
+    const whitelist = await ruleValues(current.teacherGroupId, 'whitelist');
+    assert.ok(!whitelist.includes(host), 'no exact host rule is created');
+    assert.strictEqual(
+      (await requestRow(requestId)).resolutionNote,
+      `Removed blocking rule ${host}; already allowed by ${root}`
+    );
   });
 });

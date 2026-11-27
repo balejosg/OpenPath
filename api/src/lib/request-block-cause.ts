@@ -60,11 +60,20 @@ function evaluateCause(host: string, rules: GroupRules): RequestBlockCause {
 
 async function loadGroupRules(groupId: string): Promise<GroupRules> {
   const [blocked, whitelist] = await Promise.all([
-    getRulesByGroup(groupId, 'blocked_subdomain'),
-    getRulesByGroup(groupId, 'whitelist'),
+    getRulesByGroup(groupId, 'blocked_subdomain', true),
+    getRulesByGroup(groupId, 'whitelist', true),
   ]);
 
   return { blocked, whitelist };
+}
+
+/**
+ * Return the enabled whitelist rule that already covers `value` (exact or as an
+ * ancestor/wildcard), ignoring blocking rules. Null when nothing covers it.
+ */
+export async function findAllowingRule(groupId: string, value: string): Promise<string | null> {
+  const whitelist = await getRulesByGroup(groupId, 'whitelist', true);
+  return findAllowedRule(normalizeRequestHost(value), whitelist);
 }
 
 export function requestBlockCauseKey(groupId: string, domain: string): string {
@@ -108,6 +117,7 @@ export async function getRequestBlockCause(
 }
 
 export default {
+  findAllowingRule,
   getRequestBlockCause,
   getRequestBlockCauses,
   requestBlockCauseKey,

@@ -1,4 +1,4 @@
-import { getRootDomain } from '@openpath/shared/domain';
+import { getBroaderBlockRuleBase, getRootDomain } from '@openpath/shared/domain';
 import type { DomainRequestsDialogsModel } from '../../hooks/useDomainRequestsViewModel';
 import { useT } from '../../i18n/product-i18n';
 import { ConfirmDialog, DangerConfirmDialog } from '../ui/ConfirmDialog';
@@ -12,6 +12,10 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
   const approveRequest = model.approveModal.request;
   const blockCause = approveRequest?.blockCause;
   const blockedRule = blockCause?.kind === 'blocked_by_rule' ? blockCause.matchedRule : null;
+  const broaderBlockBase =
+    blockedRule && approveRequest
+      ? getBroaderBlockRuleBase(blockedRule, approveRequest.domain)
+      : null;
   const alreadyAllowedRule = blockCause?.kind === 'already_allowed' ? blockCause.matchedRule : null;
   const approvalRoot = approveRequest ? getRootDomain(approveRequest.domain) : '';
   const disableApprove = blockedRule !== null && !model.approveUnblock;
@@ -126,6 +130,15 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
               <p className="text-sm text-red-700">
                 {t('domainRequests.dialogs.blockedByRuleWarning', { rule: blockedRule })}
               </p>
+              {broaderBlockBase ? (
+                <p className="text-sm font-medium text-red-700">
+                  {t('domainRequests.dialogs.broaderBlockWarning', {
+                    rule: blockedRule,
+                    base: broaderBlockBase,
+                    host: approveRequest.domain,
+                  })}
+                </p>
+              ) : null}
               <label className="flex items-center gap-2 text-sm text-red-700">
                 <input
                   type="checkbox"
@@ -133,9 +146,14 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
                   onChange={(event) => model.onApproveUnblockChange(event.target.checked)}
                 />
                 <span>
-                  {t('domainRequests.dialogs.blockedByRuleUnblock', {
-                    rule: blockedRule,
-                  })}
+                  {broaderBlockBase
+                    ? t('domainRequests.dialogs.blockedByRuleUnblockBroader', {
+                        rule: blockedRule,
+                        base: broaderBlockBase,
+                      })
+                    : t('domainRequests.dialogs.blockedByRuleUnblock', {
+                        rule: blockedRule,
+                      })}
                 </span>
               </label>
             </div>

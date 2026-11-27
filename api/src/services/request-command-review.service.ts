@@ -1,5 +1,5 @@
 import * as auth from '../lib/auth.js';
-import { getRequestBlockCause } from '../lib/request-block-cause.js';
+import { findAllowingRule, getRequestBlockCause } from '../lib/request-block-cause.js';
 import { normalizeRequestHost, ruleValueForApprovalScope } from '@openpath/shared/domain';
 import type { ApprovalScope } from '@openpath/shared/schemas';
 
@@ -72,25 +72,30 @@ export async function approveRequest(
   }
 
   const host = normalizeRequestHost(request.domain);
+  const ruleValue = ruleValueForApprovalScope(host, options.scope);
+  const blockedRule = blockCause.kind === 'blocked_by_rule' ? blockCause.matchedRule : null;
+  // Only the matching blocking rule is removed; a whitelist rule is created only
+  // when nothing enabled already covers the chosen scope (host or whole family).
+  const allowedBy = await findAllowingRule(resolvedTarget.id, ruleValue);
+
+  let resolutionNote = `Added to ${resolvedTarget.name}`;
+  if (blockedRule && allowedBy) {
+    resolutionNote = `Removed blocking rule ${blockedRule}; already allowed by ${allowedBy}`;
+  } else if (blockedRule) {
+    resolutionNote = `Added to ${resolvedTarget.name}; removed blocking rule ${blockedRule}`;
+  } else if (allowedBy) {
+    resolutionNote = `Already allowed by ${allowedBy}`;
+  }
 
   try {
     const approval = await approveWhitelistRequest({
-      domain: ruleValueForApprovalScope(host, options.scope),
+      domain: ruleValue,
       requestId: request.id,
       resolvedBy: user.name,
       targetGroup: resolvedTarget,
-      ...(blockCause.kind === 'blocked_by_rule'
-        ? {
-            removeBlockedRule: blockCause.matchedRule,
-            resolutionNote: `Added to ${resolvedTarget.name}; removed blocking rule ${blockCause.matchedRule}`,
-          }
-        : {}),
-      ...(blockCause.kind === 'already_allowed'
-        ? {
-            skipRuleCreation: true,
-            resolutionNote: `Already allowed by ${blockCause.matchedRule}`,
-          }
-        : {}),
+      resolutionNote,
+      ...(blockedRule ? { removeBlockedRule: blockedRule } : {}),
+      ...(allowedBy ? { skipRuleCreation: true } : {}),
     });
 
     return { ok: true, data: approval.updated };

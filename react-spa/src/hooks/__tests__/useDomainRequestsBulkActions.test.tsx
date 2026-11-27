@@ -59,7 +59,7 @@ describe('useDomainRequestsBulkActions', () => {
 
     expect(approveRequest).toHaveBeenCalledWith({
       id: 'req-1',
-      scope: 'host',
+      scope: 'family',
       unblock: false,
     });
     expect(setSelectedRequestIds).toHaveBeenCalledWith([]);
@@ -237,17 +237,17 @@ describe('useDomainRequestsBulkActions', () => {
 
     expect(approveRequest).toHaveBeenNthCalledWith(1, {
       id: 'req-1',
-      scope: 'host',
+      scope: 'family',
       unblock: false,
     });
     expect(approveRequest).toHaveBeenNthCalledWith(2, {
       id: 'req-2',
-      scope: 'host',
+      scope: 'family',
       unblock: false,
     });
     expect(approveRequest).toHaveBeenNthCalledWith(3, {
       id: 'req-3',
-      scope: 'host',
+      scope: 'family',
       unblock: false,
     });
     expect(result.current.bulkFailedIds).toEqual(['req-2']);

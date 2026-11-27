@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { DomainRequest } from '@openpath/api';
-import type { ApprovalScope } from '@openpath/shared/schemas';
+import { DEFAULT_APPROVAL_SCOPE, type ApprovalScope } from '@openpath/shared/schemas';
 
 import { useT } from '../i18n/product-i18n';
 
@@ -89,7 +89,7 @@ export function useDomainRequestsBulkActions({
 
     for (const id of requestIds) {
       try {
-        await approveRequest({ id, scope: 'host', unblock: false });
+        await approveRequest({ id, scope: DEFAULT_APPROVAL_SCOPE, unblock: false });
         successCount++;
       } catch (error) {
         failedCount++;

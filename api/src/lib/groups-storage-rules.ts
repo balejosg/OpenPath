@@ -16,6 +16,7 @@ export {
   createRule,
   deleteBlockedRule,
   deleteRule,
+  enableRuleByValue,
   setRuleEnabled,
   updateRule,
 } from './groups-storage-rules-mutation.js';

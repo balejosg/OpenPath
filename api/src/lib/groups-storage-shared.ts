@@ -152,6 +152,12 @@ export interface IGroupsStorage {
   updateRule(input: UpdateRuleInput, executor?: DbExecutor): Promise<Rule | null>;
   deleteRule(id: string, executor?: DbExecutor): Promise<boolean>;
   deleteBlockedRule(groupId: string, value: string, executor?: DbExecutor): Promise<boolean>;
+  enableRuleByValue(
+    groupId: string,
+    type: RuleType,
+    value: string,
+    executor?: DbExecutor
+  ): Promise<boolean>;
   bulkCreateRules(
     groupId: string,
     type: RuleType,
