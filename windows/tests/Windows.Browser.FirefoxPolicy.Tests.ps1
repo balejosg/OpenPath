@@ -677,6 +677,7 @@ Describe "Browser Module - Firefox Policy" {
             $policy.policies.ExtensionSettings.($contract.extensionId).installation_mode | Should -Be 'force_installed'
             $policy.policies.ExtensionSettings.($contract.extensionId).install_url | Should -Be $contract.configuredInstallUrl
             $policy.policies.ExtensionSettings.($contract.extensionId).private_browsing | Should -BeTrue
+            $policy.policies.ExtensionSettings.'*'.installation_mode | Should -Be 'blocked'
 
             $script:capturedMachinePolicyPath | Should -Be 'Software\Policies\Mozilla\Firefox'
             $script:capturedMachinePolicyType | Should -Be 'MultiString'
@@ -685,6 +686,8 @@ Describe "Browser Module - Firefox Policy" {
             $machinePolicy.($contract.extensionId).installation_mode | Should -Be 'force_installed'
             $machinePolicy.($contract.extensionId).install_url | Should -Be $contract.configuredInstallUrl
             $machinePolicy.($contract.extensionId).private_browsing | Should -BeTrue
+            $machinePolicy.'*'.installation_mode | Should -Be 'blocked'
+            @($machinePolicy.'*'.PSObject.Properties.Name) | Should -Be @('installation_mode')
         }
 
         It "Treats a machine policy entry without private browsing access as not applied" {
@@ -1207,7 +1210,8 @@ Describe "Browser Module - Firefox Policy" {
             $call.Type | Should -Be 'String'
             $call.Value | Should -BeOfType [string]
             $merged = $call.Value | ConvertFrom-Json
-            @($merged.PSObject.Properties.Name).Count | Should -Be 3
+            @($merged.PSObject.Properties.Name).Count | Should -Be 4
+            $merged.'*'.installation_mode | Should -Be 'blocked'
             $merged.'https://a.bromium.com/*'.installation_mode | Should -Be 'blocked'
             $merged.'https://b.bromium.com/*'.installation_mode | Should -Be 'blocked'
             $ours = $merged.($script:storeContract.extensionId)
@@ -1264,7 +1268,8 @@ Describe "Browser Module - Firefox Policy" {
 
             $script:storeSetCalls[0].Type | Should -Be 'MultiString'
             $merged = @($script:storeSetCalls[0].Value)[0] | ConvertFrom-Json
-            @($merged.PSObject.Properties.Name).Count | Should -Be 3
+            @($merged.PSObject.Properties.Name).Count | Should -Be 4
+            $merged.'*'.installation_mode | Should -Be 'blocked'
             $merged.'a@x'.installation_mode | Should -Be 'blocked'
             $merged.'b@x'.installation_mode | Should -Be 'blocked'
         }
@@ -1635,6 +1640,46 @@ Describe "Browser Module - Firefox Policy" {
             $script:storeRemoveCalls[0].Key | Should -Be 'Software\Policies\Mozilla\Firefox'
             $script:storeRemoveCalls[0].ValueName | Should -Be 'ExtensionSettings'
             $script:storeRemoveCalls[0].DiscardOriginal | Should -BeTrue
+        }
+
+        It "Replaces a catch-all that allows add-ons" {
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = '{"*":{"installation_mode":"allowed"}}'; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Set-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $merged = $script:storeSetCalls[0].Value | ConvertFrom-Json
+            $merged.'*'.installation_mode | Should -Be 'blocked'
+            $merged.($script:storeContract.extensionId).installation_mode | Should -Be 'force_installed'
+        }
+
+        It "Remove drops the catch-all OpenPath wrote together with our entry" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"*`":{`"installation_mode`":`"blocked`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'MultiString'; Value = [string[]]@($stored); Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $script:storeSetCalls.Count | Should -Be 0
+            $script:storeRemoveCalls.Count | Should -Be 1
+            $script:storeRemoveCalls[0].ValueName | Should -Be 'ExtensionSettings'
+        }
+
+        It "Remove keeps a customized vendor catch-all" {
+            $id = $script:storeContract.extensionId
+            $stored = "{`"$id`":{`"installation_mode`":`"force_installed`"},`"*`":{`"installation_mode`":`"blocked`",`"blocked_install_message`":`"IT policy`"}}"
+            Mock Get-OpenPathManagedPolicyValue {
+                [PSCustomObject]@{ Type = 'String'; Value = $stored; Source = 'LocalGpo' }
+            } -ModuleName Browser.FirefoxPolicy
+
+            Remove-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $script:storePolicy | Should -BeTrue
+
+            $remaining = $script:storeSetCalls[0].Value | ConvertFrom-Json
+            $remaining.PSObject.Properties.Name | Should -Be @('*')
+            $remaining.'*'.blocked_install_message | Should -Be 'IT policy'
         }
 
         It "Remove does nothing when our entry is absent" {

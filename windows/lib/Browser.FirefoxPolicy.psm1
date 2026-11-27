@@ -38,6 +38,34 @@ function Get-OpenPathDefaultFirefoxExtensionId {
     return 'openpath-block-monitor@openpath'
 }
 
+# Firefox ExtensionSettings catch-all key. A specific extension id entry overrides it, so blocking
+# "*" keeps the managed extension force-installed while users cannot install (and Firefox removes)
+# any other add-on, e.g. offline game extensions from addons.mozilla.org. Mirrors the Linux agent.
+$script:OpenPathFirefoxWildcardKey = '*'
+
+function New-OpenPathFirefoxBlockOtherAddonsEntry {
+    return [ordered]@{ installation_mode = 'blocked' }
+}
+
+function Test-OpenPathFirefoxBlockOtherAddonsEntry {
+    <#
+    .SYNOPSIS
+    Returns true when an ExtensionSettings "*" entry is exactly the catch-all block OpenPath writes.
+    #>
+    param(
+        [AllowNull()]
+        [object]$Entry
+    )
+
+    if ($null -eq $Entry) {
+        return $false
+    }
+
+    $names = @(if ($Entry -is [System.Collections.IDictionary]) { $Entry.Keys } else { $Entry.PSObject.Properties.Name })
+    $mode = if ($Entry -is [System.Collections.IDictionary]) { $Entry['installation_mode'] } else { $Entry.installation_mode }
+    return ($names.Count -eq 1 -and [string]$names[0] -eq 'installation_mode' -and [string]$mode -eq 'blocked')
+}
+
 function Get-OpenPathFirefoxMachinePolicyRegistryPath {
     <#
     .SYNOPSIS
@@ -476,6 +504,7 @@ function Set-OpenPathFirefoxMachineExtensionPolicy {
             install_url = [string]$ManagedExtensionPolicy.InstallUrl
             private_browsing = $true
         }
+        $settings[$script:OpenPathFirefoxWildcardKey] = New-OpenPathFirefoxBlockOtherAddonsEntry
 
         $policyValue = ConvertTo-OpenPathFirefoxMachineExtensionSettingsPolicyValue -Settings $settings -ExistingType $state.Type
         $result = Set-OpenPathManagedPolicyValue `
@@ -1384,6 +1413,10 @@ function Remove-OpenPathFirefoxMachineExtensionPolicy {
         }
 
         $settings.Remove($extensionId)
+        if ($settings.Contains($script:OpenPathFirefoxWildcardKey) -and (Test-OpenPathFirefoxBlockOtherAddonsEntry -Entry $settings[$script:OpenPathFirefoxWildcardKey])) {
+            # Drop the catch-all OpenPath added, so uninstalling does not leave every add-on blocked.
+            $settings.Remove($script:OpenPathFirefoxWildcardKey)
+        }
         $storeKey = Get-OpenPathFirefoxMachinePolicyStoreKey
         # The store recorded whether the local GPO held ExtensionSettings before OpenPath's first write.
         $original = $null
@@ -1531,6 +1564,7 @@ function Sync-OpenPathFirefoxManagedExtensionPolicy {
                             install_url = $managedExtensionPolicy.InstallUrl
                             private_browsing = $true
                         }
+                        '*' = New-OpenPathFirefoxBlockOtherAddonsEntry
                     }
                 }
             }
