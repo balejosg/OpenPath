@@ -34,7 +34,8 @@ export interface ApproveWhitelistRequestInput {
     id: string;
     name: string;
   };
-  removeBlockedRule?: string;
+  /** Blocking rules deleted in the same transaction; each must still exist. */
+  removeBlockedRules?: readonly string[];
   resolutionNote?: string;
   skipRuleCreation?: boolean;
 }
@@ -191,14 +192,11 @@ export async function approveWhitelistRequest(
   deps: RequestApprovalDeps = defaultWhitelistRuleCommandDependencies
 ): Promise<ApprovedWhitelistRequestCommandResult> {
   return withWhitelistEvents(deps, async (tx, events) => {
-    if (input.removeBlockedRule) {
-      const removed = await deps.deleteBlockedRule(
-        input.targetGroup.id,
-        input.removeBlockedRule,
-        tx
-      );
+    const removeBlockedRules = input.removeBlockedRules ?? [];
+    for (const blockedRule of removeBlockedRules) {
+      const removed = await deps.deleteBlockedRule(input.targetGroup.id, blockedRule, tx);
       if (!removed) {
-        throw new Error(`Blocking rule ${input.removeBlockedRule} no longer exists`);
+        throw new Error(`Blocking rule ${blockedRule} no longer exists`);
       }
     }
 
@@ -218,8 +216,8 @@ export async function approveWhitelistRequest(
 
     const resolutionNote =
       input.resolutionNote ??
-      (input.removeBlockedRule
-        ? `Added to ${input.targetGroup.name}; removed blocking rule ${input.removeBlockedRule}`
+      (removeBlockedRules.length > 0
+        ? `Added to ${input.targetGroup.name}; removed blocking rule ${removeBlockedRules.join(', ')}`
         : `Added to ${input.targetGroup.name}`);
 
     const updated = await deps.updateRequestStatus(
@@ -237,7 +235,7 @@ export async function approveWhitelistRequest(
       throw new Error('Request is no longer pending');
     }
 
-    if (ruleResult.success || reenabledRule || input.removeBlockedRule) {
+    if (ruleResult.success || reenabledRule || removeBlockedRules.length > 0) {
       events.publishWhitelistChanged(input.targetGroup.id);
     }
 

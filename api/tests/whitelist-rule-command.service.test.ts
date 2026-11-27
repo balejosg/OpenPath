@@ -191,7 +191,7 @@ await describe('whitelist rule command service', async () => {
         requestId: 'request-1',
         resolvedBy: 'admin@example.com',
         targetGroup: { id: 'group-a', name: 'Science' },
-        removeBlockedRule: '*.google.com',
+        removeBlockedRules: ['*.google.com'],
         resolutionNote: 'Added to Science; removed blocking rule *.google.com',
       },
       deps
@@ -216,6 +216,53 @@ await describe('whitelist rule command service', async () => {
       'commit',
       'event:group-a',
     ]);
+  });
+
+  await test('removes every overlapping blocked rule in the same transaction', async () => {
+    const { calls, deps } = createDeps();
+
+    const result = await approveWhitelistRequest(
+      {
+        domain: 'google.com',
+        requestId: 'request-1',
+        resolvedBy: 'teacher@example.com',
+        targetGroup: { id: 'group-a', name: 'Science' },
+        removeBlockedRules: ['*.google.com', 'gemini.google.com'],
+      },
+      deps
+    );
+
+    assert.equal(
+      result.updated.resolutionNote,
+      'Added to Science; removed blocking rule *.google.com, gemini.google.com'
+    );
+    assert.deepEqual(calls.slice(0, 3), [
+      'begin',
+      'delete-blocked:group-a:*.google.com:tx',
+      'delete-blocked:group-a:gemini.google.com:tx',
+    ]);
+  });
+
+  await test('fails the approval when one overlapping blocked rule is already gone', async () => {
+    const { calls, deps } = createDeps({
+      deleteBlockedRule: (_groupId, value) => Promise.resolve(value !== 'gemini.google.com'),
+    });
+
+    await assert.rejects(
+      () =>
+        approveWhitelistRequest(
+          {
+            domain: 'google.com',
+            requestId: 'request-1',
+            resolvedBy: 'teacher@example.com',
+            targetGroup: { id: 'group-a', name: 'Science' },
+            removeBlockedRules: ['*.google.com', 'gemini.google.com'],
+          },
+          deps
+        ),
+      /Blocking rule gemini\.google\.com no longer exists/
+    );
+    assert.ok(!calls.includes('commit'));
   });
 
   await test('skips rule creation for an already allowed host', async () => {

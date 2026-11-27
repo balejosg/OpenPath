@@ -24,14 +24,28 @@ function matchesRule(host: string, pattern: string): boolean {
   return host === normalizedPattern || host.endsWith(`.${normalizedPattern}`);
 }
 
-function findBlockedRule(host: string, rules: Rule[]): string | null {
+function ruleBase(rule: string): string {
+  return rule.startsWith('*.') ? rule.slice(2) : rule;
+}
+
+/**
+ * Every enabled blocking rule that reaches `host`, broadest first (shortest base,
+ * wildcard before the bare domain). Unblocking must remove all of them, and the
+ * first one is the rule whose scope the reviewer is warned about.
+ */
+function findBlockedRules(host: string, rules: Rule[]): string[] {
+  const matched = new Set<string>();
   for (const rule of rules) {
     if (matchesRule(host, rule.value)) {
-      return rule.value.toLowerCase();
+      matched.add(rule.value.toLowerCase());
     }
   }
 
-  return null;
+  return [...matched].sort((left, right) => {
+    const byBase = ruleBase(left).length - ruleBase(right).length;
+    if (byBase !== 0) return byBase;
+    return Number(right.startsWith('*.')) - Number(left.startsWith('*.'));
+  });
 }
 
 function findAllowedRule(host: string, rules: Rule[]): string | null {
@@ -45,8 +59,8 @@ function findAllowedRule(host: string, rules: Rule[]): string | null {
 }
 
 function evaluateCause(host: string, rules: GroupRules): RequestBlockCause {
-  const blockedRule = findBlockedRule(host, rules.blocked);
-  if (blockedRule !== null) {
+  const [blockedRule] = findBlockedRules(host, rules.blocked);
+  if (blockedRule !== undefined) {
     return { kind: 'blocked_by_rule', matchedRule: blockedRule };
   }
 
@@ -74,6 +88,15 @@ async function loadGroupRules(groupId: string): Promise<GroupRules> {
 export async function findAllowingRule(groupId: string, value: string): Promise<string | null> {
   const whitelist = await getRulesByGroup(groupId, 'whitelist', true);
   return findAllowedRule(normalizeRequestHost(value), whitelist);
+}
+
+/**
+ * Return every enabled blocking rule that reaches `value`, broadest first.
+ * Empty when nothing blocks it.
+ */
+export async function findBlockingRules(groupId: string, value: string): Promise<string[]> {
+  const blocked = await getRulesByGroup(groupId, 'blocked_subdomain', true);
+  return findBlockedRules(normalizeRequestHost(value), blocked);
 }
 
 export function requestBlockCauseKey(groupId: string, domain: string): string {
@@ -118,6 +141,7 @@ export async function getRequestBlockCause(
 
 export default {
   findAllowingRule,
+  findBlockingRules,
   getRequestBlockCause,
   getRequestBlockCauses,
   requestBlockCauseKey,

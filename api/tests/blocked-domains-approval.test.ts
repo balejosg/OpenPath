@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 
 import { db, requests } from '../src/db/index.js';
 import * as groupsStorage from '../src/lib/groups-storage.js';
+import { getRequestBlockCause } from '../src/lib/request-block-cause.js';
 import {
   approveWhitelistRequest,
   defaultWhitelistRuleCommandDependencies,
@@ -227,7 +228,7 @@ void describe('Blocked domains - approval matrix', () => {
           requestId,
           resolvedBy: 'Blocked Domains Admin',
           targetGroup: { id: current.teacherGroupId, name: current.teacherGroupName },
-          removeBlockedRule: wildcard,
+          removeBlockedRules: [wildcard],
         },
         failingDeps
       )
@@ -323,6 +324,42 @@ void describe('Blocked domains - approval matrix', () => {
     assert.strictEqual(
       (await requestRow(requestId)).resolutionNote,
       `Added to ${current.teacherGroupName}`
+    );
+  });
+
+  void test('unblock removes every overlapping blocking rule so the host is reachable', async (): Promise<void> => {
+    const current = getHarness();
+    const root = uniqueRoot('overlap');
+    const host = `gemini.${root}`;
+    const sibling = `bard.${root}`;
+    const wildcard = `*.${root}`;
+    await addRule(current.teacherGroupId, 'blocked_subdomain', host);
+    await addRule(current.teacherGroupId, 'blocked_subdomain', wildcard);
+    await addRule(current.teacherGroupId, 'blocked_subdomain', sibling);
+    const requestId = await current.createPendingRequest({
+      domain: host,
+      groupId: current.teacherGroupId,
+    });
+
+    const response = await current.trpcMutate(
+      'requests.approve',
+      { id: requestId, groupId: current.teacherGroupId, unblock: true },
+      bearerAuth(current.teacherToken)
+    );
+
+    assert.strictEqual(response.status, 200, await response.clone().text());
+    const blocked = await ruleValues(current.teacherGroupId, 'blocked_subdomain');
+    assert.ok(!blocked.includes(host), 'the exact blocking rule is removed');
+    assert.ok(!blocked.includes(wildcard), 'the overlapping wildcard rule is removed');
+    assert.ok(blocked.includes(sibling), 'sibling blocking rules stay');
+    assert.strictEqual(
+      (await getRequestBlockCause(current.teacherGroupId, host)).kind,
+      'already_allowed',
+      'the approved host must no longer be blocked'
+    );
+    assert.strictEqual(
+      (await requestRow(requestId)).resolutionNote,
+      `Added to ${current.teacherGroupName}; removed blocking rule ${wildcard}, ${host}`
     );
   });
 

@@ -1,5 +1,9 @@
 import * as auth from '../lib/auth.js';
-import { findAllowingRule, getRequestBlockCause } from '../lib/request-block-cause.js';
+import {
+  findAllowingRule,
+  findBlockingRules,
+  getRequestBlockCause,
+} from '../lib/request-block-cause.js';
 import { normalizeRequestHost, ruleValueForApprovalScope } from '@openpath/shared/domain';
 import type { ApprovalScope } from '@openpath/shared/schemas';
 
@@ -73,16 +77,19 @@ export async function approveRequest(
 
   const host = normalizeRequestHost(request.domain);
   const ruleValue = ruleValueForApprovalScope(host, options.scope);
-  const blockedRule = blockCause.kind === 'blocked_by_rule' ? blockCause.matchedRule : null;
-  // Only the matching blocking rule is removed; a whitelist rule is created only
-  // when nothing enabled already covers the chosen scope (host or whole family).
+  // Every blocking rule that reaches the host is removed (a wildcard and an exact
+  // rule can overlap); sibling blocks stay. A whitelist rule is created only when
+  // nothing enabled already covers the chosen scope (host or whole family).
+  const blockedRules =
+    blockCause.kind === 'blocked_by_rule' ? await findBlockingRules(resolvedTarget.id, host) : [];
+  const blockedList = blockedRules.join(', ');
   const allowedBy = await findAllowingRule(resolvedTarget.id, ruleValue);
 
   let resolutionNote = `Added to ${resolvedTarget.name}`;
-  if (blockedRule && allowedBy) {
-    resolutionNote = `Removed blocking rule ${blockedRule}; already allowed by ${allowedBy}`;
-  } else if (blockedRule) {
-    resolutionNote = `Added to ${resolvedTarget.name}; removed blocking rule ${blockedRule}`;
+  if (blockedList && allowedBy) {
+    resolutionNote = `Removed blocking rule ${blockedList}; already allowed by ${allowedBy}`;
+  } else if (blockedList) {
+    resolutionNote = `Added to ${resolvedTarget.name}; removed blocking rule ${blockedList}`;
   } else if (allowedBy) {
     resolutionNote = `Already allowed by ${allowedBy}`;
   }
@@ -94,7 +101,7 @@ export async function approveRequest(
       resolvedBy: user.name,
       targetGroup: resolvedTarget,
       resolutionNote,
-      ...(blockedRule ? { removeBlockedRule: blockedRule } : {}),
+      ...(blockedRules.length > 0 ? { removeBlockedRules: blockedRules } : {}),
       ...(allowedBy ? { skipRuleCreation: true } : {}),
     });
 

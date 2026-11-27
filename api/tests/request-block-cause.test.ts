@@ -6,6 +6,7 @@ import { db, whitelistRules } from '../src/db/index.js';
 import * as groupsStorage from '../src/lib/groups-storage.js';
 import {
   findAllowingRule,
+  findBlockingRules,
   getRequestBlockCause,
   getRequestBlockCauses,
 } from '../src/lib/request-block-cause.js';
@@ -50,6 +51,36 @@ void describe('request block cause', () => {
       kind: 'blocked_by_rule',
       matchedRule: '*.google.com',
     });
+  });
+
+  void test('reports the broadest of several overlapping blocked rules', async () => {
+    await addRule('blocked_subdomain', 'gemini.google.com');
+    await addRule('blocked_subdomain', 'google.com');
+    await addRule('blocked_subdomain', '*.google.com');
+
+    assert.deepEqual(await getRequestBlockCause(GROUP_ID, 'gemini.google.com'), {
+      kind: 'blocked_by_rule',
+      matchedRule: '*.google.com',
+    });
+    assert.deepEqual(await findBlockingRules(GROUP_ID, 'gemini.google.com'), [
+      '*.google.com',
+      'google.com',
+      'gemini.google.com',
+    ]);
+  });
+
+  void test('findBlockingRules skips sibling and disabled blocked rules', async () => {
+    await addRule('blocked_subdomain', 'bard.google.com');
+    const disabled = await groupsStorage.createRule(
+      GROUP_ID,
+      'blocked_subdomain',
+      '*.google.com',
+      null
+    );
+    assert.ok(disabled.id);
+    await groupsStorage.setRuleEnabled(disabled.id, false);
+
+    assert.deepEqual(await findBlockingRules(GROUP_ID, 'gemini.google.com'), []);
   });
 
   void test('reports already_allowed when a whitelist ancestor covers the host', async () => {
