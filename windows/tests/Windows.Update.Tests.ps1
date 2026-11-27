@@ -329,7 +329,7 @@ Describe "Update Script" {
             . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1")
             function Write-OpenPathLog { param([string]$Message, [string]$Level) }
 
-            $script:downloadErrors = [System.Collections.Generic.Queue[string]]::new()
+            $script:downloadErrors = [System.Collections.Generic.Queue[System.Exception]]::new()
             $script:downloadCalls = 0
             $script:sleeps = [System.Collections.Generic.List[int]]::new()
             function Get-OpenPathFromUrl {
@@ -339,6 +339,14 @@ Describe "Update Script" {
                     throw $script:downloadErrors.Dequeue()
                 }
                 return [pscustomobject]@{ Whitelist = @('example.org'); NotModified = $false }
+            }
+            # What production sees when HttpClient fails: GetResult() wraps the transport error.
+            function New-TransportFailure {
+                param([string]$Message)
+                $inner = [System.Net.Http.HttpRequestException]::new($Message)
+                return [System.Management.Automation.MethodInvocationException]::new(
+                    'Exception calling "GetResult" with "0" argument(s): "' + $Message + '"',
+                    [System.AggregateException]::new($inner))
             }
             $script:sleepAction = { param([int]$Seconds) $script:sleeps.Add($Seconds) }
             $script:config = [pscustomobject]@{ whitelistUrl = 'https://example.invalid/w/token/whitelist.txt' }
@@ -354,8 +362,8 @@ Describe "Update Script" {
         }
 
         It "Retries a transport failure (network not up after resume) and returns the fresh whitelist" {
-            $script:downloadErrors.Enqueue('Error al enviar la solicitud.')
-            $script:downloadErrors.Enqueue('No such host is known.')
+            $script:downloadErrors.Enqueue((New-TransportFailure -Message 'Error al enviar la solicitud.'))
+            $script:downloadErrors.Enqueue([System.Net.Sockets.SocketException]::new(11001))
 
             $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
 
@@ -367,7 +375,7 @@ Describe "Update Script" {
         }
 
         It "Retries a server error" {
-            $script:downloadErrors.Enqueue('HTTP 502')
+            $script:downloadErrors.Enqueue([System.Management.Automation.RuntimeException]::new('HTTP 502'))
 
             $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
 
@@ -376,7 +384,7 @@ Describe "Update Script" {
         }
 
         It "Does not retry a 4xx answer from the server" {
-            $script:downloadErrors.Enqueue('HTTP 404')
+            $script:downloadErrors.Enqueue([System.Management.Automation.RuntimeException]::new('HTTP 404'))
 
             $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
 
@@ -386,24 +394,58 @@ Describe "Update Script" {
             $script:sleeps.Count | Should -Be 0
         }
 
-        It "Gives up after the configured delays and reports the last error" {
-            foreach ($i in 1..5) { $script:downloadErrors.Enqueue("transport error $i") }
+        It "Does not retry configuration or programming errors" {
+            $script:downloadErrors.Enqueue([System.Management.Automation.RuntimeException]::new(
+                    "Cannot bind argument to parameter 'Url' because it is an empty string."))
 
             $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
 
             $result.DownloadFailed | Should -BeTrue
-            $result.ErrorText | Should -Be 'transport error 5'
+            $script:downloadCalls | Should -Be 1
+            $script:sleeps.Count | Should -Be 0
+        }
+
+        It "Does not retry when the endpoint has no whitelist URL (not enrolled)" {
+            function Get-OpenPathFromUrl {
+                param([Parameter(Mandatory = $true)][string]$Url)
+                $script:downloadCalls++
+            }
+
+            $result = Get-OpenPathWhitelistDownloadResult -Config ([pscustomobject]@{ whitelistUrl = '' }) -SleepAction $script:sleepAction
+
+            $result.DownloadFailed | Should -BeTrue
+            $script:sleeps.Count | Should -Be 0
+        }
+
+        It "Gives up after the configured delays and reports the last error" {
+            foreach ($i in 1..5) { $script:downloadErrors.Enqueue((New-TransportFailure -Message "transport error $i")) }
+
+            $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
+
+            $result.DownloadFailed | Should -BeTrue
+            $result.ErrorText | Should -Match 'transport error 5'
             $script:downloadCalls | Should -Be 5
             @($script:sleeps) | Should -Be @(5, 10, 20, 40)
         }
 
         It "Can disable retries with an empty delay list" {
-            $script:downloadErrors.Enqueue('transport error')
+            $script:downloadErrors.Enqueue((New-TransportFailure -Message 'transport error'))
 
             $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -RetryDelaySeconds @() -SleepAction $script:sleepAction
 
             $result.DownloadFailed | Should -BeTrue
             $script:downloadCalls | Should -Be 1
+        }
+
+        It "Classifies transient failures through wrapped inner exceptions" {
+            Test-OpenPathWhitelistDownloadRetryable -Exception (New-TransportFailure -Message 'x') | Should -BeTrue
+            Test-OpenPathWhitelistDownloadRetryable -Exception ([System.TimeoutException]::new()) | Should -BeTrue
+            Test-OpenPathWhitelistDownloadRetryable -Exception ([System.Threading.Tasks.TaskCanceledException]::new()) | Should -BeTrue
+            Test-OpenPathWhitelistDownloadRetryable -Exception ([System.Management.Automation.RuntimeException]::new('HTTP 503')) | Should -BeTrue
+            Test-OpenPathWhitelistDownloadRetryable -Exception ([System.Management.Automation.RuntimeException]::new('HTTP 429')) | Should -BeTrue
+            Test-OpenPathWhitelistDownloadRetryable -Exception ([System.Management.Automation.RuntimeException]::new('HTTP 401')) | Should -BeFalse
+            Test-OpenPathWhitelistDownloadRetryable -Exception ([System.FormatException]::new('bad whitelist')) | Should -BeFalse
+            Test-OpenPathWhitelistDownloadRetryable -Exception $null | Should -BeFalse
         }
 
         It "Keeps the update cycle on the default retry schedule" {

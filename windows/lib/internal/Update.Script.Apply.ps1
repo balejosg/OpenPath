@@ -1,11 +1,43 @@
 function Test-OpenPathWhitelistDownloadRetryable {
-    # a server that answered with a 4xx will answer the same way seconds later; anything else
-    # (no network yet after resume, DNS/TLS/transport errors, 5xx, timeouts) is worth a quick retry
+    # Only transport failures and server-side 5xx/408/429 answers are worth a quick retry: right after
+    # resume from sleep the network is not up yet, and a server mid-deploy answers 502/503 for seconds.
+    # Configuration and programming errors (empty whitelistUrl, parameter binding, parse errors) and
+    # 4xx answers fail the same way seconds later, so retrying them only holds the update cycle lock.
     param(
-        [string]$ErrorText = ''
+        [AllowNull()]
+        [System.Exception]$Exception
     )
 
-    return (-not ($ErrorText -match '\bHTTP 4\d\d\b'))
+    $transientTypes = @(
+        'System.Net.Http.HttpRequestException',
+        'System.Net.Sockets.SocketException',
+        'System.Net.WebException',
+        'System.TimeoutException',
+        'System.OperationCanceledException',
+        'System.Threading.Tasks.TaskCanceledException',
+        'System.IO.IOException',
+        'System.Security.Authentication.AuthenticationException'
+    )
+
+    $current = $Exception
+    $depth = 0
+    while ($null -ne $current -and $depth -lt 10) {
+        if ($transientTypes -contains $current.GetType().FullName) {
+            return $true
+        }
+        if ([string]$current.Message -match '^HTTP (5\d\d|408|429)$') {
+            return $true
+        }
+        if ($current -is [System.AggregateException] -and $current.InnerExceptions.Count -gt 0) {
+            $current = $current.InnerExceptions[0]
+        }
+        else {
+            $current = $current.InnerException
+        }
+        $depth++
+    }
+
+    return $false
 }
 
 function Get-OpenPathWhitelistDownloadResult {
@@ -29,6 +61,10 @@ function Get-OpenPathWhitelistDownloadResult {
     }
 
     $delays = @($RetryDelaySeconds | Where-Object { $_ -gt 0 })
+    # An unenrolled endpoint has no URL to retry against.
+    if ([string]::IsNullOrWhiteSpace([string]$Config.whitelistUrl)) {
+        $delays = @()
+    }
     $maxAttempts = $delays.Count + 1
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         try {
@@ -43,7 +79,7 @@ function Get-OpenPathWhitelistDownloadResult {
         catch {
             $result.DownloadFailed = $true
             $result.ErrorText = [string]$_
-            $canRetry = ($attempt -lt $maxAttempts) -and (Test-OpenPathWhitelistDownloadRetryable -ErrorText $result.ErrorText)
+            $canRetry = ($attempt -lt $maxAttempts) -and (Test-OpenPathWhitelistDownloadRetryable -Exception $_.Exception)
             if (-not $canRetry) {
                 Write-OpenPathLog "Whitelist download failed: $_" -Level WARN
                 break
