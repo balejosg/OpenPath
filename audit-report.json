@@ -670,7 +670,7 @@
       "isDirect": true,
       "via": ["@eslint/config-array", "minimatch"],
       "effects": ["addons-linter"],
-      "range": "10.0.0-alpha.0 - 10.14.0",
+      "range": "9.39.4 - 10.14.0",
       "nodes": [
         "dashboard/node_modules/eslint",
         "node_modules/addons-linter/node_modules/eslint",
