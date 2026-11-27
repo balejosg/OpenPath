@@ -246,6 +246,9 @@ function Start-SSEConnection {
     $sseUrl = Get-SSEUrl -WhitelistUrl $sseConfig.WhitelistUrl
     $machineToken = Get-MachineToken -WhitelistUrl $sseConfig.WhitelistUrl
     $backoff = $sseConfig.ReconnectMin
+    # Set once a connection drops: rule changes published while disconnected (sleep, Wi-Fi
+    # down) were never delivered, so the next successful connect must catch up explicitly.
+    $missedEventsPossible = $false
 
     Write-OpenPathLog "SSE listener starting (endpoint: $sseUrl)"
 
@@ -315,6 +318,11 @@ function Start-SSEConnection {
                     }
                     elseif ($payload -match '"connected"') {
                         Write-OpenPathLog "SSE: Connected to API - listening for rule changes"
+                        if ($missedEventsPossible) {
+                            $missedEventsPossible = $false
+                            Write-OpenPathLog "SSE: Reconnected after an outage - triggering catch-up update"
+                            Invoke-DebouncedUpdate -CooldownSeconds $sseConfig.UpdateCooldown
+                        }
                     }
                 }
             }
@@ -331,6 +339,7 @@ function Start-SSEConnection {
         }
 
         # Reconnect with exponential backoff
+        $missedEventsPossible = $true
         Write-OpenPathLog "SSE: Connection lost - reconnecting in ${backoff}s"
         Start-Sleep -Seconds $backoff
 

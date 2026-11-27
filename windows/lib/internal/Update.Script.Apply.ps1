@@ -1,8 +1,25 @@
+function Test-OpenPathWhitelistDownloadRetryable {
+    # a server that answered with a 4xx will answer the same way seconds later; anything else
+    # (no network yet after resume, DNS/TLS/transport errors, 5xx, timeouts) is worth a quick retry
+    param(
+        [string]$ErrorText = ''
+    )
+
+    return (-not ($ErrorText -match '\bHTTP 4\d\d\b'))
+}
+
 function Get-OpenPathWhitelistDownloadResult {
-    # fetches the whitelist from whitelistUrl and returns DownloadFailed, Whitelist, and ErrorText fields; sets DownloadFailed on any exception
+    # fetches the whitelist from whitelistUrl and returns DownloadFailed, Whitelist, and ErrorText fields.
+    # A transient failure is retried after short delays before falling back to the cached whitelist:
+    # right after resume from sleep the first attempt usually runs before Wi-Fi is up, and without a
+    # retry the endpoint keeps enforcing a days-old cached policy until the next scheduled cycle.
     param(
         [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Config
+        [PSCustomObject]$Config,
+
+        [int[]]$RetryDelaySeconds = @(5, 10, 20, 40),
+
+        [scriptblock]$SleepAction = { param([int]$Seconds) Start-Sleep -Seconds $Seconds }
     )
 
     $result = [ordered]@{
@@ -11,13 +28,31 @@ function Get-OpenPathWhitelistDownloadResult {
         ErrorText = ''
     }
 
-    try {
-        $result.Whitelist = Get-OpenPathFromUrl -Url $Config.whitelistUrl
-    }
-    catch {
-        $result.DownloadFailed = $true
-        $result.ErrorText = [string]$_
-        Write-OpenPathLog "Whitelist download failed: $_" -Level WARN
+    $delays = @($RetryDelaySeconds | Where-Object { $_ -gt 0 })
+    $maxAttempts = $delays.Count + 1
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            $result.Whitelist = Get-OpenPathFromUrl -Url $Config.whitelistUrl
+            $result.DownloadFailed = $false
+            $result.ErrorText = ''
+            if ($attempt -gt 1) {
+                Write-OpenPathLog "Whitelist download succeeded on attempt $attempt/$maxAttempts"
+            }
+            break
+        }
+        catch {
+            $result.DownloadFailed = $true
+            $result.ErrorText = [string]$_
+            $canRetry = ($attempt -lt $maxAttempts) -and (Test-OpenPathWhitelistDownloadRetryable -ErrorText $result.ErrorText)
+            if (-not $canRetry) {
+                Write-OpenPathLog "Whitelist download failed: $_" -Level WARN
+                break
+            }
+
+            $delay = $delays[$attempt - 1]
+            Write-OpenPathLog "Whitelist download failed (attempt $attempt/$maxAttempts), retrying in ${delay}s: $_" -Level WARN
+            & $SleepAction $delay
+        }
     }
 
     return [PSCustomObject]$result

@@ -277,6 +277,27 @@ Describe "Sse.Coalescer" {
             $content | Should -Not -Match '\$LASTEXITCODE'
         }
 
+        It "Start-SSEListener.ps1 catches up with one update after reconnecting from an outage" {
+            $listenerPath = Join-Path $PSScriptRoot ".." "scripts" "Start-SSEListener.ps1"
+            $content = Get-Content $listenerPath -Raw
+
+            # Starts lowered, so the first connection after start does not add an extra cycle.
+            $initIndex = $content.IndexOf('$missedEventsPossible = $false')
+            $loopIndex = $content.IndexOf('while ($true)')
+            $initIndex | Should -BeGreaterThan -1
+            $initIndex | Should -BeLessThan $loopIndex
+
+            # Raised on every lost connection.
+            $content | Should -Match '\$missedEventsPossible = \$true\s+Write-OpenPathLog "SSE: Connection lost'
+
+            # The next "connected" event lowers it and runs one coalesced update.
+            $connectedIndex = $content.IndexOf('elseif ($payload -match ''"connected"'')')
+            $catchUpIndex = $content.IndexOf('if ($missedEventsPossible) {')
+            $connectedIndex | Should -BeGreaterThan -1
+            $catchUpIndex | Should -BeGreaterThan $connectedIndex
+            $content | Should -Match 'if \(\$missedEventsPossible\) \{\s+\$missedEventsPossible = \$false\s+Write-OpenPathLog "SSE: Reconnected after an outage - triggering catch-up update"\s+Invoke-DebouncedUpdate -CooldownSeconds \$sseConfig\.UpdateCooldown'
+        }
+
         It "Start-SSEListener.ps1 checks once for a canary release at startup" {
             $listenerPath = Join-Path $PSScriptRoot ".." "scripts" "Start-SSEListener.ps1"
             $content = Get-Content $listenerPath -Raw

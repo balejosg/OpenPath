@@ -324,6 +324,94 @@ Describe "Update Script" {
         }
     }
 
+    Context "Whitelist download retry" {
+        BeforeEach {
+            . (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Update.Script.Apply.ps1")
+            function Write-OpenPathLog { param([string]$Message, [string]$Level) }
+
+            $script:downloadErrors = [System.Collections.Generic.Queue[string]]::new()
+            $script:downloadCalls = 0
+            $script:sleeps = [System.Collections.Generic.List[int]]::new()
+            function Get-OpenPathFromUrl {
+                param([string]$Url)
+                $script:downloadCalls++
+                if ($script:downloadErrors.Count -gt 0) {
+                    throw $script:downloadErrors.Dequeue()
+                }
+                return [pscustomobject]@{ Whitelist = @('example.org'); NotModified = $false }
+            }
+            $script:sleepAction = { param([int]$Seconds) $script:sleeps.Add($Seconds) }
+            $script:config = [pscustomobject]@{ whitelistUrl = 'https://example.invalid/w/token/whitelist.txt' }
+        }
+
+        It "Does not wait when the first download succeeds" {
+            $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
+
+            $result.DownloadFailed | Should -BeFalse
+            $result.Whitelist.Whitelist | Should -Be @('example.org')
+            $script:downloadCalls | Should -Be 1
+            $script:sleeps.Count | Should -Be 0
+        }
+
+        It "Retries a transport failure (network not up after resume) and returns the fresh whitelist" {
+            $script:downloadErrors.Enqueue('Error al enviar la solicitud.')
+            $script:downloadErrors.Enqueue('No such host is known.')
+
+            $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
+
+            $result.DownloadFailed | Should -BeFalse
+            $result.ErrorText | Should -Be ''
+            $result.Whitelist.Whitelist | Should -Be @('example.org')
+            $script:downloadCalls | Should -Be 3
+            @($script:sleeps) | Should -Be @(5, 10)
+        }
+
+        It "Retries a server error" {
+            $script:downloadErrors.Enqueue('HTTP 502')
+
+            $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
+
+            $result.DownloadFailed | Should -BeFalse
+            $script:downloadCalls | Should -Be 2
+        }
+
+        It "Does not retry a 4xx answer from the server" {
+            $script:downloadErrors.Enqueue('HTTP 404')
+
+            $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
+
+            $result.DownloadFailed | Should -BeTrue
+            $result.ErrorText | Should -Be 'HTTP 404'
+            $script:downloadCalls | Should -Be 1
+            $script:sleeps.Count | Should -Be 0
+        }
+
+        It "Gives up after the configured delays and reports the last error" {
+            foreach ($i in 1..5) { $script:downloadErrors.Enqueue("transport error $i") }
+
+            $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -SleepAction $script:sleepAction
+
+            $result.DownloadFailed | Should -BeTrue
+            $result.ErrorText | Should -Be 'transport error 5'
+            $script:downloadCalls | Should -Be 5
+            @($script:sleeps) | Should -Be @(5, 10, 20, 40)
+        }
+
+        It "Can disable retries with an empty delay list" {
+            $script:downloadErrors.Enqueue('transport error')
+
+            $result = Get-OpenPathWhitelistDownloadResult -Config $script:config -RetryDelaySeconds @() -SleepAction $script:sleepAction
+
+            $result.DownloadFailed | Should -BeTrue
+            $script:downloadCalls | Should -Be 1
+        }
+
+        It "Keeps the update cycle on the default retry schedule" {
+            $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
+            (Get-Content $runtimePath -Raw) | Should -Match '\$downloadResult = Get-OpenPathWhitelistDownloadResult -Config \$config\r?\n'
+        }
+    }
+
     Context "Stale whitelist fail-safe" {
         It "Includes stale threshold logic and restores protected mode via shared helper" {
             $runtimePath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "Update.Runtime.psm1"
