@@ -184,13 +184,11 @@ test.describe('Domain Request Management', () => {
 
       await expect(pendingRow).toHaveAttribute('data-status', 'pending');
       await pendingRow.getByTitle(/Aprobar|Approve/i).click();
-      await expect(
-        page.getByRole('heading', { name: /Aprobar Solicitud|Approve Request/i })
-      ).toBeVisible();
-      await page
-        .getByRole('button', { name: /Aprobar|Approve/i })
-        .last()
-        .click();
+      const approveDialog = page.getByRole('dialog', {
+        name: /Aprobar Solicitud|Approve Request/i,
+      });
+      await expect(approveDialog).toBeVisible();
+      await approveDialog.getByRole('button', { name: /^(Confirmar|Confirm)$/i }).click();
       await expect(pendingRow).toHaveAttribute('data-status', 'approved');
     } finally {
       await deleteDomainRequestViaApi(page, request.id);
@@ -206,18 +204,16 @@ test.describe('Domain Request Management', () => {
 
       await expect(pendingRow).toHaveAttribute('data-status', 'pending');
       await pendingRow.getByTitle(/Rechazar|Reject/i).click();
-      await expect(
-        page.getByRole('heading', { name: /Rechazar Solicitud|Reject Request/i })
-      ).toBeVisible();
-      await page
+      const rejectDialog = page.getByRole('dialog', {
+        name: /Rechazar Solicitud|Reject Request/i,
+      });
+      await expect(rejectDialog).toBeVisible();
+      await rejectDialog
         .getByPlaceholder(
           /Explica por qué se rechaza esta solicitud|Explain why this request is rejected/i
         )
         .fill('Not allowed per school policy');
-      await page
-        .getByRole('button', { name: /Rechazar|Reject/i })
-        .last()
-        .click();
+      await rejectDialog.getByRole('button', { name: /^(Confirmar|Confirm)$/i }).click();
       await expect(pendingRow).toHaveAttribute('data-status', 'rejected');
     } finally {
       await deleteDomainRequestViaApi(page, request.id);
