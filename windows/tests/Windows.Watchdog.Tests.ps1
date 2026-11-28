@@ -1,3 +1,27 @@
+# Host-mutation guard for every block in this file. Many scenarios run the real
+# Invoke-OpenPathWatchdogChecks; dot-sourcing Watchdog.Runtime.ps1 also defines the real
+# reconciler next to the test, where it shadows `function global:` stubs, so a missed stub
+# used to reach the host: local DNS set to 127.0.0.1, Acrylic re-registered and its start
+# type changed (a hosted runner without Acrylic then loses DNS and the job hangs).
+# Functions defined here sit between the tests and the global session state, so they win
+# over the imported modules while a test's own stub or Pester Mock still wins over them.
+BeforeAll {
+    $global:OpenPathWatchdogTestHostMutations = [System.Collections.Generic.List[string]]::new()
+    foreach ($mutatorName in @(
+            'Set-LocalDNS', 'Restore-OriginalDNS', 'Restore-OpenPathCaptivePortalDNS',
+            'Set-AcrylicServiceAutoStart', 'Ensure-AcrylicService', 'Start-AcrylicService',
+            'Restart-AcrylicService', 'Stop-AcrylicService',
+            'Set-OpenPathFirewall', 'Remove-OpenPathFirewall', 'Restore-OpenPathProtectedMode',
+            'Disable-OpenPathBridgeFilters', 'Set-AllBrowserPolicy'
+        )) {
+        $guardName = $mutatorName
+        Set-Item -Path "Function:\$guardName" -Value ({
+                $global:OpenPathWatchdogTestHostMutations.Add($guardName) | Out-Null
+                return $true
+            }.GetNewClosure())
+    }
+}
+
 Describe "Watchdog Script" {
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
@@ -3049,6 +3073,10 @@ Describe "Watchdog Script" {
         ) {
             $helperPath = Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "lib") "internal") "Watchdog.Runtime.ps1"
             . $helperPath
+            # The dot-source above defines the real reconciler in this scope, where it shadows
+            # global stubs; without this local stub the watchdog repairs the host (local DNS,
+            # Acrylic start type) and leaves a hosted runner without DNS.
+            function Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config, $BlockedPaths) }
 
             $global:OpenPathTestLockAcquired = $LockAcquired
             $global:OpenPathTestIntegrityChecks = 0
@@ -4125,20 +4153,20 @@ Describe "Watchdog checks the egress floor invariant outside the protected-mode 
         New-Item -ItemType Directory -Path (Split-Path -Parent $script:invariantGateLatch) -Force | Out-Null
         @{ reason = 'restricted-group-unresolved'; createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o') } |
             ConvertTo-Json | Set-Content -LiteralPath $script:invariantGateLatch -Encoding UTF8
-        function global:Get-OpenPathWatchdogTaskHealth { param($OpenPathRoot) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
+        function Get-OpenPathWatchdogTaskHealth { param($OpenPathRoot) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
         function global:Get-OpenPathWhitelistSectionsFromFile { param($Path) throw 'whitelist unreadable' }
-        function global:Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks { param($Config, $PortalModeActive, $CaptiveState) [pscustomobject]@{ Issues = @(); ReasonCodes = @() } }
+        function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks { param($Config, $PortalModeActive, $CaptiveState) [pscustomobject]@{ Issues = @(); ReasonCodes = @() } }
         function global:Get-Service { param($DisplayName, $ErrorAction) return $null }
-        function global:New-OpenPathWatchdogProtectedModeRepairPlan { param($PolicyState, $AcrylicServiceRunning, $AcrylicServiceAutoStart, $DnsResolutionHealthy, $DnsSinkholeHealthy, $FirewallActive, $LocalDnsConfigured, $AffectedLocalDnsAdapterNames, $BridgeFiltersDetected, $AffectedBridgeFilterAdapterNames) [pscustomobject]@{ Actions = @(); Issues = @(); RecoveryEligibleIssues = @() } }
-        function global:Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) }
+        function New-OpenPathWatchdogProtectedModeRepairPlan { param($PolicyState, $AcrylicServiceRunning, $AcrylicServiceAutoStart, $DnsResolutionHealthy, $DnsSinkholeHealthy, $FirewallActive, $LocalDnsConfigured, $AffectedLocalDnsAdapterNames, $BridgeFiltersDetected, $AffectedBridgeFilterAdapterNames) [pscustomobject]@{ Actions = @(); Issues = @(); RecoveryEligibleIssues = @() } }
+        function Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) }
         function global:Test-DNSResolution { return $true }
         function global:Test-DNSSinkhole { param($Domain) return $true }
         function global:Test-FirewallActive { return $true }
-        function global:Get-OpenPathActiveIpv4AdaptersMissingLocalDns { return @() }
+        function Get-OpenPathActiveIpv4AdaptersMissingLocalDns { return @() }
         function global:Get-OpenPathAdaptersWithBridgeFilters { param($ExtraComponentIds, $Allowlist) return @() }
         function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-        function global:Invoke-OpenPathWatchdogAppControlHealth { param($Config, $OpenPathRoot, $GroupSyncFailed) [pscustomobject]@{ Issues = @(); ReasonCodes = @(); RecoveryEligibleIssues = @() } }
-        function global:Invoke-OpenPathWatchdogFirefoxPolicySync { }
+        function Invoke-OpenPathWatchdogAppControlHealth { param($Config, $OpenPathRoot, $GroupSyncFailed) [pscustomobject]@{ Issues = @(); ReasonCodes = @(); RecoveryEligibleIssues = @() } }
+        function Invoke-OpenPathWatchdogFirefoxPolicySync { }
         function global:Test-OpenPathSplitDnsTopologyDrift { return [pscustomobject]@{ Drifted = $false; Reason = '' } }
         function global:Get-OpenPathFirefoxNativeHostCompiledHealth { param($Config) [pscustomobject]@{ BoundaryActive = $false; ReasonCode = '' } }
         function global:Get-OpenPathSmartAppControlState { return [pscustomobject]@{ State = 'off' } }
@@ -4711,12 +4739,12 @@ Describe "Watchdog committed update journal" {
                 param([string]$Path)
                 [pscustomobject]@{ IsDisabled = $false; Whitelist = @('blocked.example.org'); BlockedSubdomains = @() }
             }
-            function global:Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
+            function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
                 param($Config, $PortalModeActive, $CaptiveState)
                 [pscustomobject]@{ Issues = @(); ReasonCodes = @() }
             }
             function global:Get-Service { param($DisplayName, $ErrorAction) return $null }
-            function global:New-OpenPathWatchdogProtectedModeRepairPlan {
+            function New-OpenPathWatchdogProtectedModeRepairPlan {
                 param($PolicyState, $AcrylicServiceRunning, $AcrylicServiceAutoStart, $DnsResolutionHealthy, $DnsSinkholeHealthy, $FirewallActive, $LocalDnsConfigured, $AffectedLocalDnsAdapterNames, $BridgeFiltersDetected, $AffectedBridgeFilterAdapterNames)
                 $issues = @()
                 $recovery = @()
@@ -4726,7 +4754,7 @@ Describe "Watchdog committed update journal" {
                 }
                 [pscustomobject]@{ Actions = @(); Issues = $issues; RecoveryEligibleIssues = $recovery }
             }
-            function global:Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) }
+            function Invoke-OpenPathEndpointStateRepairPlan { param($Plan, $Config) }
             function global:Test-DNSResolution {
                 $global:OpenPathStaleFailsafeProbeDomain = (Get-Content -LiteralPath (Join-Path $testRoot 'data\whitelist.txt') |
                         Where-Object { $_ -and -not $_.StartsWith('#') } |
@@ -4735,22 +4763,22 @@ Describe "Watchdog committed update journal" {
             }
             function global:Test-DNSSinkhole { param($Domain) return $true }
             function global:Test-FirewallActive { return $true }
-            function global:Get-OpenPathActiveIpv4AdaptersMissingLocalDns { return @() }
+            function Get-OpenPathActiveIpv4AdaptersMissingLocalDns { return @() }
             function global:Get-OpenPathAdaptersWithBridgeFilters { param($ExtraComponentIds, $Allowlist) return @() }
             function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
-            function global:Invoke-OpenPathWatchdogAppControlHealth {
+            function Invoke-OpenPathWatchdogAppControlHealth {
                 param($Config, $OpenPathRoot, $GroupSyncFailed)
                 [pscustomobject]@{ Issues = @(); ReasonCodes = @(); RecoveryEligibleIssues = @() }
             }
-            function global:Invoke-OpenPathWatchdogFirefoxPolicySync { }
-            function global:Invoke-OpenPathWatchdogEgressFloorCheck { param($Config, $OpenPathRoot) }
+            function Invoke-OpenPathWatchdogFirefoxPolicySync { }
+            function Invoke-OpenPathWatchdogEgressFloorCheck { param($Config, $OpenPathRoot) }
             function global:Test-OpenPathSplitDnsTopologyDrift { return [pscustomobject]@{ Drifted = $false; Reason = '' } }
             function global:Get-OpenPathFirefoxNativeHostCompiledHealth {
                 param($Config)
                 [pscustomobject]@{ BoundaryActive = $false; ReasonCode = ''; UsesCompiledHost = $false; CompiledHealthy = $true }
             }
             function global:Get-OpenPathSmartAppControlState { return [pscustomobject]@{ State = 'off' } }
-            function global:Restore-CheckpointFromWatchdog {
+            function Restore-CheckpointFromWatchdog {
                 $global:OpenPathStaleFailsafeRollbackAttempted = $true
                 return $false
             }

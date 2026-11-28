@@ -995,6 +995,13 @@ function global:Get-ItemProperty {
         return [pscustomobject]@{}
     }
 
+    # The host's Smart App Control state must not reach the installer: in evaluation or
+    # enforcement the attended SAC step prompts with Read-Host and the child blocks forever.
+    if ([string]`$candidate -match '(?i)\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy$') {
+        Add-OpenPathInstallerTestTrace "probe:fixture-registry-property:`$candidate"
+        return [pscustomobject]@{ VerifiedAndReputablePolicyState = 0 }
+    }
+
     if ([string]`$candidate -match '(?i)^(?:Registry::HKEY_LOCAL_MACHINE|HKLM(?::|\\))') {
         Add-OpenPathInstallerTestTrace "probe:passthrough-registry-property:`$candidate"
     }
@@ -1134,6 +1141,13 @@ function global:Set-DnsClientServerAddress {
 }
 function global:Clear-DnsClientCache {
     Add-OpenPathInstallerTestTrace 'mutate:dns:clear-cache'
+}
+
+# The child has no operator: any prompt must fail fast instead of waiting on stdin.
+function global:Read-Host {
+    param([Parameter(Position = 0, ValueFromRemainingArguments = `$true)][object[]]`$Prompt)
+    Add-OpenPathInstallerTestTrace "probe:read-host:`$(`$Prompt -join ' ')"
+    throw 'Installer test fixture: interactive prompt is not available.'
 }
 
 function global:powershell.exe {
