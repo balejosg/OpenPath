@@ -328,6 +328,17 @@ Describe "DNS control-plane valve" {
         It "Restores protected mode on exit unless whitelist fail-open suppresses it" {
             Mock Restore-OriginalDNS { } -ModuleName DNS
             Mock Restore-OpenPathProtectedMode { $true } -ModuleName Common
+            # The valve calls Common\Restore-OpenPathProtectedMode module-qualified, which
+            # bypasses the mock above, so the real restore runs: stub its host mutators or it
+            # points the adapters at 127.0.0.1 and a runner without Acrylic loses DNS.
+            Mock Restart-AcrylicService { $true } -ModuleName Common
+            Mock Set-LocalDNS { } -ModuleName Common
+            if (Get-Command -Name Test-FirewallActive -ErrorAction SilentlyContinue) {
+                Mock Test-FirewallActive { $true } -ModuleName Common
+            }
+            if (Get-Command -Name Set-OpenPathFirewall -ErrorAction SilentlyContinue) {
+                Mock Set-OpenPathFirewall { $true } -ModuleName Common
+            }
 
             Enable-OpenPathDnsFailureOpenMode -Reason 'dns_proxy_down' -OpenPathRoot $script:valveRoot | Out-Null
             $closed = Close-OpenPathDnsFailureMode `
